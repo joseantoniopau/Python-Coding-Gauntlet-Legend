@@ -122,7 +122,7 @@ function runeAssembly(problem, onChange) {
 
 /* ------------------------------------------------------------------- trace */
 
-function trace(problem) {
+function trace(problem, onChange) {
   const spec = problem.mcq || {};
   const checkpoints = spec.checkpoints || [];
   const inputs = [];
@@ -144,6 +144,7 @@ function trace(problem) {
         `after line ${cp.after_line} — <code>${escape(cp.variable)}</code>`));
       const input = el('input');
       input.placeholder = 'its value here';
+      input.addEventListener('input', () => onChange && onChange());
       inputs.push(input);
       row.appendChild(input);
       host.appendChild(row);
@@ -159,7 +160,7 @@ function trace(problem) {
 
 /* ---------------------------------------------------------- spot the flaw */
 
-function spotTheFlaw(problem) {
+function spotTheFlaw(problem, onChange) {
   const spec = problem.mcq || {};
   let chosen = -1;
 
@@ -181,7 +182,7 @@ function spotTheFlaw(problem) {
       const row = el('div', `cl ${chosen === i + 1 ? 'picked' : ''}`);
       row.appendChild(el('span', 'n', String(i + 1)));
       row.appendChild(el('span', '', escape(line) || ' '));
-      row.onclick = () => { chosen = i + 1; build(host); };
+      row.onclick = () => { chosen = i + 1; build(host); onChange && onChange(); };
       pick.appendChild(row);
     });
     host.appendChild(pick);
@@ -192,7 +193,7 @@ function spotTheFlaw(problem) {
 
 /* -------------------------------------------------------- state prediction */
 
-function statePredict(problem) {
+function statePredict(problem, onChange) {
   const spec = problem.mcq || {};
   let input = null;
 
@@ -213,6 +214,7 @@ function statePredict(problem) {
     host.appendChild(el('div', 'section-title', 'FINAL STATE'));
     input = el('input', 'puzzle-input');
     input.placeholder = "e.g. [3, 1] or {'a': 2}";
+    input.addEventListener('input', () => onChange && onChange());
     host.appendChild(input);
   }
 
@@ -222,7 +224,7 @@ function statePredict(problem) {
 
 /* ---------------------------------------------------------------- break it */
 
-function breakIt(problem) {
+function breakIt(problem, onChange) {
   const spec = problem.mcq || {};
   let input = null;
 
@@ -242,6 +244,7 @@ function breakIt(problem) {
         (problem.entry && problem.entry.signature) || '')}</code>`));
     input = el('input', 'puzzle-input');
     input.placeholder = '[[]]  or  [[1, 1], 2]';
+    input.addEventListener('input', () => onChange && onChange());
     host.appendChild(input);
     const quick = el('div', 'row');
     quick.style.cssText = 'flex-wrap:wrap;margin-top:8px';
@@ -249,7 +252,7 @@ function breakIt(problem) {
       ['duplicates', '[[2, 2]]'], ['negatives', '[[-1, -2]]'],
       ['all same', '[[5, 5, 5]]'], ['zero', '[0]']]) {
       const b = el('button', 'btn small', label);
-      b.onclick = () => { input.value = value; input.focus(); };
+      b.onclick = () => { input.value = value; input.focus(); onChange && onChange(); };
       quick.appendChild(b);
     }
     host.appendChild(quick);
@@ -266,7 +269,7 @@ function breakIt(problem) {
 
 /* ---------------------------------------------------------- complexity match */
 
-function complexityMatch(problem) {
+function complexityMatch(problem, onChange) {
   const spec = problem.mcq || {};
   const snippets = spec.snippets || [];
   const options = spec.options
@@ -288,7 +291,7 @@ function complexityMatch(problem) {
       row.style.flexWrap = 'wrap';
       options.forEach((option) => {
         const b = el('button', `btn small ${chosen[i] === option ? 'primary' : ''}`, option);
-        b.onclick = () => { chosen[i] = option; build(host); };
+        b.onclick = () => { chosen[i] = option; build(host); onChange && onChange(); };
         row.appendChild(b);
       });
       host.appendChild(row);

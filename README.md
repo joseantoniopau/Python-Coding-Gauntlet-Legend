@@ -1,143 +1,165 @@
-# Python Coding Gauntlet Legend
+<div align="center">
+
+# PYTHON CODING GAUNTLET LEGEND
 ### The Algorithm Realms
 
-A 16-bit RPG that happens to teach Python coding interviews. Built end to end
-from the master specification: sixteen regions, fourteen bosses, 308 validated
-problems, a real sandboxed Python execution environment, an adaptive learning
-engine, spaced repetition, a loot-and-build system, and an Interview Mode that
-is provably isolated from every form of assistance.
+**A 16-bit RPG that makes you fluent in Python under interview conditions.**
 
-Runs entirely on your machine. No network, no accounts, no dependencies beyond
-Python 3.9+.
+956 validated problems · 17 regions · 14 bosses · 16 dungeons · 74 quests · 6 classes
+No accounts. No network. No dependencies. It all runs on your machine.
+
+</div>
+
+---
+
+## The pitch
+
+You are a competent engineer who freezes at a blank editor. That is a *retrieval*
+problem, not a knowledge problem, and it is fixed by doing the thing repeatedly
+under mild pressure — which happens to be what a good RPG already is.
+
+So this is a real game. It has a story, loot, a skill tree, bosses, secrets and a
+soundtrack. Every one of those systems is wired to a learning mechanic underneath:
+
+| The game thing | The learning thing underneath |
+|---|---|
+| Enemy weaknesses | The problem's actual edge cases |
+| Enemy resistances | Its performance ceiling — brute force really does bounce off |
+| Spaced-repetition shrines | Retrieval practice over *patterns*, in disguised variants |
+| Chapter gates | Evidence you can do the earlier thing unaided |
+| Hints | Real help, at a real cost to the rank you can earn |
+| The final boss | A timed practical, with every crutch removed |
+
+---
+
+## It teaches the basics first, then ramps
+
+The corpus is deliberately bottom-heavy, because the most common way a learning
+game fails is opening at a difficulty that only helps people who don't need it.
+
+```
+GUIDED    206  ████████████░░░░░░  fill in one expression
+TUTORIAL  210  ████████████░░░░░░  guided, with the shape given
+EASY      321  ██████████████████  on your own
+MEDIUM    196  ███████████░░░░░░░  real interview weight
+HARD       23  █░░░░░░░░░░░░░░░░░  the deep end
+```
+
+Every topic enters at GUIDED or TUTORIAL before it is ever asked for cold. The
+first thirteen encounters are fill-in-the-blank.
+
+**How long is it?** The test suite computes this from authored target times, so
+it is an estimate rather than telemetry:
+
+| | |
+|---|---|
+| Every lesson met once | ~7 h |
+| The curriculum's own gates satisfied | ~25 h |
+| A full seeded world | ~42 h |
+| Every problem in the corpus | ~104 h |
+
+The gates are deliberately set at more evidence than one clear, because that is
+what makes the readiness signal mean anything.
+
+**Coverage** spans the whole practical, not just algorithm puzzles: core language
+mechanics (comprehensions, slicing, unpacking, `enumerate`/`zip`/`sorted`),
+the standard library you're expected to reach for (`collections`, `itertools`,
+`functools`, `heapq`), OOP and dunder methods, generators, decorators, closures
+and context managers, exceptions, linked lists, trees, graphs, DP, backtracking,
+greedy, bit manipulation — and a **practical** family shaped like the real thing:
+here is an existing module, add a feature, fix a bug, keep its tests green.
 
 ---
 
 ## Run it
 
-**Double-click** `dist/Python Coding Gauntlet Legend.app`
-(a copy is installed in `~/Applications`).
+You need **Python 3.11+** and a browser. Nothing else — no `pip install`.
 
-From the terminal:
-
+**macOS / Linux**
 ```bash
-python3 -m gauntlet.cli play          # launch the app window
-python3 -m gauntlet.cli serve         # server only, open the printed URL
-python3 -m gauntlet.cli check         # verify the execution sandbox
-python3 -m gauntlet.cli stats         # your progress, in the terminal
-python3 -m gauntlet.cli doctor        # diagnose the installation
-python3 -m gauntlet.cli build-corpus  # rebuild + revalidate all 308 problems
-python3 tests/run_all.py              # the full test suite (98 tests)
+git clone https://github.com/joseantoniopau/Python-Coding-Gauntlet-Legend.git
+cd Python-Coding-Gauntlet-Legend
+python3 run.py
 ```
 
-Saves live in `~/Library/Application Support/GauntletLegend/`.
-Logs: `~/Library/Logs/GauntletLegend/launch.log`.
+**Windows** — double-click **`Play on Windows.bat`**, or:
+```bat
+py -3 run.py
+```
+
+> Installing Python on Windows? Tick **"Add python.exe to PATH"** in the installer.
+
+A window opens on a local server bound to `127.0.0.1` with a per-session token.
+Nothing is sent anywhere.
+
+**A native macOS app:** `./scripts/build_app.sh` produces a double-clickable
+`.app`. It isn't committed here because it's large, platform-specific and
+reproducible from that script.
+
+### Where your save lives
+
+| macOS | `~/Library/Application Support/GauntletLegend` |
+| Windows | `%APPDATA%\GauntletLegend` |
+| Linux | `~/.local/share/gauntlet-legend` |
 
 ---
 
-## The two modes, which are never confused
+## Running your code safely
 
-**Adventure Mode teaches.** Five escalating hint spells, animated algorithm
-visualisations, a Socratic coach, training camps that route you to the
-prerequisite you are actually missing, and a worked solution at the bottom of
-every hint tree. You can never permanently dead-end.
+Your solutions run in a separate process behind four independent layers:
 
-**Interview Mode measures.** The pattern name is redacted, the hint tree is
-empty, probes and items are refused, the coach returns a refusal, and gear grace
-does not apply. All of that is enforced **server-side** — `tests/test_interview_isolation.py`
-exists to prove it stays that way.
+1. **`sandbox-exec` seatbelt** (macOS) — denies all network, denies writes outside a scratch dir
+2. **POSIX resource limits** — CPU seconds, address space, file size, process count
+3. **A parent wall-clock kill** — for anything that gets past the first two
+4. **A per-test timeout** — so one runaway test doesn't take the batch with it
 
----
+`python3 run.py check` verifies all of it and prints what's active.
 
-## How a fight actually works
-
-Enemy HP is your test coverage. Each passing trial deals damage.
-
-An enemy's **weaknesses are the problem's real edge cases** — empty input,
-duplicates, negatives, exact boundaries, scale — derived from its hidden tests.
-Its **resistances** are the ceilings it enforces: an enemy with a performance
-trial literally resists brute force.
-
-Before you write anything you can spend a **probe**: assert that on *this* input
-the correct answer is *that*. Get it right and you expose the weakness — when
-your solution then passes that hidden trial it strikes **critically**, for up to
-double XP and better loot. Get it wrong and you have caught a broken mental
-model before spending twenty minutes implementing it.
-
-That is the strategy layer, and it is the same skill an interviewer is watching
-for: predicting how code breaks.
+> **On Windows, layers 1 and 2 do not exist.** There is no seatbelt and no
+> `resource` module, so isolation there rests on process separation and the
+> wall-clock kill. The code you run is code you wrote, so the threat model is
+> "my own infinite loop shouldn't wedge the machine" rather than malware — but
+> it is genuinely weaker than the macOS path, and you should know that.
 
 ---
 
-## Builds, loot and secrets
+## Interview Mode is actually sealed
 
-Three paths, chosen at the start and respeccable at the Armorer:
+Adventure Mode teaches. Interview Mode measures. The isolation is enforced
+**server-side**, not by hiding buttons: the pattern label is redacted, and hints,
+probes, companions, items and the coach are refused at the API. There is a test
+suite whose only job is to keep it that way.
 
-| Build | Wins by | Favours |
-|---|---|---|
-| **The Analyst** | predicting how code breaks | LOGIC, INSIGHT — more probes, sharper feedback |
-| **The Duelist** | the clock | HASTE, VIGOR — clock grace, combo shields |
-| **The Archivist** | knowing | FOCUS, INSIGHT — cheap spells, retest bonuses |
-
-Five attributes, three points per level. Nine equipment slots, 44 items, four
-set bonuses, six rarities, and five hidden items with real discovery conditions
-— including one awarded only for turning a quadratic solution into a linear one,
-knowingly.
-
-**Every item obeys one rule:** it may change what a fight *costs* and what it
-*pays*. No item supplies an answer, names a pattern, or survives into Interview
-Mode. `test_no_item_can_supply_an_answer` enforces this structurally.
+The last boss is that mode with the timer on and every crutch gone. The fourteen
+bosses before it each remove exactly one, so arriving with nothing is a thing you
+were trained for rather than ambushed by.
 
 ---
 
-## Armour is repaired by debugging
+## Development
 
-Failed casts crack the armour piece matching the root cause — syntax cracks your
-helm, off-by-ones dent your boots, performance failures melt your shield. You
-repair it at the Armorer's Forge by fixing genuinely broken Python. Thirty-six
-debugging encounters span syntax, off-by-one, mutation during iteration, mutable
-defaults, recursion base cases, state management, wrong axis, bounds checks and
-performance.
+```bash
+python3 tests/run_all.py          # the full suite
+python3 run.py check              # verify the sandbox
+python3 run.py build-corpus       # rebuild and re-validate every problem
+python3 run.py doctor             # diagnose an installation
+```
 
----
-
-## What is in the box
-
-| | |
-|---|---|
-| Validated problems | **308** (every canonical solution passes every one of its own tests, in the real sandbox) |
-| Regions | 16 + the Null King's Castle |
-| Bosses | 14, each with six phases and a teaching phase on failure |
-| Encounter types | code battle, debug battle, pattern encounter, complexity duel, code reading, edge-case trap, test forge, memory ambush, boss |
-| Skills tracked | 30, each with mastery / confidence / speed / retention / recency / error rate / hint dependence |
-| Items | 44 across 6 rarities, 4 sets, 5 secrets |
-| Tests | 98, including all 20 acceptance criteria |
+Every problem carries **two independent implementations** — a reference used to
+compute expected outputs at build time, and a canonical solution shown to the
+player. They must agree on every test, which is how a wrong problem gets caught
+before a player ever sees it.
 
 ---
 
-## Safety
+## Credits and licence
 
-Player code runs under four layers of containment: a macOS `sandbox-exec`
-seatbelt profile (network denied, writes confined to a scratch directory), POSIX
-resource limits (CPU, address space, file size, process count), a parent-side
-wall-clock kill switch, and per-test `SIGALRM` timers. The child runs with `-I -S`
-and a scrubbed environment.
+All art, music and text are **original and generated procedurally** — there are no
+image or audio assets in this repository, and nothing is taken from any existing
+game. The art direction is documented in `docs/08-art-direction.md` and the story
+in `docs/09-story-bible.md`.
 
-`python3 -m gauntlet.cli check` verifies all of it, and the game surfaces the
-result in the MENU panel.
+Problems tagged as reported interview patterns are **historically reported
+shapes, not guaranteed questions**, and name no company.
 
----
-
-## Documentation
-
-- [`docs/01-product-spec.md`](docs/01-product-spec.md) — the product, its design rules
-- [`docs/02-architecture.md`](docs/02-architecture.md) — system, modules, data model, API
-- [`docs/03-learning-engine.md`](docs/03-learning-engine.md) — skills, SRS, adaptation, readiness
-- [`docs/04-content-pipeline.md`](docs/04-content-pipeline.md) — the corpus and how it is validated
-- [`docs/05-art-and-audio.md`](docs/05-art-and-audio.md) — the original asset pipeline
-- [`docs/06-acceptance.md`](docs/06-acceptance.md) — the 20 criteria and where each is proved
-
----
-
-All art, music and text are original to this project. No third-party game assets
-are used. Reported-interview problems are labelled as historical patterns and
-carry an explicit disclaimer that they are not guaranteed questions.
+MIT — see [LICENSE](LICENSE).

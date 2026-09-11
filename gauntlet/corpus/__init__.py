@@ -12,6 +12,14 @@ _FAMILIES = (
     "arrays_hashing", "sliding_window", "two_pointers", "stacks_queues",
     "trees", "matrix_graphs", "recursion_dp", "python_village",
     "binary_search", "design_oop", "debugging", "meta", "reasoning",
+    # Ramp-first families: each of these enters every topic it owns at GUIDED
+    # or TUTORIAL, which is why they are listed after the original seventeen
+    # rather than folded into them.
+    "language", "pythonic", "oop_language", "generators",
+    "linked_structures", "search_optimize", "practical_test",
+    # The entry rungs. Authored from a ramp audit rather than from a subject:
+    # every topic that had no GUIDED or TUTORIAL doorway now has one.
+    "ramp",
 )
 
 

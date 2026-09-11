@@ -10,7 +10,7 @@ from collections import Counter, defaultdict, deque
 
 from ._base import code_problem
 
-Q = {"QUORA": 2.0, "GENERAL_SWE": 2.0, "SECURITY_ENGINEERING": 1.5}
+Q = {"PRACTICAL": 2.0, "GENERAL_SWE": 2.0, "SECURITY_ENGINEERING": 1.5}
 VIZ = {"type": "array_scan", "caption": "One pass, one accumulator."}
 
 

@@ -1,8 +1,24 @@
+# Python
 __pycache__/
 *.pyc
+*.pyo
+
+# macOS
 .DS_Store
-/dist/*.app/Contents/Resources/app
+
+# Built app bundles. These are large, platform-specific and reproducible from
+# scripts/build_app.sh, so the repo ships the recipe rather than the cake.
+/dist/
 /build/
+/runtime/
+
+# Player data: save games, the generated corpus, logs.
 *.sqlite3
 *.sqlite3-*
-/runtime/
+corpus.json
+/web/audio/samples/
+
+# Editors
+.idea/
+.vscode/
+*.swp

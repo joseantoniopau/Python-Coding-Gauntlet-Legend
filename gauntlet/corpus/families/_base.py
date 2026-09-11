@@ -9,7 +9,7 @@ from __future__ import annotations
 import textwrap
 
 from ..schema import (Problem, TARGET_SECONDS, build_hint_tree, case, derive,
-                      derive_ops, ops_case)
+                      derive_ops, encode_value, ops_case)
 
 __all__ = ["code_problem", "design_problem", "debug_problem", "mcq_problem",
            "forge_problem", "case", "derive", "ops_case", "derive_ops",
@@ -24,10 +24,19 @@ PROVENANCE_DISCLAIMER = (
 )
 
 
+# A provenance note is a claim about where a problem comes from, and every such
+# claim has to be disclaimed — not only the ones that name a company. The three
+# source types below are the ones that appeal to the interview-reporting record;
+# GENERATED_VARIANT and SECURITY_VARIANT carry their own, stronger note ("never
+# presented as a question any company has asked") and must not have this one
+# appended on top of it.
+CLAIMS_REPORTING = ("REPORTED_INTERVIEW", "COMPANY_PATTERN", "GENERAL_INTERVIEW")
+
+
 def with_disclaimer(source_type: str, note: str) -> str:
-    if source_type != "REPORTED_INTERVIEW":
-        return note
     note = (note or "").strip()
+    if source_type not in CLAIMS_REPORTING or not note:
+        return note
     if "not a guarantee" in note.lower() or "not a guaranteed" in note.lower():
         return note
     return (note + PROVENANCE_DISCLAIMER).strip()
@@ -265,12 +274,24 @@ def mcq_problem(
 
 def forge_problem(
     *, id: str, title: str, realm: str, difficulty: str, statement: str,
-    fn_name: str, correct: str, mutants: list[str], nudge: str = "",
-    family: str = "testing", min_kills: int = None,
+    fn_name: str, correct: str, mutants: list[str], kills: list,
+    nudge: str = "", family: str = "testing", min_kills: int = None,
 ) -> Problem:
     """TEST FORGE: the player writes tests. Their suite must accept the correct
     implementation and reject every mutant. A Mimic that survives is a bug that
-    ships."""
+    ships.
+
+    `kills` is one argument list per mutant: an input on which that mutant
+    genuinely disagrees with the correct implementation. It is required, and
+    `validate` runs it, because a mutant that behaves identically to the honest
+    implementation cannot be killed by any suite — and since `min_kills` defaults
+    to every mutant, one such Mimic makes the whole encounter unwinnable. That is
+    exactly the "fight with no win condition" the puzzle validators already
+    refuse; this is the same refusal for the Forge.
+
+    The inputs never reach the client: `schema.PUZZLE_VISIBLE_MCQ` lists
+    `min_kills` alone as the visible field.
+    """
     mutants = [dedent(m) for m in mutants]
     return Problem(
         id=id, title=title, realm=realm, pattern="TESTING", difficulty=difficulty,
@@ -300,7 +321,8 @@ def forge_problem(
         ),
         spaced_repetition_family=family,
         estimated_seconds=420, target_seconds=420,
-        mcq={"min_kills": min_kills if min_kills is not None else len(mutants)},
+        mcq={"min_kills": min_kills if min_kills is not None else len(mutants),
+             "kill_inputs": [encode_value(list(args)) for args in kills]},
     )
 
 

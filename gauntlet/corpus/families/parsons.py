@@ -42,7 +42,7 @@ from ...puzzles import shuffle_runes
 
 # Weighted toward this player's declared profile. Assembly is the bridge he needs,
 # so the selector should reach for it early and often.
-Q = {"QUORA": 2.0, "GENERAL_SWE": 2.0, "SECURITY_ENGINEERING": 2.0}
+Q = {"PRACTICAL": 2.0, "GENERAL_SWE": 2.0, "SECURITY_ENGINEERING": 2.0}
 
 VIZ = {"type": "array_scan",
        "caption": "Order is the whole puzzle. Depth is the other half of it."}
@@ -1088,7 +1088,7 @@ def build() -> list:
         [("classic", [[2, 7, 11], 9]), ("at the end", [[1, 4, 6, 3], 9])],
         [("negatives", [[-3, 4, 1], 1]), ("two elements", [[5, 5], 10])],
         edges=[("no pair", [[1, 2], 50])],
-        secondary=["ARRAY"], company="Quora", source_type="COMPANY_PATTERN",
+        secondary=["ARRAY"], source_type="COMPANY_PATTERN",
         provenance="Hash-map complement lookup is the most widely reported "
                    "opening-round archetype there is.",
         notes={"need = target - nums[i]": "The complement. Everything else in this "

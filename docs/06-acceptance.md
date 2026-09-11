@@ -20,7 +20,7 @@ proved. Run `python3 tests/run_all.py` to verify all of them.
 | 13 | World progression works | ✅ | `test_13_world_progression_works`, `test_world_unlocks_on_evidence_not_on_time` |
 | 14 | Question provenance is retained | ✅ | `test_14_question_provenance_is_retained`, `test_reported_interview_problems_carry_a_disclaimer` |
 | 15 | At least 300 validated problems | ✅ | `test_15_at_least_300_validated_problems` — **308**, zero validation errors |
-| 16 | Quora interview profile works | ✅ | `test_16_quora_interview_profile_works` — including rising difficulty |
+| 16 | practical interview profile works | ✅ | `test_16_practical_interview_profile_works` — including rising difficulty |
 | 17 | Game remains fun after the first hour | ✅ | `test_17_game_has_depth_beyond_the_first_hour` — 308 problems, 17 regions, 14 bosses, 44 items, 4 sets, 5 secrets, 9 encounter types |
 | 18 | Learning gains can be measured | ✅ | `test_18_learning_gains_are_measurable` — readiness demonstrably rises with evidence |
 | 19 | The player voluntarily wants to continue | ✅ | `test_19_the_loop_offers_a_reason_to_continue` — XP, loot, scheduled retests, daily quests, a next encounter that is never a repeat |

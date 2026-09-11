@@ -255,7 +255,11 @@ export class Overworld {
     let last = performance.now();
     const loop = (now) => {
       if (!this.running) return;
-      const dt = Math.min(0.05, (now - last) / 1000);
+      // rAF stamps a frame with the time the frame STARTED, which can predate
+      // the performance.now() taken a moment ago in start(). Without the floor
+      // the first dt is negative, this.time goes with it, and every animation
+      // that indexes a frame array by time reads off the front of it.
+      const dt = Math.min(0.05, Math.max(0, (now - last) / 1000));
       last = now;
       this.update(dt);
       this.draw();

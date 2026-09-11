@@ -747,7 +747,7 @@ def build() -> list:
             "        if counts[ch] == 1:\n"
             "            return i\n"
             "    return -1\n",
-            [("classic", ["leetcode"]), ("none", ["aabb"])],
+            [("classic", ["sandstorm"]), ("none", ["aabb"])],
             [("long", ["ab" * 40000 + "z"]), ("single", ["x"]), ("empty", [""])],
             "performance", SHIELD,
             nudge="`s.count(ch)` walks the entire string. Doing that per character is the "

@@ -148,22 +148,42 @@ class TestAcceptance(GameTest):
             skills[name].mastery = 70
         self.assertIn("binary_tree_canopy", world.unlocked_regions(skills, set()))
 
-    def test_14_question_provenance_is_retained(self):
+    def test_14_provenance_is_honest_and_company_agnostic(self):
+        """Reported patterns carry the disclaimer and name nobody.
+
+        Naming an employer would be a claim we cannot stand behind: these
+        are recurring shapes, not questions anyone confirmed was asked. So
+        the contract is the disclaimer, not the attribution.
+        """
         reported = [p for p in self.corpus if p.source_type == "REPORTED_INTERVIEW"]
         self.assertGreaterEqual(len(reported), 8)
         for p in reported:
-            self.assertTrue(p.reported_company)
             self.assertIn("not a guarantee", p.provenance_note.lower())
+            self.assertFalse(
+                (p.reported_company or "").strip(),
+                "%s names an employer" % p.id,
+            )
+
+    def test_14b_no_employer_is_named_anywhere_in_the_corpus(self):
+        """Agnostic everywhere, not just in the provenance field."""
+        banned = ("quora", "leetcode", "codesignal", "hackerrank", "faang")
+        for p in self.corpus:
+            blob = " ".join(str(x) for x in (
+                p.title, p.problem_statement, p.provenance_note,
+                p.reported_company or "", " ".join(p.tags or ()),
+            )).lower()
+            for word in banned:
+                self.assertNotIn(word, blob, "%s mentions %s" % (p.id, word))
 
     def test_15_at_least_300_validated_problems(self):
         self.assertGreaterEqual(len(self.corpus), 300)
         self.assertEqual(len(self.report.errors), 0)
 
-    def test_16_quora_interview_profile_works(self):
+    def test_16_practical_interview_profile_works(self):
         g = self.game()
-        g.set_profile("QUORA")
+        g.set_profile("PRACTICAL")
         run = g.start_interview("GAUNTLET")
-        self.assertEqual(run["run"]["profile"], "QUORA")
+        self.assertEqual(run["run"]["profile"], "PRACTICAL")
         self.assertGreaterEqual(len(run["problems"]), 3)
         difficulties = [p["difficulty"] for p in run["problems"]]
         order = ["TUTORIAL", "EASY", "MEDIUM", "HARD", "ELITE", "BOSS"]

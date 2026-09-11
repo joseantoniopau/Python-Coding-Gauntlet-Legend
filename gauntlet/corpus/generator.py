@@ -556,9 +556,9 @@ def generate(per_template: int = 8) -> list:
             skin = SKINS[i % len(SKINS)]
             spec = builder(skin, index)
             index += 1
-            profile = ({"QUORA": 1.0, "GENERAL_SWE": 1.0, "SECURITY_ENGINEERING": 2.5}
+            profile = ({"PRACTICAL": 1.0, "GENERAL_SWE": 1.0, "SECURITY_ENGINEERING": 2.5}
                        if spec.pop("security", False)
-                       else {"QUORA": 1.5, "GENERAL_SWE": 1.5, "SECURITY_ENGINEERING": 1.0})
+                       else {"PRACTICAL": 1.5, "GENERAL_SWE": 1.5, "SECURITY_ENGINEERING": 1.0})
             security = skin["security"]
             out.append(code_problem(
                 id=f"gen-{name}-{skin['key']}-{i}",

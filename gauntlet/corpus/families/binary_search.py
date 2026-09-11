@@ -5,7 +5,7 @@ import bisect
 
 from ._base import code_problem
 
-Q = {"QUORA": 2.0, "GENERAL_SWE": 2.5, "SECURITY_ENGINEERING": 1.0}
+Q = {"PRACTICAL": 2.0, "GENERAL_SWE": 2.5, "SECURITY_ENGINEERING": 1.0}
 VIZ = {"type": "binary_search", "caption": "Half the world disappears each step."}
 PSEUDO = """
 lo, hi = 0, len(data) - 1

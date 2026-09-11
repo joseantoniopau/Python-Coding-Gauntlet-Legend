@@ -13,26 +13,48 @@
  * moment the game has that the player will describe to someone else afterwards.
  * So the bosses move out of the mob pipeline and get their own:
  *
- *   64x64, or 96x64 for the winged and serpentine ones.
- *   Five frames — idle, the exhale, a wind-up, the attack, and a hurt pose.
+ *   64x64, or 96x64 for the winged and serpentine ones, DRAWN AT 1.75 with its
+ *     feet under the floor — 112 pixels against the hero's 72, reaching from
+ *     just under the ceiling of the stage down through the ground line. A boss
+ *     the same height as the thing fighting it is a mob with more health.
+ *   Five frames — idle, the exhale, a wind-up, the attack, and a hurt pose —
+ *     and six BEATS inside the idle loop, which each moving part reads at its
+ *     own rate. Uniform motion is the tell of cheap animation, and the fix is
+ *     not more frames, it is parts that disagree about where they are.
+ *   Three PHASES. The fight already had six (world.BOSS_PHASES); until now the
+ *     art did not know about any of them. Now the armour opens along authored
+ *     fault lines, the plate spalls, and a core lights inside and throws its
+ *     light back onto the creature's own bone and chrome.
  *   Separate animated parts: a jaw, a wing, a tail, an orbiting skull, a chain.
  *   A contre-jour rim in the boss's own colour, because the stage is near-black
  *     and a near-black creature on it is a hole, not a silhouette.
+ *   An ENTRANCE: four beats, up through the floor, rim first, crown last.
+ *
+ * Fifteen colours, and this file now holds to it. The whole bestiary is inside
+ * the budget — worst case fifteen exactly — which it was not before: the way
+ * a boss carrying steel AND bone AND gold AND a tabard fits is that the dark
+ * end of every hard material is ONE tone, the void and the outline are ONE
+ * tone, and a chrome specular and a chain highlight are the same pixel. That
+ * is rule 1 of docs/08-art-direction.md doing the job it is there to do.
  *
  * It reuses the sprites.js engine rather than reimplementing it. That matters:
  * ramp() is what makes generated art read as 16-bit instead of plastic, and a
  * second copy of it would drift.
  *
- * Determinism: every sprite is keyed on (archetype, colour, frame) and cached.
- * Wear and pitting come from rng(hash(key)), so the Hash Titan has the same
- * scars in every session forever. Nothing allocates inside a render loop.
+ * Determinism: every sprite is keyed on (archetype, colour, frame, phase, beat)
+ * and cached. Wear, pitting and the fault lines come from rng(hash(key)), so
+ * the Hash Titan has the same scars in every session forever and cracks in the
+ * same places every time it is brought to its second phase. Nothing allocates
+ * inside a render loop: a whole fight's working set is 45 canvases, warmBoss()
+ * builds one phase of it in one call, and 3600 drawn frames after that cost
+ * zero allocations.
  */
 
 /* Single line on purpose: the project's parse check strips /^import.*$/ per
  * line, and a wrapped import statement leaves its own tail behind. */
 import { ramp, mix, shade, rng, hash, drawGrid, applyRim, normalise, shiftRows, bobGrid, sinkRows, squashRows, widenRows, drawGroundShadow } from './sprites.js';
 
-export const BOSS_ART_VERSION = 2;
+export const BOSS_ART_VERSION = 3;
 
 /* One box height for every boss, so the battle layer never has to special-case
  * a vertical offset. Width is the only thing that varies: the winged and the
@@ -72,34 +94,77 @@ export const BOSS_GLYPHS = 'oOQBHLdDaAkewWgGnbCctTsrRfuUxXzZjJimMl';
  * between the two files without being recoloured. Materials that are not the
  * creature — steel, bone, gold — hold their own hue and do NOT take the boss
  * colour, otherwise every boss becomes a monochrome study and the accent stops
- * meaning anything. Only o/O/Q/u and the body ramp carry identity. */
-export function bossPalette(base, accentHex) {
-  const r = ramp(base || '#8a8f9c');
-  const a = ramp(accentHex || r.light2);
+ * meaning anything. Only o/O/Q/u and the body ramp carry identity.
+ *
+ * `phase` is the third dimension, and it is where a fight stops looking like
+ * one drawing with a health bar beside it. See BOSS_PHASE for what the three
+ * states mean; here is what they do to the light:
+ *
+ *   whole    as authored. Cold metal, cold bone.
+ *   cracked  the body ramp is scorched — shadows deepen and rotate toward the
+ *            void, the rim cools, the tabard goes black with dried blood.
+ *   core     something inside is burning and lighting the outside. The body
+ *            ramp takes the accent, the contre-jour rim goes hot, and — the
+ *            part that matters for the bible — bone and chrome pick that light
+ *            up in their speculars while keeping their own hue. Chrome lit by
+ *            a furnace is still chrome; chrome tinted the colour of a furnace
+ *            is plastic.
+ */
+export function bossPalette(base, accentHex, phase = 0) {
+  const ph = phase | 0;
+  const cracked = ph === 1, lit = ph >= 2;
+  const src = base || '#8a8f9c';
+  const acc = accentHex || ramp(src).light2;
+  const r = ramp(lit ? mix(src, acc, 0.22) : src);
+  const a = ramp(acc);
+  const heat = a.light2;
   const steel = ramp('#8d94a6');
   const bone = ramp('#d6d0bb');
-  const cloth = ramp(mix(base || '#8a8f9c', '#171320', 0.58));
+  const cloth = ramp(mix(src, '#171320', cracked ? 0.66 : 0.58));
   const gold = ramp('#d9a63c');
   const blood = ramp('#8e1d28');
   const wood = ramp('#6a4d33');
+  /* One knob, used everywhere a material should show that it is standing in
+   * the core's light rather than being made of it. */
+  const seen = (hex, t) => (lit ? mix(hex, heat, t) : cracked ? mix(hex, '#0c0a14', t * 0.9) : hex);
+  /* The shared dark. Every hard material's deepest step collapses onto ONE
+   * tone: steel's shadow, bone's shadow and an eye socket's rim are the same
+   * pixel value. This is not a shortcut — it is rule 1 of the art direction
+   * (docs/08), and it is what keeps a boss carrying steel AND bone AND gold
+   * AND a tabard inside the fifteen-colour budget. Collapsing the dark ends is
+   * also simply true: in a near-black ambient every material converges. */
+  const deep = seen(mix(steel.shadow2, bone.shadow1, 0.5), 0.08);
+  const spec = seen(steel.light2, 0.3);
   return {
-    o: mix(r.outline, '#08070d', 0.62),
-    O: r.rim,
-    Q: mix(r.light1, base || '#8a8f9c', 0.3),
-    D: r.shadow2, d: r.shadow1, B: r.base, L: r.light1, H: r.light2,
+    o: mix(r.outline, '#08070d', cracked ? 0.74 : 0.62),
+    O: lit ? mix(r.rim, heat, 0.45) : r.rim,
+    Q: lit ? mix(r.light1, heat, 0.55) : mix(r.light1, src, cracked ? 0.48 : 0.3),
+    D: cracked ? mix(r.shadow2, '#07060c', 0.35) : r.shadow2,
+    d: cracked ? mix(r.shadow1, '#0b0912', 0.28) : r.shadow1,
+    B: r.base, L: r.light1, H: lit ? mix(r.light2, heat, 0.3) : r.light2,
     a: a.base, A: a.light2,
-    k: '#07060b', e: '#170f21', w: '#eef2ff', W: '#ffffff',
-    g: steel.base, G: steel.light2, n: steel.shadow2,
-    b: bone.base, C: bone.light2, c: bone.shadow1,
-    t: cloth.base, T: cloth.light1, s: cloth.shadow2,
-    r: '#ff7a24', R: '#ffd473', f: '#8c1f08',
-    u: mix(r.light2, '#ffffff', 0.34), U: '#ffffff',
-    x: blood.base, X: blood.light2,
-    z: gold.base, Z: gold.light2,
+    // The void and the outline are one colour. Every sprite here pays for its
+    // outline already; an eye socket, a visor slit, an open maw and a fresh
+    // fissure are all the same absence of light, and charging a separate
+    // palette slot for each of them is what puts a boss over budget.
+    k: mix(r.outline, '#08070d', cracked ? 0.74 : 0.62),
+    // e/c/n are one tone; w is bone-white; M is the steel specular. Six glyphs,
+    // three colours, and no sprite pays for a distinction it never shows.
+    e: deep, n: deep, c: deep,
+    w: seen(bone.light2, 0.3), W: '#ffffff',
+    g: seen(steel.base, 0.14), G: spec, M: spec,
+    b: seen(bone.base, 0.14), C: seen(bone.light2, 0.3),
+    t: cloth.base, T: cloth.light1, s: cracked ? mix(r.shadow2, '#07060c', 0.35) : r.shadow2,
+    r: '#ff7a24', R: '#ffd473',
+    u: lit ? mix(heat, '#ffffff', 0.42) : mix(r.light2, '#ffffff', cracked ? 0.2 : 0.34),
+    U: '#ffffff',
+    x: cracked ? mix(blood.base, '#140610', 0.3) : blood.base, X: blood.light2,
+    f: cracked ? mix(blood.base, '#140610', 0.3) : blood.base,   // ember's deep step is the blood tone
+    z: seen(gold.base, 0.18), Z: seen(gold.light2, 0.34),
     j: wood.shadow1, J: wood.light1,
-    i: '#7fe6ff',
-    m: '#353a47', M: '#9aa3b5',
-    l: '#2a1f19',
+    i: lit ? mix('#7fe6ff', heat, 0.35) : '#7fe6ff',
+    m: mix(r.outline, '#08070d', cracked ? 0.74 : 0.62),          // chain shadow is the outline
+    l: wood.shadow1,
   };
 }
 
@@ -206,6 +271,120 @@ function patina(grid, seed, amount, glyph) {
   });
 }
 
+/* ---------------- damage as art ----------------
+ * The phase system, at the grid level. The requirement is that a phase change
+ * be legible with the health bar covered up: not a tint, but a different
+ * object. Three passes do it, and they run in this order because each one
+ * reads what the last one wrote.
+ */
+
+/* Every glyph that counts as the creature's own mass. Cracks run through these
+ * and stop at bone-white teeth, at a lit core, and at the outline — a fissure
+ * that crosses an eye socket reads as a drawing mistake, not as damage. */
+const MASS = 'BLHdDgGnbCcaAxXzZjJ';   // cloth is not in it: robes tear, they do not crack
+const isMass = ch => MASS.indexOf(ch) >= 0;
+
+/* One fissure, walked downward from an anchor with a deterministic wobble.
+ * The crack itself is void; the pixel on its lit side takes the glow glyph, so
+ * at phase 2 the fissure is a seam of light rather than a black scratch. */
+function fissure(cells, ox, oy, len, rand, glow, wide) {
+  let x = ox;
+  for (let i = 0; i < len; i++) {
+    const y = oy + i;
+    const row = cells[y];
+    if (!row) break;
+    if (i > 0) x += rand() < 0.36 ? (rand() < 0.5 ? -1 : 1) : 0;
+    if (x < 1 || x >= row.length - 1) break;
+    if (!isMass(row[x])) { if (row[x] === T || row[x] === 'o' || row[x] === 'O' || row[x] === 'Q') break; continue; }
+    if (isMass(row[x - 1])) row[x - 1] = glow;
+    row[x] = 'k';
+    if (wide && i % 2 === 0 && isMass(row[x + 1])) row[x + 1] = 'k';
+  }
+}
+
+/* Cracked armour. `faults` are authored anchors in assembled-grid coordinates:
+ * the two or three places on THIS creature where a blow would actually open it
+ * — a shoulder seam, a sternum, the join above a haunch. Scattering them by
+ * rng instead would put a fissure through a horn. */
+function fracture(grid, seed, phase, faults) {
+  if (!phase || !faults || !faults.length) return grid;
+  const w = Math.max(...grid.map(r => r.length));
+  const cells = normalise(grid, w).map(r => r.split(''));
+  const rand = rng(hash(`${seed}|fault`) || 7);
+  const glow = phase >= 2 ? 'U' : 'u';
+  for (let i = 0; i < faults.length; i++) {
+    const f = faults[i];
+    const len = (f[2] || 10) + (phase >= 2 ? 6 : 0);
+    fissure(cells, f[0] | 0, f[1] | 0, len, rand, glow, phase >= 2);
+    if (phase >= 2) fissure(cells, (f[0] | 0) + 2, (f[1] | 0) + 3, Math.round(len * 0.6), rand, glow, false);
+  }
+  /* Spall: chips knocked off the plate around each fault. Cheap, and it is
+   * what stops the cracks reading as drawn-on lines. */
+  for (const f of faults) {
+    for (let n = 0; n < (phase >= 2 ? 7 : 4); n++) {
+      const y = (f[1] | 0) + Math.floor(rand() * 12);
+      const x = (f[0] | 0) - 3 + Math.floor(rand() * 7);
+      const row = cells[y];
+      if (!row || x < 1 || x >= row.length - 1) continue;
+      if (isMass(row[x])) row[x] = rand() < 0.3 ? 'D' : 'k';
+    }
+  }
+  return cells.map(r => r.join(''));
+}
+
+/* The core. Most of these creatures already carry one — the titan's vault
+ * lock, the golem's furnace, the lich's soul in the ribs — so phase 2 promotes
+ * what is there rather than pasting a second one on top: glow becomes core,
+ * core becomes white. The ones that were authored cold get an anchor instead,
+ * stamped only where there is already mass to burn through. */
+const CORE_SEED = [
+  '.ouo.',
+  'ouUuo',
+  'oUWUo',
+  'ouUuo',
+  '.ouo.',
+];
+const CORE_OPEN = [
+  '..ouuo..',
+  '.ouUUuo.',
+  'ouUWWUuo',
+  'uUWWWWUu',
+  'ouUWWUuo',
+  '.ouUUuo.',
+  '..ouuo..',
+];
+
+/* Stamp that writes only over the creature's own mass, so a core opening in
+ * the chest never sprays light outside the silhouette. */
+function stampMasked(grid, src, ox, oy) {
+  const w = Math.max(...grid.map(r => r.length));
+  const cells = normalise(grid, w).map(r => r.split(''));
+  for (let y = 0; y < src.length; y++) {
+    const row = cells[y + (oy | 0)];
+    if (!row) continue;
+    for (let x = 0; x < src[y].length; x++) {
+      const ch = src[y][x];
+      if (ch === T || ch === ' ') continue;
+      const tx = x + (ox | 0);
+      if (tx < 0 || tx >= row.length) continue;
+      if (!isMass(row[tx]) && row[tx] !== 'k' && row[tx] !== 'u' && row[tx] !== 'U') continue;
+      row[tx] = ch;
+    }
+  }
+  return cells.map(r => r.join(''));
+}
+
+function ignite(grid, phase, core) {
+  if (phase < 2) return grid;
+  const hot = grid.map(row => row.replace(/U/g, 'W').replace(/u/g, 'U'));
+  return core ? stampMasked(hot, CORE_OPEN, core[0] - 3, core[1] - 3) : hot;
+}
+
+function ember(grid, phase, core) {
+  if (phase !== 1 || !core) return grid;
+  return stampMasked(grid, CORE_SEED, core[0] - 2, core[1] - 2);
+}
+
 /* Lean a row range progressively, one pixel per `every` rows. Necks, tails and
  * chains all bend rather than slide, and a uniform shiftRows cannot do that. */
 function skewRows(grid, from, to, total) {
@@ -262,6 +441,111 @@ export function frameIndex(frame) {
   if (typeof frame === 'number') return ((frame | 0) % BOSS_FRAME_COUNT + BOSS_FRAME_COUNT) % BOSS_FRAME_COUNT;
   const row = BOSS_FRAME_TABLE[String(frame || 'idle').toLowerCase()];
   return row ? row.index : 0;
+}
+
+/* ================================================================
+ * PHASES
+ * ================================================================
+ * The fight already has phases. gauntlet/world.py BOSS_PHASES names six of
+ * them — recognize, explain, implement, edges, complexity, variant — and
+ * fx.bossIntro lights one pip per phase before the first cast. Until now none
+ * of that reached the art: the creature that opened the fight was, pixel for
+ * pixel, the creature that closed it.
+ *
+ * Six art states would be six sprite sets nobody can tell apart. Three can be
+ * read across a room, so the six fight phases fold onto three looks:
+ *
+ *   whole    intact. This is the thing that walked in.
+ *   cracked  armour opened along its real seams, plate chipped, the light on
+ *            it gone cold. It has been hurt and it is not hiding it.
+ *   core     the fissures are lit from inside, the core is open, and the
+ *            creature's own light is falling on its bone and its chrome.
+ *
+ * bossPhase() takes whatever the caller already has — a world.py phase key, a
+ * phase index out of a count, fx's lit-pip count, or a health fraction — and
+ * returns one of the three. Nothing new has to be plumbed for the art to start
+ * answering the fight.
+ */
+export const BOSS_PHASE = Object.freeze({ WHOLE: 0, CRACKED: 1, CORE: 2 });
+export const BOSS_PHASE_NAMES = Object.freeze(['whole', 'cracked', 'core']);
+export const BOSS_PHASE_COUNT = BOSS_PHASE_NAMES.length;
+
+/* The six fight phases of world.BOSS_PHASES, mapped onto the three looks. The
+ * break lands where the fight's own difficulty breaks: naming and explaining
+ * cost it nothing, implementing opens it, and the last two are fought against
+ * something already burning. */
+export const BOSS_PHASE_FOR_KEY = Object.freeze({
+  recognize: 0, explain: 0,
+  implement: 1, edges: 1,
+  complexity: 2, variant: 2,
+  // the encounter kinds, for a caller holding those instead
+  pattern_encounter: 0, communication: 0, code_battle: 1,
+  edge_case_trap: 1, complexity_duel: 2, memory_ambush: 2,
+});
+
+export function phaseIndex(phase) {
+  if (typeof phase === 'number' && Number.isFinite(phase)) {
+    return Math.max(0, Math.min(BOSS_PHASE_COUNT - 1, phase | 0));
+  }
+  const row = BOSS_PHASE_FOR_KEY[String(phase || '').toLowerCase()];
+  return row === undefined ? 0 : row;
+}
+
+/* Accepts, in order of preference: an explicit art phase; a world.py phase key
+ * or an index-out-of-count; fx's pipsLit/pips; a health fraction. Anything it
+ * cannot read is phase 0, because a boss that arrives already cracked has
+ * thrown away the only moment where cracking it means something. */
+export function bossPhase(state) {
+  if (state === undefined || state === null) return 0;
+  if (typeof state === 'number') {
+    // A bare number is a fraction of health remaining when it is in [0,1] and
+    // not a whole number; otherwise it is an art phase index.
+    if (state > 0 && state < 1) return state > 0.66 ? 0 : state > 0.33 ? 1 : 2;
+    return phaseIndex(state);
+  }
+  if (typeof state === 'string') return phaseIndex(state);
+  if (state.artPhase !== undefined) return phaseIndex(state.artPhase);
+  if (state.phaseKey !== undefined) return phaseIndex(state.phaseKey);
+  const of = (n, total) => {
+    if (!(total > 1)) return 0;
+    const t = Math.max(0, Math.min(1, n / (total - 1)));
+    return t < 0.34 ? 0 : t < 0.7 ? 1 : 2;
+  };
+  if (typeof state.phase === 'string') return phaseIndex(state.phase);
+  if (Number.isFinite(state.phase) && Number.isFinite(state.phases)) return of(state.phase, state.phases);
+  if (Number.isFinite(state.pipsLit) && Number.isFinite(state.pips)) return of(state.pipsLit - 1, state.pips);
+  if (Number.isFinite(state.hp) && Number.isFinite(state.hpMax) && state.hpMax > 0) {
+    const left = state.hp / state.hpMax;
+    return left > 0.66 ? 0 : left > 0.33 ? 1 : 2;
+  }
+  if (Number.isFinite(state.phase)) return phaseIndex(state.phase);
+  return 0;
+}
+
+/* ---------------- the beat ----------------
+ * Six sub-positions inside the idle loop. The five frames carry the POSE; the
+ * beat carries the parts, and every part reads it at its own rate — a jaw at
+ * 1.0, a wing at 0.5, a tail at 0.75, a chain at 1.5. That is the whole fix
+ * for "uniform motion reads as cheap": with one clock and four rates nothing
+ * on the creature is ever at the top of its arc at the same time as anything
+ * else, and the eye cannot find the loop.
+ *
+ * Beats are quantised rather than continuous because a frame is a cached
+ * canvas, not a transform. Six is the smallest number that still hides the
+ * loop at the idle period the creatures run at, and it costs twelve cached
+ * idle frames per boss per phase.
+ */
+export const BOSS_BEATS = 6;
+const TAU = Math.PI * 2;
+
+/* Beat 0 is the authored pose exactly — every drift is measured RELATIVE to
+ * it. That is what keeps reduced motion, and every existing caller that never
+ * passes a beat, looking like the art as drawn. */
+function driftAt(d, beat) {
+  if (!d || !beat) return [0, 0];
+  const at = (b) => Math.sin(TAU * ((d.rate === undefined ? 1 : d.rate) * b / BOSS_BEATS + (d.phase || 0)));
+  const k = at(beat) - at(0);
+  return [Math.round((d.x || 0) * k), Math.round((d.y || 0) * k)];
 }
 
 /* ---------------- pose kit ----------------
@@ -346,12 +630,12 @@ const POSES = {
 const LICH_BODY = [
   '',
   'o..o..o',
-  'oCo.oCooC',
-  'oCCooCCCoC',
+  'oZo.oZooZ',
+  'oCZooCZCoC',
   'oCCCCCCCCC',
-  'ozzzzzzzzz',
+  'ozZzZzZzZz',
   'obbbbbbbbb',
-  'obCbbbbbbb',
+  'obzzzzzzzz',
   'occcccbbbbb',
   'obkkkkbbbbb',
   'obkkukbbbbb',
@@ -359,27 +643,27 @@ const LICH_BODY = [
   'obbkkbbbbbb',
   'obbbbbbbbbb',
   'occbbbbbbkk',
-  'occbbbbbbkk',
+  'occzzzzzzkk',
   'obCbCbCbCb',
   'occcccccccc',
   'ooooooooo',
   'obCb',
-  'obCb',
+  'obzb',
   'obCbb',
   'occbbbbb',
-  'oCo....occbbbbb',
-  'oCbo...occbbbbbb',
-  'oCbbCoocbbbbbbbbb',
-  'occbbbbcbbbbbbbbbb',
+  'oZo....occbbbbb',
+  'oZzo...occbbbbbb',
+  'oZbzCoocbbbbbbbbb',
+  'oczzzzzcbbbbbbbbbb',
   'oooooooootttttttttt',
-  'otttttttttttttttttt',
+  'ozzzzzzzzzzzzzzzzzz',
   'ottttttttttttttttt',
-  'otttttttttttttttt',
-  'ottttttttttttttt',
-  'otttttuuutttttttt',
-  'ottttuUUUuttttttt',
-  'otttttuuutttttttt',
-  'ottttttttttttttt',
+  'otttttttzzztttttt',
+  'ottttttzZUZzttttt',
+  'otttttuuZuutttttt',
+  'ottttuUUUUuttttttt',
+  'otttttuuZuuttttttt',
+  'ottttttzzzttttttt',
   'ottttttttttttttt',
   'osttttttttttttttt',
   'osttttttttttttttt',
@@ -396,7 +680,7 @@ const LICH_BODY = [
   'ossssssttttttttttttttt',
   'osssssstttttttttttttttt',
   'osssssttttttttttttttttt',
-  'oosssstttttttttttttttt',
+  'oossssttzzzzzzzzzzzzzz',
   'ooooooooooooooooooooo',
 ];
 
@@ -409,34 +693,34 @@ const LICH_STAFF = [
   'ouUUUuo',
   '.ouUuo.',
   '..ouo..',
-  '.oCoCo.',
-  'oCo.oCo',
-  'oCbbbCo',
-  '.oCbCo.',
-  '..oCo..',
+  '.oZoZo.',
+  'oZo.oZo',
+  'oZbbbZo',
+  '.oZbZo.',
+  '..ozo..',
   '..obo..',
   '..oCo..',
   '..obo..',
-  '..obo..',
+  '..ozo..',
   '..oCo..',
   '..obo..',
   '..obo..',
-  '..oCo..',
+  '..ozo..',
   '..obo..',
   '..obo..',
   '..oCo..',
-  '..obo..',
-  '..obo..',
-  '..oCo..',
-  '..obo..',
+  '..ozo..',
   '..obo..',
   '..oCo..',
   '..obo..',
-  '..obo..',
+  '..ozo..',
   '..oCo..',
   '..obo..',
   '..obo..',
-  '..occo.',
+  '..ozo..',
+  '..obo..',
+  '..obo..',
+  '..ozzo.',
   '..ooo..',
 ];
 
@@ -479,10 +763,10 @@ const LICH_ORB = [
 const DRAGON_BODY = [
   '.............ooooooo........',
   '..........oooBBBBBBBooo.....',
-  '........ooBBBBBBBBBBBBBoo...',
-  '.......oBBBBBBBBBBBBBBBBBo..',
-  '......oBBBBBBBBBBBBBBBBBBBo.',
-  '.....oBBBBBBBBBBBBBBBBBBBBBo',
+  '........ooBBnGGGGGnBBBBoo...',
+  '.......oBBBnGGGGGGGGGnBBBo..',
+  '......oBBBnGGnBBBBBnGGnBBBo.',
+  '.....oBBBBnGnBBBBBBBnGnBBBBo',
   '....oBBBBBBBBBBBBBBBBBBBBBBo',
   '...oBBBBBBBBBBBBBBBBBBBBBBBo',
   '..oBBBBBBBBBBBBBBBBBBBBBBBBo',
@@ -508,8 +792,8 @@ const DRAGON_BODY = [
   '..oBBBBo........oBBBBBBBBBo.',
   '.oBBBBBo........oBBBBBBBBBBo',
   '.oBBBBBo........oBBBBBBBBBBo',
-  'oBCBCBo..........oBBBBBBBBBo',
-  'oCCCCCo..........oBCBCBCBBBo',
+  'oGnGnGo..........oBBBBBBBBBo',
+  'oGGGGGo..........oBCBCBCBBBo',
   'oooooo............oCCCCCCCoo',
   '...................oooooooo.',
 ];
@@ -528,25 +812,25 @@ const DRAGON_NECK = [
   'oBBweBBBBBBweBBBBBBBBBBo........',
   'oBweeBBBBBweeBBBBBBBBBBo........',
   'oBBweBBBBBBweBBBBBBBBBBBo.......',
-  'oBBBBBBBBBBBBBBBBBBBBBBBo.......',
-  'oBBBBBBBBBBBBBBBBBBBBBBBo.......',
+  'oBBnGGnBBBBBBBBBBBBBBBBBBo......',
+  'oBBnGGnBBBBBBBBBBBBBBBBBBo......',
   '.oCoCoCoCoBBBBBBBBBBBBBBo.......',
   '..ooooooooBBBBBBBBBBBBBBo.......',
-  '.........oBBBBBBBBBBBBBBBo......',
-  '.........ooBBBBBBBBBBBBBBo......',
-  '..........oaaBBBBBBBBBBBBo......',
-  '..........oaaaBBBBBBBBBBBBo.....',
-  '...........oaaaBBBBBBBBBBBo.....',
-  '...........oaaaaBBBBBBBBBBo.....',
-  '............oaaaBBBBBBBBBBBo....',
-  '............oaaaaBBBBBBBBBBo....',
-  '.............oaaaBBBBBBBBBBo....',
-  '.............oaaaaBBBBBBBBBBo...',
-  '..............oaaaBBBBBBBBBBo...',
-  '..............oaaaaBBBBBBBBBBo..',
-  '...............oaaaBBBBBBBBBBo..',
-  '...............oaaaaBBBBBBBBBBo.',
-  '................oaaaBBBBBBBBBBo.',
+  '.........oBBBBBBBBBBBBBBGo......',
+  '.........ooGGGGGGGGGGGGGGo......',
+  '..........oaanGGGGGGGGGGGo......',
+  '..........oaaaBBBBBBBBBBBGo.....',
+  '...........oaaaBBBBBBBBBBGo.....',
+  '...........oaaaaBBBBBBBBBGo.....',
+  '............oaaaBBBBBBBBBBGo....',
+  '............oaaaaBBBBBBBBBGo....',
+  '.............oaaaBBBBBBBBBGo....',
+  '.............oaaaaBBBBBBBBBGo...',
+  '..............oaaaBBBBBBBBBGo...',
+  '..............oaaaaBBBBBBBBBGo..',
+  '...............oaaaBBBBBBBBBGo..',
+  '...............oaaaaBBBBBBBBBGo.',
+  '................oaaaBBBBBBBBBGo.',
 ];
 
 /* The lower jaw is its own layer. On the attack it drops four pixels and the
@@ -561,8 +845,8 @@ const DRAGON_JAW = [
 
 const DRAGON_JAW_OPEN = [
   'okkkkkkkkkko...',
-  'orrkkkkkkkkBo..',
-  'oRRrrkkkkkkBo..',
+  'ouukkkkkkkkBo..',
+  'oUUuukkkkkkBo..',
   'oCoCoCoCoCoBo..',
   'oBBBBBBBBBBBo..',
   '.oBBBBBBBBBBo..',
@@ -572,29 +856,29 @@ const DRAGON_JAW_OPEN = [
 /* Membrane wing: four fingers, a clawed thumb at the leading edge, and a
  * membrane that is one tone darker than the body so it reads as translucent. */
 const DRAGON_WING = [
-  '..............................ooo.....',
-  '.........................ooooodBBo....',
-  '.....................oooodDDDDdBo.....',
+  '..............................ono.....',
+  '.........................ooooonGGo....',
+  '.....................oooodDDDDnGo.....',
   '..................ooodDDDDDDDDdo......',
   '...............oooDDDDDDDDDDDdo.......',
   '.............ooDDDDDDDDDDDDDdo........',
   '...........ooDDDDDDDDDDDDDDBo.........',
   '.........ooDDDDDDDDDDDDDDDBo..........',
   '.......ooDDDDDDDDDDDDDDDDBo...........',
-  '.....ooDDDDDDdoDDDDDDDDDBo............',
-  '....oDDDDDDDdo.oDDDDDDDBo.............',
-  '...oDDDDDDDdo...oDDDDDBBo.............',
-  '..oDDDDDDDdo....oDDDDDBo..............',
-  '..oDDDDDDdo.....oDDDDBo...............',
-  '.oDDDDDDdo......oDDDDBo...............',
-  '.oDDDDDDdo......oDDDBo................',
-  'oDDDDDDdo.......oDDDBo................',
-  'oDDDDDdo........oDDBo.................',
-  'oDDDDdo.........oDDBo.................',
-  'oDDDdo..........oDBo..................',
-  'oDDdo...........oDBo..................',
-  'oDdoo...........oBo...................',
-  'oddo............oBo...................',
+  '.....ooDDDDDDGoDDDDDDDDDBo............',
+  '....oDDDDDDDGo.oDDDDDDDGo.............',
+  '...oDDDDDDDGo...oDDDDDGBo.............',
+  '..oDDDDDDDGo....oDDDDDGo..............',
+  '..oDDDDDDGo.....oDDDDGo...............',
+  '.oDDDDDDGo......oDDDDGo...............',
+  '.oDDDDDDGo......oDDDGo................',
+  'oDDDDDDGo.......oDDDGo................',
+  'oDDDDDGo........oDDGo.................',
+  'oDDDDGo.........oDDGo.................',
+  'oDDDGo..........oDGo..................',
+  'oDDGo...........oDGo..................',
+  'oDGoo...........oGo...................',
+  'oGdo............oGo...................',
   'oodo.............oo...................',
   '.oo...................................',
 ];
@@ -607,7 +891,7 @@ const DRAGON_TAIL = [
   'oBBBoo......oooBBBBBBBBBBo..',
   'oBBBBBoooooBBBBBBBBBBBBBo...',
   '.oBBBBBBBBBBBBBBBBBBBBBo....',
-  '..oCoCoCoCoCoBBBBBBBBoo.....',
+  '..oGnGnGnGnGoBBBBBBBBoo.....',
   '...ooooooooooooooooooo......',
 ];
 
@@ -626,26 +910,26 @@ const DRAGON_TAIL = [
 const KNIGHT_BODY = [
   '',
   'o..o..o',
-  'oGooGGoG',
-  'oGGGGGGGG',
+  'oCooCCoC',
+  'oCCGGGGGG',
   'oGGGGGGGGG',
   'ogggggggggg',
-  'oggggggggggg',
-  'ongggggggggg',
+  'ogGGGGGGGGgg',
+  'onmMmggggggg',
   'okkkkkkkkkkk',
-  'okkiiikkkkkk',
-  'ongggggggggg',
+  'okkiWikkkkkk',
+  'onmMmggggggg',
   'onnggggggggg',
-  'onngggkkkgggg',
-  'onngggggggggg',
-  'onngggkkkgggg',
+  'onngggkikgggg',
+  'onnggMMMggggg',
+  'onngggkikgggg',
   'onnggggggggggg',
   'onnnggggggggg',
   'ooonggggggg',
   'onnggggg',
   'oGo...onngggggg',
-  'oGGGo..onngggggggg',
-  'oGGGGGoonnggggggggg',
+  'oGGGo..onnggMMgggg',
+  'oGGGGGoonnggMMggggg',
   'oggggGGGonngggggggggg',
   'ongggggGGGonngggggggggg',
   'onngggggggGGonnggggggggggg',
@@ -668,17 +952,17 @@ const KNIGHT_BODY = [
   'oonggggggxxxxxxxxxxxx',
   'ooggggggxxxxxxxxxxxx',
   'oggggggo..xxxxxxxxxx',
-  'oggggggo..oxxxxxxxxx',
-  'oggggggo...oxxxxxxxx',
-  'oggggggo....oxxxxxxx',
-  'oggggggo.....oxxxxxx',
-  'oggggggo......oxxxxx',
-  'oggggggo.......oxxxx',
-  'oggggggo........oxxo',
+  'ognMMngo..oxxxxxxxxx',
+  'ognMMngo...oxxxxxxxx',
+  'ognMMngo....oxxxxxxx',
+  'ognMMngo.....oxxxxxx',
+  'ognMMngo......oxxxxx',
+  'ognMMngo.......oxxxx',
+  'ognMMngo........oxxo',
   'oggggggo.........oo.',
   'ongggggno...........',
-  'onggggggno..........',
-  'onggggggno..........',
+  'onggMMggno..........',
+  'onggMMggno..........',
   'onnggggggno.........',
   'oGGGGGGGGGo.........',
   'oggggggggggo........',
@@ -695,8 +979,8 @@ const KNIGHT_SHIELD = [
   'ogzxxxxxxxxzgo',
   'ogzxggggggxzgo',
   'ogzxgooooGxzgo',
-  'ogzxgoWWoGxzgo',
-  'ogzxgoWWoGxzgo',
+  'ogzxgoiWoGxzgo',
+  'ogzxgoWioGxzgo',
   'ogzxgooooGxzgo',
   'ogzxgGGGGGxzgo',
   'ogzxxxxxxxxzgo',
@@ -853,7 +1137,7 @@ const COLOSSUS_BODY = [
   '........oGGGGo',
   '.......oggggggo',
   '.......ogkkkkkgo',
-  '.......ogkiiikggo',
+  '.......ogkuuukggo',
   '.......ogkkkkkggg',
   '.......oggggggggg',
   '.......oGGGGGGGGG',
@@ -907,15 +1191,15 @@ const COLOSSUS_MAUL = [
   'oMnggggGnMo',
   'oMnnnnnnnMo',
   'oMMMMMMMMMo',
-  '.ooojjjooo.',
-  '...ojJjo...',
-  '...ojJjo...',
-  '...ojJjo...',
-  '...ojJjo...',
-  '...ojJjo...',
-  '...ojJjo...',
-  '...ojJjo...',
-  '...ojjjo...',
+  '.ooonnnooo.',
+  '...ongno...',
+  '...ongno...',
+  '...ongno...',
+  '...onGno...',
+  '...ongno...',
+  '...ongno...',
+  '...ongno...',
+  '...onnno...',
   '....ooo....',
 ];
 
@@ -1587,11 +1871,11 @@ const DEMON_WING = [
 /* Chain and flail head. Swings wide on the wind-up and lands on 3. */
 const DEMON_FLAIL = [
   'omo',
-  'oMo',
+  'oCo',
   'omo',
-  'oMo',
+  'oCo',
   'omo',
-  'oMo',
+  'oCo',
   'ooooo',
   'oxXXo',
   'oXrRo',
@@ -1699,162 +1983,238 @@ const WYRM_FIN = [
 const ART = {
   lich: {
     name: 'Lich', wide: false, colour: '#8f3f6f', accent: '#c7a6ff', anim: 'float',
-    body: { half: LICH_BODY, oy: 1 }, wear: 0.05,
+    body: { half: LICH_BODY, oy: 1, drift: { x: 0, y: 1, rate: 1, phase: 0.25 } }, wear: 0.05,
     motion: { bob: 3, sway: 2, phase: 0.50, period: 2600, telegraph: 900 },
+    stage: { scale: 1.75, sink: 11, bias: -8 },
+    core: null,                                       // the reliquary is authored in the ribs
+    faults: [[26, 8, 12], [38, 8, 12], [19, 26, 7], [45, 26, 7]],
     parts: [
       { name: 'hem', grid: LICH_HEM, ox: 16, oy: 53, behind: true,
-        frames: [[0, 0], [0, 1], [-1, -1], [2, 2], [-2, 1]] },
+        frames: [[0, 0], [0, 1], [-1, -1], [2, 2], [-2, 1]],
+        drift: { x: 2, y: 1, rate: 0.5, phase: 0.10 } },
       { name: 'staff', grid: LICH_STAFF, ox: 3, oy: 12,
         frames: [[0, 0], [0, 1], [1, -4], [4, 3], [-3, 2]],
+        drift: { x: 1, y: 2, rate: 0.75, phase: 0.30 },
         alt: { 2: LICH_STAFF_LIT, 3: LICH_STAFF_LIT } },
       { name: 'soul', grid: LICH_ORB, ox: 52, oy: 20,
-        frames: [[0, 0], [1, 2], [4, -4], [-8, 5], [3, 4]] },
+        frames: [[0, 0], [1, 2], [4, -4], [-8, 5], [3, 4]],
+        drift: { x: 4, y: 3, rate: 1.5, phase: 0 } },
     ],
   },
   dragon: {
     name: 'Dragon', wide: true, colour: '#3f9c5a', accent: '#d8c07a', anim: 'flap',
-    body: { grid: DRAGON_BODY, ox: 40, oy: 28 }, wear: 0.04,
+    body: { grid: DRAGON_BODY, ox: 40, oy: 28, drift: { x: 0, y: 1, rate: 1, phase: 0.20 } }, wear: 0.04,
     motion: { bob: 3, sway: 1, phase: 0.30, period: 1500, telegraph: 520 },
+    stage: { scale: 1.5, sink: 4, bias: 0 },
+    core: [55, 40],                                   // furnace behind the sternum
+    faults: [[30, 26, 12], [52, 34, 14], [60, 46, 10]],
     parts: [
+      // The wing is the slowest thing on the creature and the jaw the fastest.
+      // One clock, four rates: nothing is ever at the top of its arc twice.
       { name: 'wing', grid: DRAGON_WING, ox: 46, oy: 6, behind: true,
         frames: [[0, 0], [1, 3], [-2, -3], [3, 6], [2, 2]],
+        drift: { x: 3, y: 2, rate: 0.5, phase: 0 },
         skew: [0, 2, -3, 5, 0] },
       { name: 'tail', grid: DRAGON_TAIL, ox: 62, oy: 48, behind: true,
         frames: [[0, 0], [0, 1], [2, -1], [-2, 2], [3, 1]],
+        drift: { x: 2, y: 1, rate: 0.75, phase: 0.35 },
         skew: [0, 3, -4, 6, -2] },
       { name: 'neck', grid: DRAGON_NECK, ox: 13, oy: 8,
         frames: [[0, 0], [0, 1], [-3, -2], [4, 3], [-4, 2]],
+        drift: { x: 1, y: 1, rate: 1, phase: 0.15 },
         skew: [0, 1, -3, 5, -2] },
       { name: 'jaw', grid: DRAGON_JAW, ox: 13, oy: 21,
         frames: [[0, 0], [0, 1], [-3, -1], [4, 6], [-4, 3]],
+        drift: { x: 0, y: 1, rate: 1.5, phase: 0.5 },
         alt: { 3: DRAGON_JAW_OPEN } },
     ],
   },
   knight: {
     name: 'Knight', wide: false, colour: '#d8d8e0', accent: '#8e1d28', anim: 'heavy',
-    body: { half: KNIGHT_BODY, oy: 4 }, wear: 0.06,
+    body: { half: KNIGHT_BODY, oy: 4, drift: { x: 0, y: 1, rate: 1, phase: 0 } }, wear: 0.06,
     motion: { bob: 1, sway: 0, phase: 0.90, period: 3000, telegraph: 760 },
+    stage: { scale: 1.75, sink: 9, bias: -8 },
+    core: [32, 29],                                   // the reactor under the breastplate
+    faults: [[24, 23, 14], [40, 23, 14], [32, 44, 12]],
     parts: [
       { name: 'shield', grid: KNIGHT_SHIELD, ox: 1, oy: 29,
-        frames: [[0, 0], [0, 1], [-1, -2], [2, 2], [-3, -4]] },
+        frames: [[0, 0], [0, 1], [-1, -2], [2, 2], [-3, -4]],
+        drift: { x: 1, y: 1, rate: 0.5, phase: 0.20 } },
       { name: 'sword', grid: KNIGHT_SWORD, ox: 55, oy: 25,
         frames: [[0, 0], [0, 1], [1, -12], [-3, 6], [4, 3]],
+        drift: { x: 1, y: 2, rate: 0.75, phase: 0.60 },
         alt: { 2: KNIGHT_SWORD_LIT, 3: KNIGHT_SWORD_LIT } },
     ],
   },
   titan: {
     name: 'Titan', wide: false, colour: '#e8a33d', accent: '#f0d79a', anim: 'heavy',
-    body: { half: TITAN_BODY, oy: 6 }, wear: 0.07,
+    body: { half: TITAN_BODY, oy: 6, drift: { x: 0, y: 1, rate: 1, phase: 0.5 } }, wear: 0.07,
     motion: { bob: 2, sway: 0, phase: 0.00, period: 2800, telegraph: 820 },
+    stage: { scale: 1.75, sink: 10, bias: -8 },
+    core: null,
+    faults: [[22, 28, 14], [43, 28, 14]],
     parts: [
       { name: 'keys', grid: TITAN_CHAIN, ox: 46, oy: 27,
         frames: [[0, 0], [1, 1], [-2, -1], [3, 3], [-3, 2]],
+        drift: { x: 3, y: 2, rate: 1.5, phase: 0 },
         skew: [0, 2, -3, 4, -2] },
     ],
   },
   colossus: {
     name: 'Colossus', wide: false, colour: '#3f7f9c', accent: '#a8c8d8', anim: 'heavy',
-    body: { half: COLOSSUS_BODY, oy: 13 }, wear: 0.09,
+    body: { half: COLOSSUS_BODY, oy: 13, drift: { x: 0, y: 1, rate: 1, phase: 0.1 } }, wear: 0.09,
     motion: { bob: 2, sway: 1, phase: 0.62, period: 2200, telegraph: 700 },
+    stage: { scale: 1.75, sink: 10, bias: -8 },
+    core: null,
+    faults: [[20, 30, 14], [45, 32, 12]],
     parts: [
       { name: 'maul', grid: COLOSSUS_MAUL, ox: 1, oy: 44,
-        frames: [[0, 0], [0, 1], [2, -18], [6, 4], [-4, 2]] },
+        frames: [[0, 0], [0, 1], [2, -18], [6, 4], [-4, 2]],
+        drift: { x: 2, y: 2, rate: 0.5, phase: 0.25 } },
     ],
   },
   hydra: {
     name: 'Hydra', wide: true, colour: '#4fb783', accent: '#d8e87a', anim: 'coil',
-    body: { grid: HYDRA_BODY, ox: 28, oy: 35 }, wear: 0.04,
+    body: { grid: HYDRA_BODY, ox: 28, oy: 35, drift: { x: 0, y: 1, rate: 1, phase: 0.4 } }, wear: 0.04,
     motion: { bob: 2, sway: 2, phase: 0.20, period: 1700, telegraph: 480 },
+    stage: { scale: 1.5, sink: 4, bias: 0 },
+    core: [48, 46],
+    faults: [[36, 44, 12], [60, 44, 12]],
     parts: [
+      // Three heads on three rates and three phases. Synchronise them and the
+      // creature stops being a hydra and becomes a hat rack.
       { name: 'neckL', grid: HYDRA_NECK, ox: 32, oy: 18, behind: true,
         frames: [[0, 0], [1, 1], [-2, -2], [-4, 3], [-3, 2]],
+        drift: { x: 2, y: 2, rate: 0.75, phase: 0 },
         skew: [-2, -3, -5, -8, -4], alt: { 3: HYDRA_NECK_BITE } },
       { name: 'neckC', grid: HYDRA_NECK, ox: 43, oy: 13,
         frames: [[0, 0], [-1, 1], [1, -3], [2, 4], [0, 2]],
+        drift: { x: 1, y: 2, rate: 1, phase: 0.33 },
         skew: [0, 1, -2, 3, -1], alt: { 3: HYDRA_NECK_BITE } },
       { name: 'neckR', grid: HYDRA_NECK, ox: 53, oy: 18, flip: true, behind: true,
         frames: [[0, 0], [-1, 2], [2, -2], [5, 3], [3, 1]],
+        drift: { x: 2, y: 2, rate: 1.25, phase: 0.66 },
         skew: [2, 3, 5, 8, 4], alt: { 3: HYDRA_NECK_BITE } },
     ],
   },
   wraith: {
     name: 'Wraith', wide: false, colour: '#7f6ad6', accent: '#d8d0ff', anim: 'float',
-    body: { half: WRAITH_BODY, oy: 8 }, wear: 0.03,
+    body: { half: WRAITH_BODY, oy: 8, drift: { x: 1, y: 1, rate: 1, phase: 0.3 } }, wear: 0.03,
     motion: { bob: 4, sway: 3, phase: 0.40, period: 2300, telegraph: 560 },
+    stage: { scale: 1.75, sink: 12, bias: -8 },
+    core: null,
+    faults: [[16, 30, 10], [46, 30, 10]],
     parts: [
       { name: 'ragL', grid: WRAITH_TAIL, ox: 12, oy: 50, behind: true,
-        frames: [[0, 0], [1, 1], [-2, -1], [3, 2], [-2, 1]] },
+        frames: [[0, 0], [1, 1], [-2, -1], [3, 2], [-2, 1]],
+        drift: { x: 2, y: 2, rate: 0.5, phase: 0 } },
       { name: 'ragR', grid: WRAITH_TAIL, ox: 36, oy: 52, behind: true, flip: true,
-        frames: [[0, 0], [-1, 2], [2, -1], [-3, 1], [2, 2]] },
+        frames: [[0, 0], [-1, 2], [2, -1], [-3, 1], [2, 2]],
+        drift: { x: 2, y: 2, rate: 0.75, phase: 0.4 } },
     ],
   },
   behemoth: {
     name: 'Behemoth', wide: false, colour: '#c4553f', accent: '#f0a86a', anim: 'heavy',
-    body: { half: BEHEMOTH_BODY, oy: 14 }, wear: 0.08,
+    body: { half: BEHEMOTH_BODY, oy: 14, drift: { x: 0, y: 1, rate: 1, phase: 0.15 } }, wear: 0.08,
     motion: { bob: 2, sway: 1, phase: 0.60, period: 2000, telegraph: 600 },
+    stage: { scale: 1.75, sink: 10, bias: -8 },
+    core: [32, 30],
+    faults: [[14, 24, 14], [50, 24, 14]],
     parts: [
       { name: 'tail', grid: BEHEMOTH_TAIL, ox: 0, oy: 34, behind: true,
         frames: [[0, 0], [1, 1], [-2, -2], [3, 2], [-3, 3]],
+        drift: { x: 3, y: 2, rate: 0.75, phase: 0.2 },
         skew: [0, 2, -3, 5, -3] },
     ],
   },
   golem: {
     name: 'Golem', wide: false, colour: '#8a8f9c', accent: '#5a9ec4', anim: 'heavy',
-    body: { half: GOLEM_BODY, oy: 14 }, wear: 0.14,
+    body: { half: GOLEM_BODY, oy: 14, drift: { x: 0, y: 1, rate: 1, phase: 0.5 } }, wear: 0.14,
     motion: { bob: 1, sway: 0, phase: 0.10, period: 3200, telegraph: 980 },
+    stage: { scale: 1.75, sink: 9, bias: -8 },
+    core: null,
+    faults: [[14, 32, 14], [48, 32, 14]],
     parts: [
       { name: 'runeA', grid: GOLEM_RUNE, ox: 5, oy: 21,
-        frames: [[0, 0], [0, 2], [2, -4], [-4, 6], [1, 3]] },
+        frames: [[0, 0], [0, 2], [2, -4], [-4, 6], [1, 3]],
+        drift: { x: 3, y: 3, rate: 1.25, phase: 0 } },
       { name: 'runeB', grid: GOLEM_RUNE, ox: 53, oy: 35,
-        frames: [[0, 0], [0, -2], [-2, -5], [5, 4], [2, 2]] },
+        frames: [[0, 0], [0, -2], [-2, -5], [5, 4], [2, 2]],
+        drift: { x: 3, y: 3, rate: 1.5, phase: 0.5 } },
     ],
   },
   ent: {
     name: 'Ent', wide: false, colour: '#6b8f3f', accent: '#9fd05a', anim: 'root',
-    body: { half: ENT_BODY, oy: 8 }, wear: 0.10,
+    body: { half: ENT_BODY, oy: 8, drift: { x: 1, y: 0, rate: 1, phase: 0.25 } }, wear: 0.10,
     motion: { bob: 1, sway: 2, phase: 0.70, period: 3400, telegraph: 880 },
+    stage: { scale: 1.75, sink: 9, bias: -8 },
+    core: [32, 36],
+    faults: [[22, 44, 14], [42, 44, 14]],
     parts: [
       { name: 'branch', grid: ENT_BRANCH, ox: 4, oy: 34,
         frames: [[0, 0], [1, 1], [-2, -2], [4, 3], [-3, 1]],
+        drift: { x: 2, y: 2, rate: 0.5, phase: 0.15 },
         skew: [0, 2, -4, 6, -3] },
     ],
   },
   necromancer: {
     name: 'Necromancer', wide: false, colour: '#6a4f8f', accent: '#b0e0c0', anim: 'float',
-    body: { half: NECRO_BODY, oy: 14 }, wear: 0.04,
+    body: { half: NECRO_BODY, oy: 14, drift: { x: 0, y: 1, rate: 1, phase: 0.2 } }, wear: 0.04,
     motion: { bob: 2, sway: 1, phase: 0.50, period: 2500, telegraph: 700 },
+    stage: { scale: 1.75, sink: 10, bias: -8 },
+    core: null,
+    faults: [[10, 25, 8], [50, 25, 8]],
     parts: [
       { name: 'skullA', grid: NECRO_SKULL, ox: 48, oy: 24,
-        frames: [[0, 0], [1, 2], [3, -3], [-7, 4], [2, 3]] },
+        frames: [[0, 0], [1, 2], [3, -3], [-7, 4], [2, 3]],
+        drift: { x: 3, y: 3, rate: 1.25, phase: 0.1 } },
       { name: 'skullB', grid: NECRO_SKULL, ox: 8, oy: 32,
-        frames: [[0, 0], [-1, -2], [-3, -2], [6, 5], [-2, 2]] },
+        frames: [[0, 0], [-1, -2], [-3, -2], [6, 5], [-2, 2]],
+        drift: { x: 3, y: 3, rate: 1.5, phase: 0.6 } },
     ],
   },
   automaton: {
     name: 'Automaton', wide: false, colour: '#b0763f', accent: '#7fe6ff', anim: 'tick',
-    body: { half: AUTOMATON_BODY, oy: 11 }, wear: 0.11,
+    body: { half: AUTOMATON_BODY, oy: 11, drift: { x: 0, y: 1, rate: 0.5, phase: 0.25 } }, wear: 0.11,
     motion: { bob: 1, sway: 0, phase: 0.80, period: 1800, telegraph: 400 },
+    stage: { scale: 1.75, sink: 9, bias: -8 },
+    core: [32, 30],
+    faults: [[16, 32, 14], [48, 32, 14]],
     parts: [
+      // The gear indexes a quarter turn on every beat, so it keeps turning
+      // while the rest of the machine is standing still. That is the whole
+      // difference between a machine and a robot suit.
       { name: 'gear', grid: AUTOMATON_GEAR, ox: 26, oy: 35,
         frames: [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]],
+        drift: { x: 1, y: 1, rate: 0.5, phase: 0.6 },
+        altBeat: AUTOMATON_GEAR_TURNED,
         alt: { 1: AUTOMATON_GEAR_TURNED, 3: AUTOMATON_GEAR_TURNED } },
       { name: 'piston', grid: AUTOMATON_PISTON, ox: 4, oy: 29,
-        frames: [[0, 0], [0, 1], [-2, 0], [6, 2], [-3, 1]] },
+        frames: [[0, 0], [0, 1], [-2, 0], [6, 2], [-3, 1]],
+        drift: { x: 0, y: 3, rate: 0.75, phase: 0.1 } },
     ],
   },
   demon: {
     name: 'Demon', wide: false, colour: '#c43f4f', accent: '#ff9d4a', anim: 'flap',
-    body: { half: DEMON_BODY, oy: 11 }, wear: 0.05,
+    body: { half: DEMON_BODY, oy: 11, drift: { x: 0, y: 1, rate: 1, phase: 0.35 } }, wear: 0.05,
     motion: { bob: 2, sway: 1, phase: 0.15, period: 1500, telegraph: 320 },
+    stage: { scale: 1.75, sink: 10, bias: -8 },
+    core: [32, 33],
+    faults: [[18, 40, 12], [46, 40, 12]],
     parts: [
+      // The two wings run at the same rate half a turn apart, so the downbeat
+      // of one is the upbeat of the other and the thing never looks pinned.
       { name: 'wingL', grid: DEMON_WING, ox: -6, oy: 7, behind: true,
         frames: [[0, 0], [1, 3], [-2, -3], [2, 5], [1, 2]],
+        drift: { x: 3, y: 2, rate: 0.5, phase: 0 },
         skew: [0, 2, -3, 4, 0] },
       { name: 'wingR', grid: DEMON_WING, ox: 43, oy: 7, behind: true, flip: true,
         frames: [[0, 0], [-1, 3], [2, -3], [-2, 5], [-1, 2]],
+        drift: { x: 3, y: 2, rate: 0.5, phase: 0.5 },
         skew: [0, -2, 3, -4, 0] },
       { name: 'flail', grid: DEMON_FLAIL, ox: 52, oy: 33,
         frames: [[0, 0], [1, 1], [4, -6], [-8, 8], [3, 3]],
+        drift: { x: 4, y: 3, rate: 1.5, phase: 0.25 },
         skew: [0, 1, 4, -5, 2] },
     ],
   },
@@ -1862,23 +2222,34 @@ const ART = {
     name: 'Wyrm', wide: true, colour: '#3f6f9c', accent: '#7fe6ff', anim: 'coil',
     body: { grid: WYRM_COIL, ox: 54, oy: 47 }, wear: 0.04,
     motion: { bob: 2, sway: 3, phase: 0.35, period: 1900, telegraph: 540 },
+    stage: { scale: 1.5, sink: 4, bias: 0 },
+    core: [62, 44],
+    faults: [[50, 38, 12], [64, 52, 12]],
     parts: [
+      // The coils run slow and a third of a turn apart, so the animal swims
+      // along its own length instead of pulsing like a ring.
       { name: 'coilMid', grid: WYRM_COIL, ox: 45, oy: 33, behind: true,
         frames: [[0, 0], [1, 0], [-2, -1], [3, 1], [-3, 1]],
+        drift: { x: 2, y: 1, rate: 0.5, phase: 0 },
         skew: [0, 2, -3, 4, -2] },
       { name: 'coilTop', grid: WYRM_COIL, ox: 34, oy: 21, behind: true,
         frames: [[0, 0], [2, 0], [-3, -1], [5, 1], [-4, 1]],
+        drift: { x: 2, y: 1, rate: 0.5, phase: 0.33 },
         skew: [0, 3, -4, 6, -3] },
       { name: 'neck', grid: WYRM_NECK, ox: 24, oy: 19,
         frames: [[0, 0], [1, 1], [-3, -2], [5, 2], [-4, 2]],
+        drift: { x: 2, y: 2, rate: 0.75, phase: 0.5 },
         skew: [0, 2, -4, 6, -3] },
       { name: 'fin', grid: WYRM_FIN, ox: 40, oy: 17, behind: true,
-        frames: [[0, 0], [1, 1], [-2, -2], [4, 2], [-3, 1]] },
+        frames: [[0, 0], [1, 1], [-2, -2], [4, 2], [-3, 1]],
+        drift: { x: 1, y: 1, rate: 1.25, phase: 0 } },
       { name: 'head', grid: WYRM_HEAD, ox: 4, oy: 13,
         frames: [[0, 0], [1, 1], [-4, -2], [6, 3], [-5, 3]],
+        drift: { x: 2, y: 2, rate: 1, phase: 0.15 },
         skew: [0, 1, -3, 4, -2] },
       { name: 'jaw', grid: WYRM_JAW, ox: 4, oy: 25,
         frames: [[0, 0], [1, 1], [-4, -1], [6, 7], [-5, 4]],
+        drift: { x: 1, y: 2, rate: 1.5, phase: 0.4 },
         alt: { 3: WYRM_JAW_OPEN } },
     ],
   },
@@ -1944,7 +2315,16 @@ export const BOSS_MOTION = Object.freeze(Object.fromEntries(
       anim: art.anim,
       wide: !!art.wide,
       floats,
-      scale: 1.5,
+      /* What the battle stage should draw it at, and how far its feet go under
+       * the floor. A 64-box boss at 1.75 stands 112 tall against a 72-tall
+       * hero and fills the stage from just under its ceiling down through the
+       * ground line — which is the whole point, and is why `sink` exists: the
+       * feet are meant to be under the floor, not standing on a shelf. */
+      scale: (art.stage && art.stage.scale) || 1.5,
+      sink: (art.stage && art.stage.sink) || 0,
+      bias: (art.stage && art.stage.bias) || 0,
+      parts: (art.parts || []).length,
+      phases: BOSS_PHASE_COUNT,
       shadow: art.wide ? 44 : 30,
       colour: art.colour,
       accent: art.accent,
@@ -1956,11 +2336,24 @@ export function bossMotion(key) {
   return BOSS_MOTION[resolveBoss(key)] || BOSS_MOTION.titan;
 }
 
-/* The scale the battle stage should draw a boss at. 64 * 1.5 = 96, which puts
- * the crown of a 64-tall boss four rows below the top of the 192x128 stage with
- * its feet on STAGE.ground, and makes it half again the hero's 72. Destination
- * coordinates must be rounded or the half-pixel lands between two source rows. */
+/* The stage default, and the value fx.js passes. It is deliberately still 1.5:
+ * a caller that asks for "the stage scale" gets a number that is safe for any
+ * box, and drawBoss then refines it per archetype (BOSS_MOTION[key].scale) so
+ * a 64-box creature is drawn at 1.75 and a 96-box one stays at 1.5. Passing a
+ * scale that is NOT this constant means the caller has its own opinion — the
+ * overworld draws bosses at 1 on a 16px tile map — and is honoured verbatim.
+ *
+ * Why 1.75 for the 64-box: 64 * 1.75 = 112, which against STAGE.enemyX = 136
+ * on a 192-wide stage is exactly the width available, and against the hero's
+ * 72 makes the boss half again as tall as the thing fighting it. Destination
+ * coordinates must be rounded or the half-pixel lands between two source rows.
+ */
 export const BOSS_STAGE_SCALE = 1.5;
+
+/* The scale a given archetype actually wants on the battle stage. */
+export function bossStageScale(key) {
+  return (BOSS_MOTION[resolveBoss(key)] || BOSS_MOTION.titan).scale;
+}
 
 /* Lighting for the scene, so the stage can be tinted to the creature standing
  * on it. Returned as plain hex strings; fx.js can drop them straight into a
@@ -1997,8 +2390,10 @@ export const BOSS_PALETTES = Object.freeze(Object.fromEntries(
  * from the silhouette, and a wing shaded separately from the body it overlaps
  * would be lit as if the body were not there.
  */
-function partGrid(part, frame) {
-  let g = (part.alt && part.alt[frame]) || part.grid;
+function partGrid(part, frame, beat) {
+  let g = (part.alt && part.alt[frame])
+    || (part.altBeat && (beat & 1) ? part.altBeat : null)
+    || part.grid;
   if (part.flip) g = flipX(g);
   if (part.skew && part.skew[frame]) {
     const [top, bottom] = filledBounds(g);
@@ -2007,12 +2402,13 @@ function partGrid(part, frame) {
   return g;
 }
 
-function partOffset(part, frame) {
+function partOffset(part, frame, beat) {
   const f = (part.frames && part.frames[frame]) || [0, 0];
-  return [(part.ox | 0) + (f[0] | 0), (part.oy | 0) + (f[1] | 0)];
+  const [dx, dy] = driftAt(part.drift, beat);
+  return [(part.ox | 0) + (f[0] | 0) + dx, (part.oy | 0) + (f[1] | 0) + dy];
 }
 
-function assemble(key, frame) {
+function assemble(key, frame, beat) {
   const art = ART[key];
   const w = art.wide ? BOSS_WIDE_W : BOSS_W;
   const canvasGrid = blank(w, BOSS_H);
@@ -2021,18 +2417,22 @@ function assemble(key, frame) {
     ? mirror(halfRect(art.body.half, HALF), HALF)
     : rect(art.body.grid);
   body = (POSES[art.anim] || POSES.heavy)(body, frame);
+  /* The body gets a beat too, one pixel of it, so the parts are not drifting
+   * against something nailed down. It is the smallest amount of motion that
+   * still reads, which is the point: the parts are the performance. */
+  const bd = driftAt(art.body.drift, beat);
 
   const parts = art.parts || [];
   for (const p of parts) {
     if (!p.behind) continue;
-    const [ox, oy] = partOffset(p, frame);
-    stamp(canvasGrid, partGrid(p, frame), ox, oy);
+    const [ox, oy] = partOffset(p, frame, beat);
+    stamp(canvasGrid, partGrid(p, frame, beat), ox, oy);
   }
-  stamp(canvasGrid, body, art.body.ox | 0, art.body.oy | 0);
+  stamp(canvasGrid, body, (art.body.ox | 0) + bd[0], (art.body.oy | 0) + bd[1]);
   for (const p of parts) {
     if (p.behind) continue;
-    const [ox, oy] = partOffset(p, frame);
-    stamp(canvasGrid, partGrid(p, frame), ox, oy);
+    const [ox, oy] = partOffset(p, frame, beat);
+    stamp(canvasGrid, partGrid(p, frame, beat), ox, oy);
   }
   return canvasGrid;
 }
@@ -2047,14 +2447,28 @@ function offscreen(w, h) {
 }
 
 const spriteCache = new Map();
-const CACHE_CAP = 320;   // 16 archetypes x 5 frames x a few colours, with room
+/* A fight's working set is ONE creature: two idle frames x six beats, plus the
+ * three action frames, all of it x three phases = 45 canvases. The bound that
+ * actually matters is the pathological one — a caller warming every archetype
+ * at every phase, which is 14 x 3 x 15 = 630 — so the cap sits just above it
+ * and nothing any caller can legitimately ask for ever thrashes. */
+const CACHE_CAP = 640;
+
+/* True LRU rather than insertion order. With three phases in play the oldest
+ * INSERTED entry is frequently the current phase's idle frame, and evicting
+ * that would regenerate a sprite every time the idle loop came round. */
+function cacheGet(key) {
+  const hit = spriteCache.get(key);
+  if (hit === undefined) return undefined;
+  spriteCache.delete(key);
+  spriteCache.set(key, hit);
+  return hit;
+}
 
 function cachePut(key, value) {
   if (spriteCache.size >= CACHE_CAP) {
-    // Oldest first. Insertion order is good enough here: the working set during
-    // a fight is five frames of one boss, so nothing hot is ever evicted.
-    const oldest = spriteCache.keys().next().value;
-    spriteCache.delete(oldest);
+    const coldest = spriteCache.keys().next().value;
+    spriteCache.delete(coldest);
   }
   spriteCache.set(key, value);
   return value;
@@ -2062,29 +2476,51 @@ function cachePut(key, value) {
 
 /* One boss, one frame, one colour. Deterministic and cached forever: the same
  * Hash Titan carries the same pitting in every session. */
-export function bossSprite(spriteKey, colour, frame = 0) {
+export function bossSprite(spriteKey, colour, frame = 0, opts = {}) {
   const key = resolveBoss(spriteKey);
   const art = ART[key];
   const base = colour || art.colour;
   const f = frameIndex(frame);
-  const cacheKey = `${key}|${base}|${f}`;
-  const hit = spriteCache.get(cacheKey);
+  const ph = bossPhase(opts && opts.phase !== undefined ? opts.phase : 0);
+  /* Beats only run on the two idle frames. The action frames already move
+   * every part to an authored extreme, and giving them a sub-beat would
+   * multiply the cache to hide a difference nobody can see in 240ms. */
+  const beat = (f <= BOSS_FRAME.BREATHE && opts && opts.beat)
+    ? (((opts.beat | 0) % BOSS_BEATS) + BOSS_BEATS) % BOSS_BEATS : 0;
+  const cacheKey = `${key}|${base}|${f}|${ph}|${beat}`;
+  const hit = cacheGet(cacheKey);
   if (hit) return hit;
 
-  let grid = assemble(key, f);
-  if (art.wear) grid = patina(grid, `${key}:${base}:${f}`, art.wear, 'd');
+  let grid = assemble(key, f, beat);
+  if (art.wear) grid = patina(grid, `${key}:${base}:${f}`, art.wear + ph * 0.05, 'd');
+  // Damage before shading: applyRim derives light from the silhouette, and a
+  // fissure opened after the fact would be lit as if the plate were still shut.
+  grid = fracture(grid, `${key}:${f}:${ph}`, ph, art.faults);
+  grid = ember(grid, ph, art.core);
+  grid = ignite(grid, ph, art.core);
   grid = rimPass(applyRim(grid));
 
   const w = art.wide ? BOSS_WIDE_W : BOSS_W;
   const { canvas, ctx } = offscreen(w, BOSS_H);
-  drawGrid(ctx, grid, bossPalette(base, art.accent));
+  drawGrid(ctx, grid, bossPalette(base, art.accent, ph));
   return cachePut(cacheKey, canvas);
 }
 
 /* All five frames of one boss, in table order. Call once at fight start and the
  * render loop never touches the generator again. */
-export function bossFrames(spriteKey, colour) {
-  return BOSS_FRAME_NAMES.map((_, i) => bossSprite(spriteKey, colour, i));
+export function bossFrames(spriteKey, colour, opts = {}) {
+  return BOSS_FRAME_NAMES.map((_, i) => bossSprite(spriteKey, colour, i, opts));
+}
+
+/* Every canvas one phase of one fight can ask for, built in one go. A caller
+ * that warms this at phase change never generates inside the render loop. */
+export function warmBoss(spriteKey, colour, phase = 0) {
+  let n = 0;
+  for (let f = 0; f < BOSS_FRAME_COUNT; f++) {
+    const beats = f <= BOSS_FRAME.BREATHE ? BOSS_BEATS : 1;
+    for (let b = 0; b < beats; b++) { bossSprite(spriteKey, colour, f, { phase, beat: b }); n++; }
+  }
+  return n;
 }
 
 export function clearBossCache() { spriteCache.clear(); flashCache = new WeakMap(); }
@@ -2120,6 +2556,10 @@ export function bossPose(spriteKey, timeMs, seed = 0) {
     dx: Math.round(Math.cos(cycle * Math.PI * 2) * m.sway),
     dy: -Math.round(Math.abs(wave) * m.bob),
     frame: cycle < 0.5 ? BOSS_FRAME.IDLE : BOSS_FRAME.BREATHE,
+    /* The sub-position inside the idle loop. The frame flips twice per period;
+     * the beat advances BOSS_BEATS times, and each part reads it at its own
+     * rate. This is the field that makes the parts stop marching in step. */
+    beat: Math.floor(cycle * BOSS_BEATS) % BOSS_BEATS,
     cycle,
   };
 }
@@ -2141,36 +2581,76 @@ export function bossFrameAt(spriteKey, state, elapsedMs) {
  * matching how fx.js places the hero. A floating boss is authored with its own
  * gap above the baseline, so the same call site works for both without a flag.
  */
+/* The floor eats the last few rows. A boss is drawn with its feet BELOW the
+ * ground line — see `sink` — and without this it reads as a sprite whose legs
+ * were cut off rather than as a creature standing in front of, and partly
+ * inside, the floor. Four hard bands, darkening downward, in the stage's own
+ * near-black: the same trick as an aerial-perspective haze, run vertically. */
+function floorVeil(ctx, left, right, groundY, depth, tone) {
+  if (depth <= 0) return;
+  const bands = 4;
+  for (let i = 0; i < bands; i++) {
+    const y0 = groundY + Math.round((depth * i) / bands);
+    const y1 = groundY + Math.round((depth * (i + 1)) / bands);
+    if (y1 <= y0) continue;
+    ctx.globalAlpha = 0.3 + 0.7 * ((i + 1) / bands);
+    ctx.fillStyle = tone;
+    ctx.fillRect(left, y0, right - left, y1 - y0);
+  }
+  ctx.globalAlpha = 1;
+}
+
 export function drawBoss(ctx, key, x, y, opts = {}) {
   const artKey = resolveBoss(key);
   const m = BOSS_MOTION[artKey];
-  const colour = opts.colour || ART[artKey].colour;
+  const art = ART[artKey];
+  const colour = opts.colour || art.colour;
   const reduced = !!opts.reducedMotion;
   const time = opts.time || 0;
 
-  let frame = opts.frame;
-  if (frame === undefined || frame === null) {
-    frame = reduced ? BOSS_FRAME.IDLE : bossPose(artKey, time).frame;
+  /* An entrance is a different animal: it owns the staging, the reveal and the
+   * light. One number turns this call into that one. */
+  if (opts.entrance !== undefined && opts.entrance !== null && opts.entrance < 1) {
+    return drawBossEntrance(ctx, artKey, x, y, opts.entrance, opts);
   }
-  const img = bossSprite(artKey, colour, frame);
+
+  const pose = reduced ? { dx: 0, dy: 0, frame: BOSS_FRAME.IDLE, beat: 0 }
+    : bossPose(artKey, time, opts.seed || 0);
+
+  let frame = opts.frame;
+  if (frame === undefined || frame === null) frame = pose.frame;
+  const phase = bossPhase(opts.phase);
+  const beat = reduced ? 0 : (opts.beat === undefined ? pose.beat : opts.beat);
+  const img = bossSprite(artKey, colour, frame, { phase, beat });
   if (!img) return null;
 
-  const scale = opts.scale || BOSS_STAGE_SCALE;
+  /* Scale. A caller that passes nothing, or that passes the stage default,
+   * is asking for "however big this creature should be on the battle stage"
+   * and gets the per-archetype answer. A caller with its own number — the
+   * overworld map, at 1 — is taken at its word and nothing is applied on top,
+   * including the sink, which only means anything against a ground line. */
+  const staged = opts.scale === undefined || opts.scale === BOSS_STAGE_SCALE;
+  const scale = staged ? m.scale : opts.scale;
+  const sink = staged ? (opts.sink === undefined ? m.sink : opts.sink) : 0;
+  const bias = staged ? (opts.bias === undefined ? m.bias : opts.bias) : 0;
+
   const w = Math.round(img.width * scale);
   const h = Math.round(img.height * scale);
 
   // The ambient bob is applied here rather than baked into a frame: it is
   // continuous, the frames are not, and a boss that only moved on frame change
-  // would step rather than drift.
-  const pose = reduced ? { dx: 0, dy: 0 } : bossPose(artKey, time, opts.seed || 0);
-  const dx = Math.round(pose.dx * scale);
+  // would step rather than drift. The horizontal half is capped: something
+  // this heavy does not slide five pixels sideways, and the cap is also what
+  // keeps a 112-wide creature inside a 192-wide stage at every phase of it.
+  const dx = Math.max(-3, Math.min(3, Math.round(pose.dx * scale)));
   const dy = Math.round(pose.dy * scale);
-  const left = Math.round(x - w / 2) + dx;
-  const top = Math.round(y - h) + dy;
+  const foot = Math.round(y + sink * scale);
+  const left = Math.round(x + bias - w / 2) + dx;
+  const top = foot - h + dy;
 
   if (opts.shadow !== false) {
     const squeeze = m.floats ? 0.7 : 1;
-    drawGroundShadow(ctx, Math.round(x + dx * 0.4), Math.round(y + 1),
+    drawGroundShadow(ctx, Math.round(x + bias + dx * 0.4), Math.round(y + 1),
       Math.round(m.shadow * scale * 0.5 * squeeze),
       Math.round(m.shadow * scale * 0.17 * squeeze),
       m.floats ? 0.22 : 0.36);
@@ -2189,7 +2669,161 @@ export function drawBoss(ctx, key, x, y, opts = {}) {
   }
   if (alpha !== 1) ctx.restore();
 
-  return { x: left, y: top, w, h, frame, key: artKey };
+  // Everything below the ground line goes into the floor.
+  const below = top + h - Math.round(y);
+  if (opts.occlude !== false && sink > 0 && below > 0) {
+    const light = BOSS_PALETTES[artKey] || bossLighting(artKey, colour);
+    floorVeil(ctx, left, left + w, Math.round(y), below,
+      opts.floorTone || light.floor);
+  }
+
+  return { x: left, y: top, w, h, frame, phase, beat, key: artKey };
+}
+
+/* ================================================================
+ * THE ENTRANCE
+ * ================================================================
+ * A boss that fades up at 40% opacity is a creature that was always there and
+ * that the renderer got around to. This is four beats, and the creature is not
+ * whole until the last one:
+ *
+ *   0.00-0.28  THE FLOOR ANSWERS. Nothing is visible but the ground giving
+ *              way: a widening scar under the feet and dust thrown off it.
+ *   0.22-0.62  THE RISE. The creature comes up through that scar, clipped at
+ *              the ground line, so it is genuinely emerging rather than
+ *              sliding in from off-frame. Its own rim light arrives first.
+ *   0.55-0.80  THE CROWN LIGHTS. A flare in the creature's own colour washes
+ *              the silhouette, brightest at the top — the contre-jour hitting
+ *              the highest thing on the stage before anything else.
+ *   0.75-1.00  THE SETTLE. It drops the last pixels onto the ground line, the
+ *              shadow snaps in hard, and dust comes back off the impact.
+ *
+ * Deterministic in k: same progress, same frame, forever. Allocates nothing —
+ * the only canvases are the cached sprite and its cached silhouette.
+ */
+export const BOSS_ENTRANCE_MS = 2200;
+
+/* What the entrance wants from the caller at a given progress: how hard to
+ * shake, how hard to flash the stage, and whether the impact has landed yet.
+ * A caller drives its camera from this rather than guessing at the timing. */
+export function bossEntrance(key, k = 0) {
+  const t = Math.max(0, Math.min(1, k));
+  const impact = 0.78;
+  const hit = t >= impact && t < impact + 0.08;
+  return {
+    key: resolveBoss(key),
+    duration: BOSS_ENTRANCE_MS,
+    t,
+    beat: t < 0.28 ? 'floor' : t < 0.62 ? 'rise' : t < 0.8 ? 'crown' : 'settle',
+    impactAt: impact,
+    landed: t >= impact,
+    shake: hit ? 9 : t < 0.28 ? 2 + t * 6 : t < 0.62 ? 3 : 1,
+    flash: hit ? 0.85 : t > 0.55 && t < impact ? (t - 0.55) * 1.2 : 0,
+  };
+}
+
+function dustRing(ctx, cx, groundY, spread, rise, a, colour) {
+  // Twelve hard chips on a fixed lattice. No rng in a draw path, ever.
+  for (let i = 0; i < 12; i++) {
+    const s = (i % 2 ? 1 : -1) * (0.25 + (i % 6) * 0.15);
+    const px = Math.round(cx + s * spread);
+    const py = Math.round(groundY - rise * (0.3 + ((i * 7) % 10) * 0.07));
+    const size = i % 3 === 0 ? 2 : 1;
+    ctx.globalAlpha = a * (i % 3 === 0 ? 0.9 : 0.55);
+    ctx.fillStyle = colour;
+    ctx.fillRect(px, py, size, size);
+  }
+  ctx.globalAlpha = 1;
+}
+
+export function drawBossEntrance(ctx, key, x, y, k, opts = {}) {
+  const artKey = resolveBoss(key);
+  const m = BOSS_MOTION[artKey];
+  const colour = opts.colour || ART[artKey].colour;
+  const light = bossLighting(artKey, colour);
+  const beat = bossEntrance(artKey, k);
+  const t = beat.t;
+  const reduced = !!opts.reducedMotion;
+
+  const staged = opts.scale === undefined || opts.scale === BOSS_STAGE_SCALE;
+  const scale = staged ? m.scale : opts.scale;
+  const sink = staged ? m.sink : 0;
+  const bias = staged ? m.bias : 0;
+
+  /* Phase during an entrance is always whole: the thing has not been hit yet,
+   * and a boss that arrives already cracked has thrown away the one moment
+   * where cracking it means anything. */
+  const img = bossSprite(artKey, colour, t < beat.impactAt ? BOSS_FRAME.WINDUP : BOSS_FRAME.IDLE, { phase: 0, beat: 0 });
+  if (!img) return null;
+  const w = Math.round(img.width * scale);
+  const h = Math.round(img.height * scale);
+  const groundY = Math.round(y);
+  const foot = Math.round(y + sink * scale);
+  const left = Math.round(x + bias - w / 2);
+
+  // 1. the floor answers — a scar opening under the feet
+  const scar = Math.min(1, t / 0.28);
+  if (scar > 0) {
+    const half = Math.round(m.shadow * scale * 0.5 * scar);
+    ctx.globalAlpha = 0.85;
+    ctx.fillStyle = light.ambient;
+    ctx.fillRect(x + bias - half, groundY - 1, half * 2, 3);
+    ctx.globalAlpha = 0.5 + 0.4 * scar;
+    ctx.fillStyle = light.glow;
+    ctx.fillRect(x + bias - Math.round(half * 0.7), groundY, Math.round(half * 1.4), 1);
+    ctx.globalAlpha = 1;
+    if (!reduced) dustRing(ctx, x + bias, groundY, half * 1.4, 10 * scar, 0.5 * scar, light.ember);
+  }
+
+  // 2. the rise — clipped at the ground line so it comes UP through the floor
+  const rise = Math.max(0, Math.min(1, (t - 0.22) / 0.4));
+  if (rise > 0) {
+    const lift = Math.round((1 - (rise * rise * (3 - 2 * rise))) * h);   // smoothstep
+    const top = foot - h + lift;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(left - 8, top, w + 16, Math.max(0, (foot - top) - (t < beat.impactAt ? 0 : 0)));
+    ctx.clip();
+    ctx.globalAlpha = Math.min(1, 0.35 + rise * 0.75);
+    ctx.drawImage(img, left, top, w, h);
+    // Its own rim arrives before the body does: a hot silhouette under a dim one.
+    if (rise < 1) {
+      const sil = silhouette(img, light.rim);
+      ctx.globalAlpha = (1 - rise) * 0.8;
+      ctx.drawImage(sil, left, top, w, h);
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+  // 3. the crown lights — a wash in the creature's own colour, hottest at the top
+  const crown = Math.max(0, Math.min(1, (t - 0.55) / 0.25));
+  if (crown > 0 && crown < 1 && !reduced) {
+    const sil = silhouette(img, light.glow);
+    const top = foot - h;
+    ctx.globalAlpha = Math.sin(crown * Math.PI) * 0.7;
+    ctx.drawImage(sil, left, top, w, h);
+    ctx.globalAlpha = 1;
+  }
+
+  // 4. the settle — shadow snaps in, dust comes back off the impact
+  if (t >= beat.impactAt) {
+    const s = Math.min(1, (t - beat.impactAt) / (1 - beat.impactAt));
+    const squeeze = m.floats ? 0.7 : 1;
+    drawGroundShadow(ctx, Math.round(x + bias), groundY + 1,
+      Math.round(m.shadow * scale * 0.5 * squeeze),
+      Math.round(m.shadow * scale * 0.17 * squeeze),
+      (m.floats ? 0.22 : 0.36) * s);
+    if (!reduced) {
+      dustRing(ctx, x + bias, groundY, m.shadow * scale * (0.5 + s * 0.9),
+        18 * (1 - s), (1 - s) * 0.8, light.ember);
+    }
+    const below = foot - groundY;
+    if (sink > 0 && below > 0) floorVeil(ctx, left, left + w, groundY, below, light.floor);
+  }
+
+  return { x: left, y: foot - h, w, h, frame: BOSS_FRAME.IDLE, phase: 0, beat: 0,
+           key: artKey, entrance: beat };
 }
 
 /* Everything a caller needs about one archetype in a single object, for a
@@ -2205,5 +2839,10 @@ export function bossInfo(key) {
     lighting: BOSS_PALETTES[artKey],
     parts: (art.parts || []).map(p => p.name),
     frames: BOSS_FRAME_NAMES.slice(),
+    phases: BOSS_PHASE_NAMES.slice(),
+    beats: BOSS_BEATS,
+    core: art.core ? art.core.slice() : null,
+    faults: (art.faults || []).length,
+    entrance: BOSS_ENTRANCE_MS,
   };
 }

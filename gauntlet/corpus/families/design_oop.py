@@ -5,8 +5,8 @@ from collections import OrderedDict, defaultdict, deque
 
 from ._base import design_problem
 
-Q = {"QUORA": 3.0, "GENERAL_SWE": 2.5, "SECURITY_ENGINEERING": 1.5}
-QS = {"QUORA": 1.0, "GENERAL_SWE": 1.0, "SECURITY_ENGINEERING": 3.0}
+Q = {"PRACTICAL": 3.0, "GENERAL_SWE": 2.5, "SECURITY_ENGINEERING": 1.5}
+QS = {"PRACTICAL": 1.0, "GENERAL_SWE": 1.0, "SECURITY_ENGINEERING": 3.0}
 
 
 class RefTextEditor:
@@ -212,7 +212,7 @@ def build() -> list:
         id="ds-text-editor", title="The Editor Automaton", realm="matrix_citadel",
         difficulty="HARD", cls_name="TextEditor", reference_cls=RefTextEditor,
         profile_weight=Q, boss=True, secondary=["STACK", "SIMULATION"],
-        source_type="REPORTED_INTERVIEW", company="Quora",
+        source_type="REPORTED_INTERVIEW",
         provenance="Stateful text-editor simulation is a repeatedly reported archetype.",
         statement="""
             Build a `TextEditor` supporting:
@@ -309,7 +309,7 @@ def build() -> list:
             undo:        text = history.pop() if history
             copy:        clipboard = text[start:end]   (no history push)
         """,
-        tags=["core", "quora", "design", "boss"],
+        tags=["core", "practical", "design", "boss"],
     ))
 
     P.append(design_problem(
@@ -447,7 +447,7 @@ def build() -> list:
             get: miss -> -1; hit -> move_to_end, return value
             put: existing -> move_to_end; assign; over capacity -> popitem(last=False)
         """,
-        tags=["core", "quora", "design"],
+        tags=["core", "practical", "design"],
     ))
 
     P.append(design_problem(

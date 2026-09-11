@@ -23,7 +23,7 @@ genuinely ready for a demanding Python coding interview.**
 
 ## The two priorities, held equally
 
-**Make me want to play.** Not LeetCode with pixel graphics. Not a corporate
+**Make me want to play.** Not a puzzle grinder with pixel graphics. Not a corporate
 dashboard with swords. Not flashcards in a wizard hat. A real game, where a
 planned twenty-minute session becomes ninety because you want to continue.
 
@@ -116,9 +116,9 @@ This is the same skill an interviewer watches for: predicting how code breaks.
 
 ## Interview profiles
 
-`QUORA` (the immediate objective), `GENERAL_SWE`, `SECURITY_ENGINEERING`,
+`PRACTICAL` (the immediate objective), `GENERAL_SWE`, `SECURITY_ENGINEERING`,
 `CUSTOM`. Profiles change question weighting, difficulty, timing and the problem
-mix. The Quora profile weights arrays, strings, hash maps, sets, sorting, sliding
+mix. The practical profile weights arrays, strings, hash maps, sets, sorting, sliding
 window, two pointers, matrices, trees, recursion, BFS/DFS, design, debugging,
 Big-O and testing — the publicly reported emphasis, presented as historical
 pattern rather than prophecy.

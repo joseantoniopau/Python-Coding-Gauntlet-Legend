@@ -22,6 +22,17 @@
  *   e.done           true once the effect has fully dissipated
  *   e.duration       seconds, already adjusted for reduced motion
  *   e.impactAt       0..1 — the beat the caller should sync a hit or sfx to
+ *   e.element        'fire' | 'frost' | 'arcane' | 'lightning' | 'force'
+ *   e.power          damage-scaled strength; 1 is a plain blow, ~1.5 a crit
+ *
+ * Advisory per frame, for a host that wants to move the camera and wash the
+ * screen in step with the art. An effect that is drawn and never read still
+ * looks right; it just does not shove the stage around.
+ *
+ *   e.shakeHint      logical units of screen shake to apply this frame
+ *   e.flashHint      0..1 white flash the host owns
+ *   e.lightHint      0..1 how lit the stage is; decays slower than the flash
+ *   e.targetFlashHint 0..1 hard flash on the target sprite, two frames wide
  *
  * Geometry is mirrored from fx.js STAGE rather than imported. fx.js is the
  * module that will import this one, and a two-way import is a cycle waiting to
@@ -30,7 +41,7 @@
  */
 import { rng, hash, shade, mix } from './sprites.js';
 
-export const SPELLFX_VERSION = '1.0.0';
+export const SPELLFX_VERSION = '1.1.0';
 
 /* Logical stage units. Same numbers as fx.js STAGE; overridable per effect. */
 export const STAGE_GEOM = Object.freeze({
@@ -69,6 +80,56 @@ export const ATTACK_COLOURS = Object.freeze({
   miss:   { key: '#7ec8ff', hot: '#e0f2ff', deep: '#0b1a2a', ink: INK },
 });
 
+/* ---------------- elements ----------------
+ * The brief that matters most here: fire, frost, arcane, lightning and force
+ * have to be told apart *from their motion alone, with the colour turned off*.
+ * Colour is the first thing a player stops seeing when three trials resolve in
+ * a row, so identity cannot live there.
+ *
+ * So each element is a motion law, and the law is applied in three places: the
+ * wind-up figure at the caster, the impact signature on the target, and the
+ * velocity, gravity and lifetime every spark and chunk is emitted with.
+ *
+ *   fire       buoyant. Rises, licks, never settles. Gravity is negative.
+ *   frost      brittle. Stabs out once, stops dead, then falls in pieces.
+ *   arcane     orbital. Nothing travels straight; rings counter-rotate.
+ *   lightning  instantaneous. Full speed on frame one, gone three frames later,
+ *              re-seeded on a strobe clock so it snaps rather than slides.
+ *   force      radial. One pressure front, dust that stays low, no rise at all.
+ *
+ * `holdScale` stretches or shortens that element's hold frame: frost and force
+ * land heavier than lightning, which is over before it is seen.
+ */
+export const ELEMENTS = Object.freeze({
+  fire: Object.freeze({
+    id: 'fire', radial: false, dir: -Math.PI / 2, tangent: 0, spread: 1.5,
+    speed: 30, speedVar: 52, gravity: -42, life: 0.52, lifeVar: 0.50,
+    spin: 6.5, chunk: 0.22, holdScale: 1.00,
+  }),
+  frost: Object.freeze({
+    id: 'frost', radial: true, dir: 0, tangent: 0, spread: 0.5,
+    speed: 46, speedVar: 56, gravity: 230, life: 0.26, lifeVar: 0.20,
+    spin: 0, chunk: 0.50, holdScale: 1.25,
+  }),
+  arcane: Object.freeze({
+    id: 'arcane', radial: true, dir: 0, tangent: 1.35, spread: 0.5,
+    speed: 20, speedVar: 28, gravity: 6, life: 0.70, lifeVar: 0.55,
+    spin: 12, chunk: 0.12, holdScale: 0.95,
+  }),
+  lightning: Object.freeze({
+    id: 'lightning', radial: true, dir: 0, tangent: 0, spread: 0.8,
+    speed: 130, speedVar: 130, gravity: 420, life: 0.13, lifeVar: 0.10,
+    spin: 0, chunk: 0.22, holdScale: 0.75,
+  }),
+  force: Object.freeze({
+    id: 'force', radial: true, dir: 0, tangent: 0, spread: 0.3,
+    speed: 58, speedVar: 50, gravity: 170, life: 0.38, lifeVar: 0.28,
+    spin: 0, chunk: 0.42, holdScale: 1.15,
+  }),
+});
+
+export const ELEMENT_IDS = Object.freeze(Object.keys(ELEMENTS));
+
 /* Cold steel. Weapons, bezels and chrome bevels are not tinted by the spell —
  * keeping the metal neutral is what makes the coloured light look like light. */
 const STEEL = '#cdd6e0';
@@ -87,6 +148,40 @@ const overshoot = (k) => { const t = k - 1; return t * t * (2.70158 * t + 1.7015
 const arc = (k) => Math.sin(Math.PI * clamp(k, 0, 1));
 /* Snaps to a whole logical pixel. Half-pixel art is soft art. */
 const px = Math.round;
+/* The reference blow. With no damage numbers to go on an effect is played at
+ * the strength of one ordinary hit, which is what `power === 1` means. */
+const REFERENCE_BLOW = 0.18;
+
+/* Deterministic pseudo-noise with no closure allocated. rng() hands back a
+ * function, which is fine in build() and wrong in a draw path that runs sixty
+ * times a second; every jag and flicker added below uses this instead. */
+function noise(a, b) {
+  let h = (Math.imul(a | 0, 374761393) + Math.imul(b | 0, 668265263)) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177) | 0;
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
+/* Two derived tones per effect colour, so a plume or a chunk of debris has a
+ * step between the key and the shadow instead of banding straight to black.
+ * Six colours per effect all in — ink, deep, dim, mid, key, hot — plus the two
+ * neutral steels, which leaves the fifteen-colour budget with room to spare.
+ * Memoised because mix() builds strings and this must never run in a frame. */
+const TONE_MAX = 64;
+const toneCache = new Map();
+
+function tonesFor(col) {
+  const id = `${col.key}|${col.deep}`;
+  let t = toneCache.get(id);
+  if (t === undefined) {
+    if (toneCache.size >= TONE_MAX) toneCache.clear();
+    t = Object.freeze({
+      mid: mix(col.key, col.deep, 0.45),
+      dim: mix(col.deep, col.ink, 0.35),
+    });
+    toneCache.set(id, t);
+  }
+  return t;
+}
 
 /* Alpha-blended colour strings, quantised and cached per hex.
  *
@@ -166,7 +261,7 @@ function stamp(ctx, key, w, h, paint, x, y, alpha = 1) {
   ctx.globalAlpha = prev;
 }
 
-export function clearCache() { canvasCache.clear(); alphaCache.clear(); }
+export function clearCache() { canvasCache.clear(); alphaCache.clear(); toneCache.clear(); }
 
 /* ---------------- the rune micro-font ----------------
  * Twenty-four 3x5 runes, authored by hand. They are deliberately not an
@@ -233,13 +328,28 @@ class Motes {
     this.life = new Float32Array(this.cap);
     this.size = new Float32Array(this.cap);
     this.spin = new Float32Array(this.cap);
+    /* 0 is a spark, 1 is a chunk of debris. Same pool, same step, different
+     * paint — an impact that throws only sparks reads as a sparkle, and an
+     * impact that throws pieces of something reads as damage. */
+    this.shape = new Uint8Array(this.cap);
     this.colour = new Array(this.cap).fill(INK);
     this.alive = new Uint8Array(this.cap);
     this.head = 0;
     this.quiet = false;                 // reduced motion mutes emission
+    /* The stage, so a mote that has left it can stop costing anything. Measured
+     * before this was here: VISION's debris was still being filled a hundred
+     * and thirty units below a 128-unit stage, one clipped fillRect each. */
+    this.bw = 1e6;
+    this.bh = 1e6;
   }
 
-  reset() { this.alive.fill(0); this.head = 0; }
+  setBounds(w, h) {
+    this.bw = w > 0 ? w : 1e6;
+    this.bh = h > 0 ? h : 1e6;
+    return this;
+  }
+
+  reset() { this.alive.fill(0); this.shape.fill(0); this.head = 0; }
 
   emit(x, y, vx, vy, g, life, size, colour, spin = 0) {
     if (this.quiet || this.cap === 0) return;
@@ -248,9 +358,19 @@ class Motes {
     this.x[i] = x; this.y[i] = y; this.vx[i] = vx; this.vy[i] = vy;
     this.g[i] = g; this.t[i] = 0; this.life[i] = life; this.size[i] = size;
     this.colour[i] = colour; this.spin[i] = spin; this.alive[i] = 1;
+    this.shape[i] = 0;
+  }
+
+  /* Debris. Heavier, slower, longer-lived, and painted as a solid piece. */
+  emitChunk(x, y, vx, vy, g, life, size, colour, spin = 0) {
+    if (this.quiet || this.cap === 0) return;
+    const i = this.head;
+    this.emit(x, y, vx, vy, g, life, size, colour, spin);
+    this.shape[i] = 1;
   }
 
   step(dt) {
+    const xlo = -28, xhi = this.bw + 28, ylo = -40, yhi = this.bh + 24;
     for (let i = 0; i < this.cap; i++) {
       if (!this.alive[i]) continue;
       this.t[i] += dt;
@@ -259,6 +379,11 @@ class Motes {
       this.x[i] += this.vx[i] * dt;
       this.y[i] += this.vy[i] * dt;
       if (this.spin[i]) this.vx[i] += Math.sin(this.t[i] * this.spin[i]) * 24 * dt;
+      /* Gone for good: retire it rather than carry it. This is not only a draw
+       * saved, it hands the slot back to the pool, so a dense impact stops
+       * starving its own sparks to feed debris that left the frame. */
+      const x = this.x[i], y = this.y[i];
+      if (y > yhi || x < xlo || x > xhi || (y < ylo && this.vy[i] <= 0)) this.alive[i] = 0;
     }
   }
 
@@ -266,9 +391,28 @@ class Motes {
     for (let i = 0; i < this.cap; i++) {
       if (!this.alive[i]) continue;
       const k = 1 - this.t[i] / this.life[i];
+      const a = clamp(k * k * fade, 0, 1);
+      if (!(a > 0)) continue;
+      const x = px(this.x[i]), y = px(this.y[i]);
+      if (x < -4 || y < -6 || x > this.bw + 4 || y > this.bh + 4) continue;
+      if (this.shape[i]) {
+        /* A chunk tumbles by flipping its long axis on a whole-frame clock
+         * rather than by rotating: a rotated rect on this grid is a blurred
+         * rect, and nothing in this game is allowed to blur. */
+        const s = Math.max(2, px(this.size[i]));
+        const turn = ((this.t[i] * (7 + this.spin[i])) | 0) & 1;
+        const w = turn ? s : s + 1, h = turn ? s + 1 : s;
+        ctx.fillStyle = rgba(INK, a * 0.85);
+        ctx.fillRect(x - 1, y - 1, w + 2, h + 2);
+        ctx.fillStyle = rgba(this.colour[i], a * 0.8);
+        ctx.fillRect(x, y, w, h);
+        ctx.fillStyle = rgba(this.colour[i], a);   // the one lit edge, up-left
+        ctx.fillRect(x, y, w, 1);
+        continue;
+      }
       const s = Math.max(1, px(this.size[i] * (0.4 + k * 0.6)));
-      ctx.fillStyle = rgba(this.colour[i], clamp(k * k * fade, 0, 1));
-      ctx.fillRect(px(this.x[i]), px(this.y[i]), s, s);
+      ctx.fillStyle = rgba(this.colour[i], a);
+      ctx.fillRect(x, y, s, s);
     }
   }
 
@@ -373,10 +517,290 @@ function bevelPlate(ctx, x, y, w, h, col, alpha, lit = 1) {
   ctx.fillRect(px(x), px(y + h) - 1, px(w), 1);
 }
 
+/* ---------------- additive light ----------------
+ * The difference between a spell that lights the stage and a sprite pasted on
+ * top of it is one property. Under 'lighter' the backdrop, the hero and the
+ * enemy all get brighter where the light falls, because everything underneath
+ * is already on the canvas by the time an effect draws (fx.js paints the
+ * backdrop, the hero and the enemy, and only then the effects).
+ *
+ * It is still banded, not blurred. Three or four hard steps of a quantised
+ * radius is light on this grid; a radial gradient is an airbrush, and an
+ * airbrush belongs to a different decade than this game does.
+ */
+function lightDisc(ctx, cx, cy, radius, colour, alpha, bands = 3) {
+  if (!(alpha > 0) || !(radius > 1)) return;
+  for (let i = bands; i >= 1; i--) {
+    const r = Math.max(1, px((radius * i) / bands));
+    ctx.fillStyle = rgba(colour, alpha * (1 - (i - 1) / bands));
+    ctx.beginPath();
+    ctx.arc(px(cx), px(cy), r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+/* The one hot rim light in this game comes from a low source, so every impact
+ * also puts a pool of it on the floor. This is the cheapest thing in the file
+ * and it does more for "the light is real" than anything else in it. */
+function groundPool(ctx, cx, groundY, rx, colour, alpha) {
+  if (!(alpha > 0) || !(rx > 1)) return;
+  for (let i = 2; i >= 1; i--) {
+    const w = Math.max(1, px((rx * i) / 2));
+    const h = Math.max(1, px((rx * i) / 6));
+    ctx.fillStyle = rgba(colour, alpha * (1 - (i - 1) / 2));
+    ctx.beginPath();
+    ctx.ellipse(px(cx), px(groundY), w, h, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+/* A jagged polyline between two points, seeded so a given strobe tick always
+ * draws the same bolt. Allocation-free: noise() rather than rng(). */
+function boltPath(ctx, x0, y0, x1, y1, seed, jag, segs) {
+  ctx.beginPath();
+  ctx.moveTo(px(x0), px(y0));
+  for (let i = 1; i <= segs; i++) {
+    const q = i / segs;
+    const taper = 1 - Math.abs(q - 0.5) * 1.4;
+    const nx = lerp(x0, x1, q) + (noise(seed, i) - 0.5) * jag * taper;
+    const ny = lerp(y0, y1, q) + (noise(seed, i + 97) - 0.5) * jag * taper * 0.6;
+    ctx.lineTo(px(nx), px(ny));
+  }
+  ctx.stroke();
+}
+
+/* ---------------- element signatures ----------------
+ * Act one and act three, in the element's own motion. Both painters are pure
+ * functions of their arguments so that a replay is identical, and both take
+ * `quiet` so that reduced motion really does hold still — `this.t` keeps
+ * running in that mode even while `k` is pinned, so anything driven by time
+ * has to be gated here rather than trusted.
+ */
+
+/* ACT ONE. Anticipation at the caster. This is the beat an effect without one
+ * skips, and skipping it is exactly what makes a hit read as a flash. */
+function windupSignature(ctx, el, cx, cy, p, t, col, tn, alpha, power, seed, quiet) {
+  if (!(alpha > 0)) return;
+  const R = (16 + 9 * power) * (1 - easeOut(p) * 0.68);
+  ctx.lineWidth = 1;
+
+  if (el.id === 'fire') {
+    // Embers spiral UP into the hand on a golden angle, and a tongue licks off
+    // it. Nothing in fire falls, and that is the whole tell.
+    for (let i = 0; i < 7; i++) {
+      const a = i * 2.39996 + (quiet ? 0 : t * 4.2);
+      const rr = R * (1 - (i / 7) * 0.5);
+      const ex = cx + Math.cos(a) * rr;
+      const ey = cy + Math.sin(a) * rr * 0.55 - p * 11 - (i % 3);
+      const s = 1 + (i & 1);
+      ctx.fillStyle = rgba(i < 3 ? col.hot : i < 5 ? col.key : tn.mid,
+        alpha * (0.45 + 0.55 * p));
+      ctx.fillRect(px(ex), px(ey), s, s);
+    }
+    const h = 4 + 13 * p * power;
+    for (let i = 0; i < 5; i++) {
+      const q = i / 4;
+      const w = Math.max(1, px((1 - q) * 5 * power));
+      const wob = quiet ? 0 : Math.sin(t * 11 - q * 3) * (1 + 2 * q);
+      ctx.fillStyle = rgba(q < 0.35 ? col.hot : q < 0.8 ? col.key : tn.mid,
+        alpha * (1 - q * 0.5));
+      ctx.fillRect(px(cx - w / 2 + wob), px(cy - q * h), w, 2);
+    }
+    return;
+  }
+
+  if (el.id === 'frost') {
+    // Six spikes grow inward on fixed bearings and then hold dead still. No
+    // rotation anywhere: frost is the element that stops.
+    for (let i = 0; i < 6; i++) {
+      const a = (Math.PI * 2 * i) / 6 + 0.26;
+      const dx = Math.cos(a), dy = Math.sin(a);
+      for (let s = 0; s < 4; s++) {
+        const q = s / 3;
+        const rr = lerp(R, R * 0.3, easeOut(p) * q + q * 0.4);
+        const w = Math.max(1, px((1 - q) * 3));
+        ctx.fillStyle = rgba(q > 0.6 ? col.hot : col.key, alpha * (0.4 + 0.6 * q));
+        ctx.fillRect(px(cx + dx * rr), px(cy + dy * rr), w, w);
+      }
+    }
+    return;
+  }
+
+  if (el.id === 'arcane') {
+    // Two rings close on the point, counter-rotating. Arcane is the only
+    // element whose wind-up keeps turning after it has arrived.
+    const spin = quiet ? 0 : t * 4;
+    runeRing(ctx, cx, cy, Math.max(4, R), 6, spin, col, alpha * 0.85);
+    runeRing(ctx, cx, cy, Math.max(3, R * 0.55), 4, -spin * 1.4, col, alpha * 0.5);
+    return;
+  }
+
+  if (el.id === 'lightning') {
+    // A gap-arc that stutters between two contacts. It does not travel, it
+    // reappears; the strobe is doing all the work.
+    const tick = quiet ? 3 : (t * 22) | 0;
+    const on = quiet ? 1 : (tick % 3 === 2 ? 0.18 : 1);
+    ctx.strokeStyle = rgba(col.hot, alpha * on);
+    boltPath(ctx, cx - R, cy - R * 0.5, cx + R * 0.4, cy + R * 0.35,
+      seed + tick, 5 + 4 * power, 5);
+    ctx.fillStyle = rgba(col.hot, alpha * on);
+    ctx.fillRect(px(cx - R) - 1, px(cy - R * 0.5) - 1, 3, 3);
+    ctx.fillRect(px(cx + R * 0.4) - 1, px(cy + R * 0.35) - 1, 3, 3);
+    return;
+  }
+
+  // force: a compression. A ring closes with eight inward ticks riding it, and
+  // the ground under it darkens before anything has been thrown.
+  const r = Math.max(2, R);
+  shockRing(ctx, cx, cy, r, col.key, alpha * 0.8);
+  for (let i = 0; i < 8; i++) {
+    const a = (Math.PI * 2 * i) / 8;
+    const dx = Math.cos(a), dy = Math.sin(a);
+    const rr = r + 5 * (1 - easeOut(p));
+    // The tick's own trail, one step down the ramp, so the eye can see which
+    // way it is travelling before the ring has finished closing.
+    ctx.fillStyle = rgba(tn.mid, alpha * (0.3 + 0.4 * p));
+    ctx.fillRect(px(cx + dx * (rr + 3)), px(cy + dy * (rr + 3)), 2, 2);
+    ctx.fillStyle = rgba(col.hot, alpha * (0.4 + 0.6 * p));
+    ctx.fillRect(px(cx + dx * rr), px(cy + dy * rr), 2, 2);
+  }
+}
+
+/* ACT TWO INTO ACT THREE. The impact signature: what the element does to the
+ * place it landed on, and how that dies down. `fall` is the whole envelope, so
+ * a caller that wants nothing drawn passes zero. */
+function impactSignature(ctx, el, cx, cy, p, t, col, tn, fall, power, seed, groundY, quiet) {
+  if (!(fall > 0.004)) return;
+  ctx.lineWidth = 1;
+  const reach = 15 + 24 * power;
+
+  if (el.id === 'fire') {
+    // Up, and it keeps going up. Tongues climb and narrow; the ring that
+    // leaves the point rises off the floor instead of lying on it.
+    const h = reach * 1.3 * easeOut(p);
+    for (let i = 0; i < 9; i++) {
+      const q = i / 8;
+      const w = Math.max(1, px((1 - q) * (5 + 9 * power) * (0.6 + 0.4 * noise(seed + i, 3))));
+      const wob = quiet ? 0 : Math.sin(q * 7 + t * 10) * (2 + 2 * q);
+      ctx.fillStyle = rgba(q < 0.3 ? col.hot : q < 0.7 ? col.key : tn.mid,
+        fall * (1 - q * 0.5));
+      ctx.fillRect(px(cx - w / 2 + wob), px(cy - q * h), w, 3);
+    }
+    shockRing(ctx, cx, cy - h * 0.3, Math.max(1, reach * easeOut(p) * 0.8),
+      col.key, fall * 0.7);
+    return;
+  }
+
+  if (el.id === 'frost') {
+    // One stab outward, frozen at a third of the window, then the crust cracks.
+    // The stillness in the middle of the effect is the identity.
+    const grow = easeOut(clamp(p / 0.34, 0, 1));
+    for (let i = 0; i < 8; i++) {
+      const a = (Math.PI * 2 * i) / 8 + 0.19;
+      const dx = Math.cos(a), dy = Math.sin(a);
+      const len = reach * grow * (0.55 + 0.45 * noise(seed + i, 11));
+      for (let s = 0; s < 5; s++) {
+        const q = s / 4;
+        const w = Math.max(1, px((1 - q) * 4));
+        ctx.fillStyle = rgba(q < 0.35 ? col.hot : col.key, fall * (1 - q * 0.35));
+        ctx.fillRect(px(cx + dx * len * q), px(cy + dy * len * q), w, w);
+      }
+    }
+    const r = Math.max(2, reach * 0.6 * grow);
+    ctx.strokeStyle = rgba(col.hot, fall * 0.85);
+    ctx.beginPath();
+    for (let i = 0; i < 6; i++) {
+      const a = (Math.PI / 3) * i;
+      const x = cx + Math.cos(a) * r, y = cy + Math.sin(a) * r;
+      if (i === 0) ctx.moveTo(px(x), px(y)); else ctx.lineTo(px(x), px(y));
+    }
+    ctx.closePath();
+    ctx.stroke();
+    if (p > 0.34) cracks(ctx, cx, cy, seed + 17, 5, reach * 0.5, col.key, fall * 0.7, 1);
+    return;
+  }
+
+  if (el.id === 'arcane') {
+    // Two rune rings counter-rotate around a diamond that hangs still. The
+    // figure turns for as long as it exists and never travels.
+    const spin = quiet ? 0 : t * 5.2;
+    const open = 0.35 + easeOut(p) * 0.8;
+    runeRing(ctx, cx, cy, Math.max(4, reach * 0.42 * open), 6, spin, col, fall * 0.9);
+    runeRing(ctx, cx, cy, Math.max(4, reach * 0.8 * open), 4, -spin * 0.65, col, fall * 0.55);
+    const d = Math.max(1, px(reach * 0.18 * (1 - p)));
+    ctx.fillStyle = rgba(col.hot, fall);
+    ctx.beginPath();
+    ctx.moveTo(px(cx), px(cy - d));
+    ctx.lineTo(px(cx + d), px(cy));
+    ctx.lineTo(px(cx), px(cy + d));
+    ctx.lineTo(px(cx - d), px(cy));
+    ctx.closePath();
+    ctx.fill();
+    return;
+  }
+
+  if (el.id === 'lightning') {
+    // Already there when it appears, gone between frames. Re-seeded on a strobe
+    // clock so it snaps to a new shape rather than sliding into one. No easing
+    // is applied anywhere in this branch, deliberately.
+    const tick = quiet ? 4 : (t * 26) | 0;
+    const on = quiet ? 1 : (tick % 3 === 2 ? 0.2 : 1);
+    const a = fall * on;
+    const top = Math.max(3, cy - reach * 1.3);
+    ctx.strokeStyle = rgba(col.hot, a);
+    boltPath(ctx, cx, top, cx, cy, seed + tick, 8 + 5 * power, 7);
+    ctx.strokeStyle = rgba(col.key, a * 0.75);
+    for (let b = 0; b < 3; b++) {
+      const q = 0.3 + b * 0.22;
+      const ang = -Math.PI / 2 + (noise(seed + tick, b * 13) - 0.5) * 2.6;
+      const sy = lerp(top, cy, q);
+      boltPath(ctx, cx, sy, cx + Math.cos(ang) * reach * 0.9,
+        sy + Math.sin(ang) * reach * 0.5, seed + tick * 7 + b, 6, 4);
+    }
+    cracks(ctx, cx, cy, seed + tick, 5, reach * 0.7, col.hot, a * 0.7, 1);
+    return;
+  }
+
+  // force: one pressure front. Three rings leave on a stagger and the dust
+  // stays on the floor, because force pushes out rather than up.
+  for (let i = 0; i < 3; i++) {
+    const span = Math.max(0.01, 1 - i * 0.16);
+    const q = clamp(p - i * 0.16, 0, 1) / span;
+    if (q <= 0) continue;
+    shockRing(ctx, cx, cy, Math.max(1, reach * 1.5 * easeOut(q)),
+      i === 0 ? col.hot : col.key, fall * (1 - q) * (1 - i * 0.22));
+  }
+  const spread = reach * 1.7 * easeOut(p);
+  const gy = px(Math.min(groundY - 1, cy + 4));
+  for (let d = 0; d < 2; d++) {
+    const dir = d ? 1 : -1;
+    for (let i = 0; i < 4; i++) {
+      const q = i / 3;
+      const x = cx + dir * spread * (0.35 + q * 0.65);
+      const w = Math.max(1, px(4 * (1 - q) * power));
+      ctx.fillStyle = rgba(i < 2 ? col.key : tn.mid, fall * (1 - q) * 0.8);
+      ctx.fillRect(px(x), gy - (i & 1), w, 2);
+    }
+  }
+}
+
 /* ---------------- the animator base ----------------
- * Every effect is the same four-beat shape: a wind-up at the caster, a travel,
- * an impact on the target, and a dissipation. The base owns the clock, the
- * seed, the particle pool and the beat callbacks; subclasses own the art.
+ * Every effect is the same three-act shape: a wind-up at the caster, a strike
+ * on the target, and a dissipation. The base owns the clock, the seed, the
+ * particle pool and the beat callbacks; subclasses own the art in the middle.
+ *
+ * The base also owns all three acts' *shared* layer, and that is the point: an
+ * effect whose bespoke art forgot to anticipate still gets a wind-up, and an
+ * effect that lands still gets the hit flash, the debris, the additive light
+ * and the hold frame. Consistency across eleven effects is not something a
+ * per-effect renderer can be trusted to keep.
+ *
+ * The hold frame deserves its own note, because it is the thing amateur effects
+ * skip. `duration` is a contract — the battle loop awaits it — so the hold is
+ * not bought by running longer. It is bought by remapping the clock: real time
+ * advances as it always did, and the effect's own `k` stalls for a few frames
+ * at the impact and then plays the dissipation back a hair faster to pay for
+ * it. Weight comes from the stall, not from the extra art.
  *
  * Reduced motion is not "the same thing, faster". The still frame is posed at
  * the impact beat and cross-faded, because the job of the animation in that
@@ -397,6 +821,10 @@ class Effect {
      * looks right, it just does not move the camera. */
     this.shakeHint = 0;
     this.flashHint = 0;
+    this.lightHint = 0;
+    this.targetFlashHint = 0;
+    this.power = 1;
+    this.rawK = 0;
     this._configure(opts);
     this._layout();
   }
@@ -407,10 +835,13 @@ class Effect {
     this._configure(state);
     this.t = 0;
     this.k = 0;
+    this.rawK = 0;
     this.done = false;
     this.started = true;
     this.shakeHint = 0;
     this.flashHint = 0;
+    this.lightHint = 0;
+    this.targetFlashHint = 0;
     this.motes.reset();
     for (const b of this.beats) b.fired = false;
     this._layout();
@@ -422,11 +853,14 @@ class Effect {
     if (!this.started) this.start();
     const d = Number.isFinite(dt) && dt > 0 ? dt : 0;
     this.t += d;
-    this.k = clamp(this.t / this.duration, 0, 1);
+    this.rawK = clamp(this.t / this.duration, 0, 1);
+    this.k = this._warp(this.rawK);
     this._fireBeats();
+    this._hints();
     this._step(d);
+    this._impactStep(d);
     this.motes.step(d);
-    if (this.t >= this.duration) { this.k = 1; this.done = true; }
+    if (this.t >= this.duration) { this.k = 1; this.rawK = 1; this.done = true; }
     return this.done;
   }
 
@@ -439,9 +873,9 @@ class Effect {
       const held = this.k;
       ctx.globalAlpha = alpha0 * clamp(arc(Math.min(1, this.k * 1.02)) * 1.5, 0, 1);
       this.k = this.poseAt;
-      try { this._draw(ctx); } finally { this.k = held; }
+      try { this._paint(ctx); } finally { this.k = held; }
     } else {
-      this._draw(ctx);
+      this._paint(ctx);
       this.motes.draw(ctx);
     }
     ctx.restore();
@@ -450,7 +884,17 @@ class Effect {
   }
 
   /* Jump to the end without drawing another frame. For a torn-down stage. */
-  cancel() { this.done = true; this.k = 1; this.motes.reset(); return this; }
+  cancel() {
+    this.done = true;
+    this.k = 1;
+    this.rawK = 1;
+    this.shakeHint = 0;
+    this.flashHint = 0;
+    this.lightHint = 0;
+    this.targetFlashHint = 0;
+    this.motes.reset();
+    return this;
+  }
 
   /* ---- internals ---- */
 
@@ -500,6 +944,140 @@ class Effect {
     this.onImpact = typeof o.onImpact === 'function' ? o.onImpact : null;
     this.onBeat = typeof o.onBeat === 'function' ? o.onBeat : null;
     this.intensity = o.intensity > 0 ? o.intensity : 1;
+
+    /* Damage-scaled strength. A critical has to LOOK like a critical, and the
+     * honest way to get that is one number that drives every dial at once:
+     * shake, flash, debris count, ring reach, plume height and the length of
+     * the hold frame. Callers that know the numbers pass `damage` with `hpMax`
+     * (or a `damageRatio` outright); callers that do not get the reference
+     * blow, which is calibrated so that `power === 1`.
+     *
+     * The curve is a square root, because damage in this game spans two orders
+     * of magnitude and a linear map would make every ordinary hit invisible
+     * next to a boss-killer. */
+    const ratio = o.damageRatio !== undefined
+      ? clamp(o.damageRatio, 0, 1)
+      : (o.damage > 0 && o.hpMax > 0 ? clamp(o.damage / o.hpMax, 0, 1) : REFERENCE_BLOW);
+    this.damageRatio = ratio;
+    this.power = clamp(this.intensity * (0.62 + 0.9 * Math.sqrt(ratio)), 0.45, 2);
+
+    this.element = ELEMENTS[String(o.element || this.def.element || 'force').toLowerCase()]
+      || ELEMENTS.force;
+    this.tone = tonesFor(this.colour);
+
+    /* Where the clock stalls, and for how long. Reduced motion never holds:
+     * that mode already shows one still frame and a second stall inside it
+     * would read as a dropped frame rather than as weight. */
+    this.holdAt = this.def.holdAt;
+    const holdSec = this.reducedMotion
+      ? 0
+      : (this.def.hold || 0) * this.element.holdScale * clamp(this.power, 0.6, 1.6);
+    this.holdK = clamp(holdSec / Math.max(0.05, this.duration), 0,
+      (1 - this.holdAt) * 0.55);
+  }
+
+  /* Piecewise-linear clock remap. Identity up to the hold so the impact beat
+   * and the caller's damage number still land on the frame they always did,
+   * flat across the hold, compressed after it. Monotone, continuous, w(1) === 1
+   * exactly, and a pure function of t — a replay is still identical. */
+  _warp(k) {
+    const a = this.holdAt, h = this.holdK;
+    if (!(h > 0) || k <= a) return k;
+    if (k <= a + h) return a;
+    return a + (k - a - h) * ((1 - a) / (1 - a - h));
+  }
+
+  /* The impact envelope, as a function of a point on the timeline and nothing
+   * else. Every dial the hit drives — hint or pixel — reads from these three,
+   * which is what lets the reduced-motion path pin k to the pose frame and get
+   * a pose that genuinely holds still. Read a stored hint inside a draw and the
+   * still frame starts breathing on the wall clock.
+   *
+   * Nothing, then everything on the frame of the hit, then a squared decay. The
+   * two-hundredth ramp in front of the impact is there so a host reading
+   * shakeHint does not get a discontinuity it has to smooth away. */
+  _env(k) {
+    const a = this.holdAt;
+    const rise = clamp((k - a + 0.02) / 0.02, 0, 1);
+    const decay = 1 - clamp((k - a) / Math.max(0.06, this.def.settle), 0, 1);
+    return rise * decay * decay;
+  }
+
+  /* Light outlives the flash. A white frame is an event; a lit stage is a
+   * consequence, and the consequence is what sells the event as real. */
+  _lightAt(k) {
+    if (k < this.holdAt - 0.02) return 0;
+    const settle = Math.max(0.06, this.def.settle);
+    const tail = 1 - clamp((k - this.holdAt) / Math.max(0.08, settle * 1.5), 0, 1);
+    return clamp((this._env(k) * 0.55 + tail * tail * 0.4)
+      * clamp(this.power, 0.4, 1.6), 0, 1);
+  }
+
+  /* Two frames wide at sixty, and not one frame later than the hit. */
+  _targetFlashAt(k) {
+    const a = this.holdAt;
+    const rise = clamp((k - a + 0.02) / 0.02, 0, 1);
+    return clamp(rise * (1 - clamp((k - a) / 0.05, 0, 1)) * this.power, 0, 1);
+  }
+
+  /* The advisory hints, recomputed every frame for every effect rather than by
+   * whichever subclass remembered to. */
+  _hints() {
+    const d = this.def;
+    if (d.impactWhere === 'none') {
+      this.shakeHint = 0; this.flashHint = 0;
+      this.lightHint = 0; this.targetFlashHint = 0;
+      return;
+    }
+    const env = this._env(this.k);
+    const p = this.power;
+    this.shakeHint = env * d.shake * p;
+    this.flashHint = clamp(env * d.flash * p, 0, 1);
+    this.lightHint = this._lightAt(this.k);
+    this.targetFlashHint = this._targetFlashAt(this.k);
+  }
+
+  /* The debris throw, once, on the frame of the hit, plus the tail of element
+   * motes that carries the dissipation. */
+  _impactStep(dt) {
+    const d = this.def;
+    if (d.impactWhere === 'none' || this.reducedMotion) return;
+    const a = this.holdAt;
+    if (this.k < a) return;
+    const P = this.hitAt;
+    if (!this._burst) {
+      this._burst = true;
+      const n = Math.round(d.debris * clamp(this.power, 0.5, 1.9));
+      const r = this.prand;
+      for (let i = 0; i < n; i++) {
+        this._emitElement(r, P.x + (r() - 0.5) * 10, P.y + (r() - 0.5) * 12, 1);
+      }
+    }
+    const settle = Math.max(0.06, d.settle);
+    if (this.k < a + settle) {
+      const q = 1 - (this.k - a) / settle;
+      this.drip(dt, 90 * q * q * this.power, this._tailEmit);
+    }
+  }
+
+  /* One spark or one chunk, launched by the element's motion law. This is the
+   * third place an element is expressed, and the one the eye reads longest. */
+  _emitElement(r, x, y, strength) {
+    const el = this.element;
+    const base = el.radial ? r() * Math.PI * 2 : el.dir;
+    const a = base + el.tangent + (r() - 0.5) * el.spread;
+    const sp = (el.speed + r() * el.speedVar) * strength * clamp(this.power, 0.6, 1.7);
+    const life = el.life + r() * el.lifeVar;
+    const c = r() < 0.42 ? this.colour.hot : (r() < 0.75 ? this.colour.key : this.tone.mid);
+    if (r() < el.chunk) {
+      /* Debris always falls, even fire's: a burning chunk of something is still
+       * a chunk of something, and watching it drop is what says "that broke". */
+      this.motes.emitChunk(x, y, Math.cos(a) * sp * 0.7, Math.sin(a) * sp * 0.7 - 14,
+        Math.abs(el.gravity) * 1.4 + 50, life * 1.7, 2 + ((r() * 2) | 0), c, el.spin);
+    } else {
+      this.motes.emit(x, y, Math.cos(a) * sp, Math.sin(a) * sp, el.gravity, life,
+        r() < 0.28 ? 2 : 1, c, el.spin);
+    }
   }
 
   _layout() {
@@ -508,12 +1086,112 @@ class Effect {
     this.rand = rng(this.seed);
     this.prand = rng((this.seed ^ 0x9e3779b9) >>> 0 || 7);
     this.emitAcc = 0;
+    this._burst = false;
+    this.motes.setBounds(this.stage.w, this.stage.h);
+    /* Where the blow actually lands. A heal resolves on the caster and a resist
+     * resolves a few pixels in front of the target's barrier, and both of those
+     * reading as a hit on the enemy would be a lie about what happened. */
+    const where = this.def.impactWhere;
+    this.hitAt = where === 'caster'
+      ? { x: this.from.x, y: this.from.y - 4 }
+      : where === 'wall'
+        ? { x: this.box.x - 4, y: this.to.y }
+        : { x: this.to.x, y: this.to.y };
+    /* Bound once per cast. drip() takes a callback and the impact tail emits on
+     * most frames of the dissipation, so building this arrow here rather than
+     * inside the loop is the difference between zero garbage and a closure a
+     * frame for a third of a second. */
+    this._tailEmit = (r) => {
+      this._emitElement(r, this.hitAt.x + (r() - 0.5) * 12,
+        this.hitAt.y + (r() - 0.5) * 14, 0.6);
+    };
     this.build();
   }
 
   build() {}
   _step() {}
   _draw() {}
+
+  /* The full frame: act one, the subclass's own art, act two and three. Kept
+   * separate from draw() so the reduced-motion pose runs through exactly the
+   * same path as the animated one. */
+  _paint(ctx) {
+    this._paintWindup(ctx);
+    this._draw(ctx);
+    this._paintImpact(ctx);
+  }
+
+  /* ACT ONE — anticipation at the caster, in the element's own motion. */
+  _paintWindup(ctx) {
+    const d = this.def;
+    if (d.impactWhere === 'none' || !(d.wind > 0)) return;
+    const w = this.ph(0, d.windTo);
+    if (w <= 0 || w >= 1) return;
+    const a = arc(w) * 0.85 * d.wind;
+    if (!(a > 0.01)) return;
+    const x = this.from.x + d.windDx, y = this.from.y;
+    const prevOp = ctx.globalCompositeOperation;
+    ctx.globalCompositeOperation = 'lighter';
+    lightDisc(ctx, x, y, (7 + 9 * this.power) * w, this.tone.dim, a * 0.34, 2);
+    groundPool(ctx, x, this.stage.ground, (9 + 11 * this.power) * w,
+      this.tone.dim, a * 0.3);
+    ctx.globalCompositeOperation = prevOp;
+    windupSignature(ctx, this.element, x, y, w, this.t, this.colour, this.tone,
+      a, this.power, this.seed, this.reducedMotion);
+  }
+
+  /* ACT TWO into ACT THREE — the strike, and the dissipation after it.
+   *
+   * Order matters and it is the order a real hit happens in: the target lights
+   * up, the stage lights up, and only then does the debris start to fall. */
+  _paintImpact(ctx) {
+    const d = this.def;
+    if (d.impactWhere === 'none') return;
+    const a = this.holdAt;
+    if (this.k < a) return;
+    const settle = Math.max(0.06, d.settle);
+    const p = clamp((this.k - a) / settle, 0, 1);
+    if (p >= 1) return;
+    const P = this.hitAt;
+    const col = this.colour, tn = this.tone;
+    const fall = (1 - p) * (1 - p);
+    const prevOp = ctx.globalCompositeOperation;
+
+    /* The hit flash. Hard light over the whole target box on the frame of the
+     * hit, plus a one-pixel frame so the silhouette pops off the backdrop. */
+    const hf = this._targetFlashAt(this.k);
+    if (hf > 0.01 && d.impactWhere === 'target') {
+      const b = this.box;
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.fillStyle = rgba(col.hot, hf * 0.5);
+      ctx.fillRect(px(b.x), px(b.y), px(b.w), px(b.h));
+      ctx.globalCompositeOperation = prevOp;
+      ctx.fillStyle = rgba(col.hot, hf * 0.9);
+      ctx.fillRect(px(b.x) - 1, px(b.y) - 1, px(b.w) + 2, 1);
+      ctx.fillRect(px(b.x) - 1, px(b.y + b.h), px(b.w) + 2, 1);
+      ctx.fillRect(px(b.x) - 1, px(b.y), 1, px(b.h));
+      ctx.fillRect(px(b.x + b.w), px(b.y), 1, px(b.h));
+    }
+
+    /* Additive light. Not a sprite of a glow: everything already on the canvas
+     * under this gets brighter, which is the whole difference. */
+    const lit = this._lightAt(this.k);
+    if (lit > 0.01) {
+      ctx.globalCompositeOperation = 'lighter';
+      lightDisc(ctx, P.x, P.y, (12 + 24 * this.power) * (0.5 + p * 0.8),
+        col.key, lit * 0.3, 3);
+      groundPool(ctx, P.x, this.stage.ground,
+        (14 + 26 * this.power) * (0.4 + p), col.key, lit * 0.24);
+      if (d.wash > 0) {
+        ctx.fillStyle = rgba(tn.dim, lit * d.wash * 0.5);
+        ctx.fillRect(0, 0, this.stage.w, this.stage.h);
+      }
+      ctx.globalCompositeOperation = prevOp;
+    }
+
+    impactSignature(ctx, this.element, P.x, P.y, p, this.t, col, tn,
+      fall, this.power, this.seed, this.stage.ground, this.reducedMotion);
+  }
 
   _fireBeats() {
     for (const b of this.beats) {
@@ -644,7 +1322,7 @@ class OracleEffect extends Effect {
     // The beam: one shot, snapping wide then settling thin.
     if (this.k > 0.52 && this.k < 0.86) {
       const life = this.ph(0.52, 0.86);
-      const wdt = lerp(9, 2, easeOut(Math.min(1, life * 1.8))) * this.intensity;
+      const wdt = lerp(9, 2, easeOut(Math.min(1, life * 1.8))) * this.power;
       const a = (1 - easeIn(life)) * 0.95;
       beam(ctx, this.eye.x, this.eye.y + 1, this.aim.x, this.aim.y, wdt, col, a);
       // Lens crossbar at the muzzle: the flare that says this is light, not paint.
@@ -825,7 +1503,7 @@ class VisionEffect extends Effect {
     const fade = this.ph(0.84, 1);
     const live = 1 - easeIn(fade);
     const x = this._sweepX();
-    const half = lerp(2, 11, easeOut(rise)) * this.intensity;
+    const half = lerp(2, 11, easeOut(rise)) * this.power;
 
     // The wall of light. Banded, not blurred: three hard columns and a core.
     if (this.k < 0.72) {
@@ -1005,7 +1683,7 @@ class PseudosightEffect extends Effect {
     if (imp > 0) {
       shockRing(ctx, this.to.x, this.to.y, lerp(3, 30, easeOut(imp)), col.key, (1 - imp) * 0.9);
       runeRing(ctx, this.to.x, this.to.y, lerp(6, 20, easeOut(imp)), 6,
-        this.t * 2, col, (1 - imp) * 0.8);
+        this.reducedMotion ? 0 : this.t * 2, col, (1 - imp) * 0.8);
     }
   }
 }
@@ -1297,10 +1975,16 @@ class PhoenixEffect extends Effect {
     const imp = this.ph(0.80, 0.98);
     if (imp > 0) {
       const a = (1 - imp) * live;
-      ctx.fillStyle = rgba(col.hot, a * 0.22);
+      const pw = clamp(this.power, 0.6, 1.8);
+      /* Additive, so the backdrop and both fighters brighten under it. A flat
+       * alpha wash would have greyed the stage out instead of lighting it. */
+      const prevOp = ctx.globalCompositeOperation;
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.fillStyle = rgba(col.hot, a * 0.16);
       ctx.fillRect(0, 0, S.w, S.h);
-      shockRing(ctx, this.to.x, this.to.y - 6, lerp(6, 56, easeOut(imp)), col.hot, a * 0.9);
-      shockRing(ctx, this.to.x, this.to.y - 6, lerp(2, 34, easeOut(imp)), col.key, a);
+      ctx.globalCompositeOperation = prevOp;
+      shockRing(ctx, this.to.x, this.to.y - 6, lerp(6, 56 * pw, easeOut(imp)), col.hot, a * 0.9);
+      shockRing(ctx, this.to.x, this.to.y - 6, lerp(2, 34 * pw, easeOut(imp)), col.key, a);
       // Feathers fall out of the impact and settle.
       for (const f of this.feathers) {
         const fx = this.to.x + (f.x - 0.5) * 70;
@@ -1377,8 +2061,6 @@ class HitEffect extends Effect {
   }
 
   _step(dt) {
-    this.flashHint = arc(this.ph(0.34, 0.62)) * 0.7;
-    this.shakeHint = (1 - this.ph(0.34, 0.8)) * 2;
     if (this.k > 0.32 && this.k < 0.6) {
       this.drip(dt, 220, (r) => {
         const a = this.angle + Math.PI / 2 + (r() - 0.5) * 2.2;
@@ -1411,19 +2093,22 @@ class HitEffect extends Effect {
       const a = (1 - easeIn(fade)) * 0.95;
       const cx = lerp(this.from.x + 10, this.to.x, e);
       const cy = lerp(this.from.y, this.to.y, e);
+      /* The blade is as long as the blow is hard. Same art, scaled: a chip of
+       * damage cuts a short arc, a heavy one cuts across the whole box. */
+      const reach = this.reach * clamp(this.power, 0.7, 1.5);
       ctx.save();
       ctx.translate(px(cx), px(cy));
       ctx.rotate(this.angle);
       ctx.fillStyle = rgba(col.ink, a * 0.6);
-      ctx.fillRect(px(-this.reach * e), -2, px(this.reach * 2 * e), 4);
+      ctx.fillRect(px(-reach * e), -2, px(reach * 2 * e), 4);
       ctx.fillStyle = rgba(col.key, a * 0.85);
-      ctx.fillRect(px(-this.reach * e), -1, px(this.reach * 2 * e), 2);
+      ctx.fillRect(px(-reach * e), -1, px(reach * 2 * e), 2);
       ctx.fillStyle = rgba(col.hot, a);
-      ctx.fillRect(px(-this.reach * e), 0, px(this.reach * 2 * e), 1);
+      ctx.fillRect(px(-reach * e), 0, px(reach * 2 * e), 1);
       ctx.restore();
       if (cut >= 1) {
         const imp = this.ph(0.5, 1);
-        shockRing(ctx, this.to.x, this.to.y, lerp(2, 16, easeOut(imp)),
+        shockRing(ctx, this.to.x, this.to.y, lerp(2, 16 * this.power, easeOut(imp)),
           col.hot, (1 - imp) * 0.8);
       }
     }
@@ -1447,8 +2132,6 @@ class CritEffect extends Effect {
   }
 
   _step(dt) {
-    this.flashHint = arc(this.ph(0.34, 0.58));
-    this.shakeHint = (1 - this.ph(0.36, 0.78)) * 9 * this.intensity;
     if (this.k > 0.08 && this.k < 0.34) {
       // Charge: motes drawn up into the sigil as it forms.
       this.drip(dt, 90, (r) => {
@@ -1482,7 +2165,7 @@ class CritEffect extends Effect {
       const y = lerp(this.hover.y, this.to.y, easeIn(slam));
       const scale = lerp(1.8, 1, easeOut(form)) * lerp(1, 1.25, slam);
       runeRing(ctx, this.hover.x, y, lerp(30, 18, easeOut(form)), 6,
-        this.t * 2.4, col, easeOut(form) * (1 - slam));
+        this.reducedMotion ? 0 : this.t * 2.4, col, easeOut(form) * (1 - slam));
       stampRot(ctx, `crit:sigil:${col.key}:${this.sigilSize}`,
         this.sigilSize, this.sigilSize, paintSigil(this.sigilSize, col),
         this.hover.x, y, this.osc(2) * 0.05, easeOut(form), scale);
@@ -1494,12 +2177,15 @@ class CritEffect extends Effect {
     // Shatter: cracks, two rings, and the plate blowing apart into shards.
     if (burst > 0) {
       const e = easeOut(burst);
-      shockRing(ctx, this.to.x, this.to.y, lerp(4, 52, e), col.hot, (1 - burst) * live);
-      shockRing(ctx, this.to.x, this.to.y, lerp(2, 30, e), col.key, (1 - burst) * live * 0.9);
-      cracks(ctx, this.to.x, this.to.y, this.seed, 9, 26, col.hot,
+      /* Every dimension of the shatter rides the damage: how far the rings get,
+       * how deep the cracks run, how hard the shards are thrown. */
+      const pw = clamp(this.power, 0.6, 1.8);
+      shockRing(ctx, this.to.x, this.to.y, lerp(4, 52 * pw, e), col.hot, (1 - burst) * live);
+      shockRing(ctx, this.to.x, this.to.y, lerp(2, 30 * pw, e), col.key, (1 - burst) * live * 0.9);
+      cracks(ctx, this.to.x, this.to.y, this.seed, 9, 26 * pw, col.hot,
         (1 - burst) * live * 0.95, e);
       for (const s of this.shards) {
-        const d = s.sp * burst * 0.5;
+        const d = s.sp * burst * 0.5 * pw;
         const x = this.to.x + Math.cos(s.a) * d;
         const y = this.to.y + Math.sin(s.a) * d + burst * burst * 34;
         stampRot(ctx, `crit:shard:${col.key}:${s.w}:${s.h}`, s.w + 2, s.h + 2, (c) => {
@@ -1530,8 +2216,6 @@ class ResistEffect extends Effect {
   }
 
   _step(dt) {
-    this.shakeHint = 0;
-    this.flashHint = arc(this.ph(0.46, 0.64)) * 0.3;
     if (this.k > 0.48 && this.k < 0.72) {
       this.drip(dt, 120, (r) => {
         const a = Math.PI + (r() - 0.5) * 1.8;
@@ -1604,8 +2288,6 @@ class HealEffect extends Effect {
   }
 
   _step(dt) {
-    this.flashHint = arc(this.ph(0.55, 0.8)) * 0.35;
-    this.shakeHint = 0;
     if (this.k > 0.2 && this.k < 0.75) {
       this.drip(dt, 70, (r) => {
         const a = r() * Math.PI * 2;
@@ -1629,8 +2311,9 @@ class HealEffect extends Effect {
     ctx.beginPath();
     ctx.ellipse(px(C.x), px(C.y), C.rx * ins, C.ry * ins, 0, 0, Math.PI * 2);
     ctx.stroke();
+    const turn = this.reducedMotion ? 0 : this.t * 0.8;
     for (let i = 0; i < 6; i++) {
-      const a = (Math.PI * 2 * i) / 6 + this.t * 0.8;
+      const a = (Math.PI * 2 * i) / 6 + turn;
       drawGlyphStrip(ctx, C.x + Math.cos(a) * C.rx * ins - 1,
         C.y + Math.sin(a) * C.ry * ins - 2, 1, 991 + i * 37, col.key, live * ins * 0.8);
     }
@@ -1663,8 +2346,6 @@ class HealEffect extends Effect {
  * barrier never even lights. Short, quiet, and unmistakably a nil result. --- */
 class MissEffect extends Effect {
   build() { this.lift = 18 + this.rand() * 8; }
-
-  _step() { this.flashHint = 0; this.shakeHint = 0; }
 
   _draw(ctx) {
     const col = this.colour;
@@ -1706,6 +2387,28 @@ function defineEffect(spec, Ctor) {
     duration: spec.duration,
     reducedDuration: spec.reducedDuration,
     impactAt: spec.impactAt,
+    /* --- the impact contract, shared by every effect ---
+     * element      which motion law act one and act three are written in
+     * shake/flash  magnitude of the advisory hints at the peak
+     * hold         seconds the clock stalls on the hit; the weight of the blow
+     * settle       fraction of the timeline the dissipation gets
+     * debris       chunks and sparks thrown at reference power
+     * wash         how much of the stage the additive light reaches
+     * wind         strength of the shared wind-up, 0 for effects that are all
+     *              wind-up already (PHOENIX gathers for nearly half a second)
+     * impactWhere  'target' | 'caster' | 'wall' | 'none' */
+    element: spec.element || 'force',
+    shake: spec.shake === undefined ? 4 : spec.shake,
+    flash: spec.flash === undefined ? 0.5 : spec.flash,
+    hold: spec.hold === undefined ? 0.05 : spec.hold,
+    settle: spec.settle === undefined ? 0.28 : spec.settle,
+    holdAt: spec.holdAt === undefined ? spec.impactAt : spec.holdAt,
+    debris: spec.debris === undefined ? 10 : spec.debris,
+    wash: spec.wash === undefined ? 0.18 : spec.wash,
+    wind: spec.wind === undefined ? 1 : spec.wind,
+    windTo: spec.windTo === undefined ? spec.impactAt * 0.62 : spec.windTo,
+    windDx: spec.windDx === undefined ? 10 : spec.windDx,
+    impactWhere: spec.impactWhere || 'target',
     /* The frame the reduced-motion still holds. Usually the impact, but a slash
      * reads better a hair after it, once the arc is fully extended. */
     poseAt: spec.poseAt === undefined ? spec.impactAt : spec.poseAt,
@@ -1723,6 +2426,7 @@ function defineEffect(spec, Ctor) {
     family: def.family,
     label: def.label,
     colour: def.colour,
+    element: def.element,
     duration: def.duration,
     reducedDuration: def.reducedDuration,
     impactAt: def.impactAt,
@@ -1738,42 +2442,69 @@ export const SPELL_ANIMATIONS = Object.freeze({
     id: 'ORACLE', family: 'spell', label: 'ORACLE',
     colour: SPELL_COLOURS.ORACLE,
     duration: 1.5, reducedDuration: 0.8, impactAt: 0.56, poseAt: 0.6,
-    motes: 64, sfx: { cast: 'spell', impact: 'crit' },
+    motes: 84, sfx: { cast: 'spell', impact: 'crit' },
+    /* An eye in a turning bezel, so: arcane. The wind-up is offset high and
+     * forward because the eye, not the caster's hand, is where it gathers. */
+    element: 'arcane', shake: 5, flash: 0.55, hold: 0.055, settle: 0.3,
+    debris: 9, wash: 0.16, windDx: 14, windTo: 0.3,
   }, OracleEffect),
 
   REVEAL_PATH: defineEffect({
     id: 'REVEAL_PATH', family: 'spell', label: 'REVEAL PATH',
     colour: SPELL_COLOURS.REVEAL_PATH,
     duration: 1.6, reducedDuration: 0.85, impactAt: 0.66, poseAt: 0.72,
-    motes: 64, sfx: { cast: 'spell', impact: 'unlock' },
+    motes: 76, sfx: { cast: 'spell', impact: 'unlock' },
+    /* A lattice is a crystal. Frost's snap-then-stop is the same motion the
+     * edges already make, which is why this one agrees with itself. */
+    element: 'frost', shake: 5, flash: 0.5, hold: 0.06, settle: 0.3,
+    debris: 14, wash: 0.14, windTo: 0.22,
   }, RevealPathEffect),
 
   VISION: defineEffect({
     id: 'VISION', family: 'spell', label: 'VISION',
     colour: SPELL_COLOURS.VISION,
     duration: 1.9, reducedDuration: 0.9, impactAt: 0.52, poseAt: 0.7,
-    motes: 56, sfx: { cast: 'spell', impact: 'shrine' },
+    motes: 64, sfx: { cast: 'spell', impact: 'shrine' },
+    /* A wall of light crossing the whole stage is a pressure front, so force:
+     * staggered rings and dust that stays low. It lands softer than the rest
+     * because VISION explains rather than punishes. */
+    element: 'force', shake: 4, flash: 0.4, hold: 0.05, settle: 0.34,
+    debris: 8, wash: 0.22, wind: 0.7, windTo: 0.18,
   }, VisionEffect),
 
   PSEUDOSIGHT: defineEffect({
     id: 'PSEUDOSIGHT', family: 'spell', label: 'PSEUDOSIGHT',
     colour: SPELL_COLOURS.PSEUDOSIGHT,
     duration: 1.7, reducedDuration: 0.9, impactAt: 0.74, poseAt: 0.5,
-    motes: 64, sfx: { cast: 'spell', impact: 'unlock' },
+    motes: 72, sfx: { cast: 'spell', impact: 'unlock' },
+    /* Rune rows read off a page: arcane, and the counter-rotating rings at the
+     * impact are the same figure the page's margin runes belong to. */
+    element: 'arcane', shake: 5, flash: 0.5, hold: 0.055, settle: 0.26,
+    debris: 10, wash: 0.15, wind: 0.8, windTo: 0.2,
   }, PseudosightEffect),
 
   CODE_FRAGMENT: defineEffect({
     id: 'CODE_FRAGMENT', family: 'spell', label: 'CODE FRAGMENT',
     colour: SPELL_COLOURS.CODE_FRAGMENT,
     duration: 1.6, reducedDuration: 0.85, impactAt: 0.62, poseAt: 0.5,
-    motes: 80, sfx: { cast: 'spell', impact: 'crit' },
+    motes: 96, sfx: { cast: 'spell', impact: 'crit' },
+    /* Shards that are simply *there* on the frame they arrive: lightning. The
+     * strobe on the impact is the same beat the shards lock in on. */
+    element: 'lightning', shake: 7, flash: 0.6, hold: 0.05, settle: 0.3,
+    debris: 16, wash: 0.18, windTo: 0.16,
   }, CodeFragmentEffect),
 
   PHOENIX: defineEffect({
     id: 'PHOENIX', family: 'spell', label: 'PHOENIX',
     colour: SPELL_COLOURS.PHOENIX,
     duration: 3.0, reducedDuration: 1.2, impactAt: 0.82, poseAt: 0.74,
-    travelAt: 0.46, motes: 160, sfx: { cast: 'levelup', impact: 'victory' },
+    travelAt: 0.46, motes: 208, sfx: { cast: 'levelup', impact: 'victory' },
+    /* The only warm effect in the game, and the heaviest thing in it: the
+     * longest hold, the widest wash, the most debris. Its own gather already
+     * runs for the best part of a second, so the shared wind-up only tops it
+     * up rather than competing with it. */
+    element: 'fire', shake: 11, flash: 0.85, hold: 0.11, settle: 0.2,
+    debris: 22, wash: 0.34, wind: 0.4, windDx: 0, windTo: 0.3,
   }, PhoenixEffect),
 });
 
@@ -1782,28 +2513,47 @@ export const ATTACK_ANIMATIONS = Object.freeze({
     id: 'hit', family: 'attack', label: 'HIT',
     colour: ATTACK_COLOURS.hit,
     duration: 0.55, reducedDuration: 0.3, impactAt: 0.38, poseAt: 0.5,
-    motes: 32, sfx: { cast: null, impact: 'hit' },
+    motes: 48, sfx: { cast: null, impact: 'hit' },
+    /* Kinetic and cheap. A three-frame hold is enough to feel and short enough
+     * that ten of these in a row still resolve as ten separate events. */
+    element: 'force', shake: 3, flash: 0.5, hold: 0.035, settle: 0.5,
+    debris: 6, wash: 0.08, windTo: 0.24,
   }, HitEffect),
 
   [DAMAGE_KIND.CRIT]: defineEffect({
     id: 'crit', family: 'attack', label: 'CRITICAL',
     colour: ATTACK_COLOURS.crit,
     duration: 1.25, reducedDuration: 0.55, impactAt: 0.4, poseAt: 0.46,
-    motes: 96, sfx: { cast: 'tick', impact: 'crit' },
+    motes: 120, sfx: { cast: 'tick', impact: 'crit' },
+    /* The rarest thing the player sees, so it gets the second-longest hold in
+     * the game and a full-strength flash. Lightning because a weakness strike
+     * should arrive already finished. */
+    element: 'lightning', shake: 10, flash: 0.7, hold: 0.1, settle: 0.45,
+    debris: 20, wash: 0.3, windTo: 0.2,
   }, CritEffect),
 
   [DAMAGE_KIND.RESIST]: defineEffect({
     id: 'resist', family: 'attack', label: 'RESIST',
     colour: ATTACK_COLOURS.resist,
     duration: 0.75, reducedDuration: 0.4, impactAt: 0.5, poseAt: 0.58,
-    motes: 32, sfx: { cast: null, impact: 'tick' },
+    motes: 40, sfx: { cast: null, impact: 'tick' },
+    /* Lands on the barrier, not on the enemy, and barely shakes the camera:
+     * the whole message is that nothing got through. Frost's dead stop is
+     * exactly the right motion for a blow that stops. */
+    element: 'frost', shake: 1.5, flash: 0.22, hold: 0.045, settle: 0.34,
+    debris: 7, wash: 0.05, impactWhere: 'wall', windTo: 0.24,
   }, ResistEffect),
 
   [DAMAGE_KIND.HEAL]: defineEffect({
     id: 'heal', family: 'attack', label: 'HEAL',
     colour: ATTACK_COLOURS.heal,
     duration: 0.95, reducedDuration: 0.45, impactAt: 0.6, poseAt: 0.68,
-    motes: 48, sfx: { cast: null, impact: 'unlock' },
+    motes: 56, sfx: { cast: null, impact: 'unlock' },
+    /* Resolves on the caster and never shakes the camera. No hold either — a
+     * hold frame says "that hurt", and this is the one effect that must not. */
+    element: 'arcane', shake: 0, flash: 0.3, hold: 0, settle: 0.3,
+    debris: 6, wash: 0.12, impactWhere: 'caster', wind: 0.55, windDx: 0,
+    windTo: 0.2,
   }, HealEffect),
 
   [DAMAGE_KIND.MISS]: defineEffect({
@@ -1811,6 +2561,10 @@ export const ATTACK_ANIMATIONS = Object.freeze({
     colour: ATTACK_COLOURS.miss,
     duration: 0.6, reducedDuration: 0.3, impactAt: 0.4, poseAt: 0.45,
     motes: 0, sfx: { cast: null, impact: 'tick' },
+    /* Nothing connected, so nothing lands: no wind-up figure, no flash, no
+     * shake, no light, no debris. The absence is the information. */
+    element: 'force', shake: 0, flash: 0, hold: 0, debris: 0, wash: 0,
+    wind: 0, impactWhere: 'none',
   }, MissEffect),
 });
 
@@ -1844,6 +2598,15 @@ export function effectDuration(kind, { reducedMotion = false } = {}) {
   return reducedMotion ? def.reducedDuration : def.duration;
 }
 
+/* Which motion law a kind is drawn in, without building it. For a caller that
+ * wants to pick an sfx or a damage-number colour that agrees with the art. */
+export function elementOf(kind) {
+  const raw = kind === null || kind === undefined ? '' : String(kind);
+  const def = SPELL_ANIMATIONS[raw.toUpperCase()]
+    || ATTACK_ANIMATIONS[raw.toLowerCase()];
+  return def ? def.element : ATTACK_ANIMATIONS[DAMAGE_KIND.HIT].element;
+}
+
 /* Rasterise everything an effect will need before the fight starts. A cold
  * cache costs a few canvases on the first cast, which is exactly the frame the
  * player is watching; this moves that cost to the loading beat. */
@@ -1860,8 +2623,13 @@ export function warmCache(kinds, opts = {}) {
      * paying for a full playthrough. */
     for (let i = 0; i <= 12; i++) {
       e.t = (e.duration * i) / 12;
-      e.k = clamp(e.t / e.duration, 0, 1);
-      try { e._draw(made.ctx); } catch (err) { /* a cold warm-up is not fatal */ }
+      e.rawK = clamp(e.t / e.duration, 0, 1);
+      e.k = e._warp(e.rawK);
+      /* _paint, not _draw: the shared wind-up and impact layer rasterise rune
+       * tiles of their own, and warming only the subclass art would leave the
+       * frame of the hit — the one frame the player is actually watching —
+       * paying for its canvases at the worst possible moment. */
+      try { e._paint(made.ctx); } catch (err) { /* a cold warm-up is not fatal */ }
     }
     e.cancel();
   }

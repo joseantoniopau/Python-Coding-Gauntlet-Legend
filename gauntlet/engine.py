@@ -15,8 +15,31 @@ from . import curriculum, diagnostic, puzzles, story as storymod, tactics
 from . import skills as skillmod
 from . import srs as srsmod
 from . import world
+from . import bestiary, classes, dungeons, finalexam, incantation, legendaries
+from . import pets, progression, quests, saves, worldgen
 from .corpus import ensure as ensure_corpus
 from .corpus.schema import Problem
+
+# Artifacts are ordinary items everywhere the engine looks one up — the equip
+# path, the loadout panel, the secret awards — through _item() below.
+#
+# The manifest says to do that by writing them into items.BY_ID at boot.  Do not:
+# legendaries.validate() asserts `a.id not in items.BY_ID`, which is how it
+# proves an artifact never shadows a catalogue item, so the registration would
+# turn that module's own invariant into a permanent failure. One resolver in
+# this file gets the same result and leaves the catalogue alone.
+#
+# The 31 artifact keys and the 22 class-tree keys already carry labels in
+# items.EFFECT_LABELS, so items.describe renders them; no merge is needed.
+
+
+def _item(item_id: str):
+    """An item or an artifact, whichever owns this id. Artifacts never shadow."""
+    found = items.BY_ID.get(item_id)
+    if found is not None:
+        return found
+    artifact = legendaries.BY_ID.get(item_id)
+    return artifact.to_item() if artifact is not None else None
 
 
 @dataclass
@@ -45,6 +68,12 @@ class Encounter:
     temp_effects: dict = field(default_factory=dict)  # consumables used this battle
     enemy: dict = field(default_factory=dict)
     free_recast_used: bool = False
+    # Companion interventions live here rather than in temp_effects, which is
+    # folded straight into items.total_effects and can only hold numbers.
+    pet_spoke: bool = False
+    pet_spoken: dict = field(default_factory=dict)   # pet id -> times spoken
+    rank_ceiling: str = ""          # the best rank still earnable here
+    dungeon_room: int = -1          # the room this fight belongs to, or -1
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -96,7 +125,9 @@ DEFAULT_STATE = {
     "codex": [],
     "settings": {"music": True, "sfx": True, "reduced_motion": False,
                  "text_scale": 1.0, "high_contrast": False, "colorblind": False,
-                 "crt": True},
+                 "crt": True,
+                 # the mixer: master, music and sound effects move independently
+                 "vol_master": 0.7, "vol_music": 0.55, "vol_sfx": 0.8},
     "skills": {},
     "schedule": {},
     "encounter": None,
@@ -104,17 +135,121 @@ DEFAULT_STATE = {
     "daily": {"date": "", "quests": [], "completed": []},
     "stats": {"encounters": 0, "armor_repairs": 0, "shrines": 0,
               "hints_total": 0, "sessions": 0, "probes": 0, "probes_correct": 0,
-              "crits": 0, "items_found": 0, "secrets": 0},
+              "crits": 0, "items_found": 0, "secrets": 0,
+              # counters the artifact acquisition conditions read
+              "boundary_clears": 0, "chains_completed": 0,
+              "hidden_rooms_found": 0, "green_index_found": 0,
+              "chapters_graduated": 0, "regions_retaken": 0,
+              "interviews_passed": 0, "session_started_at": 0.0,
+              "forge_streak": 0},
+
+    # --- the eleven modules' own sub-states -------------------------------
+    # Each blob is whatever its owning module says it is, asked for rather than
+    # copied, so a module that grows a key does not need this file edited. They
+    # are all plain JSON and round-trip through db.save_state untouched.
+    "pets": pets.new_state(),
+    "quests": quests.new_quest_state(),
+    "world": progression.new_world_state(),
+    dungeons.STATE_KEY: None,
+    "dungeons_cleared": [],          # ours to write; progression.snapshot reads it
+    "dungeon_map": {},               # dungeon id -> {room id: problem id}
+    "class": {},                     # classes.new_state() at class choice
+    "world_seed": 0,                 # the int, never the WorldSpec
+    "legendaries": [],               # artifact ids owned
+    "hand": legendaries.hand_ledger_new(),   # the Hand's ledger MUST persist
+    "moveset": incantation.new_moveset(),
+    "incantation": None,             # the live typed-Python battle, or None
+    "exam": None,                    # the sealed practical, or None
+    # What this sitting has already covered. The selector reads it to bring a
+    # family back inside the session; the SRS schedule still owns tomorrow.
+    "session": {"started_at": 0.0, "log": []},
 }
 
 
 class Game:
     def __init__(self, *, db_path=None, corpus_path=None, rebuild: bool = False):
         self.conn = db.connect(db_path)
+        saves.ensure_schema(self.conn)          # named slots, autosave ring, undo
         self.corpus: list = ensure_corpus(corpus_path, rebuild=rebuild)
         self.by_id: dict = {p.id: p for p in self.corpus}
         self.state = self._load_or_create()
         self._rng = random.Random()
+        # The world is rebuilt from its seed rather than serialised: the spec is
+        # a frozen description and generate() is pure, so a save carries 4 bytes.
+        # The manifest says generate(0) means "pick one"; it does not — seed 0 is
+        # a real world, so every save would be the same one. The pick is made
+        # here, once, and then persisted.
+        self._reseed_world(self.state.get("world_seed") or 0)
+        self._dungeons: dict = {}               # id -> built Dungeon, this process
+        self._exam = None                       # the composed Exam, this process
+        self._resolved_dungeon = None           # (Dungeon, run) for this encounter
+        self._last_tick = time.time()
+        self._open_session()
+        self._sync_class_points()
+
+    def _reseed_world(self, seed) -> None:
+        seed = worldgen.parse_seed(seed) if seed else random.getrandbits(31) or 1
+        self.world = worldgen.generate(seed)
+        self.state["world_seed"] = self.world.seed
+        self._dungeons = {}
+
+    def new_world(self, seed=0) -> dict:
+        """Reroll the world. The seed is shareable: the same code is the same
+        geography, the same dungeons and the same boss affixes, for anyone.
+
+        Sealed in a measured run: rerolling the geography under a running exam
+        moves the ground the run was composed against."""
+        sealed = self._sealed_in_interview()
+        if sealed:
+            return sealed
+        self._reseed_world(seed)
+        self.save()
+        return {"ok": True, "seed": worldgen.seed_text(self.world.seed),
+                "card": worldgen.world_card(self.world)}
+
+    def world_card(self) -> dict:
+        return {"seed": worldgen.seed_text(self.world.seed),
+                "card": worldgen.world_card(self.world),
+                "first_hour": worldgen.first_hour(self.world)}
+
+    # -- sessions and playtime ---------------------------------------------
+    # story._STAT_LABELS exposes "Sessions" as a trigger dimension, and both of
+    # these were declared and never written, so every beat keyed to them was
+    # unreachable. A session is a launch, not a page refresh: reconnecting the
+    # client inside the window continues the one already open.
+    SESSION_GAP_SECONDS = 20 * 60
+    # A gap longer than this is somebody making coffee, not somebody playing.
+    PLAYTIME_MAX_GAP = 15 * 60
+
+    def _open_session(self) -> None:
+        stats = self.state["stats"]
+        now = time.time()
+        if now - float(stats.get("session_started_at") or 0) > self.SESSION_GAP_SECONDS:
+            stats["sessions"] = int(stats.get("sessions", 0)) + 1
+            stats["armor_full_this_session"] = False
+            # A new sitting starts with an empty board: yesterday's interleaving
+            # is the spaced-repetition schedule's business, not the selector's.
+            self.state["session"] = {"started_at": now, "log": []}
+        stats["session_started_at"] = now
+        self.save()
+
+    def _tick_playtime(self) -> None:
+        now = time.time()
+        delta = now - self._last_tick
+        self._last_tick = now
+        if 0 < delta < self.PLAYTIME_MAX_GAP:
+            self.state["player"]["playtime_seconds"] = round(
+                float(self.state["player"].get("playtime_seconds") or 0.0) + delta, 2)
+
+    def _sync_class_points(self) -> None:
+        """classes.sync_points is the only granter and is idempotent, so calling
+        it on every load and every level-up cannot double-grant."""
+        cls = self.state.get("class") or {}
+        if not cls.get("class"):
+            return
+        classes.sync_points(
+            cls, level=int(self.state["player"]["level"]),
+            chapters_graduated=classes.chapters_graduated(self.skills))
 
     # -- persistence -------------------------------------------------------
     def _load_or_create(self) -> dict:
@@ -136,6 +271,7 @@ class Game:
         return merged
 
     def save(self) -> None:
+        self._tick_playtime()
         db.save_state(self.conn, self.state)
 
     # -- typed views over the raw state ------------------------------------
@@ -214,13 +350,53 @@ class Game:
         enc = self.encounter
         temp = dict(enc.temp_effects) if (enc and include_temp) else {}
         base = items.total_effects(self.state["equipped"], self.state["attributes"], temp)
+        # An equipped artifact folds in exactly like gear, with the same
+        # max-not-sum rule for switches. items.total_effects cannot do it itself
+        # because artifacts deliberately stay out of items.BY_ID (see _item).
+        for item_id in (self.state["equipped"] or {}).values():
+            artifact = legendaries.BY_ID.get(item_id)
+            if artifact is None:
+                continue
+            for key, value in artifact.effects.items():
+                if key not in items.EFFECT_LABELS:
+                    continue
+                base[key] = (max(base.get(key, 0), value)
+                             if key in items.SWITCH_KEYS
+                             else base.get(key, 0) + value)
         # mentor techniques are earned by demonstrated mastery, so they fold in
         # exactly like gear does — and obey the same rule about never answering
         earned = storymod.technique_effects(self.state["story"], self.story_context())
         for key, value in (earned or {}).items():
             if key in items.EFFECT_LABELS:
                 base[key] = base.get(key, 0) + value
-        return base
+
+        mode = enc.mode if enc else config.MODE_ADVENTURE
+        region_id = self.state["player"].get("region", "")
+        # Companions contribute the BEST of each passive rather than the sum, and
+        # contribute nothing at all in Interview Mode — party_effects self-guards,
+        # but the region gate is ours.
+        if pets.available_in(mode, region_id):
+            for key, value in pets.party_effects(
+                    self.state["pets"].get("active", []),
+                    self.state["pets"].get("bond", {}), mode=mode).items():
+                if key in items.EFFECT_LABELS:
+                    base[key] = max(base.get(key, 0), value)
+
+        # A rebuilt town hall and a skill tree are both "build", which is what
+        # the boss ladder takes away at rung 8 and the exam takes away entirely.
+        if not finalexam.sealed(enc, "BUILD"):
+            for key, value in quests.upgrade_effects(self.state).items():
+                if key in items.EFFECT_LABELS:
+                    base[key] = base.get(key, 0) + value
+            for key, value in classes.tree_effects(self.state.get("class") or {}).items():
+                if key not in items.EFFECT_LABELS:
+                    continue
+                base[key] = (max(base.get(key, 0), value)
+                             if key in items.SWITCH_KEYS
+                             else base.get(key, 0) + value)
+        # Caps run LAST, on the merged total: an always-refunded probe is an
+        # unlimited probe and a 100%-graced clock is not a clock.
+        return classes.clamp(base)
 
     def _sync_caps(self) -> None:
         """Equipment and attributes change the ceilings, never the current values
@@ -236,12 +412,12 @@ class Game:
         fx = self.effects(include_temp=False)
         equipped = {}
         for slot, item_id in self.state["equipped"].items():
-            item = items.BY_ID.get(item_id)
+            item = _item(item_id)
             if item:
                 equipped[slot] = item.to_dict()
         owned = []
         for item_id in self.state["inventory"]:
-            item = items.BY_ID.get(item_id)
+            item = _item(item_id)
             if item:
                 owned.append({**item.to_dict(),
                               "equipped": self.state["equipped"].get(item.slot) == item.id})
@@ -285,7 +461,7 @@ class Game:
         for item_id in ("rusty_blade", "training_vest", "worn_boots"):
             if item_id not in self.state["inventory"]:
                 self.state["inventory"].append(item_id)
-                self.state["equipped"][items.BY_ID[item_id].slot] = item_id
+                self.state["equipped"][_item(item_id).slot] = item_id
         self.state["consumables"]["focus_elixir"] = \
             self.state["consumables"].get("focus_elixir", 0) + 2
         self.state["consumables"]["probe_scroll"] = \
@@ -323,9 +499,14 @@ class Game:
                 "effects": self.loadout()["effects"]}
 
     def equip(self, item_id: str) -> dict:
-        item = items.BY_ID.get(item_id)
+        item = _item(item_id)
         if not item or item_id not in self.state["inventory"]:
             return {"error": "you do not carry that"}
+        class_id = (self.state.get("class") or {}).get("class", "")
+        if class_id and not classes.equippable(item_id, class_id):
+            return {"error": "not for your discipline",
+                    "message": "%s is restricted to %s." % (
+                        item.name, classes.restricted_to(item_id))}
         slot = item.slot
         # rings are interchangeable between the two ring slots
         if slot.startswith("ring"):
@@ -353,6 +534,10 @@ class Game:
         if not spec:
             return {"error": "unknown item"}
         enc = self.encounter
+        # The seal is checked BEFORE anything is applied. It used to sit below
+        # the mana/stamina branch, so an Elixir of Focus worked mid-interview.
+        if finalexam.sealed(enc, "ITEMS"):
+            return finalexam.refuse("ITEMS")
         effect = dict(spec["effect"])
         player = self.state["player"]
         applied = []
@@ -367,9 +552,6 @@ class Game:
         if effect:
             if enc is None:
                 return {"error": "that one only works inside a battle"}
-            if enc.mode == config.MODE_INTERVIEW:
-                return {"error": "sealed",
-                        "message": "Items do not work in Interview Mode. That is the point."}
             for k, v in effect.items():
                 enc.temp_effects[k] = enc.temp_effects.get(k, 0) + v
             applied.append("a charm settles over the battle")
@@ -385,19 +567,20 @@ class Game:
         enc = self.encounter
         if not enc:
             return 0
-        if enc.mode == config.MODE_INTERVIEW:
+        if finalexam.sealed(enc, "PROBES"):
             return 0
-        return max(0, items.base_probe_charges(self.effects()) - enc.probes_used)
+        fx = self.effects()
+        if fx.get("probe_unbounded"):
+            return 99            # an artifact, and the only thing that says this
+        return max(0, items.base_probe_charges(fx) - enc.probes_used)
 
     def probe(self, args, expected, ops=None) -> dict:
         """Spend a charge to assert what the correct answer is on an input you choose."""
         enc = self.encounter
         if not enc:
             return {"error": "no active encounter"}
-        if enc.mode == config.MODE_INTERVIEW:
-            return {"error": "sealed",
-                    "message": "Probes are a learning tool. Interview Mode measures "
-                               "you without them."}
+        if finalexam.sealed(enc, "PROBES"):
+            return finalexam.refuse("PROBES")
         if self.probes_remaining() <= 0:
             return {"error": "no charges",
                     "message": "Out of probe charges. Raise LOGIC, wear Testsmith "
@@ -463,6 +646,17 @@ class Game:
 
         self._refresh_daily(skills, schedule)
         self._sync_caps()
+        self._sync_class_points()
+
+        ctx = quests.context(self.story_context(readiness=ready), self.state)
+        run = self.state.get(dungeons.STATE_KEY)
+        dungeon_view = None
+        if run:
+            built = self._dungeon_for(run["dungeon"], run.get("seed"))
+            dungeon_view = {**dungeons.progress(built, run),
+                            "depth": self._dungeon_depth(built, run),
+                            "options": dungeons.options(built, run),
+                            "name": built.name}
         self.save()
 
         return {
@@ -513,7 +707,575 @@ class Game:
             "honorific": storymod.honorific(self.state["story"]),
             "codex": self.state["codex"],
             "diagnostic_done": bool(self.state.get("diagnostic", {}).get("done")),
+
+            # --- the eleven modules, reachable from the one screen the client
+            # already refreshes. Everything below was written, self-checked and
+            # unreferenced until now.
+            "world": progression.world_map(self.state, skills, readiness=ready),
+            "todo": progression.things_to_do(self.state, skills, readiness=ready,
+                                             due_retests=len(due_now), limit=6),
+            "quests": quests.board(ctx, self.state),
+            "quest_next": quests.next_steps(ctx, self.state),
+            "pets": pets.catalogue(self.state["pets"]),
+            "pet_hints": pets.undiscovered_hints(self._pet_evidence(),
+                                                 self.state["pets"]["found"]),
+            "dungeon": dungeon_view,
+            "dungeons": [self._dungeon_card(d) for d in
+                         dungeons.dungeons_for_region(player.get("region", ""))],
+            "class": (classes.tree_view(self.state["class"],
+                                        level=int(player["level"]))
+                      if (self.state.get("class") or {}).get("class") else None),
+            "class_selection": (classes.selection_screen()
+                                if not (self.state.get("class") or {}).get("class")
+                                else []),
+            "legendaries": {"owned": list(self.state["legendaries"]),
+                            "hand": legendaries.hand_summary(self.state["hand"])},
+            "upgrades": items.upgrades_for(
+                self.state["inventory"],
+                {name: s.to_dict() for name, s in skills.items()},
+                {**self.state["stats"], **stats}),
+            "exam": {"ladder": finalexam.ladder_view(),
+                     "format": finalexam.interview_format()},
+            "seed": worldgen.seed_text(self.world.seed),
+            "moveset": self.state["moveset"],
+            # Cracked armour used to be a number nothing read. hero_look turns
+            # integrity into what the player actually looks like on the map.
+            "hero": items.hero_look(self.state["armor"], self.state["equipped"]),
+            "playtime": saves.format_playtime(
+                float(player.get("playtime_seconds") or 0.0)),
         }
+
+    def _dungeon_card(self, dungeon_id: str) -> dict:
+        plan = dungeons.DUNGEON_BY_ID[dungeon_id]
+        return {"id": plan.id, "name": plan.name, "region": plan.region,
+                "chapter": plan.chapter, "tier": plan.tier,
+                "archetype": plan.archetype, "rule": plan.rule,
+                "floors": plan.floors, "blurb": plan.blurb, "lesson": plan.lesson,
+                "cleared": dungeon_id in self.state["dungeons_cleared"]}
+
+    # ======================================================================
+    # The world layer's public surface. Each of these is a thin door onto a
+    # module that already knows the rules; the engine's job here is to hold the
+    # save, seal Interview Mode and pay out what the module says is owed.
+    # ======================================================================
+
+    def _readiness(self) -> dict:
+        easy, medium = self._unaided_counts()
+        return adaptive.readiness(skills=self.skills, schedule=self.schedule,
+                                  stats=db.attempt_stats(self.conn),
+                                  unaided_easy=easy, unaided_medium=medium)
+
+    def _quest_ctx(self) -> dict:
+        return quests.context(self.story_context(readiness=self._readiness()),
+                              self.state)
+
+    def _sealed_in_interview(self) -> dict | None:
+        """One refusal for every overworld action. The modules refuse too, but
+        the guarantee belongs at the door, not three rooms in."""
+        if self.state.get("interview") or (
+                self.encounter and self.encounter.mode == config.MODE_INTERVIEW):
+            return finalexam.refuse("BUILD")
+        return None
+
+    # -- classes -----------------------------------------------------------
+    def class_selection(self) -> dict:
+        return {"selection": classes.selection_screen(),
+                "chosen": (self.state.get("class") or {}).get("class", "")}
+
+    def choose_class(self, class_id: str) -> dict:
+        # The seal is asked FIRST. A refusal that names the player's build
+        # state before it names the seal is a second answer to the same
+        # question, and the answer in a measured run is always the seal.
+        sealed = self._sealed_in_interview()
+        if sealed:
+            return sealed
+        if (self.state.get("class") or {}).get("class"):
+            return {"error": "a class is already chosen; respec at the Armorer"}
+        if classes.get(class_id) is None:
+            return {"error": "unknown class"}
+        self.state["class"] = classes.new_state(class_id)
+        self._sync_class_points()
+        self._sync_caps()
+        self.save()
+        return {"ok": True, "class": class_id,
+                "tree": classes.tree_view(self.state["class"],
+                                          level=int(self.state["player"]["level"]))}
+
+    def class_tree(self) -> dict:
+        cls = self.state.get("class") or {}
+        if not cls.get("class"):
+            return {"error": "no class chosen", "selection": classes.selection_screen()}
+        self._sync_class_points()
+        return classes.tree_view(cls, level=int(self.state["player"]["level"]))
+
+    def spend_node(self, node_id: str) -> dict:
+        sealed = self._sealed_in_interview()
+        if sealed:
+            return sealed
+        cls = self.state.get("class") or {}
+        if not cls.get("class"):
+            return {"error": "no class chosen"}
+        self._sync_class_points()
+        result = classes.spend(cls, node_id, level=int(self.state["player"]["level"]))
+        if "ok" in result:
+            self._sync_caps()
+            self.save()
+            result["tree"] = classes.tree_view(
+                cls, level=int(self.state["player"]["level"]))
+        return result
+
+    def class_respec(self, *, scope: str = "all", branch_id: str = "") -> dict:
+        sealed = self._sealed_in_interview()
+        if sealed:
+            return sealed
+        cls = self.state.get("class") or {}
+        if not cls.get("class"):
+            return {"error": "no class chosen"}
+        quote = classes.respec_cost(cls, level=int(self.state["player"]["level"]),
+                                    effects=self.effects(), scope=scope,
+                                    branch_id=branch_id)
+        result = classes.respec(cls, level=int(self.state["player"]["level"]),
+                                gold_available=int(self.state["player"]["gold"]),
+                                effects=self.effects(), scope=scope,
+                                branch_id=branch_id)
+        if result.get("ok"):
+            self.state["player"]["gold"] -= int(result.get("gold", 0))
+            self._sync_caps()
+            self.save()
+        return {**result, "quote": quote}
+
+    def choose_dual(self, class_id: str) -> dict:
+        sealed = self._sealed_in_interview()
+        if sealed:
+            return sealed
+        cls = self.state.get("class") or {}
+        if not cls.get("class"):
+            return {"error": "no class chosen"}
+        result = classes.choose_dual(cls, class_id,
+                                     level=int(self.state["player"]["level"]))
+        if result.get("ok"):
+            self.save()
+        return result
+
+    # -- quests ------------------------------------------------------------
+    def quest_board(self, region_id: str = "") -> dict:
+        ctx = self._quest_ctx()
+        if region_id:
+            return quests.region_board(region_id, ctx, self.state)
+        return quests.board(ctx, self.state)
+
+    def accept_quest(self, quest_id: str) -> dict:
+        sealed = self._sealed_in_interview()
+        if sealed:
+            return sealed
+        result = quests.accept(self.state, quest_id, self._quest_ctx())
+        self.save()
+        return result
+
+    def abandon_quest(self, quest_id: str) -> dict:
+        sealed = self._sealed_in_interview()
+        if sealed:
+            return sealed
+        quests.abandon(self.state, quest_id)
+        self.save()
+        return {"ok": True}
+
+    def turn_in_quest(self, quest_id: str) -> dict:
+        sealed = self._sealed_in_interview()
+        if sealed:
+            return sealed
+        ctx = self._quest_ctx()
+        if not quests.ready(quest_id, ctx, self.state):
+            return {"error": "not finished",
+                    "progress": quests.progress_of(quest_id, ctx, self.state)}
+        done = quests.complete(self.state, quest_id)
+        if not done:
+            return {"error": "already turned in"}
+        pay = done.get("pay") or {}
+        player = self.state["player"]
+        player["xp"] += int(pay.get("xp", 0))
+        player["gold"] += int(pay.get("gold", 0))
+        player["level"] = world.level_for(player["xp"])
+        player["title"] = world.title_for(player["level"])
+        if pay.get("set_item"):
+            item_id = pay["set_item"]
+            if _item(item_id) and item_id not in self.state["inventory"]:
+                self.state["inventory"].append(item_id)
+                self.state["stats"]["items_found"] += 1
+        consumable = pay.get("consumable")
+        if consumable:
+            key = consumable if isinstance(consumable, str) else consumable.get("id")
+            count = 1 if isinstance(consumable, str) else int(
+                consumable.get("count", 1))
+            if key:
+                self.state["consumables"][key] = \
+                    self.state["consumables"].get(key, 0) + count
+        story_reward = done.get("story") or {}
+        for card in ([story_reward["card"]] if story_reward.get("card") else []):
+            if card not in self.state["grimoire"]:
+                self.state["grimoire"].append(card)
+        for note in ([story_reward["codex"]] if story_reward.get("codex") else []):
+            if note not in self.state["codex"]:
+                self.state["codex"].append(note)
+        if story_reward.get("title"):
+            player["title"] = story_reward["title"]
+        if done.get("chain_complete"):
+            self.state["stats"]["chains_completed"] = int(
+                self.state["stats"].get("chains_completed", 0)) + 1
+        self._sync_caps()
+        self.save()
+        saves.autosave(self.conn, self.state, "quest_turned_in")
+        return {"ok": True, **done,
+                "world": progression.advance(self.state, self.skills,
+                                             readiness=self._readiness())}
+
+    # -- companions --------------------------------------------------------
+    def pet_catalogue(self) -> dict:
+        return {"pets": pets.catalogue(self.state["pets"]),
+                "hints": pets.undiscovered_hints(self._pet_evidence(),
+                                                 self.state["pets"]["found"]),
+                "limit": pets.ACTIVE_LIMIT}
+
+    def set_active_pets(self, pet_ids: list) -> dict:
+        sealed = self._sealed_in_interview()
+        if sealed:
+            return finalexam.refuse("PET")
+        chosen = pets.set_active(self.state["pets"], pet_ids or [])
+        self.save()
+        return {"ok": True, "active": chosen}
+
+    def pet_intervention(self, signals: dict | None = None) -> dict | None:
+        """Called as the player works. On a hit the engine charges it exactly the
+        way use_hint charges — one hint used, and the rank clamped."""
+        enc = self.encounter
+        if not enc:
+            return None
+        region_id = self.state["player"].get("region", "")
+        if not pets.available_in(enc.mode, region_id):
+            return None
+        if finalexam.sealed(enc, "PET"):
+            return None
+        problem = self.by_id[enc.problem_id]
+        spoken = dict(enc.pet_spoken or {})
+        event = pets.party_intervention(
+            self.state["pets"].get("active", []),
+            bonds=self.state["pets"].get("bond", {}),
+            mode=enc.mode, region_id=region_id, signals=signals or {},
+            context={"pattern": problem.pattern,
+                     "family": problem.spaced_repetition_family},
+            spoken=spoken)
+        if not event:
+            return None
+        # The caller contract, honoured here so no client can skip it.
+        enc.hints_used += event["hint_weight"]
+        enc.pet_spoke = True
+        spoken[event["pet"]] = event["spoken"]
+        enc.pet_spoken = spoken
+        # A companion costs a hint AND caps the rank, exactly as a hint rung
+        # does. Charging the hint without the cap would make a pet cheaper than
+        # the spell that says the same thing.
+        enc.rank_ceiling = _worse_rank(enc.rank_ceiling, event["rank_ceiling"])
+        self.state["stats"]["hints_total"] += event["hint_weight"]
+        self._write_encounter(enc)
+        self.save()
+        return event
+
+    # -- dungeons ----------------------------------------------------------
+    def dungeon_list(self, region_id: str = "") -> dict:
+        region_id = region_id or self.state["player"].get("region", "")
+        return {"region": region_id,
+                "dungeons": [self._dungeon_card(d)
+                             for d in dungeons.dungeons_for_region(region_id)]}
+
+    def enter_dungeon(self, dungeon_id: str) -> dict:
+        sealed = self._sealed_in_interview()
+        if sealed:
+            return sealed
+        if dungeon_id not in dungeons.DUNGEON_BY_ID:
+            return {"error": "unknown dungeon"}
+        built = self._dungeon_for(dungeon_id)
+        try:
+            run = dungeons.enter(built, run_seed=self._rng.randrange(1 << 30))
+        except ValueError as exc:
+            return {"error": str(exc)}
+        # The room->problem map is stored so a returning player meets the same
+        # problem in the same room; the building itself is never serialised.
+        self.state["dungeon_map"][dungeon_id] = dungeons.populate(
+            built, self.corpus, skills=self.skills,
+            solved_ids=set(self.state["solved_ids"]), rng=self._rng)
+        self.state[dungeons.STATE_KEY] = run
+        self.save()
+        return self.dungeon_state()
+
+    def dungeon_state(self) -> dict:
+        run = self.state.get(dungeons.STATE_KEY)
+        if not run:
+            return {"dungeon": None}
+        built = self._dungeon_for(run["dungeon"], run.get("seed"))
+        return {
+            "dungeon": {"id": built.id, "name": built.name, "rule": built.rule,
+                        "rule_note": built.rule_note, "archetype": built.archetype,
+                        # "floors" is the floor COUNT, the way _dungeon_card
+                        # and quests.note_depth mean it. Dungeon.floor is the
+                        # difficulty floor ("GUIDED") and shipping that under
+                        # the same key gave the client two types for one name.
+                        "floors": dungeons.floors_for(built.id),
+                        "difficulty_floor": built.floor,
+                        "max_depth": built.max_depth},
+            "run": run,
+            "progress": {**dungeons.progress(built, run),
+                         "depth": self._dungeon_depth(built, run)},
+            "options": dungeons.options(built, run),
+            "rooms": [r.to_dict() for r in built.rooms if r.id in run["visited"]],
+            "exit_path": dungeons.exit_path(built, run["at"]),
+        }
+
+    def dungeon_move(self, room_id: int) -> dict:
+        sealed = self._sealed_in_interview()
+        if sealed:
+            return sealed
+        run = self.state.get(dungeons.STATE_KEY)
+        if not run:
+            return {"error": "you are not in a dungeon"}
+        built = self._dungeon_for(run["dungeon"], run.get("seed"))
+        result = dungeons.move(built, run, int(room_id))
+        if result.get("moved"):
+            room = next((r for r in built.rooms if r.id == run["at"]), None)
+            if room is not None and "hidden" in (room.tags or []):
+                run["off_map"] = True
+                self.state["stats"]["hidden_rooms_found"] = int(
+                    self.state["stats"].get("hidden_rooms_found", 0)) + 1
+            quests.note_depth(self.state, run["dungeon"],
+                              self._dungeon_depth(built, run))
+        self.state[dungeons.STATE_KEY] = run
+        self.save()
+        return {**result, "state": self.dungeon_state()}
+
+    def dungeon_engage(self) -> dict:
+        """Fight what is standing in this room. The room holds an encounter
+        REQUEST, not a problem id, so a chapter-one player who walks into the
+        Graph Wastes still meets material the curriculum has opened.
+
+        Sealed in a measured run. A descent left open when the exam starts is
+        the one way a dungeon reaches Interview Mode, and engaging from inside
+        it opened a full Adventure encounter over the top of the exam's own.
+        """
+        sealed = self._sealed_in_interview()
+        if sealed:
+            return sealed
+        run = self.state.get(dungeons.STATE_KEY)
+        if not run:
+            return {"error": "you are not in a dungeon"}
+        built = self._dungeon_for(run["dungeon"], run.get("seed"))
+        room = next((r for r in built.rooms if r.id == run["at"]), None)
+        if room is None or not room.demands_solving:
+            return {"error": "nothing here asks anything of you"}
+        bound = (self.state["dungeon_map"].get(built.id) or {}).get(str(room.id))
+        problem = self.by_id.get(bound)
+        if problem is None:
+            problem = dungeons.resolve_encounter(
+                room.encounter, self.corpus, skills=self.skills,
+                solved_ids=set(self.state["solved_ids"]),
+                recent_ids=self.state["recent_ids"], rng=self._rng,
+                attempts=int(run.get("attempts", {}).get(str(room.id), 0)))
+        if problem is None:
+            return {"error": "this room is empty"}
+        payload = self.start_encounter(problem.id, reason="DUNGEON")
+        enc = self.encounter
+        enc.dungeon_room = room.id
+        self._write_encounter(enc)
+        payload["encounter"] = enc.to_dict()
+        self.save()
+        payload["room"] = room.to_dict()
+        payload["dungeon"] = {"id": built.id, "name": built.name,
+                              "depth": room.depth}
+        return payload
+
+    def dungeon_retreat(self) -> dict:
+        sealed = self._sealed_in_interview()
+        if sealed:
+            return sealed
+        run = self.state.get(dungeons.STATE_KEY)
+        if not run:
+            return {"error": "you are not in a dungeon"}
+        built = self._dungeon_for(run["dungeon"], run.get("seed"))
+        path = dungeons.exit_path(built, run["at"])
+        run["retreated"] = True
+        for room_id in path[1:]:
+            dungeons.move(built, run, room_id)
+        self.state[dungeons.STATE_KEY] = run
+        self.save()
+        return {"ok": True, "path": path, "state": self.dungeon_state()}
+
+    def leave_dungeon(self) -> dict:
+        sealed = self._sealed_in_interview()
+        if sealed:
+            return sealed
+        run = self.state.get(dungeons.STATE_KEY)
+        self.state[dungeons.STATE_KEY] = None
+        self.save()
+        return {"ok": True, "left": (run or {}).get("dungeon", "")}
+
+    # -- the overworld -----------------------------------------------------
+    def world_map(self) -> dict:
+        return progression.world_map(self.state, self.skills,
+                                     readiness=self._readiness())
+
+    def region_view(self, region_id: str) -> dict:
+        prog = progression.snapshot(self.state, self.skills,
+                                    readiness=self._readiness())
+        return progression.region_view(region_id, prog)
+
+    def things_to_do(self) -> list:
+        due = srsmod.due(self.schedule, now=time.time(), limit=25)
+        return progression.things_to_do(self.state, self.skills,
+                                        readiness=self._readiness(),
+                                        due_retests=len(due), limit=6)
+
+    def travel(self, route_id: str) -> dict:
+        sealed = self._sealed_in_interview()
+        if sealed:
+            return sealed
+        prog = progression.snapshot(self.state, self.skills,
+                                    readiness=self._readiness())
+        status = progression.can_travel(prog, route_id,
+                                        frm=self.state["player"]["region"])
+        if not status.get("ok"):
+            return {"error": "the road is closed", "route": status}
+        self.state["player"]["region"] = status["to"]
+        walked = self.state["world"].setdefault("routes_walked", [])
+        if route_id not in walked:
+            walked.append(route_id)
+        self._count_world_stats()
+        self.save()
+        saves.autosave(self.conn, self.state, "region_entered")
+        return {"ok": True, "route": status,
+                "region": status["to"],
+                "world": progression.advance(self.state, self.skills,
+                                             readiness=self._readiness())}
+
+    # -- saves -------------------------------------------------------------
+    def save_slots(self) -> dict:
+        return {"slots": saves.list_slots(self.conn),
+                "undo_available": saves.undo_available(self.conn)}
+
+    def save_to_slot(self, ordinal, name: str = "", note: str = "") -> dict:
+        return saves.save_to_slot(self.conn, ordinal, self.state, name=name,
+                                  note=note, readiness=self._readiness())
+
+    def load_slot(self, slot_id) -> dict:
+        # Saving mid-run is allowed — it banks the run, it does not help with
+        # it. Loading is a retry, and the server has always said so; the engine
+        # has to say it too or the guarantee lives in one layer only.
+        sealed = self._sealed_in_interview()
+        if sealed:
+            return sealed
+        try:
+            result = saves.load_slot(self.conn, slot_id, current_state=self.state)
+        except saves.SaveError as exc:
+            return {"ok": False, "error": str(exc)}
+        # The caller MUST adopt the returned state; dropping it leaves the
+        # in-memory game and the row on disk out of step.
+        self.state = result["state"]
+        self._after_load()
+        return result
+
+    def undo_load(self) -> dict:
+        sealed = self._sealed_in_interview()
+        if sealed:
+            return sealed
+        if not saves.undo_available(self.conn):
+            return {"ok": False, "error": "there is nothing to undo"}
+        try:
+            result = saves.undo_load(self.conn, current_state=self.state)
+        except saves.SaveError as exc:
+            return {"ok": False, "error": str(exc)}
+        self.state = result["state"]
+        self._after_load()
+        return result
+
+    def _after_load(self) -> None:
+        """A loaded save is somebody else's world. Rebuild everything derived."""
+        merged = _deep_copy(DEFAULT_STATE)
+        _merge(merged, self.state)
+        self.state = merged
+        self._reseed_world(self.state.get("world_seed") or 0)
+        self._sync_class_points()
+        self._sync_caps()
+        self.save()
+
+    # -- the final exam ----------------------------------------------------
+    def exam_ladder(self) -> dict:
+        return {"ladder": finalexam.ladder_view(),
+                "format": finalexam.interview_format()}
+
+    # -- the Obliging Hand -------------------------------------------------
+    def hand_offer(self) -> dict:
+        enc = self.encounter
+        mode = enc.mode if enc else config.MODE_ADVENTURE
+        return {**legendaries.hand_offer(),
+                "owned": "obliging_hand" in self.state["legendaries"],
+                "sealed": legendaries.hand_sealed(mode),
+                "summary": legendaries.hand_summary(self.state["hand"])}
+
+    def use_hand(self) -> dict:
+        """The one thing in this codebase that lowers mastery for a reason other
+        than a graded failure. It solves the encounter and pays loot and XP in
+        full — the cost is a permanent ceiling on the skill, and nothing else."""
+        enc = self.encounter
+        if not enc:
+            return {"error": "no active encounter"}
+        if "obliging_hand" not in self.state["legendaries"]:
+            return {"error": "you are not wearing it"}
+        if finalexam.sealed(enc, "OBLIGING_HAND"):
+            return finalexam.refuse("OBLIGING_HAND")
+        problem = self.by_id[enc.problem_id]
+        skill_name = skillmod.PATTERN_TO_SKILL.get(problem.pattern, "PYTHON")
+        skills = self.skills
+        result = legendaries.use_hand(skills, self.state["hand"],
+                                      skill=skill_name,
+                                      difficulty=problem.difficulty,
+                                      mode=enc.mode)
+        if not result.get("solved"):
+            return result
+        self._write_skills(skills)
+        fx = self.effects()
+        drop = items.roll_drop(difficulty=problem.difficulty, rank=result["rank"],
+                               luck=fx.get("loot_luck", 0.0),
+                               is_boss=bool(enc.boss_id), skill=skill_name,
+                               owned=set(self.state["inventory"]), rng=self._rng)
+        if drop:
+            self._take_drop(drop)
+        player = self.state["player"]
+        xp = grading.xp_for(difficulty=problem.difficulty, rank=result["rank"],
+                            combo=grading.combo_multiplier(player["combo"]),
+                            is_retest=enc.is_retest)
+        player["xp"] += xp
+        player["level"] = world.level_for(player["xp"])
+        player["title"] = world.title_for(player["level"])
+        if problem.id not in self.state["solved_ids"]:
+            self.state["solved_ids"].append(problem.id)
+        self._write_encounter(None)
+        self.save()
+        return {**result, "xp": xp, "loot": drop,
+                "canonical_solution": problem.canonical_solution}
+
+    # -- the relic codex ---------------------------------------------------
+    def legendary_catalogue(self) -> dict:
+        return {"catalogue": legendaries.catalogue(),
+                "owned": list(self.state["legendaries"]),
+                "hand": legendaries.hand_summary(self.state["hand"])}
+
+    def legendary(self, artifact_id: str) -> dict:
+        entry = legendaries.codex_entry(artifact_id)
+        if not entry:
+            return {"error": "unknown artifact"}
+        stats = {**self.state["stats"], **db.attempt_stats(self.conn)}
+        return {**entry, "owned": artifact_id in self.state["legendaries"],
+                "progress": legendaries.eligible(
+                    artifact_id,
+                    skills={n: s.to_dict() for n, s in self.skills.items()},
+                    stats=stats)}
 
     def _unaided_counts(self) -> tuple:
         rows = self.conn.execute(
@@ -536,15 +1298,26 @@ class Game:
     # -- encounter selection ----------------------------------------------
     def next_encounter(self, *, region: str | None = None,
                        mode: str = config.MODE_ADVENTURE,
-                       kind: str | None = None) -> dict:
+                       kind: str | None = None,
+                       armor_piece: str = "") -> dict:
         skills = self.skills
+        # The Armorer could not be asked to fix the piece you actually broke:
+        # the repair went to whichever piece the served problem happened to be
+        # tagged for. Naming the piece filters the candidates by that tag.
+        tag = "armor:%s" % armor_piece if armor_piece else ""
+        pool = [p for p in self.corpus
+                # parenthesised deliberately: the previous form parsed as
+                # `(matches_kind and not_boss) or matches_kind`, which let an
+                # explicit kind smuggle boss encounters into ordinary selection
+                if (kind is None or p.encounter_kind == kind)
+                and p.difficulty != "BOSS"
+                and (not tag or tag in p.tags)]
+        if tag and not pool:
+            pool = [p for p in self.corpus
+                    if (kind is None or p.encounter_kind == kind)
+                    and p.difficulty != "BOSS"]
         selection = adaptive.select_next(
-            # parenthesised deliberately: the previous form parsed as
-            # `(matches_kind and not_boss) or matches_kind`, which let an explicit
-            # kind smuggle boss encounters into ordinary selection
-            [p for p in self.corpus
-             if (kind is None or p.encounter_kind == kind)
-             and p.difficulty != "BOSS"],
+            pool,
             skills=skills, schedule=self.schedule,
             profile=self.state["player"]["profile"],
             solved_ids=set(self.state["solved_ids"]),
@@ -553,6 +1326,10 @@ class Game:
             # asking for one kind cannot blind the selector to what came before.
             recent_kinds=[self.by_id[i].encounter_kind
                           for i in self.state["recent_ids"] if i in self.by_id],
+            # What has already been cleared TODAY, so a family learned this
+            # morning can come back this afternoon instead of waiting a day for
+            # the SRS minimum interval to expire.
+            session=self.state["session"].get("log", []),
             region=region, allow_retest=(mode == config.MODE_ADVENTURE),
         )
         return self.start_encounter(selection.problem.id, mode=mode,
@@ -571,45 +1348,80 @@ class Game:
                         is_retest=is_retest, interval_days=interval_days,
                         boss_id=boss_id, interview_id=interview_id)
         self._write_encounter(enc)
+        self.state["stats"]["encounters"] += 1
         self.save()
         return self._encounter_payload(problem, enc, reason=reason)
 
     def _encounter_payload(self, problem: Problem, enc: Encounter,
                            reason: str = "") -> dict:
-        view = problem.player_view(mode=enc.mode)
+        seal = finalexam.encounter_seal(enc)
+        interview = enc.mode == config.MODE_INTERVIEW
+        # An exam question goes through exam_view, which is the only payload an
+        # exam may send: it additionally drops complexity_choices, because four
+        # Big-O options with the right one among them tell you what shape of
+        # answer is expected.
+        view = (finalexam.exam_view(problem) if interview
+                else problem.player_view(mode=enc.mode))
+        if seal.blocks("VISUALS"):
+            view["visualization"] = {}
+        if seal.blocks("PATTERN"):
+            view["pattern"] = "REDACTED"
+            view["secondary_patterns"] = []
+            view["optimal_complexity"] = {}
+            view["common_failures"] = []
+        if seal.blocks("HINTS"):
+            view["hint_tree"] = []
+
         enemy_dict = self._enemy_for(problem, enc.exposed)
         enemy_obj = tactics.Enemy(**{k: v for k, v in enemy_dict.items()
                                      if k in ("name", "sprite", "hp", "hp_max", "boss",
                                               "taunt", "colour", "difficulty",
                                               "weaknesses", "resistances", "exposed")})
-        interview = enc.mode == config.MODE_INTERVIEW
+        if seal.blocks("WEAKNESS_MAP"):
+            # derive_enemy builds `weaknesses` out of the problem's edge cases and
+            # hangs a teaching line off each one, so shipping the enemy whole was
+            # handing over the hidden tests with an explanation attached.
+            enemy_dict = {**enemy_dict, "weaknesses": [], "resistances": [],
+                          "exposed": []}
         skills = self.skills
         skill_name = skillmod.PATTERN_TO_SKILL.get(problem.pattern, "PYTHON")
         history = db.attempts_for(self.conn, problem.id)
-        return {
+        payload = {
             "problem": view,
             "encounter": enc.to_dict(),
             "reason": reason,
             "mode": enc.mode,
-            "interview_locked": enc.mode == config.MODE_INTERVIEW,
+            "interview_locked": interview,
+            "seal": seal.to_dict(),
             "enemy": enemy_dict,
-            "tactics": ({} if interview
+            "tactics": ({} if seal.blocks("WEAKNESS_MAP")
                         else tactics.tactical_brief(enemy_obj, enc.exposed)),
             "probe_charges": self.probes_remaining(),
-            "loadout": {} if interview else self.loadout(),
+            "loadout": {} if seal.blocks("BUILD") else self.loadout(),
             "region": world.REGION_BY_ID.get(problem.realm, world.REGIONS[0]),
-            "mentor": world.MENTORS.get(
-                world.REGION_BY_ID.get(problem.realm, {}).get("mentor", "byte")),
-            "skill": skill_name if enc.mode != config.MODE_INTERVIEW else "",
-            "skill_state": (skills[skill_name].to_dict()
-                            if enc.mode != config.MODE_INTERVIEW
-                            and skill_name in skills else None),
+            "mentor": (None if seal.blocks("MENTOR") else world.MENTORS.get(
+                world.REGION_BY_ID.get(problem.realm, {}).get("mentor", "byte"))),
+            "skill": "" if seal.blocks("SKILL_STATE") else skill_name,
+            "skill_state": (None if seal.blocks("SKILL_STATE")
+                            or skill_name not in skills
+                            else skills[skill_name].to_dict()),
             "attempts_before": len(history),
             "best_time": db.best_time(self.conn, problem.id),
-            "hint_count": len(problem.hint_tree) if enc.mode != config.MODE_INTERVIEW else 0,
+            "hint_count": 0 if seal.blocks("HINTS") else len(problem.hint_tree),
+            "clock_seconds": finalexam.clock_for(problem, seal),
+            "companions": ([] if not pets.available_in(
+                enc.mode, self.state["player"].get("region", ""))
+                else list(self.state["pets"].get("active", []))),
             "mana": self.state["player"]["mana"],
             "stamina": self.state["player"]["stamina"],
         }
+        if interview:
+            # Refuse to ship rather than hope. A bare `assert` would vanish under
+            # python -O, and this is the one guarantee the whole mode rests on.
+            leaks = finalexam.audit_payload(payload)
+            if leaks:
+                raise RuntimeError("exam payload leaks: %s" % "; ".join(leaks))
+        return payload
 
     ENEMY_SPRITES = {
         "HASH_MAP": "vaultling", "SET": "wisp", "SLIDING_WINDOW": "marshling",
@@ -652,7 +1464,7 @@ class Game:
         """HASTE and Chronomancer gear buy grace on the CLOCK, for rank only.
         Correctness is never graded on a curve."""
         enc = self.encounter
-        if enc and enc.mode == config.MODE_INTERVIEW:
+        if finalexam.sealed(enc, "BUILD"):
             return problem.target_seconds
         grace = self.effects().get("rank_grace", 0.0)
         return problem.target_seconds * (1.0 + grace)
@@ -980,6 +1792,12 @@ class Game:
         player = self.state["player"]
         skills = self.skills
         skill_name = skillmod.PATTERN_TO_SKILL.get(problem.pattern, "PYTHON")
+        # One clamp for all four grading paths. rank_for reads hints_used, which
+        # a pet already raised; this is the separate ceiling a pet also imposes.
+        if enc.rank_ceiling and rank:
+            rank = _worse_rank(rank, enc.rank_ceiling)
+        if solved and self.effects().get("rank_floor"):
+            rank = _better_rank(rank, "B")      # an artifact, and it says so
 
         # -- skills
         skillmod.apply_outcome(
@@ -1024,7 +1842,14 @@ class Game:
                                    seconds=seconds, target_seconds=problem.target_seconds,
                                    first_try=first_try, is_retest=True,
                                    interval_days=enc.interval_days, mode=enc.mode)
+        # THE ORDER THAT MATTERS: grade first, then apply the Hand's ceiling.
+        # Reversed, a clear briefly shows mastery above a ceiling the player paid
+        # for, and they will see it and correctly read the cost as fake.
+        for state in skills.values():
+            legendaries.clamp_to_ceiling(state, self.state["hand"])
         self._write_skills(skills)
+        # The tree's post-respec grip ticks down once per resolved encounter.
+        classes.after_encounter(self.state.get("class") or {})
 
         # -- spaced repetition
         schedule = self.schedule
@@ -1125,7 +1950,18 @@ class Game:
                 self.state["grimoire"].append(problem.pattern)
         self.state["recent_ids"].insert(0, problem.id)
         self.state["recent_ids"] = self.state["recent_ids"][:40]
-        self.state["stats"]["encounters"] += 1
+        # `encounters` counted submissions, so 60 encounters with 19 retries read
+        # as 79. It is incremented in start_encounter now; this counts what it
+        # was actually counting, under its own name.
+        self.state["stats"]["submissions"] = int(
+            self.state["stats"].get("submissions", 0)) + 1
+        if enc.mode != config.MODE_INTERVIEW:
+            log = self.state["session"].setdefault("log", [])
+            log.append({"id": problem.id, "family": family,
+                        "pattern": problem.pattern, "kind": problem.encounter_kind,
+                        "solved": bool(solved), "unaided": enc.hints_used == 0,
+                        "at": time.time()})
+            self.state["session"]["log"] = log[-80:]
 
         weapon_event = self._advance_weapons(skills)
         new_achievements = self._check_achievements(skills, problem, solved, rank,
@@ -1167,7 +2003,17 @@ class Game:
                 self._take_drop(drop)
 
         # -- secrets: hidden rewards with real discovery conditions
-        secrets = self._check_secrets(problem, enc, solved, rank, combat, report)
+        secrets = self._check_secrets(problem, enc, solved, rank, combat, report,
+                                      seconds=seconds, armor_event=armor_event)
+
+        # -- the world layer: quests, companions, events, artifacts, upgrades.
+        # All of it hangs off this one method because _apply_outcome is the one
+        # place progression changes, and a second place would eventually disagree
+        # with this one about what a clear is worth.
+        world_result = self._advance_world(
+            problem, enc, solved=solved, rank=rank, seconds=seconds,
+            skill_name=skill_name, first_try=first_try, fx=fx,
+            levels_gained=levels_gained, analysis=analysis)
 
         db.record_attempt(
             self.conn, problem_id=problem.id, pattern=problem.pattern,
@@ -1209,8 +2055,13 @@ class Game:
             events.append("perf_recovered")
         if solved and any(not a["solved"] for a in db.attempts_for(self.conn, problem.id)):
             events.append("comeback_clear")
+        if world_result["quests_completed"]:
+            events.append("quest_completed")
+        if world_result["world_events"]:
+            events.append("world_event")
 
         history = db.attempts_for(self.conn, problem.id)
+        seal = finalexam.encounter_seal(enc)
         reply = coachmod.coach(mode=enc.mode, analysis=analysis, problem=problem,
                                report=report, hints_used=enc.hints_used,
                                seconds=seconds, history=history,
@@ -1225,9 +2076,12 @@ class Game:
             "analysis": {"root_cause": analysis.root_cause,
                          "categories": analysis.categories,
                          "narrative": analysis.narrative},
-            "coach": {"available": reply.available, "questions": reply.questions,
-                      "analysis": reply.analysis, "next_steps": reply.next_steps,
-                      "reveal_solution": reply.reveal_solution},
+            "coach": ({"available": False, "questions": [], "analysis": "",
+                       "next_steps": [], "reveal_solution": False}
+                      if seal.blocks("COACH") else
+                      {"available": reply.available, "questions": reply.questions,
+                       "analysis": reply.analysis, "next_steps": reply.next_steps,
+                       "reveal_solution": reply.reveal_solution}),
             "armor_event": armor_event,
             "weapon_event": weapon_event,
             "companion_event": companion_event,
@@ -1239,13 +2093,13 @@ class Game:
             "stamina_triggered_camp": stamina_zero,
             "damage_taken": damage_taken,
             "next_retest_days": round(interval, 1) if solved else 0.5,
-            "skill": skill_name if enc.mode != config.MODE_INTERVIEW else "",
-            "skill_state": (skills[skill_name].to_dict()
-                            if enc.mode != config.MODE_INTERVIEW else None),
+            "skill": "" if seal.blocks("SKILL_STATE") else skill_name,
+            "skill_state": (None if seal.blocks("SKILL_STATE")
+                            else skills[skill_name].to_dict()),
             "level": player["level"], "title": player["title"],
             "canonical_solution": (problem.canonical_solution
                                    if (solved or reply.reveal_solution)
-                                   and enc.mode != config.MODE_INTERVIEW else None),
+                                   and not seal.blocks("SOLUTION") else None),
             "provenance": {"source_type": problem.source_type,
                            "company": problem.reported_company,
                            "note": problem.provenance_note},
@@ -1265,6 +2119,10 @@ class Game:
             "gold": player["gold"],
             "enemy": enemy_dict,
         }
+        result.update(world_result)
+        if seal.blocks("PET"):
+            result["pet"] = None
+            result["companion_line"] = ""
         if extra:
             result.update(extra)
 
@@ -1276,6 +2134,16 @@ class Game:
         # rather than on the one after.
         result["story"] = self.collect_story(events=events)
         result["chapter"] = curriculum.next_objective(self.skills)
+        # LAST, and unconditional. Two things move the skill-point total and
+        # neither is a level-up on its own: a graduated chapter grants a point
+        # with no level attached, and collect_story pays beat XP that can cross
+        # a level boundary right here, after _advance_world has already run.
+        # Syncing earlier left state["class"]["points"] one encounter behind
+        # what tree_view showed — and the save carried the smaller number, so
+        # the point was refused until the player happened to open the screen.
+        # sync_points is a pure recompute from evidence, so calling it on every
+        # resolved encounter cannot grant anything twice.
+        self._sync_class_points()
         self.save()
         return result
 
@@ -1298,6 +2166,441 @@ class Game:
             drop["auto_equipped"] = True
         self._sync_caps()
 
+    # -- the world layer, folded in one pass -------------------------------
+    def _pet_evidence(self) -> dict:
+        """The flat snapshot pets.newly_found reads. Assembled once per clear."""
+        skills = self.skills
+        rows = self.conn.execute(
+            "SELECT family, COUNT(DISTINCT problem_id) AS n FROM attempts"
+            " WHERE solved = 1 AND hints_used = 0 GROUP BY family").fetchall()
+        families = {r["family"]: r["n"] for r in rows}
+        retests = {}
+        for row in self.conn.execute(
+                "SELECT pattern, COUNT(*) AS n FROM attempts"
+                " WHERE solved = 1 AND is_retest = 1 GROUP BY pattern").fetchall():
+            name = skillmod.PATTERN_TO_SKILL.get(row["pattern"], "PYTHON")
+            retests[name] = retests.get(name, 0) + row["n"]
+        retests[""] = sum(retests.values())
+        streak = 0
+        for row in db.recent_attempts(self.conn, limit=60):
+            if row["solved"] and not row["hints_used"]:
+                streak += 1
+            elif row["solved"]:
+                break
+        return {
+            "families": families,
+            "skills": {name: {"mastery": s.mastery,
+                              "unaided_clears": s.unaided_clears,
+                              "clears": s.clears}
+                       for name, s in skills.items()},
+            "bosses_unaided": [r["boss_id"] for r in db.boss_history(self.conn)
+                               if r["defeated"] and not r["hints_used"]],
+            "regions_cleared": list(world.unlocked_regions(
+                skills, set(self.state["cleared_bosses"]))),
+            "dungeons": dict(self.state["quests"].get("depths", {})),
+            "retests": retests,
+            "no_hint_streak": streak,
+            "perf_cleared": len(self.state["perf_failed_ids"]),
+            "probes_correct": self.state["stats"].get("probes_correct", 0),
+            "stats": {**self.state["stats"], **db.attempt_stats(self.conn)},
+        }
+
+    def _artifact_conditions(self, enc: Encounter, *, solved: bool,
+                             seconds: float, problem: Problem) -> set:
+        """Which of legendaries.CONDITIONS this encounter actually satisfied.
+
+        Every one is derived from something already graded. None of them is a
+        thing the player can assert about themselves.
+        """
+        found = set()
+        if enc.hints_used == 0:
+            found.add("no_spell_cast")
+        if solved and enc.submits <= 1:
+            found.add("no_failed_submission")
+        if solved and seconds <= problem.target_seconds * 0.5:
+            found.add("under_half_target")
+        if solved and enc.submits > 1:
+            found.add("after_a_loss")
+        if enc.probe_log and all(p.get("correct") for p in enc.probe_log):
+            found.add("every_probe_correct")
+        if enc.probe_log and enc.probe_log[0].get("correct"):
+            found.add("first_probe_correct")
+        if int(self.state["hand"].get("uses", 0)) > 0:
+            found.add("hand_worn_once")
+        else:
+            found.add("never_worn_hand")
+        # The run this encounter was fought inside, AFTER the room was resolved.
+        # Reading state[STATE_KEY] here instead would see the boss room still
+        # uncleared on the one clear that completes the dungeon — and after the
+        # descent closes, see nothing at all — so "every_room" and "full_depth"
+        # could never both be true and the four dungeon artifacts were
+        # unwinnable. _advance_dungeon parks the resolved pair here for exactly
+        # this read; it is per-encounter scratch and never saved.
+        resolved = getattr(self, "_resolved_dungeon", None)
+        run = (resolved[1] if resolved else self.state.get(dungeons.STATE_KEY)) or {}
+        if run:
+            # Both of these are written by this engine's own dungeon handlers,
+            # because the run state dungeons.enter() hands back does not record
+            # either and inventing a key inside its dict would be a second owner.
+            if not run.get("retreated"):
+                found.add("no_retreat")
+            if run.get("off_map"):
+                found.add("off_map")
+            dungeon = (resolved[0] if resolved
+                       else self._dungeon_for(run["dungeon"], run.get("seed")))
+            if len(set(run.get("cleared", []))) >= sum(
+                    1 for r in dungeon.rooms if r.demands_solving):
+                found.add("every_room")
+            if self._dungeon_depth(dungeon, run) >= dungeon.max_depth:
+                found.add("full_depth")
+        return found
+
+    def _advance_world(self, problem: Problem, enc: Encounter, *, solved: bool,
+                       rank: str, seconds: float, skill_name: str,
+                       first_try: bool, fx: dict, levels_gained: int,
+                       analysis) -> dict:
+        """Quests, companions, world events, artifacts, upgrades and the dungeon,
+        all from the facts this encounter actually produced."""
+        out = {"quests_ready": [], "quests_completed": [], "pet": None,
+               "found_pets": [], "world_events": [], "artifacts": [],
+               "upgrades": [], "daily_completed": [], "dungeon": None,
+               "incantations_learned": [], "companion_line": ""}
+        if enc.mode == config.MODE_INTERVIEW:
+            # A measured run pays nothing into the world. That is the point.
+            return out
+
+        ready = adaptive.readiness(
+            skills=self.skills, schedule=self.schedule,
+            stats=db.attempt_stats(self.conn),
+            unaided_easy=self._unaided_counts()[0],
+            unaided_medium=self._unaided_counts()[1])
+
+        # -- quests: graded facts only, never intent
+        if solved:
+            out["quests_ready"] = quests.note_clear(
+                self.state, pattern=problem.pattern,
+                family=problem.spaced_repetition_family,
+                difficulty=problem.difficulty, skill=skill_name,
+                unaided=(enc.hints_used == 0),
+                under_target=(seconds <= problem.target_seconds))
+            if problem.encounter_kind in puzzles.PUZZLE_KINDS:
+                quests.note_puzzle(self.state, problem.encounter_kind)
+
+        # -- companions: bond on evidence, discovery on the same pass
+        pet_state = self.state["pets"]
+        for pet_id in list(pet_state.get("active", [])):
+            gained = pets.bond_gain(
+                pet_id, skill=skill_name, cleared=solved, rank=rank,
+                hints_used=enc.hints_used,
+                intervened=bool(enc.pet_spoke),
+                is_retest=enc.is_retest)
+            if gained:
+                out["pet"] = pets.award(pet_state, pet_id, gained)
+        if solved:
+            evidence = self._pet_evidence()
+            for row in pets.newly_found(evidence, pet_state.get("found", [])):
+                # discovery_progress keys the pet as "pet", not "id"
+                if pets.grant(pet_state, row["pet"], at=time.time()):
+                    out["found_pets"].append(row)
+        if out["found_pets"] or pet_state.get("active"):
+            speaker = (out["found_pets"][0]["pet"] if out["found_pets"]
+                       else pet_state["active"][0])
+            out["companion_line"] = pets.outcome_line(
+                speaker, cleared=solved,
+                helped=bool(enc.pet_spoke))
+
+        # -- the world itself: events fire once, and only on what is now true
+        advanced = progression.advance(self.state, self.skills, readiness=ready)
+        out["world_events"] = advanced["events"]
+        self._count_world_stats()
+
+        # -- the daily board, which generated quests and could never finish one
+        out["daily_completed"] = self._credit_daily(problem, enc, solved=solved,
+                                                    rank=rank, seconds=seconds)
+
+        # -- the dungeon this encounter was fought inside. This runs BEFORE the
+        #    artifact roll: a relic earned by clearing every room must be able
+        #    to see the room that was just cleared.
+        out["dungeon"] = self._advance_dungeon(enc, solved=solved, rank=rank,
+                                               fx=fx)
+
+        # -- earned upgrades: 18 items, every LEGENDARY weapon among them, were
+        #    unreachable because nothing ever called items.upgrades_for.
+        if solved:
+            out["upgrades"] = self._grant_upgrades()
+            out["artifacts"] = self._roll_artifacts(problem, enc, solved=solved,
+                                                    seconds=seconds, fx=fx)
+            learned = incantation.learn_from_clear(
+                self.state["moveset"], skill=skill_name,
+                chapter=curriculum.frontier(self.skills))
+            out["incantations_learned"] = learned
+
+        if levels_gained:
+            incantation.grow_slots(self.state["moveset"],
+                                   int(self.state["player"]["level"]))
+
+        if solved:
+            self._autosave("encounter_cleared", readiness=ready)
+        return out
+
+    def _count_world_stats(self) -> None:
+        """Two acquisition counters that were declared in DEFAULT_STATE and
+        written by nothing, which made three artifacts unwinnable.
+
+        Both are READ off state that other modules already own rather than
+        tallied by hand, so they cannot drift: a region is retaken when
+        progression says it is restored, and a green sphere is in hand when the
+        player is standing in a region this seed put one in.
+        """
+        stats = self.state["stats"]
+        states = (self.state["world"].get("region_states") or {})
+        stats["regions_retaken"] = sum(
+            1 for value in states.values() if value in ("restored", "transformed"))
+        here = self.state["player"].get("region", "")
+        held = self.state["world"].setdefault("green_index", [])
+        if here and here not in held and any(
+                sighting.region == here for sighting in self.world.sightings):
+            held.append(here)
+        stats["green_index_found"] = len(held)
+
+    AUTOSAVE_THROTTLE_SECONDS = 180
+
+    def _autosave(self, reason: str, **kwargs) -> None:
+        """The ring is four slots deep and the whole state goes into each one, so
+        writing on every cleared encounter would keep four minutes of history and
+        a lot of disk churn. Notable events (a boss, a turn-in, a load) call
+        saves.autosave directly and are never throttled."""
+        now = time.time()
+        last = float(self.state["stats"].get("autosave_at") or 0)
+        if now - last < self.AUTOSAVE_THROTTLE_SECONDS:
+            return
+        self.state["stats"]["autosave_at"] = now
+        saves.autosave(self.conn, self.state, reason, **kwargs)
+
+    def _credit_daily(self, problem: Problem, enc: Encounter, *, solved: bool,
+                      rank: str, seconds: float) -> list:
+        """Daily quests were generated, rendered with their rewards, and had no
+        completion path at all: `daily["completed"]` was written nowhere."""
+        daily = self.state["daily"]
+        done = daily.setdefault("completed", [])
+        counts = daily.setdefault("counts", {})
+        paid = []
+        for quest in daily.get("quests", []):
+            qid = quest["id"]
+            if qid in done or not self._daily_matches(quest, problem, enc,
+                                                      solved=solved):
+                continue
+            counts[qid] = int(counts.get(qid, 0)) + 1
+            if counts[qid] < int(quest.get("count", 1)):
+                continue
+            done.append(qid)
+            self.state["player"]["xp"] += int(quest.get("reward_xp", 0))
+            paid.append({**quest, "completed": True,
+                         "progress": counts[qid]})
+        return paid
+
+    def _daily_matches(self, quest: dict, problem: Problem, enc: Encounter, *,
+                       solved: bool) -> bool:
+        if not solved:
+            return False
+        kind = quest.get("kind")
+        qid = quest.get("id", "")
+        if kind == "RETEST":
+            return enc.is_retest
+        if kind == "MENTOR":
+            want = qid.replace("daily-weak-", "").upper()
+            return skillmod.PATTERN_TO_SKILL.get(problem.pattern, "PYTHON") == want
+        if qid == "daily-village":
+            return problem.realm == "python_village"
+        if qid == "daily-armor":
+            return problem.encounter_kind == "DEBUG_BATTLE"
+        if qid == "daily-bounty":
+            return (time.time() - enc.started_at) <= problem.target_seconds
+        return False
+
+    def _grant_upgrades(self) -> list:
+        """Swap an item for the form the evidence has earned. The upgraded item
+        is added, the old one is kept — a Rusty Blade you can still see is what
+        makes the new one mean something."""
+        stats = {**self.state["stats"], **db.attempt_stats(self.conn)}
+        skill_rows = {name: s.to_dict() for name, s in self.skills.items()}
+        earned = items.upgrades_for(self.state["inventory"], skill_rows, stats)
+        granted = []
+        for upgrade in earned:
+            new_id = upgrade["to"]
+            if new_id in self.state["inventory"]:
+                continue
+            self.state["inventory"].append(new_id)
+            self.state["stats"]["items_found"] += 1
+            item = _item(new_id)
+            if item and self.state["equipped"].get(item.slot) == upgrade["from"]:
+                self.state["equipped"][item.slot] = new_id
+                upgrade = {**upgrade, "auto_equipped": True}
+            granted.append(upgrade)
+        if granted:
+            self._sync_caps()
+        return granted
+
+    def _roll_artifacts(self, problem: Problem, enc: Encounter, *, solved: bool,
+                        seconds: float, fx: dict) -> list:
+        """Twenty-two artifacts. Guaranteed ones are awarded when the evidence is
+        in; the rest are rolled and may simply not drop, which is honest."""
+        owned = set(self.state["legendaries"])
+        conditions = self._artifact_conditions(enc, solved=solved,
+                                               seconds=seconds, problem=problem)
+        stats = {**self.state["stats"], **db.attempt_stats(self.conn)}
+        skill_rows = {name: s.to_dict() for name, s in self.skills.items()}
+        found = []
+        for artifact in legendaries.ARTIFACTS:
+            if artifact.id in owned:
+                continue
+            check = legendaries.eligible(artifact.id, skills=skill_rows,
+                                         stats=stats, conditions=conditions)
+            if not check:
+                continue
+            if check["met"] and artifact.acquisition["guaranteed"]:
+                # "met" means award outright, do not roll. `kind` names WHERE it
+                # comes from (boss/dungeon/proof/chain/...), not whether it is
+                # certain — the manifest confused the two.
+                found.append(self._take_artifact(artifact.id, check))
+                continue
+            if not check["conditions_met"] or not check["checks"]:
+                continue
+            if not all(row["met"] for row in check["checks"]):
+                continue
+            got = legendaries.roll(artifact.id, problem.difficulty,
+                                   luck=fx.get("loot_luck", 0.0),
+                                   conditions_met=True, owned=owned,
+                                   rng=self._rng)
+            if got:
+                found.append(self._take_artifact(artifact.id, check))
+        return found
+
+    def _take_artifact(self, artifact_id: str, check: dict) -> dict:
+        self.state["legendaries"].append(artifact_id)
+        if artifact_id not in self.state["inventory"]:
+            self.state["inventory"].append(artifact_id)
+            self.state["stats"]["items_found"] += 1
+        self._sync_caps()
+        return {"id": artifact_id, "name": check.get("name", ""),
+                "item": check.get("item"), "where": check.get("where", "")}
+
+    def _advance_dungeon(self, enc: Encounter, *, solved: bool, rank: str,
+                         fx: dict) -> dict | None:
+        """A room cleared is a floor walked. A room failed relents one rung and is
+        never terminal, which is why options() is asserted non-empty.
+
+        Only a fight that was STARTED from a room counts. Carrying a dungeon run
+        while doing overworld work is allowed, and crediting the room for it
+        would be a floor the player never walked.
+        """
+        self._resolved_dungeon = None
+        run = self.state.get(dungeons.STATE_KEY)
+        if not run or enc.dungeon_room < 0:
+            return None
+        dungeon = self._dungeon_for(run["dungeon"], run.get("seed"))
+        result = dungeons.clear_room(dungeon, run, enc.dungeon_room, solved=solved)
+        self._resolved_dungeon = (dungeon, run)
+        if solved:
+            reward = result.get("reward") or {}
+            self.state["player"]["xp"] += int(reward.get("xp", 0))
+            self.state["player"]["gold"] += int(reward.get("gold", 0))
+            quests.note_depth(self.state, run["dungeon"],
+                              self._dungeon_depth(dungeon, run))
+            room = next((r for r in dungeon.rooms
+                         if r.id == enc.dungeon_room), None)
+            if room is not None:
+                treasure = dungeons.roll_room_treasure(
+                    dungeon, room, luck=fx.get("loot_luck", 0.0),
+                    owned=set(self.state["inventory"]), rank=rank, rng=self._rng)
+                if treasure:
+                    self._take_drop(treasure)
+                    result["treasure"] = treasure
+            if enc.dungeon_room == dungeon.boss_room:
+                result["dungeon_cleared"] = self._close_dungeon(dungeon, run,
+                                                                rank=rank, fx=fx)
+                return result
+        self.state[dungeons.STATE_KEY] = run
+        return result
+
+    def _close_dungeon(self, dungeon, run: dict, *, rank: str, fx: dict) -> dict:
+        """The thing at the bottom falls and the descent is over.
+
+        The manifest put this in _resolve_boss, and that guard is still there —
+        but it only fires for a boss in world.BOSS_BY_ID, and a dungeon boss is
+        assembled per run with an id like "halfwritten_barrow_boss_0007" that no
+        world table has ever heard of. So every room in every dungeon could be
+        beaten, boss room included, and "dungeons_cleared" stayed empty forever:
+        the DELVE quests, progression.Needs.dungeon and the artifact conditions
+        were all reading a list nothing ever wrote to.
+
+        The boss's own reward is paid here too. clear_room pays room_reward,
+        which is the room's share; assemble_boss().reward is the boss's, and it
+        was going nowhere.
+        """
+        boss = run.get("boss") or {}
+        reward = boss.get("reward") or {}
+        player = self.state["player"]
+        player["xp"] += int(reward.get("xp", 0))
+        player["gold"] += int(reward.get("gold", 0))
+        player["level"] = world.level_for(player["xp"])
+        player["title"] = world.title_for(player["level"])
+        spec = reward.get("drop") or {}
+        drop = items.roll_drop(
+            difficulty=spec.get("difficulty", "BOSS"), rank=rank,
+            luck=fx.get("loot_luck", 0.0), is_boss=bool(spec.get("is_boss", True)),
+            owned=set(self.state["inventory"]), rng=self._rng,
+            upgrade=int(spec.get("upgrade", 0)))
+        if drop:
+            self._take_drop(drop)
+        if dungeon.id not in self.state["dungeons_cleared"]:
+            self.state["dungeons_cleared"].append(dungeon.id)
+        quests.note_depth(self.state, dungeon.id, self._dungeon_depth(dungeon, run))
+        self.state[dungeons.STATE_KEY] = None
+        self.state["dungeon_map"].pop(dungeon.id, None)
+        self.save()
+        saves.autosave(self.conn, self.state, "boss_defeated")
+        return {"id": dungeon.id, "name": dungeon.name,
+                "boss": boss.get("name", ""), "boss_id": boss.get("id", ""),
+                "xp": int(reward.get("xp", 0)), "gold": int(reward.get("gold", 0)),
+                "loot": drop, "rank": rank}
+
+    def _dungeon_depth(self, dungeon, run: dict) -> int:
+        """Floor reached, counted as BFS depth from the threshold. progress()
+        does not report it — the manifest said it did — so it is read off the
+        deepest room actually visited, which is what "deepest floor reached"
+        means and what quests.note_depth is asking for.
+        """
+        by_id = {room.id: room for room in dungeon.rooms}
+        return max((by_id[r].depth for r in run.get("visited", []) if r in by_id),
+                   default=0)
+
+    def _dungeon_for(self, dungeon_id: str, seed=None):
+        """Rebuild rather than store: generate(id, seed=) is deterministic, so a
+        returning player walks into the identical building.
+
+        The seeded world's build must win whenever it can. worldgen swaps the
+        archetype and applies a size bonus, so `generate(id, seed=s)` is a
+        DIFFERENT building from `build_dungeon(spec)` even at the same seed —
+        a different archetype, a different room count, a different boss room.
+        Entering through one and then walking through the other is how a player
+        ends up standing in a room that does not exist. The spec's build carries
+        the seed it was asked for, so matching on that seed is exact.
+        """
+        key = (dungeon_id, seed)
+        if key in self._dungeons:
+            return self._dungeons[key]
+        built = None
+        spec = next((d for d in self.world.dungeons if d.id == dungeon_id), None)
+        if spec is not None:
+            candidate = worldgen.build_dungeon(spec)
+            if seed is None or candidate.seed == seed:
+                built = candidate
+        if built is None:
+            built = dungeons.generate(dungeon_id, seed=seed)
+        self._dungeons[key] = built
+        return built
+
     def _award_secret(self, secret_id: str) -> dict | None:
         if secret_id in self.state["secrets_found"]:
             return None
@@ -1306,16 +2609,28 @@ class Game:
             return None
         self.state["secrets_found"].append(secret_id)
         self.state["stats"]["secrets"] += 1
-        item = items.BY_ID.get(secret["item"])
+        item = _item(secret["item"])
         if item and item.id not in self.state["inventory"]:
             self.state["inventory"].append(item.id)
             self.state["stats"]["items_found"] += 1
         self._sync_caps()
         return {**secret, "item_detail": item.to_dict() if item else None}
 
-    def _check_secrets(self, problem, enc, solved, rank, combat, report) -> list:
-        """Hidden rewards, earned by doing something genuinely notable."""
+    def _check_secrets(self, problem, enc, solved, rank, combat, report, *,
+                       seconds: float = 0.0, armor_event: dict | None = None) -> list:
+        """Hidden rewards, earned by doing something genuinely notable.
+
+        All thirteen are evaluated here or at the one other hook their trigger
+        names (`location`, `interview_finished`). Eight of them used to have no
+        award path at all, so the Character panel showed conditions a player
+        could satisfy and still get nothing.
+        """
         found = []
+
+        def take(secret_id):
+            award = self._award_secret(secret_id)
+            if award:
+                found.append(award)
 
         # The Optimiser's Revelation: fail on performance alone, then clear it.
         perf_only = (not solved and getattr(report, "tests", None)
@@ -1349,17 +2664,108 @@ class Game:
             if award:
                 found.append(award)
 
+        # --- the eight that had no award path at all ----------------------
+
+        # The Thirtieth Day: a disguised retest of something a month old.
+        if solved and enc.is_retest and enc.interval_days >= 30:
+            take("secret_long_memory")
+
+        # Half The Budget: a Medium, unaided, in under half its target.
+        if (solved and problem.difficulty == "MEDIUM" and enc.hints_used == 0
+                and seconds <= problem.target_seconds * 0.5):
+            take("secret_half_clock")
+
+        # Three Forges, No Survivors. The streak breaks on any imperfect forge.
+        if problem.encounter_kind == "TEST_FORGE":
+            perfect = solved and enc.submits == 1
+            self.state["stats"]["forge_streak"] = (
+                int(self.state["stats"].get("forge_streak", 0)) + 1 if perfect else 0)
+            if self.state["stats"]["forge_streak"] >= 3:
+                take("secret_forge_streak")
+
+        # The Armorer's Last Plate: every piece back to full inside one session.
+        pieces = [v for k, v in self.state["armor"].items() if k != "legendary"]
+        if armor_event and armor_event.get("repaired") and pieces and min(pieces) >= 100:
+            if not self.state["stats"].get("armor_full_this_session"):
+                self.state["stats"]["armor_full_this_session"] = True
+                take("secret_full_repair")
+
+        # A boundary clear: a problem that actually declares edges, beaten on
+        # the first graded submission with nothing cast. legendaries gates the
+        # Off-By-One Band on twenty of these and the counter was declared and
+        # never written, so the Band could not be earned at all. This is graded
+        # evidence only — the player asserts nothing about themselves.
+        if (solved and enc.submits <= 1 and enc.hints_used == 0
+                and (problem.edge_cases or problem.hidden_tests)):
+            self.state["stats"]["boundary_clears"] = int(
+                self.state["stats"].get("boundary_clears", 0)) + 1
+
+        # The Silent Chapter: graduated without casting a single learning spell.
+        if solved:
+            for chapter in self._newly_graduated_chapters():
+                self.state["stats"]["chapters_graduated"] = int(
+                    self.state["stats"].get("chapters_graduated", 0)) + 1
+                if self._chapter_was_silent(chapter):
+                    take("secret_silent_chapter")
+
+        # The Second Meeting: a rematch win in under half the first win's time.
+        if solved and enc.boss_id:
+            wins = [r for r in db.boss_history(self.conn, enc.boss_id)
+                    if r["defeated"]]
+            if len(wins) >= 2 and wins[-1]["seconds"] <= wins[0]["seconds"] * 0.5:
+                take("secret_rematch")
+
         return found
 
+    def _newly_graduated_chapters(self) -> list:
+        """Chapters that graduated on THIS clear. The ledger lives in the save,
+        so a chapter cannot graduate twice and pay twice."""
+        skills = self.skills
+        banked = self.state["story"].setdefault("chapters_graduated", [])
+        fresh = []
+        for chapter in curriculum.CHAPTERS:
+            if chapter.id in banked:
+                continue
+            if curriculum.chapter_progress(skills, chapter).get("graduated"):
+                banked.append(chapter.id)
+                fresh.append(chapter)
+        return fresh
+
+    def _chapter_was_silent(self, chapter) -> bool:
+        """Did the player cast a single spell on anything this chapter teaches?
+
+        Measured against recorded attempts, not against a running counter, so it
+        stays true across sessions and cannot be reset by reloading.
+        """
+        families = set(chapter.families)
+        if not families:
+            return False
+        marks = ", ".join("?" for _ in families)
+        row = self.conn.execute(
+            "SELECT COALESCE(SUM(hints_used), 0) AS n FROM attempts"
+            " WHERE family IN (%s)" % marks, tuple(families)).fetchone()
+        return int(row["n"] or 0) == 0
+
+    # Every `location` secret and where it hides. The position is derived from
+    # the region id, so the world is consistent and the codex hint leads
+    # somewhere; the hardcoded `if region != "graph_wastes"` used to compute a
+    # target for the Complexity Tower and then refuse to honour it, which made
+    # secret_tower_alcove unobtainable.
+    SECRET_LOCATIONS = {
+        "graph_wastes": "secret_null_key",
+        "complexity_tower": "secret_tower_alcove",
+    }
+
     def find_secret_location(self, region_id: str, x: int, y: int) -> dict:
-        """The hidden alcove. Its position is derived from the region id, so the
-        world is consistent — and the hint in the codex actually leads somewhere."""
-        seed = sum(ord(c) for c in region_id)
-        target = (34 + seed % 6, 6 + seed % 14)
-        if region_id != "graph_wastes":
+        secret_id = self.SECRET_LOCATIONS.get(region_id)
+        if not secret_id:
             return {"found": False}
-        if abs(x - target[0]) <= 1 and abs(y - target[1]) <= 1:
-            award = self._award_secret("secret_null_key")
+        target = self.secret_target(region_id)
+        if abs(x - target["x"]) <= 1 and abs(y - target["y"]) <= 1:
+            award = self._award_secret(secret_id)
+            if award:
+                self.state["stats"]["hidden_rooms_found"] = int(
+                    self.state["stats"].get("hidden_rooms_found", 0)) + 1
             self.save()
             if award:
                 return {"found": True, "secret": award}
@@ -1368,9 +2774,9 @@ class Game:
         return {"found": False}
 
     def secret_target(self, region_id: str) -> dict:
-        seed = sum(ord(c) for c in region_id)
-        if region_id != "graph_wastes":
+        if region_id not in self.SECRET_LOCATIONS:
             return {}
+        seed = sum(ord(c) for c in region_id)
         return {"x": 34 + seed % 6, "y": 6 + seed % 14}
 
     # -- hints -------------------------------------------------------------
@@ -1378,10 +2784,13 @@ class Game:
         enc = self.encounter
         if not enc:
             return {"error": "no active encounter"}
-        if enc.mode == config.MODE_INTERVIEW:
-            # The sacred rule. Enforced server-side, not merely hidden in the UI.
-            return {"error": "sealed",
-                    "message": "Spells do not work in Interview Mode. That is the point."}
+        # The sacred rule, enforced server-side and in exactly one place:
+        # finalexam.sealed is the ONE way to ask whether a capability exists here.
+        if finalexam.sealed(enc, "HINTS"):
+            return finalexam.refuse("HINTS")
+        if self.effects().get("sealed_hints"):
+            # An artifact the player chose to wear. Its own tooltip says so.
+            return finalexam.refuse("HINTS")
         problem = self.by_id[enc.problem_id]
         rungs = problem.hint_tree
         if not 1 <= level <= len(rungs):
@@ -1389,8 +2798,19 @@ class Game:
         rung = rungs[level - 1]
 
         player = self.state["player"]
-        discount = self.effects().get("hint_discount", 0.0)
+        fx = self.effects()
+        discount = fx.get("hint_discount", 0.0)
         cost = max(1, int(round(rung["mana"] * (1.0 - min(0.75, discount)))))
+        if fx.get("hint_surcharge"):
+            cost = int(round(cost * (1.0 + fx["hint_surcharge"])))
+        # The full ladder costs 33 focus against a ceiling of 30, and PHOENIX —
+        # the worked solution — costs 12, so a player who took rungs 1-4 had 9
+        # and could not reach the floor the whole design rests on. Once the coach
+        # would reveal the solution anyway (three attempts on this problem), the
+        # rung that reveals it is free. It still costs the entire rank.
+        stuck = len(db.attempts_for(self.conn, problem.id)) >= 3
+        if rung["spell"] == "PHOENIX" and stuck:
+            cost = 0
         if player["mana"] < cost:
             return {"error": "not enough focus",
                     "message": f"{rung['title']} costs {cost} focus. "
@@ -1474,16 +2894,52 @@ class Game:
                     "requirements": requirements,
                     "readiness": ready,
                 }
-        payload = self.start_encounter(boss["problem_id"],
+        rematch = self.state["boss_rematch"].get(boss_id, 0)
+        # A rematch that replays the identical problem id is not a rematch. The
+        # victory copy promised "the same boss, a different surface form", so the
+        # rematch draws a different problem from the boss's own family, one rung
+        # harder per tier, and only falls back to the authored one when the
+        # family has nothing else.
+        problem_id = self._rematch_problem(boss, rematch)
+        payload = self.start_encounter(problem_id,
                                        mode=config.MODE_ADVENTURE,
                                        boss_id=boss_id, reason="BOSS")
-        rematch = self.state["boss_rematch"].get(boss_id, 0)
+        spec = next((b for b in self.world.bosses if b.id == boss_id), None)
+        # The six-phase structure is world.BOSS_PHASES and stays authoritative —
+        # the manifest said worldgen.BossSpec.phases replaces it, but the seeded
+        # list is a SUBSET of the same six keys (4-6 of them per boss), so it
+        # names which phases this seed demands rather than redefining the shape.
+        demanded = set(spec.phases) if spec is not None else set()
+        phases = [{**phase, "demanded": (not demanded) or phase["key"] in demanded}
+                  for phase in world.BOSS_PHASES]
+        seal = finalexam.seal_for(mode=config.MODE_ADVENTURE, boss_id=boss_id)
         payload["boss"] = {
-            **boss, "phases": world.BOSS_PHASES, "rematch": rematch,
-            "hp_max": len(world.BOSS_PHASES),
+            **boss, "phases": phases, "rematch": rematch,
+            "hp_max": sum(1 for p in phases if p["demanded"]),
             "teaching_available": True,
+            "affixes": list(spec.affixes) if spec is not None else [],
+            "seal": seal.to_dict(),
+            # Said before the first phase, not after the loss: the player is
+            # told what this one takes away while they can still walk out.
+            "herald": seal.herald,
+            "ladder": self.boss_ladder(boss_id)["ladder"],
         }
         return payload
+
+    def _rematch_problem(self, boss: dict, rematch: int) -> str:
+        authored = boss["problem_id"]
+        if not rematch:
+            return authored
+        problem = self.by_id.get(authored)
+        if problem is None:
+            return authored
+        family = [p for p in self.corpus
+                  if p.spaced_repetition_family == problem.spaced_repetition_family
+                  and p.id != authored]
+        if not family:
+            return authored
+        family.sort(key=lambda p: (adaptive.DIFF_ORDER.index(p.difficulty), p.id))
+        return family[min(rematch - 1, len(family) - 1)].id
 
     def _resolve_boss(self, enc: Encounter, solved: bool, rank: str,
                       seconds: float) -> dict:
@@ -1495,16 +2951,26 @@ class Game:
                 self.state["cleared_bosses"].append(enc.boss_id)
             self.state["boss_rematch"][enc.boss_id] = \
                 self.state["boss_rematch"].get(enc.boss_id, 0) + 1
+            run = self.state.get(dungeons.STATE_KEY)
+            if run and run.get("boss", {}).get("id") == enc.boss_id:
+                if run["dungeon"] not in self.state["dungeons_cleared"]:
+                    self.state["dungeons_cleared"].append(run["dungeon"])
+                self.state[dungeons.STATE_KEY] = None
+            saves.autosave(self.conn, self.state, "boss_defeated")
             return {"id": enc.boss_id, "name": boss.get("name", ""),
                     "defeated": True, "rank": rank, "seconds": round(seconds, 1),
                     "rematch_tier": self.state["boss_rematch"][enc.boss_id],
                     "history": db.boss_history(self.conn, enc.boss_id)}
-        # A boss is never a dead end: it enters its teaching phase.
+        # A boss is never a dead end: it enters its teaching phase, and the
+        # ladder comes WITH the refusal rather than behind a route nothing calls.
+        seal = finalexam.seal_for(mode=config.MODE_ADVENTURE, boss_id=enc.boss_id)
         return {
             "id": enc.boss_id, "name": boss.get("name", ""), "defeated": False,
             "teaching_phase": True,
-            "mentor": world.MENTORS.get(
-                world.REGION_BY_ID.get(boss.get("region", ""), {}).get("mentor", "byte")),
+            "mentor": (None if seal.blocks("MENTOR") else world.MENTORS.get(
+                world.REGION_BY_ID.get(boss.get("region", ""), {}).get(
+                    "mentor", "byte"))),
+            "ladder": self.boss_ladder(enc.boss_id).get("ladder", []),
             "message": "The boss steps back. A mentor arrives. Nothing here is a wall.",
             "history": db.boss_history(self.conn, enc.boss_id),
         }
@@ -1534,6 +3000,9 @@ class Game:
                         "ladder": ["EASY", "MEDIUM"]},
         "GAUNTLET": {"label": "The Gauntlet", "minutes": 65, "count": 4,
                      "ladder": ["EASY", "EASY", "MEDIUM", "HARD"]},
+        # The sealed practical. Its composer knows about weak skills and about
+        # the codebase segment, which the engine's own ladder never did.
+        "FINAL_EXAM": finalexam.interview_format(),
     }
 
     def start_interview(self, fmt: str = "GAUNTLET",
@@ -1541,7 +3010,10 @@ class Game:
         spec = self.INTERVIEW_FORMATS.get(fmt)
         if not spec:
             return {"error": "unknown format"}
-        profile = profile or self.state["player"]["profile"]
+        profile = config.normalise_profile(
+            profile or self.state["player"]["profile"])
+        if fmt == "FINAL_EXAM":
+            return self._start_exam(profile)
         weights = adaptive.PROFILE_PATTERN_WEIGHT.get(
             profile, adaptive.PROFILE_PATTERN_WEIGHT["GENERAL_SWE"])
         recent = set(self.state["recent_ids"][:15])
@@ -1582,6 +3054,81 @@ class Game:
                          for p in chosen],
         }
 
+    def _start_exam(self, profile: str) -> dict:
+        exam = finalexam.compose(
+            self.corpus, self.skills, profile=profile,
+            history=finalexam.history_fingerprints(
+                db.interview_history(self.conn, limit=50)),
+            recent_ids=self.state["recent_ids"])
+        payload = exam.to_dict()
+        self._exam = exam
+        self.state["exam"] = payload
+        run = {
+            "id": payload["id"], "format": "FINAL_EXAM", "profile": profile,
+            "problem_ids": [q["problem_id"] for q in
+                            (q for seg in payload["segments"]
+                             for q in seg["questions"])],
+            "index": 0, "started_at": time.time(),
+            "minutes": payload["minutes"], "results": [],
+        }
+        self.state["interview"] = run
+        self.save()
+        fmt = finalexam.interview_format()
+        return {
+            "run": run, "label": fmt["label"], "exam": payload,
+            "rules": list(fmt["rules"]),
+            "ladder": finalexam.ladder_view(),
+            "problems": [{"id": pid, "title": self.by_id[pid].title,
+                          "difficulty": self.by_id[pid].difficulty}
+                         for pid in run["problem_ids"] if pid in self.by_id],
+        }
+
+    def finish_exam(self, seconds_by_segment: dict | None = None) -> dict:
+        """Kept as a named door for the client. The debrief itself is produced
+        inside finish_interview, because the run can also end by answering the
+        last question — and a debrief you only get by pressing the right button
+        is a debrief half the players never see."""
+        run = self.state.get("interview")
+        if not run:
+            return {"error": "no exam running"}
+        return self.finish_interview(seconds_by_segment=seconds_by_segment)
+
+    def _exam_debrief(self, results: list, seconds_by_segment) -> dict | None:
+        payload = self.state.get("exam")
+        if not payload:
+            return None
+        exam = self._recover_exam(payload)
+        if exam is None:
+            return {"unavailable": True, "note":
+                    "The exam was composed in an earlier process and could not "
+                    "be rebuilt, so the per-question debrief is unavailable. "
+                    "The score is still the measured one."}
+        # debrief() documents `results` as exactly the shape interview_advance
+        # already records, so it is passed through rather than rebuilt.
+        return finalexam.debrief(
+            exam, results, skills=self.skills,
+            seconds_by_segment=seconds_by_segment or {},
+            readiness=self._readiness(), corpus_index=self.by_id)
+
+    def _recover_exam(self, payload: dict):
+        """The composed Exam, from memory or rebuilt from its own seed.
+
+        Exam has no from_dict and compose() is seeded, so the rebuild is exact
+        when it works — and the fingerprint says whether it did rather than
+        leaving the player with a debrief about a different exam.
+        """
+        cached = getattr(self, "_exam", None)
+        if cached is not None and cached.fingerprint == payload.get("fingerprint"):
+            return cached
+        try:
+            rebuilt = finalexam.compose(
+                self.corpus, self.skills, profile=payload.get("profile"),
+                seed=payload.get("seed"),
+                format_id=payload.get("format_id", "THE_PRACTICAL"))
+        except Exception:
+            return None
+        return rebuilt if rebuilt.fingerprint == payload.get("fingerprint") else None
+
     def interview_current(self) -> dict:
         run = self.state.get("interview")
         if not run:
@@ -1616,11 +3163,12 @@ class Game:
             return self.finish_interview()
         return {"next": True, "index": run["index"], "total": len(run["problem_ids"])}
 
-    def finish_interview(self) -> dict:
+    def finish_interview(self, seconds_by_segment: dict | None = None) -> dict:
         run = self.state.get("interview")
         if not run:
             return {"error": "no interview running"}
         results = run["results"]
+        debrief = self._exam_debrief(results, seconds_by_segment)
         solved = sum(1 for r in results if r["solved"])
         total = max(len(run["problem_ids"]), 1)
         seconds = time.time() - run["started_at"]
@@ -1628,26 +3176,38 @@ class Game:
         score = round(100 * solved / total * (1.0 if within else 0.85))
 
         causes = [r["root_cause"] for r in results if r.get("root_cause")]
-        knowledge = sum(1 for c in causes
-                        if c in ("PATTERN_NOT_RECOGNIZED", "WRONG_ALGORITHM",
-                                 "WRONG_DATA_STRUCTURE"))
-        implementation = sum(1 for c in causes
-                             if c in ("SYNTAX", "PYTHON_RECALL", "OFF_BY_ONE",
-                                      "STATE_MANAGEMENT", "EDGE_CASE"))
-        timing = sum(1 for c in causes
-                     if c in ("TIME_PRESSURE", "INEFFICIENT_ALGORITHM"))
+        # finalexam.CAUSE_BUCKETS is the named version of what used to be three
+        # inline sets here. Two copies of "what a root cause means" would drift.
+        buckets = finalexam.CAUSE_BUCKETS
+        knowledge = sum(1 for c in causes if c in buckets["knowledge"])
+        implementation = sum(1 for c in causes if c in buckets["implementation"])
+        timing = sum(1 for c in causes if c in buckets["timing"])
 
         db.record_interview(
             self.conn, profile=run["profile"], format=run["format"],
             problem_ids=",".join(run["problem_ids"]), score=score, solved=solved,
             total=total, seconds=seconds, detail=str(results))
 
+        secrets = []
+        if solved == total and total:
+            self.state["stats"]["interviews_passed"] = int(
+                self.state["stats"].get("interviews_passed", 0)) + 1
+            # No Scratches: every problem solved with no failed submission.
+            if all(r.get("rank") for r in results):
+                award = self._award_secret("secret_flawless_run")
+                if award:
+                    secrets.append(award)
+
         self.state["interview"] = None
+        self.state["exam"] = None
+        self._exam = None
         self._write_encounter(None)
         self.save()
+        saves.autosave(self.conn, self.state, "session_end")
 
         return {
             "finished": True, "score": score, "solved": solved, "total": total,
+            "debrief": debrief,
             "seconds": round(seconds), "within_time": within,
             "results": results,
             "breakdown": {"knowledge_failures": knowledge,
@@ -1655,6 +3215,7 @@ class Game:
                           "time_failures": timing},
             "verdict": self._interview_verdict(score, knowledge, implementation, timing),
             "coach_now_available": True,
+            "secrets": secrets,
             "history": db.interview_history(self.conn, limit=10),
         }
 
@@ -1677,6 +3238,121 @@ class Game:
         if not parts:
             parts.append("Mixed causes. Work the specific root cause listed per problem.")
         return " ".join(parts)
+
+    # -- typed-Python combat: the enemies ARE the variables ----------------
+    # bestiary.py names the creatures and incantation.py owns the line the
+    # player types. The engine holds the field between turns and nothing else:
+    # the BattleContext is rebuilt from (encounter id, hp, turn) every request,
+    # because it carries live Python objects and does not belong in a save file.
+    def incantation_encounters(self, region_id: str = "") -> dict:
+        region_id = region_id or self.state["player"].get("region", "")
+        rows = bestiary.encounters_for_region(region_id)
+        return {"region": region_id,
+                "encounters": [{"id": e.id, "title": e.title, "blurb": e.blurb,
+                                "chapter": e.chapter, "lesson": e.lesson,
+                                "enemies": list(e.enemies)} for e in rows]}
+
+    def start_incantation(self, encounter_id: str) -> dict:
+        sealed = self._sealed_in_interview()
+        if sealed:
+            return sealed
+        # battle_context does not raise on an unknown id — it hands back an
+        # empty battlefield, which is a fight with nothing in it that reports
+        # itself already cleared. The try/except below therefore never fired.
+        if encounter_id not in bestiary.ENCOUNTER_BY_ID:
+            return {"error": "unknown incantation encounter"}
+        try:
+            ctx = bestiary.battle_context(encounter_id,
+                                          mode=config.MODE_ADVENTURE)
+        except (KeyError, TypeError):
+            return {"error": "unknown incantation encounter"}
+        self.state["incantation"] = {
+            "encounter": encounter_id,
+            "hp": {e.name: e.hp for e in ctx.enemies},
+            "turn": 0, "casts": 0, "started_at": time.time(),
+        }
+        self.save()
+        return self.incantation_view(ctx)
+
+    def _incantation_context(self):
+        run = self.state.get("incantation")
+        if not run:
+            return None
+        ctx = bestiary.battle_context(run["encounter"],
+                                      mode=config.MODE_ADVENTURE,
+                                      hp=dict(run.get("hp") or {}))
+        ctx.turn = int(run.get("turn", 0))
+        return ctx
+
+    def incantation_view(self, ctx=None) -> dict:
+        run = self.state.get("incantation")
+        if not run:
+            return {"incantation": None}
+        ctx = ctx or self._incantation_context()
+        moveset = self.state["moveset"]
+        skills = self.skills
+        chapter = curriculum.frontier(skills)
+        demand = incantation.next_demand(moveset, ctx, chapter=chapter,
+                                         rng=self._rng)
+        moves = []
+        for move in incantation.equipped(moveset):
+            tier = incantation.tier_for_move(moveset, move.id, skills)
+            rendered = incantation.render_template(move, tier, context=ctx)
+            moves.append({**rendered, "id": move.id, "tier": tier,
+                          "teach": move.note, "skill": move.skill})
+        return {
+            "incantation": {
+                "encounter": run["encounter"],
+                "turn": ctx.turn,
+                "timer_seconds": 0,       # adventure teaches; only exams are timed
+                "enemies": [e.to_dict() for e in ctx.enemies],
+                "bindings": ctx.bindings(),
+                "demand": demand,
+                "casts": run.get("casts", 0),
+                "cleared": not ctx.living(),
+            },
+            "moveset": moves,
+        }
+
+    def incantation_cast(self, move_id: str, answers: dict) -> dict:
+        run = self.state.get("incantation")
+        if not run:
+            return {"error": "no incantation battle running"}
+        ctx = self._incantation_context()
+        skills = self.skills
+        tier = incantation.tier_for_move(self.state["moveset"], move_id, skills)
+        result = incantation.cast(move_id, answers, ctx, tier=tier,
+                                  seconds=time.time() - run["started_at"],
+                                  streak=int(self.state["player"]["combo"]),
+                                  timed=False)
+        incantation.record_cast(self.state["moveset"], result)
+        # skill_deltas are graded evidence — the cast either ran the player's own
+        # Python or it did not — so they fold in the way _apply_outcome does.
+        for name, delta in (result.skill_deltas or {}).items():
+            state = skills.get(name)
+            if state is None:
+                continue
+            state.mastery = max(0.0, min(100.0, state.mastery + delta))
+            legendaries.clamp_to_ceiling(state, self.state["hand"])
+            state.stage = skillmod.derive_stage(state)
+        self._write_skills(skills)
+        run["hp"] = {e.name: e.hp for e in ctx.enemies}
+        run["turn"] = int(ctx.turn) + 1
+        run["casts"] = int(run.get("casts", 0)) + 1
+        cleared = not ctx.living()
+        payload = {**result.to_dict(), "ok": result.correct,
+                   **self.incantation_view(ctx)}
+        if cleared:
+            self.state["player"]["xp"] += 40 + 10 * len(ctx.enemies)
+            self.state["incantation"] = None
+            payload["cleared"] = True
+        self.save()
+        return payload
+
+    def leave_incantation(self) -> dict:
+        self.state["incantation"] = None
+        self.save()
+        return {"ok": True}
 
     # -- progression bookkeeping -------------------------------------------
     def _advance_weapons(self, skills: dict):
@@ -1782,9 +3458,38 @@ class Game:
         return db.export_save(self.conn)
 
     def import_save(self, payload: dict) -> dict:
-        db.import_save(self.conn, payload)
+        """Load a save file, or report why it was refused and change nothing."""
+        try:
+            db.import_save(self.conn, payload)
+        except db.InvalidSave as exc:
+            # Refusing loudly matters more than loading something: a bad import
+            # used to delete the player's entire graded history and say "ok".
+            return {"ok": False, "error": str(exc)}
         self.state = self._load_or_create()
         return {"ok": True}
+
+
+# Best to worst. grading.rank_for produces these and nothing else.
+RANK_ORDER = ("S", "A", "B", "C", "LEARNING_CLEAR")
+
+
+def _worse_rank(left: str, right: str) -> str:
+    """The lower of two ranks. An empty string means "no opinion"."""
+    if not left:
+        return right
+    if not right:
+        return left
+    return max(left, right, key=lambda r: RANK_ORDER.index(r)
+               if r in RANK_ORDER else len(RANK_ORDER))
+
+
+def _better_rank(left: str, right: str) -> str:
+    if not left:
+        return right
+    if not right:
+        return left
+    return min(left, right, key=lambda r: RANK_ORDER.index(r)
+               if r in RANK_ORDER else len(RANK_ORDER))
 
 
 def _deep_copy(value):

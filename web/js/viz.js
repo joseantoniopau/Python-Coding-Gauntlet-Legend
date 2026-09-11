@@ -662,6 +662,9 @@ export class Visualiser {
 
   render() {
     if (!this.viz) return;
+    // The panel that owns this canvas can be repainted out from under us. A
+    // detached canvas means nobody is watching, so stop rather than animate it.
+    if (!this.canvas.isConnected) { this.stop(); return; }
     const dpr = window.devicePixelRatio || 1;
     const rect = this.canvas.getBoundingClientRect();
     const w = Math.max(320, rect.width), h = Math.max(220, rect.height);

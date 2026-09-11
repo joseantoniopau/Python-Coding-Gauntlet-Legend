@@ -1,12 +1,12 @@
-"""Hashmap Highlands + Array Caverns: the load-bearing patterns of the Quora profile."""
+"""Hashmap Highlands + Array Caverns: the load-bearing patterns of the the practical screen profile."""
 from __future__ import annotations
 
 from collections import Counter, defaultdict
 
 from ._base import code_problem, dedent
 
-Q = {"QUORA": 3.0, "GENERAL_SWE": 2.0, "SECURITY_ENGINEERING": 1.0}
-QS = {"QUORA": 1.5, "GENERAL_SWE": 1.0, "SECURITY_ENGINEERING": 3.0}
+Q = {"PRACTICAL": 3.0, "GENERAL_SWE": 2.0, "SECURITY_ENGINEERING": 1.0}
+QS = {"PRACTICAL": 1.5, "GENERAL_SWE": 1.0, "SECURITY_ENGINEERING": 3.0}
 
 VIZ_HASH = {"type": "hash_map", "caption": "Each key unlocks its own vault."}
 VIZ_SCAN = {"type": "array_scan", "caption": "One pass, one dictionary."}
@@ -246,9 +246,9 @@ def build() -> list:
     P.append(code_problem(
         id="ah-two-sum-indices", title="The Twin Runes", realm="hashmap_highlands",
         pattern="HASH_MAP", difficulty="EASY", family="two_sum",
-        source_type="REPORTED_INTERVIEW", company="Quora", year="reported pattern",
+        source_type="REPORTED_INTERVIEW", year="reported pattern",
         provenance="Historically reported pattern for software-engineering screens at "
-                   "many companies including Quora. Not a guarantee of any question.",
+                   "many companies including the practical screen. Not a guarantee of any question.",
         profile_weight=Q, viz=VIZ_HASH,
         statement="""
             Two runes in a row sum to the seal's value. Return the **indices** of the
@@ -298,7 +298,7 @@ def build() -> list:
                              "carry them along. Worse here.",
                      "complexity": "O(n log n)"}],
         variants=["ah-two-sum-values", "ah-two-sum-count", "sec-pair-risk"],
-        tags=["core", "quora"],
+        tags=["core", "practical"],
     ))
 
     P.append(code_problem(
@@ -419,7 +419,7 @@ def build() -> list:
         id="ah-three-sum", title="The Three-Sum Hydra", realm="array_caverns",
         pattern="TWO_POINTER", difficulty="MEDIUM", family="three_sum",
         secondary=["SORTING", "ARRAY"], boss=True, profile_weight=Q,
-        source_type="REPORTED_INTERVIEW", company="Quora", year="reported pattern",
+        source_type="REPORTED_INTERVIEW", year="reported pattern",
         provenance="Widely reported archetype across SWE screens. Historical pattern only.",
         viz={"type": "two_pointer", "caption": "Fix one head; two more close in."},
         statement="""
@@ -482,7 +482,7 @@ def build() -> list:
         """,
         prerequisites=["ah-two-sum-indices"],
         variants=["ah-three-sum-target"],
-        tags=["core", "quora", "boss"],
+        tags=["core", "practical", "boss"],
     ))
 
     P.append(code_problem(
@@ -526,7 +526,7 @@ def build() -> list:
     P.append(code_problem(
         id="ah-group-anagrams", title="The Scattered Scrolls", realm="stringwood_labyrinth",
         pattern="HASH_MAP", difficulty="MEDIUM", family="anagrams", secondary=["STRING"],
-        source_type="REPORTED_INTERVIEW", company="Quora", year="reported pattern",
+        source_type="REPORTED_INTERVIEW", year="reported pattern",
         provenance="Character-frequency grouping is a widely reported screen archetype.",
         profile_weight=Q, cmp="nested_set", viz=VIZ_HASH,
         statement="""
@@ -568,7 +568,7 @@ def build() -> list:
         alternates=[{"name": "26-slot count tuple as key",
                      "note": "O(nk) instead of O(nk log k). Faster, uglier.",
                      "complexity": "O(n k)"}],
-        tags=["core", "quora"],
+        tags=["core", "practical"],
     ))
 
     P.append(code_problem(
@@ -612,7 +612,7 @@ def build() -> list:
                         return i
                 return -1
         """,
-        visible=[("middle", ["leetcode"]), ("later", ["loveleetcode"])],
+        visible=[("middle", ["sandstorm"]), ("later", ["loveleetcode"])],
         hidden=[("none unique", ["aabb"]), ("first is unique", ["zabb"]),
                 ("spaces count", ["a b a"])],
         edges=[("empty", [""]), ("single", ["x"])],
@@ -749,7 +749,7 @@ def build() -> list:
                 found += counts.get(running - k, 0)
                 counts[running] += 1
         """,
-        tags=["core", "quora"],
+        tags=["core", "practical"],
     ))
 
     P.append(code_problem(
@@ -855,7 +855,7 @@ def build() -> list:
             pass 1 left -> right: out[i] = running_left; running_left *= nums[i]
             pass 2 right -> left: out[i] *= running_right; running_right *= nums[i]
         """,
-        tags=["core", "quora"],
+        tags=["core", "practical"],
     ))
 
     P.append(code_problem(
@@ -941,7 +941,7 @@ def build() -> list:
                 if out and start <= out[-1][1]: out[-1][1] = max(out[-1][1], end)
                 else: out.append([start, end])
         """,
-        tags=["core", "quora"],
+        tags=["core", "practical"],
     ))
 
     P.append(code_problem(

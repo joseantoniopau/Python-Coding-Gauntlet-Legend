@@ -46,7 +46,7 @@ from ..schema import Problem, TARGET_SECONDS, build_hint_tree
 
 # Weighted toward the profile this family flatters. Finding the input nobody
 # tested is this player's day job; the game should notice that he is good at it.
-Q = {"SECURITY_ENGINEERING": 2.0, "GENERAL_SWE": 1.4, "QUORA": 1.4}
+Q = {"SECURITY_ENGINEERING": 2.0, "GENERAL_SWE": 1.4, "PRACTICAL": 1.4}
 
 _BREAK_FAILURES = [
     "Probing only the middle of the input space",

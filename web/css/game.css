@@ -85,6 +85,10 @@ h1, h2, h3, .pixel { font-family: 'Press Start 2P', 'Courier New', monospace; }
 .tag.violet { color: var(--violet); border-color: var(--violet); }
 .tag.red { color: var(--red); border-color: var(--red); }
 .tag.blue { color: var(--blue); border-color: var(--blue); }
+.tag.orange { color: var(--orange); border-color: var(--orange); }
+/* A diagnostic choice that has been committed: it cannot be taken back, so it
+ * should not still look clickable. */
+.list-item.chosen { border-color: var(--gold); opacity: .65; cursor: default; }
 
 .bar { height: 12px; background: #0d0b16; border: 2px solid var(--line); position: relative; }
 .bar > i { display: block; height: 100%; background: var(--green); transition: width .35s; }
@@ -218,6 +222,18 @@ h1, h2, h3, .pixel { font-family: 'Press Start 2P', 'Courier New', monospace; }
 .tok-call    { color: var(--gold); }
 .tok-def     { color: var(--gold-hi); }
 .tok-op      { color: #c8a8ff; }
+/* The fill-in-the-blank marker. It is not Python and it must not look like it:
+ * a boxed, pulsing slot that reads as something to be replaced. */
+.tok-blank {
+  color: var(--gold-hi); background: rgba(232, 195, 125, .14);
+  outline: 1px solid var(--gold); border-radius: 2px;
+  animation: blank-pulse 1.6s ease-in-out infinite;
+}
+@keyframes blank-pulse {
+  0%, 100% { background: rgba(232, 195, 125, .10); }
+  50%      { background: rgba(232, 195, 125, .26); }
+}
+body.reduced-motion .tok-blank { animation: none; }
 
 /* test results */
 .test-line {
@@ -520,3 +536,52 @@ body.titling #app { visibility: hidden; }
 .loot-drop-stage canvas { image-rendering: pixelated; }
 .item-art { flex: 0 0 40px; display: block; }
 .item-art canvas { image-rendering: pixelated; display: block; }
+
+/* mixer faders */
+input[type="range"] {
+  -webkit-appearance: none; appearance: none; height: 14px; background: transparent;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 10px; background: #0d0b16; border: 2px solid var(--line);
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none; width: 14px; height: 18px;
+  margin-top: -6px; background: var(--gold); border: 2px solid var(--shadow);
+  cursor: pointer;
+}
+input[type="range"]:hover::-webkit-slider-thumb { background: var(--gold-hi); }
+
+/* ---------- the world layer ---------- */
+
+/* The bar carries five doors and an index rather than a screen's worth of tabs.
+ * It wraps before it pushes the vitals off the right-hand edge. */
+#topbar .nav { flex-wrap: wrap; justify-content: flex-end; max-width: 48vw; }
+
+/* Locked content is shown locked with its reason attached, which only works if
+ * the reason is still readable. .42 was right for a row with nothing to say and
+ * wrong for a row whose whole job is to name the thing it is waiting for. */
+.list-item.locked { opacity: .68; cursor: default; }
+.list-item.locked .t { color: var(--ink-faint); }
+.list-item.locked .tag.red, .list-item.locked .gate { opacity: 1; }
+
+/* A save that will not decode. Dimmed, outlined in red, and still carrying its
+ * own buttons — rename and delete have to work on exactly this row. */
+.list-item.broken { opacity: .72; border-color: var(--red); cursor: default; }
+.list-item.slot-empty .d { color: var(--ink-faint); font-style: italic; }
+.list-item.broken:hover, .list-item.locked:hover,
+.list-item.slot-empty:hover { transform: none; }
+
+/* Rows that hold their own controls are blocks, not two-line summaries. The
+ * hover nudge on a row you cannot press reads as a broken button. */
+.list-item .row .btn { margin-top: 2px; }
+
+/* The exam ladder: fourteen rungs down a column, and the rung number is what
+ * the eye should land on first. */
+#exam-body .frame { border-left-width: 4px; }
+
+/* The world code is meant to be read aloud and typed in somewhere else. */
+#seed-code { word-break: break-all; }
+
+/* A chain inside a quest row: four steps of one person's life, indented under
+ * the premise rather than lined up with it. */
+.list-item .rung { padding: 3px 0 3px 10px; }

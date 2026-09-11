@@ -43,7 +43,7 @@ from ..schema import Problem, TARGET_SECONDS, build_hint_tree
 
 # The player this family exists for. Same weighting as onboarding: the selector
 # should reach for reading work early and often.
-Q = {"QUORA": 2.0, "GENERAL_SWE": 2.0, "SECURITY_ENGINEERING": 2.0}
+Q = {"PRACTICAL": 2.0, "GENERAL_SWE": 2.0, "SECURITY_ENGINEERING": 2.0}
 
 VIZ = {"type": "array_scan", "caption": "One line at a time. Write down what changed."}
 

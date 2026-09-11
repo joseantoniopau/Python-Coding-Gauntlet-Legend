@@ -26,6 +26,7 @@ DIFF_ORDER = ["GUIDED", "TUTORIAL", "EASY", "MEDIUM", "HARD", "ELITE", "BOSS"]
 PUZZLE_SHARE = 0.25
 VARIETY_WINDOW = 12
 VARIETY_SEED = 4
+
 # The puzzle families weight themselves toward this player's profile, which is
 # right for choosing WHICH puzzle and a standing thumb on the scale for choosing
 # WHETHER — it held the mix near a third. Paid back here so the share above is
@@ -33,8 +34,54 @@ VARIETY_SEED = 4
 # `2.0 * profile_weight` at their weighting and at the default.
 PUZZLE_PROFILE_EDGE = 2.0
 
+# Variety was steered for the puzzle GROUP and for nothing else, so the two
+# largest families in the corpus — CODE_BATTLE and MISSING_RUNE — could and did
+# take 46 of 60 encounters while nine kinds were never served at all. This
+# spreads the same pressure across every kind: a kind over its fair share is
+# pushed down, a kind that has not appeared is pulled up.
+#
+# KIND_SPREAD is set so the whole term stays inside one difficulty tier (5.0
+# per step, below). Wanting a change of pace must never outrank what the
+# curriculum has opened or what the player is ready for.
+KIND_WINDOW = 24
+KIND_SEED = 8              # denominator floor, so a short history is not evidence
+KIND_FAIR_SHARE = 0.125    # twenty-four encounters should touch about eight kinds
+KIND_SPREAD = 18.0
+# Every variety term together is capped so that the SPREAD between any two
+# candidates stays under one difficulty tier (5.0 per step, below) — which is
+# what "worth less than one tier" has to mean if it is to hold. Uncapped, a kind
+# served eight times running scored -15.75 against a starved one's +2.25, and
+# that 18-point gap is three tiers of pull: enough for a change of pace to
+# outrank what the player is actually ready for, which it did.
+VARIETY_CAP = 2.4
+
+# The share term above reshapes the mix but cannot cross a difficulty tier, and
+# a kind whose only candidates sit one tier up therefore still never arrives —
+# which is how BREAK_IT, COMPLEXITY_MATCH, PATTERN_ENCOUNTER and CODE_READING
+# were all served zero times despite being unlocked. This is the explicit floor
+# instead: any twenty consecutive encounters contain at least this many distinct
+# kinds, and when they do not, the next encounter is one of the missing ones.
+#
+# The substitution is bounded twice over. It only ever chooses from the pool the
+# curriculum has ALREADY opened, and only material within one difficulty tier of
+# the player's target — so it cannot unlock anything and cannot skip a rung.
+KIND_FLOOR_WINDOW = 20
+KIND_FLOOR = 8
+KIND_FLOOR_MAX_TIERS = 1
+
+# --- within-session repetition ------------------------------------------------
+# The SRS minimum interval is one day, so a first session contained no repetition
+# whatsoever — 60 encounters, 60 distinct problems, nothing due. That is the
+# opposite of the design. A family cleared earlier TODAY comes back today, in a
+# different problem, after enough other work has passed to make it recall rather
+# than a re-read.
+SESSION_ECHO_GAP = 3       # encounters that must pass before a family returns
+SESSION_ECHO_LIMIT = 2     # a family is met once and comes back once
+SESSION_ECHO_BONUS = 40.0  # enough to beat the -45 "already solved" penalty
+SESSION_ECHO_REACH = 8     # the gap at which the echo is worth full value
+
 PROFILE_PATTERN_WEIGHT = {
-    "QUORA": {
+    "PRACTICAL": {
         "ARRAY": 3.0, "STRING": 3.0, "HASH_MAP": 3.0, "SET": 2.5, "SORTING": 2.0,
         "SLIDING_WINDOW": 3.0, "TWO_POINTER": 3.0, "MATRIX": 2.5, "TREE": 2.5,
         "RECURSION": 2.5, "BFS": 2.5, "DFS": 2.5, "DESIGN": 2.5,
@@ -179,12 +226,78 @@ def _variety_bonus(problem, recent_kinds: list) -> float:
         bonus -= 3.0
     if len(window) > 1 and window[1] == kind:
         bonus -= 1.5
-    return bonus
+
+    # The same pressure, applied to every kind rather than to the puzzle group
+    # alone. This is the term that ends a 24-in-a-row run of one encounter kind.
+    wide = list(recent_kinds[:KIND_WINDOW])
+    share = sum(1 for k in wide if k == kind) / max(len(wide), KIND_SEED)
+    bonus += KIND_SPREAD * (KIND_FAIR_SHARE - share)
+    return max(-VARIETY_CAP, min(VARIETY_CAP, bonus))
+
+
+def _starved_kind(scored: list, recent_kinds: list, skills: dict,
+                  recent_ids: list) -> object | None:
+    """The best-scoring encounter of a kind the recent window is missing.
+
+    Returns None unless the window is both full and genuinely narrow, so this
+    never fires early and never fires when the mix is already varied.
+    """
+    window = list(recent_kinds[:KIND_FLOOR_WINDOW])
+    if len(window) < KIND_FLOOR_WINDOW:
+        return None
+    seen = set(window)
+    available = {p.encounter_kind for _, p in scored}
+    # is_permitted() and permitted_patterns() do not agree on every problem, and
+    # the second is the one the ramp tests read, so the floor honours both — a
+    # variety pick must never be the one thing that walks past a chapter gate.
+    allowed = curriculum.permitted_patterns(skills)
+    if len(seen) >= min(KIND_FLOOR, len(available)):
+        return None
+    blocked = set(recent_ids[:12])
+    for _, problem in scored:                  # already sorted best-first
+        if problem.encounter_kind in seen or problem.id in blocked:
+            continue
+        if allowed and problem.pattern not in allowed:
+            continue
+        state = skills.get(
+            skillmod.PATTERN_TO_SKILL.get(problem.pattern, "PYTHON"))
+        target = _difficulty_target(state, skills.get("PYTHON"))
+        if _difficulty_distance(problem.difficulty, target) > KIND_FLOOR_MAX_TIERS:
+            continue
+        return problem
+    return None
+
+
+def _session_echo(problem, session: list) -> float:
+    """Bring back, later in the same sitting, a family cleared earlier in it.
+
+    Interleaved recall inside one session is the single highest-value thing the
+    selector can do and it was not happening at all. The rules are narrow on
+    purpose: a DIFFERENT problem in the same family, only after enough other
+    work has passed for it to be recall, and only a few times before the family
+    is left alone and the spaced-repetition schedule takes over tomorrow.
+    """
+    if not session:
+        return 0.0
+    family = problem.spaced_repetition_family
+    if not family:
+        return 0.0
+    rows = [i for i, row in enumerate(session)
+            if row.get("family") == family and row.get("solved")]
+    if not rows or len(rows) >= SESSION_ECHO_LIMIT:
+        return 0.0
+    if any(session[i].get("id") == problem.id for i in rows):
+        return 0.0                     # the same problem again is a re-read
+    since = len(session) - 1 - rows[-1]
+    if since < SESSION_ECHO_GAP:
+        return 0.0                     # too soon: it is still on the screen
+    reach = max(1, SESSION_ECHO_REACH - SESSION_ECHO_GAP)
+    return SESSION_ECHO_BONUS * min(1.0, (since - SESSION_ECHO_GAP + 1) / reach)
 
 
 def score_problem(problem, *, skills: dict, profile: str, solved_ids: set,
                   recent_ids: list, region: str | None, now: float,
-                  recent_kinds: list = ()) -> float:
+                  recent_kinds: list = (), session: list = ()) -> float:
     """Higher is a better next encounter. This is the whole selection policy."""
     skill_name = skillmod.PATTERN_TO_SKILL.get(problem.pattern, "PYTHON")
     state = skills.get(skill_name)
@@ -222,13 +335,18 @@ def score_problem(problem, *, skills: dict, profile: str, solved_ids: set,
     # hint trees, and they move mastery — they are encounters, not flavour. Their
     # share is steered instead, so they arrive mixed in rather than never.
     score += _variety_bonus(problem, list(recent_kinds))
+    # Deliberately added AFTER the solved/recent penalties rather than folded
+    # into them: an echo is meant to overcome "you have seen this family", which
+    # is exactly what those penalties say.
+    score += _session_echo(problem, list(session))
     return score
 
 
 def select_next(corpus: list, *, skills: dict, schedule: dict, profile: str,
                 solved_ids: set, recent_ids: list, region: str | None = None,
                 now: float | None = None, allow_retest: bool = True,
-                recent_kinds: list | None = None) -> Selection:
+                recent_kinds: list | None = None,
+                session: list | None = None) -> Selection:
     """Retests come first — a due pattern is the highest-value thing we can show.
     Otherwise pick the best-scoring fresh encounter."""
     now = now or time.time()
@@ -266,14 +384,29 @@ def select_next(corpus: list, *, skills: dict, schedule: dict, profile: str,
         kind_of = {p.id: p.encounter_kind for p in corpus}
         recent_kinds = [kind_of[i] for i in recent_ids if i in kind_of]
 
+    session = list(session or ())
     scored = [(score_problem(p, skills=skills, profile=profile,
                              solved_ids=solved_ids, recent_ids=recent_ids,
-                             region=region, now=now, recent_kinds=recent_kinds), p)
+                             region=region, now=now, recent_kinds=recent_kinds,
+                             session=session), p)
               for p in eligible]
     scored.sort(key=lambda pair: pair[0], reverse=True)
     if not scored:
         raise ValueError("empty corpus")
+    starved = _starved_kind(scored, list(recent_kinds), skills, recent_ids)
+    if starved is not None:
+        return Selection(problem=starved, reason="VARIETY",
+                         encounter_kind=starved.encounter_kind,
+                         tags=["variety", starved.encounter_kind])
+
     best = scored[0][1]
+    # An echo is a different reason than "the best fresh thing", and the client
+    # says so out loud — a returning pattern the player is not told is a return
+    # reads as the engine repeating itself rather than as deliberate recall.
+    if _session_echo(best, session) > 0:
+        return Selection(problem=best, reason="SESSION_ECHO",
+                         encounter_kind=best.encounter_kind,
+                         tags=["echo", best.spaced_repetition_family])
     return Selection(problem=best, reason="ADAPTIVE",
                      encounter_kind=best.encounter_kind)
 

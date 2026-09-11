@@ -111,6 +111,96 @@ EFFECT_LABELS = {
     "shrine_bonus": "+{p}% shrine rewards",
     "armor_repair": "+{p}% armour restored per repair",
     "second_wind": "one free re-cast per battle without breaking your combo",
+
+
+    # -- character classes and skill trees (gauntlet/classes.py) -------------
+    # Each of these names something the engine already measures, or can measure
+    # without new instrumentation. They were declared inside classes.py while that
+    # module was being reviewed on its own; the effect vocabulary is one dict and
+    # this is it, so they live here and classes.py derives its view from here.
+    # engine.py renders tooltips from THIS dict, so a key that is not here is a
+    # key the player never sees, however carefully its owner declared it.
+    "declare_slots": "+{v} pre-write declaration(s) per encounter",
+    "declare_bonus": "+{p}% XP when a pre-write declaration proves correct",
+    "probe_refund": "a correct probe refunds its charge {p}% of the time",
+    "first_try_bonus": "+{p}% XP when you clear on your first submission",
+    "iteration_bonus": "+{p}% XP per failed submission that preceded an unaided clear, "
+                       "counting at most three",
+    "retry_grace": "the first {v} failed submission(s) each encounter cost no stamina",
+    "stamina_regen": "+{v} stamina after every cleared encounter",
+    "retest_charges": "+{v} memory ambush(es) offered per day",
+    "interval_stretch": "memory ambushes schedule {p}% further out, and pay for the "
+                        "distance",
+    "srs_preview": "the day's memory ambushes are listed before you set out",
+    "edge_ward": "each edge case you name before running that turns out to be real "
+                 "grants a ward absorbing one failed submission, up to {v}",
+    "weakness_scan": "{v} of the enemy's weakness CLASSES are named at the start of the "
+                     "fight — the class, never the input and never the answer",
+    "bench_slots": "+{v} bench slot(s): helpers you wrote and cleared come back with "
+                   "you into later adventure encounters",
+    "design_rubric": "+{v} extra rubric point(s) on design answers, each worth XP and "
+                     "each requiring an extra argument from you",
+    "refactor_bonus": "+{p}% XP for re-clearing a solved encounter with a shorter or "
+                      "measurably faster solution",
+    "trace_frames": "step your own submitted code {v} frame(s) either side of the point "
+                    "it first diverged",
+    "root_cause_bonus": "+{p}% XP when you name the failure category before the game "
+                        "names it for you",
+    "recovery_grace": "+{p}% clock grace for rank on an encounter you already failed "
+                      "this session",
+    "loot_upgrade": "{v} drop(s) per battle roll one rarity tier higher",
+    "gold_bonus": "+{p}% gold",
+    "respec_discount": "the Armorer unpicks your tree for {p}% less",
+    "rematch_bonus": "+{p}% XP from boss rematches",
+
+    # -- legendary artifacts (gauntlet/legendaries.py) ----------------------
+    # A legendary's signature is what a run gets built around, so each of these is
+    # a behaviour rather than a percentage. Moved here for the same reason.
+    "probe_unbounded": "probes are unlimited, and each one costs {v} focus",
+    "probe_first_free": "the first probe of every battle is free and returns {v} cases",
+    "boundary_sense": "probes on the first and last element of any input are free and "
+                      "unlimited",
+    "prereq_sight": "a failure names the prerequisite skill that actually failed, and "
+                    "opens the route to it",
+    "phase_preview": "a boss phase announces its modifier one phase early",
+    "off_map": "dungeon floors reveal one room past the frontier, including the room "
+               "that is not on the map",
+    "no_clock": "the rank clock does not start until your first keystroke, and runs "
+                "double afterwards",
+    "rank_floor": "while your combo is intact, rank cannot fall below A",
+    "rank_ceiling": "your rank can never exceed {v}",
+    "combo_immortal": "your combo never breaks; each failure permanently cuts this "
+                      "run's XP rate by {p}%",
+    "combo_brittle": "a broken combo cannot be rebuilt for the rest of the session",
+    "no_second_attempt": "one failed submission ends the encounter",
+    "glass_stamina": "maximum stamina is {v}, and no repair restores it",
+    "focus_from_failure": "a failed submission restores {v} focus instead of costing "
+                          "stamina",
+    "xp_on_failure": "a failed submission still pays {p}% XP, once per problem",
+    "armor_eternal": "armour integrity is frozen where it stands: nothing damages it "
+                     "and nothing repairs it",
+    "hint_surcharge": "learning spells cost {p}% more focus",
+    "sealed_hints": "learning spells cannot be cast at all",
+    "weakness_chain": "each consecutive weakness strike adds +{p}% XP; a miss resets "
+                      "the chain to zero",
+    "mastery_spillover": "an unaided clear credits {p}% of its mastery to the weakest "
+                         "prerequisite skill",
+    "spell_refund": "a learning spell's focus is refunded in full if you then clear "
+                    "that problem unaided",
+    "memo_bank": "focus spent on a learning spell is banked; the next time that pattern "
+                 "appears, the spell is free",
+    "retest_storm": "memory ambushes come {v}x as often and pay triple",
+    "unlabelled": "problems arrive with pattern, family and difficulty stripped",
+    "indexed": "a memory ambush follows every encounter, at full difficulty, paying "
+               "{v}x",
+    "naming": "after a clutch clear, the next encounter pays double XP and rolls its "
+              "loot one rarity higher",
+    "loot_double_roll": "every drop rolls twice and you keep both",
+    "oblige": "solves the current encounter outright and pays full loot",
+    "skill_decay": "permanently removes {v} mastery from the skill it solved",
+    "sealed_in_exam": "does nothing whatsoever in Interview Mode",
+    "hand_ward": "mastery the Obliging Hand took back regrows at {p}% of an unaided "
+                 "clear's gain, and the Hand cannot be worn alongside these",
 }
 
 
@@ -1149,14 +1239,39 @@ def hero_look(armor: dict | None = None, equipped: dict | None = None) -> dict:
 # Aggregation
 # --------------------------------------------------------------------------
 
+# Keys that are a capability rather than a quantity: two sources of one do not
+# make it twice as true, so they take the maximum instead of the sum. Named here
+# rather than inlined because `classes.MAXED_KEYS` has to agree with this list,
+# and a switch that silently accumulates renders as "sealed_hints: 2".
+SWITCH_KEYS = frozenset({
+    "reveal_category", "probe_reveal_value", "perf_insight", "second_wind",
+    "combo_shield", "srs_preview",
+    # legendary signatures, which are conditions rather than amounts
+    "sealed_hints", "no_second_attempt", "armor_eternal", "combo_brittle",
+    "combo_immortal", "no_clock", "rank_floor", "probe_unbounded",
+    "boundary_sense", "prereq_sight", "phase_preview", "off_map",
+    "unlabelled", "oblige", "sealed_in_exam",
+    # An absolute, not an amount: "maximum stamina IS {v}". Summing two of them
+    # is meaningless; the max is the survivable reading and is what
+    # legendaries.WIRING §1 asked for.
+    "glass_stamina",
+})
+
+# `rank_ceiling` ("your rank can never exceed {v}") is the one effect whose
+# combining rule is a design decision rather than an obvious one: two ceilings
+# should plausibly take the STRICTER of the two, which is neither the sum nor
+# the max. No artifact currently stacks it with another, so it is left out of
+# SWITCH_KEYS deliberately rather than by omission — whoever wires a second
+# source of it picks the rule then.
+
+
 def total_effects(equipped: dict, attributes: dict, temp: dict | None = None) -> dict:
     """Fold equipment, set bonuses, attributes and battle-temporary buffs into one
     effect dict. This is the single source of truth for what a build actually does."""
     out: dict = {}
 
     def add(key, value):
-        if key in ("reveal_category", "probe_reveal_value", "perf_insight",
-                   "second_wind", "combo_shield"):
+        if key in SWITCH_KEYS:
             out[key] = max(out.get(key, 0), value)
         else:
             out[key] = out.get(key, 0) + value

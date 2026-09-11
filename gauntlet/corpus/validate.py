@@ -183,6 +183,7 @@ def _static_checks(p: Problem) -> list:
             compile(p.canonical_solution, "<correct>", "exec")
         except SyntaxError as exc:
             err(f"reference implementation does not compile: {exc}")
+        out.extend(_verify_forge(p))
         return out
 
     # code / design encounters
@@ -199,8 +200,64 @@ def _static_checks(p: Problem) -> list:
         warn("no stated time complexity")
     if not p.starter_code.strip():
         err("no starter code")
-    if p.source_type == "REPORTED_INTERVIEW" and not p.provenance_note:
-        err("reported-interview provenance must carry a disclaimer note")
+    if p.source_type == "REPORTED_INTERVIEW":
+        if not p.provenance_note:
+            err("reported-interview provenance must carry a disclaimer note")
+        if "not a guarantee" not in p.provenance_note.lower():
+            err("reported-interview provenance must say it is not a guarantee")
+        # This build is company-agnostic on purpose. REPORTED_INTERVIEW now means
+        # "a shape the reporting record keeps producing", which is a claim we can
+        # actually stand behind; naming an employer is a claim we cannot, since
+        # nobody confirmed any particular question was asked anywhere. So the
+        # disclaimer is the contract and the attribution is the thing we refuse.
+        if (p.reported_company or "").strip():
+            err("provenance names an employer; this build is company-agnostic")
+    return out
+
+
+def _verify_forge(p: Problem) -> list:
+    """Prove the Forge can be won.
+
+    `min_kills` defaults to every Mimic, so a Mimic that behaves exactly like the
+    honest implementation makes the encounter unwinnable — no suite can reject it
+    without also rejecting the correct code. Whether two implementations differ
+    is not decidable in general, so the author supplies the witness: one input per
+    Mimic on which it disagrees. This runs those witnesses. A missing or wrong one
+    is an error, because an unprovable Forge and an unwinnable Forge look
+    identical from the player's side of the screen.
+    """
+    out = []
+    name = p.entry.get("name")
+    witnesses = p.mcq.get("kill_inputs") or []
+    if len(witnesses) < len(p.mutants):
+        return [Issue(p.id, "error",
+                      f"test forge declares {len(p.mutants)} mimic(s) but only "
+                      f"{len(witnesses)} killing input(s); every mimic needs one, "
+                      f"or there is no proof the encounter can be won")]
+
+    def call(source, args, label):
+        namespace: dict = {}
+        exec(compile(source, f"<{p.id} {label}>", "exec"), namespace)
+        return namespace[name](*copy.deepcopy(args))
+
+    for i, mutant in enumerate(p.mutants):
+        args = list(witnesses[i])
+        try:
+            honest = call(p.canonical_solution, args, "correct")
+        except Exception as exc:
+            out.append(Issue(p.id, "error",
+                             f"the honest implementation raises on mimic {i}'s "
+                             f"killing input {args!r}: {type(exc).__name__}: {exc}"))
+            continue
+        try:
+            theirs = call(mutant, args, f"mimic {i}")
+        except Exception:
+            continue            # raising IS disagreeing, and a suite catches it
+        if theirs == honest:
+            out.append(Issue(p.id, "error",
+                             f"mimic {i} agrees with the honest implementation on "
+                             f"its own killing input {args!r} (both give "
+                             f"{honest!r}) — no test suite can tell them apart"))
     return out
 
 

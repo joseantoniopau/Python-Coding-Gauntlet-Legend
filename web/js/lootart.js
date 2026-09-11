@@ -11,27 +11,39 @@
  * is authored pixel by pixel in this file, exactly as sprites.js authors its
  * characters, and rasterised at runtime. There are no image assets.
  *
- * Four conventions carry the file:
+ * Six conventions carry the file:
  *
  *   1. A shape is authored as MATERIAL, never as colour. A grid says "this is
  *      body metal, this is haft, this is trim, this is gem" and the rarity
  *      supplies what those words mean. That is why a new item added to
  *      gauntlet/items.py tomorrow inherits the whole ladder for free.
- *   2. Rarity is a pipeline of grid transforms — ornament, rim, corruption,
- *      animation — applied in that order. Each stage is a pure function from
- *      grid to grid, so the ladder can be tested and extended without touching
- *      a single shape.
- *   3. Shapes are resolved from SLOT and ICON with keyword hints, never from a
+ *   2. Rarity is a pipeline of grid transforms — silhouette, ornament, rim,
+ *      corruption, animation — applied in that order. Each stage is a pure
+ *      function from grid to grid, so the ladder can be tested and extended
+ *      without touching a single shape.
+ *   3. RARITY IS READ FROM THE OUTLINE FIRST. This is the rule the rest of the
+ *      file serves. A tier that changes only hue is a tier the player learns to
+ *      ignore, because in a dark frame at 24px hue is the weakest channel there
+ *      is. So the silhouette stage GROWS the object: a Common sword has a plain
+ *      straight guard, a Rare one has quillons, an Epic one has swept wings, a
+ *      Legendary one has horned wings, a pennant and a faceted crystal. You can
+ *      name the tier of a Legendary from across the room with the colour turned
+ *      off, and the art harness proves it — see silhouetteSpread().
+ *   4. A Legendary has a HISTORY. Symmetry is what makes procedural art look
+ *      procedural, so every Legendary and above takes one seeded, one-sided
+ *      mark: a chip out of the edge, a repair binding wrapped over the haft at
+ *      a slightly wrong place, a pennant on one side only.
+ *   5. Shapes are resolved from SLOT and ICON with keyword hints, never from a
  *      hardcoded item id. The catalogue is being edited by other hands; art
  *      keyed to ids would rot within the hour.
- *   4. Everything is cached by a deterministic key. Nothing allocates a canvas
+ *   6. Everything is cached by a deterministic key. Nothing allocates a canvas
  *      inside a render loop, and the same item looks the same forever.
  *
  * Wiring is documented at the bottom of the file under INTEGRATION.
  */
-import { ramp, mix, rng, hash, applyRim, gridSprite, composeSprite, drawGroundShadow, scaleSprite, HERO_W, HERO_H, HERO_WEAPON_KEYS } from './sprites.js';
+import { ramp, mix, rng, hash, applyRim, gridSprite, composeSprite, drawGroundShadow, scaleSprite, heroFrame, HERO_W, HERO_H, HERO_WEAPON_KEYS } from './sprites.js';
 
-export const LOOT_ART_VERSION = '1.0.0';
+export const LOOT_ART_VERSION = '1.1.0';
 
 /* The item box. 24 is the same size sprites.js uses for enemies and portraits,
  * so an item can sit in a battle scene at the same scale without resampling. */
@@ -121,17 +133,24 @@ const MATERIAL = {
  * ================================================================
  * The brief, restated as engineering:
  *
- *   COMMON     dull iron, muted, no ornament
- *   UNCOMMON   cleaner steel, a bronze fitting, slight sheen
- *   RARE       blued steel, silver inlay, a set gem, cool rim light
- *   EPIC       ornate, violet energy in the material, animated glint
- *   LEGENDARY  gold and blackened steel, runes, a burning aura, animated
- *   MYTHIC     the material is wrong somehow — voids, fracture lines, red light
+ *   COMMON     plain iron. Bare silhouette, no ornament, no light.
+ *   UNCOMMON   cleaner steel, one bronze fitting, the shape squares up
+ *   RARE       blued steel, silver inlay, a set gem, the shape grows guards
+ *   EPIC       swept and winged, violet energy IN the material, animated glint
+ *   LEGENDARY  horned and crowned, gold on blackened steel, engraving, a
+ *              faceted crystal, a torn pennant, one scar, embers
+ *   MYTHIC     all of that, then the material fails — voids punched through,
+ *              a fracture corner to corner, red light leaking out of both
  *
- * Each tier is expressed as (a) a material transform, (b) an ornament level
- * that adds structure to the grid, and (c) an aura that animates. Because all
- * three are driven off this table alone, an item authored next week inherits
- * the full ladder without anyone editing its shape.
+ * Each tier is expressed as (a) a material transform, (b) a SILHOUETTE level
+ * that grows the outline, (c) an ornament level that adds structure inside it,
+ * and (d) an aura that animates. Because all four are driven off this table
+ * alone, an item authored next week inherits the full ladder without anyone
+ * editing its shape.
+ *
+ * `grow` is the one that matters. Everything else on this table is a surface
+ * treatment and surface treatments do not survive a dark room, a small icon or
+ * a colour-blind player. The outline does.
  *
  * `colour` matches RARITIES in gauntlet/items.py exactly. If those drift, the
  * card border and the beam drift with them, which is worse than it sounds:
@@ -144,14 +163,14 @@ const RARITY_DEF = {
      * suppressed so the surface never catches the light. */
     tint: '#2f3138', tintAmt: 0.30, desat: 0.52, lift: -0.05,
     trim: null, gem: null, rune: null, energy: null,
-    ornament: 0, sheen: 0, aura: 'none', outlineTint: 0.06,
+    grow: 0, ornament: 0, sheen: 0, aura: 'none', outlineTint: 0.06,
   },
   UNCOMMON: {
     label: 'Uncommon', colour: '#8fd07a',
     /* Cleaned up and slightly brighter, with one bronze fitting. */
     tint: '#3a4048', tintAmt: 0.12, desat: 0.18, lift: 0.03,
     trim: '#a9712f', gem: '#6f8a52', rune: null, energy: null,
-    ornament: 1, sheen: 1, aura: 'none', outlineTint: 0.08,
+    grow: 1, ornament: 1, sheen: 1, aura: 'none', outlineTint: 0.08,
   },
   RARE: {
     label: 'Rare', colour: '#7ec8ff',
@@ -159,7 +178,7 @@ const RARITY_DEF = {
      * silver, and the rim light is cool rather than the default warm. */
     tint: '#31456e', tintAmt: 0.34, desat: 0.0, lift: 0.02,
     trim: '#c2ccdd', gem: '#7ec8ff', rune: null, energy: '#7ec8ff',
-    ornament: 2, sheen: 2, aura: 'none', outlineTint: 0.12,
+    grow: 2, ornament: 2, sheen: 2, aura: 'none', outlineTint: 0.12,
     rim: '#9fd8ff',
   },
   EPIC: {
@@ -169,7 +188,7 @@ const RARITY_DEF = {
     tint: '#3b2c56', tintAmt: 0.44, desat: 0.10, lift: -0.02,
     glowInto: '#7b4fd0', glowAmt: 0.22,
     trim: '#9a7fd8', gem: '#c8a8ff', rune: '#c8a8ff', energy: '#c8a8ff',
-    ornament: 3, sheen: 3, aura: 'glint', outlineTint: 0.14,
+    grow: 3, ornament: 3, sheen: 3, aura: 'glint', outlineTint: 0.14,
   },
   LEGENDARY: {
     label: 'Legendary', colour: '#e8c37d',
@@ -178,7 +197,7 @@ const RARITY_DEF = {
     tint: '#17141c', tintAmt: 0.52, desat: 0.22, lift: -0.04,
     glowInto: '#c0641e', glowAmt: 0.10,
     trim: '#e8c37d', gem: '#ffd98a', rune: '#ff9d4a', energy: '#ff9d4a',
-    ornament: 4, sheen: 3, aura: 'ember', outlineTint: 0.16,
+    grow: 4, ornament: 4, sheen: 3, aura: 'ember', outlineTint: 0.16,
   },
   MYTHIC: {
     label: 'Mythic', colour: '#ff6a7a',
@@ -188,7 +207,7 @@ const RARITY_DEF = {
     tint: '#180f1c', tintAmt: 0.62, desat: 0.30, lift: -0.06,
     glowInto: '#9a1030', glowAmt: 0.16,
     trim: '#ff6a7a', gem: '#ff4a5f', rune: '#ff6a7a', energy: '#ff6a7a',
-    ornament: 5, sheen: 3, aura: 'void', outlineTint: 0.18,
+    grow: 5, ornament: 5, sheen: 3, aura: 'void', outlineTint: 0.18,
   },
 };
 
@@ -217,11 +236,20 @@ export function rarityStyle(rarity) {
     label: d.label,
     colour: d.colour,
     index: RARITY_KEYS.indexOf(key),
+    /* How far the outline is allowed to grow. Read by silhouette(). */
+    grow: d.grow,
     ornament: d.ornament,
     sheen: d.sheen,
     aura: d.aura,
     animated,
     frames: animated ? ANIM_FRAMES : 1,
+    /* The three treatments that make a drop feel authored rather than rolled.
+     * Deriving them from the ornament level rather than listing them again
+     * means a seventh tier inherits them without a second edit. */
+    crystal: d.ornament >= 4,
+    pennant: d.ornament >= 4,
+    engrave: d.ornament >= 4,
+    history: d.ornament >= 4,
     /* Bend a material hex into this tier. Order matters: tint first so the
      * hue moves, desaturate second so the tint does not smear, lift last so
      * the value lands where the ramp expects it. */
@@ -264,7 +292,94 @@ export const RARITY_STYLE = Object.freeze(
  *   x X   leaking energy at a void edge, and its pulsed state
  *   p     liquid
  */
+/* ---------------- the fifteen-colour budget ----------------
+ * docs/08-art-direction.md is not decoration: fifteen colours plus transparent,
+ * per sprite, and a sprite over budget is a bug. The glyph contract above names
+ * twenty-eight slots, and while no single sprite uses all of them, a Legendary
+ * pair of sabres used seventeen — body ramp, haft ramp, trim ramp, gem ramp,
+ * bone, specular, rune and its pulse — which is over.
+ *
+ * The fix is not to delete a glyph, because then a shape that needs it renders
+ * a hole. It is to MERGE the two nearest colours until the budget is met, which
+ * is exactly what an artist does when they run out of palette entries: the two
+ * steps that were nearly the same become the same, the ramps get shorter, and
+ * the sprite gets more coherent rather than less.
+ *
+ * Outline and specular are exempt. Those two are the whole readability of a
+ * sprite — merge the outline into the shadow and the silhouette dissolves — so
+ * they are pinned and everything else negotiates around them.
+ */
+const BUDGET = 15;
+const PINNED = ['o', 'W'];
+
+/* Redmean: cheap, and markedly better than raw RGB distance at not merging a
+ * dark blue into a dark red, which is the one merge that would be visible. */
+function colourDist(a, b) {
+  const A = parseHex(a), B = parseHex(b);
+  const rm = (A[0] + B[0]) / 2;
+  const dr = A[0] - B[0], dg = A[1] - B[1], db = A[2] - B[2];
+  return (2 + rm / 256) * dr * dr + 4 * dg * dg + (2 + (255 - rm) / 256) * db * db;
+}
+
+function fitPalette(pal) {
+  const glyphs = Object.keys(pal);
+  const uniq = [];
+  for (const g of glyphs) if (pal[g] && !uniq.includes(pal[g])) uniq.push(pal[g]);
+  if (uniq.length <= BUDGET) return pal;
+  const pinnedHex = new Set(PINNED.map(g => pal[g]).filter(Boolean));
+  /* How many glyphs point at each colour, so a merge keeps the colour that is
+   * carrying more of the sprite and retires the one that is carrying less. */
+  const weight = new Map();
+  for (const g of glyphs) if (pal[g]) weight.set(pal[g], (weight.get(pal[g]) || 0) + 1);
+  const live = uniq.slice();
+  const remap = new Map();
+  while (live.length > BUDGET) {
+    let best = Infinity, bi = -1, bj = -1;
+    for (let i = 0; i < live.length; i++) {
+      for (let j = i + 1; j < live.length; j++) {
+        if (pinnedHex.has(live[i]) && pinnedHex.has(live[j])) continue;
+        const d = colourDist(live[i], live[j]);
+        if (d < best) { best = d; bi = i; bj = j; }
+      }
+    }
+    if (bi < 0) break;
+    /* Survivor: whichever is pinned, else whichever more glyphs depend on. */
+    let keep = live[bi], drop = live[bj];
+    if (pinnedHex.has(drop) || (!pinnedHex.has(keep)
+        && (weight.get(drop) || 0) > (weight.get(keep) || 0))) {
+      keep = live[bj]; drop = live[bi];
+    }
+    remap.set(drop, keep);
+    weight.set(keep, (weight.get(keep) || 0) + (weight.get(drop) || 0));
+    live.splice(live.indexOf(drop), 1);
+  }
+  const resolve = (c) => { let v = c; const seen = new Set(); while (remap.has(v) && !seen.has(v)) { seen.add(v); v = remap.get(v); } return v; };
+  const out = {};
+  for (const g of glyphs) out[g] = pal[g] ? resolve(pal[g]) : pal[g];
+  return out;
+}
+
+const paletteCache = new Map();
+
 export function rarityPalette(material, rarity) {
+  const key = `${material}:${normaliseRarity(rarity)}`;
+  const hit = paletteCache.get(key);
+  if (hit) return hit;
+  const built = fitPalette(buildRarityPalette(material, rarity));
+  if (paletteCache.size >= 256) paletteCache.delete(paletteCache.keys().next().value);
+  paletteCache.set(key, built);
+  return built;
+}
+
+/* How many distinct colours a given material/rarity pair actually spends.
+ * The harness reads this; so should anyone adding a glyph. */
+export function paletteBudget(material, rarity) {
+  const pal = rarityPalette(material, rarity);
+  const uniq = new Set(Object.values(pal).filter(Boolean));
+  return { used: uniq.size, budget: BUDGET, ok: uniq.size <= BUDGET };
+}
+
+function buildRarityPalette(material, rarity) {
   const style = rarityStyle(rarity);
   const baseHex = style.material(MATERIAL[material] || MATERIAL.steel);
   const body = ramp(baseHex);
@@ -338,16 +453,20 @@ function rep(ch, n) { return ch.repeat(n); }
 const SHAPES = {
   /* ---- blades ---- */
   sword: {
+    /* Authored PLAIN. A Common sword is a bar of iron with a straight guard and
+     * nothing else, because the growth table below has to have somewhere to go:
+     * if the base silhouette already has wings then Legendary has no move left
+     * except turning yellow, which is the failure this file exists to fix. */
     mat: 'steel', gem: [11, 15],
     grid: [
       blank(), mid('oo'), mid('oBBo'),
       mid('oBBBBo'), mid('oBBBBo'), mid('oBBBBo'), mid('oBBBBo'),
       mid('oBBBBo'), mid('oBBBBo'), mid('oBBBBo'), mid('oBBBBo'),
       mid('oBBBBo'), mid('oBBBBo'), mid('oBBBBo'), mid('oBBBBo'),
-      mid('o' + rep('g', 12) + 'o'),
       mid('o' + rep('g', 8) + 'o'),
+      mid('o' + rep('g', 4) + 'o'),
       mid('osso'), mid('osso'), mid('osso'), mid('osso'),
-      mid('oggggo'), mid('oggggo'), mid('oooo'),
+      mid('oggggo'), mid('oggo'), mid('oo'),
     ],
   },
   sabers: {
@@ -913,12 +1032,12 @@ const SHAPES = {
       mid('ommo'),
       mid('o' + rep('m', 4) + 'o'),
       mid('o' + rep('m', 6) + 'o'),
-      row(7, 'o' + rep('m', 8) + 'o', 3, 'm'),
+      row(7, 'o' + rep('m', 8) + 'o'),
       mid('o' + rep('m', 4) + 'ee' + rep('m', 4) + 'o'),
       mid('o' + rep('m', 4) + 'ee' + rep('m', 4) + 'o'),
       mid('o' + rep('m', 4) + 'ee' + rep('m', 4) + 'o'),
       mid('o' + rep('m', 10) + 'o'),
-      row(7, 'o' + rep('m', 8) + 'o', 20, 'm'),
+      row(7, 'o' + rep('m', 8) + 'o'),
       mid('o' + rep('m', 6) + 'o'),
       mid('o' + rep('m', 4) + 'o'),
       mid('ommo'),
@@ -1023,6 +1142,429 @@ const SHAPES = {
 export const SHAPE_KEYS = Object.keys(SHAPES);
 
 /* ================================================================
+ * SILHOUETTE GROWTH
+ * ================================================================
+ * The headline of this pass, and the thing the brief actually asked for:
+ * rarity must be readable before the name is. Colour cannot carry that. In a
+ * near-black frame at 24px, against a palette that is deliberately desaturated,
+ * hue is the weakest channel we have — and it is the channel a colour-blind
+ * player does not have at all. The outline is the strong one.
+ *
+ * So each tier GROWS the object. The stamps below are authored per shape and
+ * are cumulative: a Legendary applies levels 1 through 4 in order, so the
+ * quillons a Rare grew are still there under the wings a Legendary adds. That
+ * is what makes the ladder read as one object maturing rather than as five
+ * unrelated drawings.
+ *
+ * A stamp is [y, x, run]; '.' inside a run means "leave what was there", the
+ * same contract row() uses. Stamps are applied to the RAW grid, before rim and
+ * before ornament, so added matter gets shaded by exactly the same pass as
+ * authored matter and there is no seam where the growth starts.
+ *
+ * Shapes with no entry fall through to growGeneric(), which derives a pair of
+ * mirrored shoulder tabs and a crest from the silhouette itself. It is less
+ * characterful than an authored entry and it is meant to be: it exists so a
+ * shape added next week is never stuck at Common-shaped.
+ */
+const GROWTH = {
+  /* A Common sword is a bar with a straight guard. Then: the guard widens,
+   * the quillons sweep up, wings and horns grow off them. Four silhouettes
+   * you can tell apart in a thumbnail with the colour turned off. */
+  sword: {
+    2: [[15, 5, 'ogg'], [15, 16, 'ggo'], [16, 7, 'ogg'], [16, 14, 'ggo']],
+    3: [[13, 4, 'ooo'], [14, 4, 'ogg'], [15, 4, 'oggg'],
+        [13, 17, 'ooo'], [14, 16, 'ggo'], [15, 16, 'gggo'],
+        [22, 9, 'oggggo'], [23, 10, 'oooo']],
+    4: [[10, 3, 'oo'], [11, 3, 'ogo'], [12, 3, 'ogo'],
+        [10, 19, 'oo'], [11, 18, 'ogo'], [12, 18, 'ogo'],
+        [12, 8, 'oBBBBBBo'], [13, 8, 'oBBBBBBo']],
+    5: [[8, 2, 'oo'], [9, 2, 'ogo'], [10, 2, 'ogo'],
+        [8, 20, 'oo'], [9, 19, 'ogo'], [10, 19, 'ogo']],
+  },
+  dagger: {
+    2: [[15, 5, 'ogg'], [15, 16, 'ggo']],
+    3: [[16, 7, 'ogo'], [16, 14, 'ogo']],
+    4: [[12, 7, 'oo'], [13, 7, 'oB'], [12, 15, 'oo'], [13, 15, 'Bo'],
+        [21, 9, 'oggggo'], [22, 10, 'oooo']],
+    5: [[3, 11, 'oo'], [2, 11, 'oo']],
+  },
+  sabers: {
+    2: [[18, 2, 'oggggo'], [18, 16, 'oggggo']],
+    3: [[1, 4, 'oo'], [1, 18, 'oo']],
+    4: [[22, 3, 'oggo'], [22, 17, 'oggo'], [23, 4, 'oo'], [23, 18, 'oo']],
+    5: [[0, 4, 'oo'], [0, 18, 'oo']],
+  },
+  spear: {
+    2: [[3, 7, 'oB'], [3, 16, 'Bo'], [4, 7, 'oB'], [4, 16, 'Bo']],
+    3: [[7, 6, 'oggggggggggo']],
+    4: [[6, 6, 'og'], [6, 16, 'go'], [5, 6, 'o'], [5, 17, 'o']],
+    5: [[5, 5, 'og'], [5, 17, 'go'], [4, 5, 'o'], [4, 18, 'o']],
+  },
+  lance: {
+    2: [[9, 3, 'ogg'], [9, 18, 'ggo'], [10, 4, 'ogg'], [10, 17, 'ggo']],
+    3: [[8, 4, 'oB'], [8, 18, 'Bo']],
+    4: [[11, 4, 'ogg'], [11, 17, 'ggo'], [12, 4, 'o'], [12, 19, 'o']],
+    5: [[7, 5, 'oB'], [7, 17, 'Bo'], [6, 6, 'o'], [6, 17, 'o']],
+  },
+  /* The axe is the one shape that is asymmetric by construction, so it grows
+   * asymmetrically too: the bit deepens first, and only at Epic does the
+   * second bit appear on the back of the head. */
+  axe: {
+    2: [[2, 14, 'BBBBBo'], [9, 14, 'BBBBBo']],
+    3: [[4, 5, 'oBBBB'], [5, 4, 'oBBBBB'], [6, 4, 'oBBBBB'], [7, 5, 'oBBBB'],
+        [8, 5, 'oBBo']],
+    4: [[1, 16, 'oo'], [0, 17, 'oo'], [10, 15, 'oo'], [11, 16, 'oo']],
+    5: [[0, 19, 'oo'], [1, 18, 'ogo'], [12, 17, 'oo'], [13, 18, 'oo']],
+  },
+  hammer: {
+    2: [[0, 6, 'oooooooooooo'], [1, 5, 'oBBBBBBBBBBBBo']],
+    3: [[3, 3, 'ooo'], [4, 3, 'oBB'], [5, 3, 'oBB'], [6, 3, 'ooo'],
+        [3, 18, 'ooo'], [4, 18, 'BBo'], [5, 18, 'BBo'], [6, 18, 'ooo']],
+    4: [[0, 3, 'ooo'], [1, 3, 'oB'], [0, 18, 'ooo'], [1, 19, 'Bo'],
+        [9, 5, 'oo'], [9, 17, 'oo']],
+    5: [[1, 2, 'ooo'], [2, 2, 'oBB'], [3, 2, 'oBB'], [4, 2, 'oo'],
+        [1, 19, 'ooo'], [2, 19, 'BBo'], [3, 19, 'BBo'], [4, 20, 'oo']],
+  },
+  staff: {
+    2: [[2, 5, 'og'], [2, 17, 'go']],
+    3: [[1, 5, 'o'], [1, 18, 'o'], [5, 6, 'og'], [5, 16, 'go']],
+    4: [[0, 7, 'oo'], [0, 15, 'oo'], [1, 7, 'og'], [1, 15, 'go']],
+    5: [[6, 5, 'og'], [6, 17, 'go'], [7, 4, 'o'], [7, 19, 'o']],
+  },
+  bow: {
+    2: [[0, 9, 'oso'], [0, 13, 'o'], [1, 13, 'w'],
+        [22, 9, 'oso'], [22, 13, 'o'], [21, 13, 'w']],
+    3: [[3, 6, 'os'], [4, 5, 'os'], [5, 4, 'os'],
+        [18, 5, 'os'], [19, 6, 'os'], [20, 7, 'os'],
+        [9, 3, 'og'], [10, 3, 'og'], [11, 3, 'og'], [12, 3, 'og'], [13, 3, 'og']],
+    /* An arrow on the string. It is the one detail that makes a bow read as a
+     * bow at 24px, it is asymmetric, and it is the sort of thing you only put
+     * on the weapon you actually carry. */
+    4: [[11, 14, 'sssgggo'], [10, 17, 'ooo'], [12, 17, 'ooo'],
+        [10, 14, 'o'], [12, 14, 'o'],
+        [1, 8, 'og'], [21, 8, 'og'], [8, 3, 'o'], [14, 3, 'o']],
+    5: [[7, 3, 'og'], [15, 3, 'og'], [6, 3, 'o'], [16, 3, 'o'],
+        [2, 5, 'os'], [20, 5, 'os']],
+  },
+  shield: {
+    2: [[2, 3, 'o'], [3, 3, 'oB'], [2, 20, 'o'], [3, 19, 'Bo']],
+    3: [[1, 4, 'oooooooooooooooo'], [2, 3, 'oBBBBBBBBBBBBBBBBo']],
+    4: [[0, 6, 'oggo'], [0, 14, 'oggo'], [1, 6, 'oggo'], [1, 14, 'oggo'],
+        [18, 10, 'oBBo'], [19, 11, 'oo']],
+    5: [[4, 2, 'oB'], [5, 2, 'oB'], [4, 20, 'Bo'], [5, 20, 'Bo']],
+  },
+  helm: {
+    2: [[2, 8, 'oggggggo'], [1, 9, 'oggggo']],
+    3: [[0, 10, 'oggo'], [1, 5, 'ogo'], [1, 16, 'ogo'], [2, 5, 'og'], [2, 16, 'go']],
+    4: [[0, 4, 'oo'], [1, 3, 'ogo'], [2, 3, 'ogo'], [3, 4, 'oo'],
+        [0, 18, 'oo'], [1, 18, 'ogo'], [2, 18, 'ogo'], [3, 18, 'oo'],
+        [16, 8, 'oggggggo'], [17, 9, 'ooooo']],
+    5: [[0, 2, 'oo'], [1, 1, 'ogo'], [0, 20, 'oo'], [1, 20, 'ogo']],
+  },
+  crown: {
+    2: [[9, 7, 'OO'], [10, 6, 'OggO'], [9, 15, 'OO'], [10, 15, 'OggO']],
+    3: [[5, 11, 'oo'], [6, 10, 'oggo'], [7, 10, 'oggo'],
+        [7, 5, 'oo'], [8, 4, 'oggo'], [7, 17, 'oo'], [8, 17, 'oggo']],
+    4: [[3, 11, 'oo'], [4, 10, 'oggo'], [5, 10, 'oggo'],
+        [6, 3, 'oo'], [7, 2, 'ogo'], [6, 19, 'oo'], [7, 19, 'ogo'],
+        [16, 3, 'oyyyyyyyyyyyyyyyyo'], [17, 3, 'oooooooooooooooooo']],
+    5: [[1, 11, 'oo'], [2, 10, 'oggo'], [4, 2, 'oo'], [5, 1, 'ogo'],
+        [4, 20, 'oo'], [5, 20, 'ogo']],
+  },
+  /* Armour grows the way armour actually grows: a plain cuirass gains
+   * pauldrons, then a gorget, then a fauld and a high collar. All of it lands
+   * on the hero overlay too, which is the point of doing it here. */
+  plate: {
+    2: [[4, 1, 'oBBo'], [4, 19, 'oBBo'], [5, 1, 'oB'], [5, 21, 'Bo'],
+        [6, 1, 'oB'], [6, 21, 'Bo']],
+    3: [[3, 0, 'oooo'], [4, 0, 'oBB'], [5, 0, 'oB'], [6, 0, 'oB'], [7, 0, 'oo'],
+        [3, 20, 'oooo'], [4, 21, 'BBo'], [5, 22, 'Bo'], [6, 22, 'Bo'], [7, 22, 'oo'],
+        [2, 9, 'oBBBBo'], [3, 8, 'oBBBBBBo']],
+    4: [[2, 0, 'oooo'], [3, 0, 'ogg'], [2, 20, 'oooo'], [3, 21, 'ggo'],
+        [1, 9, 'oggo'], [20, 6, 'oggggggggggo'], [21, 7, 'ooooooooo']],
+    5: [[0, 10, 'oo'], [1, 0, 'ooo'], [1, 21, 'ooo']],
+  },
+  greaves: {
+    2: [[4, 3, 'ooooo'], [5, 2, 'oBBBBBo'], [4, 15, 'ooooo'], [5, 14, 'oBBBBBo']],
+    3: [[3, 4, 'ooo'], [4, 2, 'oBo'], [3, 16, 'ooo'], [4, 17, 'oBo'],
+        [19, 2, 'oggggggo'], [19, 14, 'oggggggo']],
+    4: [[2, 4, 'oo'], [3, 2, 'ogo'], [2, 16, 'oo'], [3, 17, 'ogo'],
+        [20, 3, 'oggggo'], [20, 15, 'oggggo'], [21, 4, 'oooo'], [21, 16, 'oooo']],
+    5: [[1, 3, 'oo'], [2, 2, 'ogo'], [1, 17, 'oo'], [2, 17, 'ogo']],
+  },
+  boots: {
+    2: [[5, 2, 'oBBBBBBo'], [5, 14, 'oBBBBBBo']],
+    3: [[4, 3, 'oBBBBo'], [4, 15, 'oBBBBo'], [3, 4, 'oooo'], [3, 16, 'oooo'],
+        [19, 1, 'oBBBBBBBo'], [19, 13, 'oBBBBBBBo'], [20, 1, 'ooooooooo'], [20, 13, 'ooooooooo']],
+    4: [[2, 4, 'oo'], [3, 3, 'ogo'], [2, 16, 'oo'], [3, 16, 'ogo'],
+        [18, 0, 'oBBBBBBBBBo'], [19, 0, 'oggggggggo'], [18, 12, 'oBBBBBBBBBo'], [19, 12, 'oggggggggo']],
+    5: [[1, 3, 'oo'], [2, 2, 'ogo'], [1, 17, 'oo'], [2, 17, 'ogo']],
+  },
+  gauntlets: {
+    2: [[4, 2, 'ooooooo'], [4, 14, 'ooooooo']],
+    3: [[3, 3, 'ooooo'], [4, 1, 'oBBBBBBBo'], [3, 15, 'ooooo'], [4, 13, 'oBBBBBBBo'],
+        [15, 1, 'ooooooooo'], [15, 13, 'ooooooooo']],
+    4: [[2, 3, 'oo'], [3, 2, 'ogo'], [2, 16, 'oo'], [3, 16, 'ogo'],
+        [15, 1, 'oggggggo'], [15, 13, 'oggggggo'], [16, 2, 'ooooo'], [16, 14, 'ooooo']],
+    5: [[1, 2, 'oo'], [2, 1, 'ogo'], [1, 17, 'oo'], [2, 17, 'ogo']],
+  },
+  /* Cloth hand wraps: the generic fallback could not separate Rare from Epic
+   * here, because the widest row of a PAIR of things has a gap down the middle
+   * and the level-3 tabs land on top of the level-1 nubs. Authored instead. */
+  wraps: {
+    2: [[4, 3, 'occco'], [4, 15, 'occco']],
+    3: [[3, 4, 'occo'], [3, 16, 'occo']],
+    4: [[2, 5, 'oo'], [2, 17, 'oo'],
+        [19, 3, 'occo'], [19, 15, 'occo'], [20, 4, 'oo'], [20, 16, 'oo']],
+    5: [[1, 5, 'oo'], [1, 17, 'oo'], [21, 4, 'oo'], [21, 16, 'oo']],
+  },
+  hood: {
+    2: [[2, 8, 'oCCCCo'], [12, 4, 'oCCCCCCCCCCCCCCo']],
+    3: [[1, 9, 'oCCo'], [13, 3, 'oCCCCCCCCCCCCCCCCo'], [14, 3, 'oc'], [14, 20, 'co']],
+    4: [[0, 10, 'oo'], [1, 4, 'oo'], [1, 18, 'oo'], [2, 3, 'ogo'], [2, 18, 'ogo'],
+        [17, 4, 'ovvvvvvvvvvvvvvo'], [18, 5, 'oooooooooooo']],
+    5: [[0, 3, 'oo'], [0, 19, 'oo'], [1, 2, 'ogo'], [1, 19, 'ogo']],
+  },
+  robe: {
+    2: [[1, 9, 'oCCCCo'], [20, 2, 'ovvvvvvvvvvvvvvvvvvo']],
+    3: [[0, 10, 'oCCo'], [21, 2, 'oooooooooooooooooooo'],
+        [5, 5, 'oc'], [5, 17, 'co'], [6, 4, 'oc'], [6, 18, 'co']],
+    4: [[7, 3, 'oc'], [7, 19, 'co'], [8, 3, 'og'], [8, 19, 'go'],
+        [21, 1, 'ovvvvvvvvvvvvvvvvvvvvo'], [22, 2, 'oooooooooooooooooooo']],
+    5: [[9, 2, 'oc'], [9, 20, 'co'], [10, 2, 'oo'], [10, 21, 'oo']],
+  },
+  cloak: {
+    2: [[3, 8, 'oggggggo'], [20, 2, 'ovvvvvvvvvvvvvvvvvvo']],
+    3: [[2, 9, 'oggggo'], [21, 2, 'oooooooooooooooooooo'],
+        [6, 4, 'oc'], [6, 18, 'co']],
+    4: [[1, 10, 'oggo'], [7, 3, 'oc'], [7, 19, 'co'], [8, 3, 'og'], [8, 19, 'go'],
+        [21, 1, 'ovvvvvvvvvvvvvvvvvvvvo'], [22, 2, 'oooooooooooooooooooo']],
+    5: [[0, 11, 'oo'], [9, 2, 'oc'], [9, 20, 'co'], [10, 2, 'oo'], [10, 21, 'oo']],
+  },
+  chest: {
+    2: [[3, 8, 'occcccco'], [17, 4, 'ovvvvvvvvvvvvvvo']],
+    3: [[2, 9, 'occcco'], [18, 5, 'oooooooooooo'],
+        [5, 2, 'oc'], [5, 20, 'co']],
+    4: [[1, 10, 'occo'], [4, 2, 'oc'], [4, 20, 'co'], [5, 1, 'og'], [5, 21, 'go'],
+        [18, 4, 'ovvvvvvvvvvvvvvo'], [19, 5, 'oooooooooooo']],
+    5: [[0, 11, 'oo'], [3, 1, 'oc'], [3, 21, 'co'], [6, 1, 'oo'], [6, 22, 'oo']],
+  },
+  /* Jewellery cannot grow outward much before it stops being jewellery, so it
+   * grows UPWARD into a setting: a claw mount, then a spire, then wings. */
+  ring: {
+    2: [[3, 10, 'oggo'], [6, 6, 'og'], [6, 16, 'go']],
+    3: [[2, 11, 'oo'], [3, 9, 'ogggo'], [5, 7, 'og'], [5, 16, 'go'],
+        [7, 5, 'og'], [7, 17, 'go']],
+    4: [[0, 11, 'oo'], [1, 10, 'ogo'], [2, 10, 'ogo'],
+        [4, 6, 'og'], [4, 17, 'go'], [3, 5, 'oo'], [3, 18, 'oo'],
+        [16, 8, 'oggggggo'], [17, 9, 'ooooo']],
+    5: [[1, 7, 'oo'], [2, 6, 'ogo'], [1, 16, 'oo'], [2, 16, 'ogo']],
+  },
+  amulet: {
+    2: [[9, 7, 'oggggggo'], [15, 7, 'oggggggo']],
+    3: [[8, 6, 'oggggggggo'], [16, 8, 'oggggo'], [10, 5, 'og'], [10, 17, 'go']],
+    4: [[7, 5, 'og'], [7, 17, 'go'], [8, 4, 'og'], [8, 18, 'go'],
+        [9, 4, 'oo'], [9, 18, 'oo'], [17, 9, 'oggggo'], [18, 10, 'oooo']],
+    5: [[6, 3, 'og'], [6, 19, 'go'], [7, 2, 'oo'], [7, 20, 'oo']],
+  },
+  orb: {
+    2: [[18, 5, 'oggggggggggggo'], [19, 5, 'oggggggggggggo']],
+    3: [[16, 6, 'oggggggggo'], [17, 7, 'oggggggo'],
+        [8, 3, 'og'], [8, 18, 'go'], [9, 3, 'og'], [9, 18, 'go']],
+    4: [[7, 2, 'og'], [7, 19, 'go'], [10, 2, 'og'], [10, 19, 'go'],
+        [6, 3, 'oo'], [6, 19, 'oo'], [11, 3, 'oo'], [11, 19, 'oo'],
+        [20, 4, 'oggggggggggggggo'], [21, 5, 'ooooooooooooo']],
+    5: [[5, 1, 'oo'], [12, 1, 'oo'], [5, 21, 'oo'], [12, 21, 'oo']],
+  },
+  relic: {
+    /* The two loose motes used to be authored into the base grid, which meant
+     * a Common relic shipped with two unexplained pixels floating beside it.
+     * They belong to the tier, not to the shape. */
+    2: [[8, 6, 'ommmmmmmmmmo'], [13, 6, 'ommmmmmmmmmo'], [8, 3, 'm'], [13, 20, 'm']],
+    3: [[7, 5, 'ommmmmmmmmmmmo'], [14, 5, 'ommmmmmmmmmmmo'],
+        [3, 11, 'oo'], [18, 11, 'oo']],
+    4: [[6, 3, 'oo'], [7, 2, 'omo'], [8, 2, 'omo'], [9, 3, 'oo'],
+        [6, 19, 'oo'], [7, 19, 'omo'], [8, 19, 'omo'], [9, 19, 'oo'],
+        [2, 11, 'oo'], [19, 11, 'oo']],
+    5: [[12, 2, 'oo'], [13, 1, 'omo'], [12, 19, 'oo'], [13, 19, 'omo']],
+  },
+  tome: {
+    2: [[4, 3, 'oooooooooooooooooo'], [17, 3, 'oooooooooooooooooo']],
+    3: [[3, 4, 'oooooooooooooooo'], [4, 2, 'ovvcccccccccccccccco'],
+        [18, 3, 'oggggggggggggggggo'], [19, 4, 'oooooooooooooooo']],
+    4: [[2, 5, 'oggggggggggggo'], [3, 3, 'oggggggggggggggggo'],
+        [20, 4, 'oggggggggggggggo'], [21, 5, 'oooooooooooooo'],
+        [8, 21, 'og'], [12, 21, 'og']],
+    5: [[1, 6, 'oo'], [1, 16, 'oo'], [2, 2, 'oo'], [2, 20, 'oo']],
+  },
+};
+
+/* Stamp a list of [y, x, run] onto a cell grid. '.' leaves the cell alone. */
+function stamp(cells, list) {
+  if (!list) return;
+  const h = cells.length, w = widthOf(cells);
+  for (const [y, x, run] of list) {
+    if (y < 0 || y >= h) continue;
+    const r = cells[y];
+    for (let k = 0; k < run.length; k++) {
+      const ch = run[k], px = x + k;
+      if (ch === '.' || px < 0 || px >= w) continue;
+      r[px] = ch;
+    }
+  }
+}
+
+/* Where the object is widest, and where its crown is. Both derived from the
+ * silhouette rather than from a table, so they are correct for an off-centre
+ * shape — a bow, an axe — as well as for a symmetrical one. */
+function silhouetteExtents(cells) {
+  const h = cells.length, w = widthOf(cells);
+  let wideY = -1, wideA = -1, wideB = -1, topY = -1, topA = -1, topB = -1;
+  for (let y = 0; y < h; y++) {
+    let a = -1, b = -1;
+    for (let x = 0; x < w; x++) {
+      if (cells[y][x] === '.' || cells[y][x] === ' ') continue;
+      if (a < 0) a = x;
+      b = x;
+    }
+    if (a < 0) continue;
+    if (topY < 0) { topY = y; topA = a; topB = b; }
+    if (b - a > wideB - wideA) { wideY = y; wideA = a; wideB = b; }
+  }
+  return { wideY, wideA, wideB, topY, topA, topB };
+}
+
+/* Level 1, and it runs on EVERY shape, authored table or not.
+ *
+ * Uncommon has to be separable from Common by outline alone or the bottom of
+ * the ladder is two rungs painted the same, which is where this file started.
+ * The move is the smallest one available: a single pixel of fitting at each
+ * end of the widest row, so the shape squares up without acquiring character
+ * it has not earned yet. Four pixels. It is enough — at 24px four pixels on
+ * the widest axis is a visible change of outline.
+ */
+function growNubs(cells) {
+  const w = widthOf(cells);
+  const { wideY, wideA, wideB } = silhouetteExtents(cells);
+  if (wideY < 0) return;
+  if (wideA >= 1) cells[wideY][wideA - 1] = 'o';
+  if (wideB <= w - 2) cells[wideY][wideB + 1] = 'o';
+  const above = cells[wideY - 1];
+  if (above) {
+    if (wideA >= 1 && above[wideA - 1] === '.') above[wideA - 1] = 'o';
+    if (wideB <= w - 2 && above[wideB + 1] === '.') above[wideB + 1] = 'o';
+  }
+}
+
+/* The fallback. A shape with no authored growth still has to escalate, or an
+ * item added to the catalogue next week is stuck looking Common at Legendary —
+ * which is precisely the failure mode this pass exists to prevent.
+ *
+ * Three moves, all derived from the silhouette rather than from a table:
+ * shoulder tabs just outside the widest row, a crest of spikes above the
+ * crown, and a pair of outer horns. Less characterful than an authored entry
+ * and meant to be — it is a floor, not a ceiling.
+ */
+function growGeneric(cells, level) {
+  if (level < 2) return;
+  const h = cells.length, w = widthOf(cells);
+  const { wideY, wideA, wideB, topY, topA, topB } = silhouetteExtents(cells);
+  if (wideY < 0) return;
+  /* Level 2: the nubs become a rail — the same pixel repeated on the row
+   * under the widest one, which squares the shoulder off rather than leaving
+   * two dots sticking out of a curve. */
+  if (level >= 2) {
+    const below = cells[wideY + 1];
+    if (below) {
+      if (wideA >= 1 && below[wideA - 1] === '.') below[wideA - 1] = 'o';
+      if (wideB <= w - 2 && below[wideB + 1] === '.') below[wideB + 1] = 'o';
+    }
+  }
+  if (level < 3) return;
+  /* Shoulder tabs. Only where there is room — a shape that already fills the
+   * box does not get a tab pushed off the edge and silently clipped. */
+  if (wideA >= 2 && wideB <= w - 3) {
+    stamp(cells, [
+      [wideY, wideA - 2, 'og'], [wideY, wideB + 1, 'go'],
+      [wideY - 1, wideA - 2, 'oo'], [wideY - 1, wideB + 1, 'oo'],
+      [wideY + 1, wideA - 2, 'oo'], [wideY + 1, wideB + 1, 'oo'],
+    ]);
+  }
+  if (level < 4 || topY < 1) return;
+  /* A crest of three spikes above the crown of the shape — but only on columns
+   * that have matter directly under them. A spike over a gap is not a spike,
+   * it is one loose pixel, and one loose pixel beside a sprite is the single
+   * most common way procedural pixel art gives itself away. */
+  const cx = Math.round((topA + topB) / 2);
+  for (const x of [cx - 3, cx, cx + 3]) {
+    if (x < 0 || x >= w) continue;
+    const under = cells[topY][x];
+    if (under === '.' || under === ' ') continue;
+    cells[topY - 1][x] = 'o';
+  }
+  if (level < 5) return;
+  /* Mythic: the tabs become horns that reach past the shape entirely. */
+  let horned = false;
+  if (wideA >= 4 && wideB <= w - 5 && wideY >= 2) {
+    stamp(cells, [
+      [wideY, wideA - 4, 'og'], [wideY, wideB + 3, 'go'],
+      [wideY - 1, wideA - 4, 'og'], [wideY - 1, wideB + 3, 'go'],
+      [wideY - 2, wideA - 4, 'oo'], [wideY - 2, wideB + 3, 'oo'],
+    ]);
+    horned = true;
+  }
+  /* A shape already filling its box has no room for horns, and must still be
+   * separable from the tier below it. It grows UPWARD instead: the crest's
+   * centre spike doubles in height and the crown grows a pair of ticks. */
+  if (!horned && topY >= 2) {
+    const cx = Math.round((topA + topB) / 2);
+    if (cells[topY][cx] !== '.' && cells[topY][cx] !== ' ') {
+      cells[topY - 1][cx] = 'o';
+      cells[topY - 2][cx] = 'o';
+    }
+    for (const x of [topA, topB]) {
+      if (x < 0 || x >= w) continue;
+      if (cells[topY][x] === '.' || cells[topY][x] === ' ') continue;
+      cells[topY - 1][x] = 'o';
+    }
+  }
+}
+
+/* The stage. Cumulative, lowest level first, so the ladder reads as one object
+ * maturing rather than five separate drawings. */
+function silhouette(grid, shapeKey, style) {
+  if (style.grow <= 0) return grid;
+  const table = GROWTH[shapeKey];
+  const cells = toCells(grid);
+  /* Nubs first, always, so an authored level-2 stamp can bury them if it wants
+   * the room. */
+  growNubs(cells);
+  if (!table) { growGeneric(cells, style.grow); return toRows(cells); }
+  for (let lv = 2; lv <= style.grow; lv++) stamp(cells, table[lv]);
+  return toRows(cells);
+}
+
+/* What the ladder actually costs in outline, per shape, as pixels of binary
+ * silhouette changed between adjacent tiers. Exported because "rarity is
+ * legible before the name is read" is a claim, and a claim about pixels is
+ * one a harness can check rather than one an artist can assert. A zero in
+ * this list is a bug: it means two tiers of that shape have the same outline.
+ */
+export function silhouetteSpread(shapeKey) {
+  const mask = (r) => shapeGrid(shapeKey, r, { frame: 0 })
+    .map(row => row.padEnd(N, '.').split('')
+      .map(c => (c === '.' || c === ' ' || c === 'r' || c === 'R') ? 0 : 1).join('')).join('');
+  const masks = RARITY_KEYS.map(mask);
+  const steps = [];
+  for (let i = 0; i + 1 < masks.length; i++) {
+    let d = 0;
+    for (let k = 0; k < masks[i].length; k++) if (masks[i][k] !== masks[i + 1][k]) d++;
+    steps.push(d);
+  }
+  return { shape: shapeKey, steps, min: Math.min(...steps), total: steps.reduce((a, b) => a + b, 0) };
+}
+
+/* ================================================================
  * THE RARITY PIPELINE
  * ================================================================
  * ornament -> applyRim -> corrupt -> animate. Each stage takes a grid and
@@ -1121,6 +1663,211 @@ function cutRunes(cells, top, bot) {
   }
 }
 
+/* ---------------- the legendary treatments ----------------
+ * A 2x2 stone and a band of trim is what a Rare gets. A Legendary has to look
+ * like somebody MADE it, and then like somebody CARRIED it for a while. That
+ * is four separate passes and they are deliberately not merged: engraving is
+ * craft, the crystal is wealth, the pennant is allegiance, and the scar is
+ * history. An item that has all four reads as an object with a past, and an
+ * object with a past is the thing the player wants to keep.
+ */
+
+/* A faceted crystal, not a flat chip. Four tones in a 4x4 so it reads as a cut
+ * stone with a table and a girdle rather than as a coloured square: specular
+ * on the upper-left facet, base across the table, shadow under the girdle, and
+ * a hard outline pixel on the lower-right where the facet turns away. */
+function crystal(cells, anchor) {
+  if (!anchor) return false;
+  const w = widthOf(cells), h = cells.length;
+  let [x, y] = anchor;
+  x -= 1; y -= 1;
+  if (y < 0 || x < 0 || y + 3 >= h || x + 3 >= w) return false;
+  /* Refuse to float. If the anchor's own pixel is empty the shape does not
+   * have a socket there, and a gem in mid-air is worse than no gem. */
+  if (cells[y + 1][x + 1] === '.' || cells[y + 1][x + 1] === 'o') return false;
+  const face = [
+    '.mm.',
+    'mMMn',
+    'mMnn',
+    '.nn.',
+  ];
+  for (let dy = 0; dy < 4; dy++) {
+    for (let dx = 0; dx < 4; dx++) {
+      const ch = face[dy][dx];
+      if (ch === '.') continue;
+      cells[y + dy][x + dx] = ch;
+    }
+  }
+  /* The girdle: one outline pixel each side, which is what separates a set
+   * stone from a painted-on one. */
+  if (x - 1 >= 0) cells[y + 1][x - 1] = 'o';
+  if (x + 4 < w) cells[y + 2][x + 4] = 'o';
+  return true;
+}
+
+/* Chased engraving: a fine repeating chevron cut down the trim, offset row by
+ * row so it reads as tooling rather than as a dotted line. Only ever cuts INTO
+ * trim, never into body — engraving on bare steel at this size is noise. */
+function engrave(cells, seed) {
+  const w = widthOf(cells), h = cells.length;
+  const rand = rng((seed || 1) ^ 0x1b873593);
+  const phase = Math.floor(rand() * 3);
+  let cut = 0;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (cells[y][x] !== 'g') continue;
+      if (((x + y * 2 + phase) % 3) !== 0) continue;
+      cells[y][x] = 'y';
+      cut++;
+    }
+  }
+  return cut;
+}
+
+/* A pennant: a short cloth streamer hanging off the object, with a torn notch
+ * in its lower edge. It hangs on ONE side only, and which side is seeded, so
+ * two Legendaries of the same shape are not the same drawing mirrored.
+ *
+ * The anchor is found rather than authored: the longest run of trim on the
+ * object is its guard, collar or crossbar, and that is where a banner is tied
+ * in every century that had banners. Ties go to the LOWER row, because on a
+ * weapon the fitting nearest the hand is the one you tie to and the one an
+ * ornament band higher up the blade is not.
+ */
+function pennant(cells, seed, frame, frames) {
+  const w = widthOf(cells), h = cells.length;
+  /* Every trim run on the object is a candidate tie point, ranked longest
+   * first and, within a length, lowest first. One candidate is not enough:
+   * across thirty-two shapes the widest fitting is regularly boxed in on both
+   * sides, and a pennant that gives up there is a Legendary that looks Rare.
+   * Leave six rows of hang below the anchor, or the banner is a stub. */
+  const cands = [];
+  for (let y = 1; y < h - 6; y++) {
+    let a = -1, b = -1;
+    const push = () => { if (a >= 0 && b - a >= 2) cands.push([y, a, b]); };
+    for (let x = 0; x < w; x++) {
+      const ch = cells[y][x];
+      if (ch !== 'g' && ch !== 'G' && ch !== 'y') { push(); a = -1; b = -1; continue; }
+      if (a < 0) a = x;
+      b = x;
+    }
+    push();
+  }
+  if (!cands.length) return false;
+  cands.sort((p, q) => (q[2] - q[1]) - (p[2] - p[1]) || q[0] - p[0]);
+
+  const rand = rng((seed || 1) ^ 0x27d4eb2f);
+  const wantLeft = rand() < 0.5;
+  /* The sway. Two columns of travel across the cycle, which is a real shape
+   * change per frame rather than a brightness change — the rule sprites.js
+   * states for characters and which holds just as hard for a banner. */
+  const swayTable = [0, 0, 1, 1, 0, -1];
+  const sway = frames > 1 ? swayTable[frame % swayTable.length] : 0;
+  const torn = 2 + Math.floor(rand() * 3);
+
+  /* Plan, then commit. A streamer drawn straight into the grid leaves one or
+   * two orphan pixels wherever the object happens to be in the way, and two
+   * orphan pixels beside a sprite read as dirt on the screen rather than as
+   * cloth. So the whole banner is laid out first and written only if it comes
+   * out whole: contiguous from the anchor down, and long enough to read as a
+   * banner rather than as a tag. */
+  function hang(top, a, b, left) {
+    const x0 = left ? a - 4 : b + 1;
+    /* One column of slack each side is required, not optional: the streamer
+     * sways a pixel per frame, and a sway that clips against the box edge
+     * stops being a sway and becomes a flicker. */
+    if (x0 < 1 || x0 + 3 >= w) return null;
+    const bottom = Math.min(h - 2, top + 7);
+    const plan = [];
+    for (let y = top; y <= bottom; y++) {
+      const d = y - top;
+      const bend = Math.round(sway * (d / Math.max(1, bottom - top)));
+      /* The torn corner: the streamer loses its lower outer pixel from `torn`
+       * rows down, so the tip is a ragged point and not a rectangle. */
+      const width = d >= bottom - top - torn ? 2 : 3;
+      const rowPlan = [];
+      let ok = true;
+      for (let k = 0; k < width; k++) {
+        const px = x0 + k + bend;
+        if (px < 0 || px >= w || cells[y][px] !== '.') { ok = false; break; }
+        rowPlan.push([px, d === 0 ? 'C' : (k === (left ? 0 : width - 1) ? 'v' : 'c')]);
+      }
+      if (!ok) break;
+      const edge = x0 + (left ? -1 : width) + bend;
+      if (edge >= 0 && edge < w && cells[y][edge] === '.') rowPlan.push([edge, 'o']);
+      plan.push(rowPlan.map(e => [y, e[0], e[1]]));
+    }
+    return plan.length >= 5 ? plan : null;
+  }
+
+  for (const [y, a, b] of cands.slice(0, 6)) {
+    for (const left of [wantLeft, !wantLeft]) {
+      const plan = hang(y, a, b, left);
+      if (!plan) continue;
+      for (const rowPlan of plan) for (const [py, px, ch] of rowPlan) cells[py][px] = ch;
+      return true;
+    }
+  }
+  return false;
+}
+
+/* One seeded, one-sided mark. Symmetry is what makes procedural art look
+ * procedural; a single asymmetric flaw is what makes a weapon look owned.
+ *
+ *   a chip   one body pixel bitten out of an edge, with the edge behind it
+ *            turned to deep shadow so the notch has depth
+ *   a repair a two-row leather binding wrapped over the haft, deliberately
+ *            not centred on any fitting, because a field repair never is
+ */
+function history(cells, seed) {
+  const w = widthOf(cells), h = cells.length;
+  const rand = rng((seed || 1) ^ 0x85ebca6b);
+  /* The chip. Walk the left edge of the body from a seeded row and take the
+   * first outline pixel with body behind it.
+   *
+   * The band is deliberately the middle of the object. A notch taken out of
+   * the point of a blade does not read as a chip, it reads as a blunt sword —
+   * and a notch in the bottom row reads as a rendering error. */
+  const lo = Math.max(1, Math.round(h * 0.25));
+  const hi = Math.min(h - 2, Math.round(h * 0.80));
+  const span = Math.max(1, hi - lo);
+  const start = lo + Math.floor(rand() * span);
+  let chipped = false;
+  for (let i = 0; i < span && !chipped; i++) {
+    const y = lo + ((start - lo + i) % span);
+    for (let x = 1; x < w - 2; x++) {
+      const ch = cells[y][x];
+      if (ch !== 'o' && ch !== 'O') continue;
+      const next = cells[y][x + 1];
+      if (next !== 'B' && next !== 'H' && next !== 'L') break;
+      cells[y][x + 1] = 'o';
+      if (cells[y][x + 2] === 'B') cells[y][x + 2] = 'D';
+      chipped = true;
+      break;
+    }
+  }
+  /* The repair. Find the haft — a run of 's' glyphs — and bind two rows of it
+   * with leather at a seeded offset. */
+  const hafts = [];
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (cells[y][x] === 's') { hafts.push(y); break; }
+  if (hafts.length >= 4) {
+    const y0 = hafts[2 + Math.floor(rand() * (hafts.length - 3))];
+    for (const y of [y0, y0 + 1]) {
+      if (y < 0 || y >= h) continue;
+      for (let x = 0; x < w; x++) if (cells[y][x] === 's' || cells[y][x] === 't') cells[y][x] = 'u';
+    }
+    /* The knot, on one side only. */
+    const side = rand() < 0.5 ? -1 : 1;
+    for (let x = 0; x < w; x++) {
+      if (cells[y0][x] !== 'u') continue;
+      const px = side < 0 ? x - 1 : x + 2;
+      if (px >= 0 && px < w && cells[y0][px] === '.') cells[y0][px] = 'u';
+      break;
+    }
+  }
+  return chipped;
+}
+
 /* Gold filigree: outline pixels beside a fitting become trim, so the ornament
  * wraps the silhouette instead of sitting inside it. Legendary and above only,
  * because at lower tiers a gold outline reads as a selection highlight. */
@@ -1140,10 +1887,12 @@ function gildOutline(cells, rows) {
  *   1  one bronze fitting.
  *   2  two fittings and a set stone.
  *   3  three fittings, a stone, and runes cut into the spine.
- *   4  all of the above plus a second stone and gilded outlines.
+ *   4  all of the above, plus a second stone, gilded outlines, chased
+ *      engraving, a faceted crystal in place of the flat one, a torn pennant
+ *      and one seeded scar.
  *   5  as 4; corruption is applied separately, after the rim pass.
  */
-function ornament(grid, shape, style, seed) {
+function ornament(grid, shape, style, seed, frame) {
   if (style.ornament <= 0) return grid;
   const cells = toCells(grid);
   const [top, bot] = bodyExtent(cells, BANDABLE);
@@ -1168,7 +1917,20 @@ function ornament(grid, shape, style, seed) {
   }
   if (style.ornament >= 2) setStone(cells, shape.gem);
   if (style.ornament >= 3) cutRunes(cells, top, bot);
-  if (style.ornament >= 4) { setStone(cells, shape.gem2); gildOutline(cells, rows); }
+  if (style.ornament >= 4) {
+    setStone(cells, shape.gem2);
+    gildOutline(cells, rows);
+    /* Order is load-bearing. Engraving first, so it cuts the trim the bands
+     * just laid down and the gilding just widened. The pennant second, while
+     * the guard is still an unbroken run of trim it can find. The crystal
+     * third, so the engraving does not tool across the stone and the stone
+     * does not split the guard before the pennant looks at it. The scar last,
+     * because damage happens to a finished object. */
+    if (style.engrave) engrave(cells, seed);
+    if (style.pennant) pennant(cells, seed, frame | 0, style.frames);
+    if (style.crystal && !crystal(cells, shape.gem)) crystal(cells, shape.gem2);
+    if (style.history) history(cells, seed);
+  }
   return toRows(cells);
 }
 
@@ -1268,17 +2030,46 @@ function animate(grid, style, frame, seed) {
     }
   }
 
-  if (style.aura === 'ember') {
-    /* Four embers rising through transparent space beside the object. Their
-     * columns are fixed per item and only their height changes, which is what
-     * separates an ember from a twinkle. */
-    for (let i = 0; i < 4; i++) {
+  /* The stone is lit from INSIDE. A gem that only catches the surface glint is
+   * a shiny pebble; a gem with a spark travelling through its facets is a gem.
+   * The wave runs on x + 2y so it descends through the crystal rather than
+   * sliding across it, which is what separates subsurface light from polish.
+   * Confined to gem glyphs, so it never touches the body ramp. */
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const ch = cells[y][x];
+      if (ch !== 'm' && ch !== 'M' && ch !== 'n') continue;
+      if (((x + y * 2 + f * 2) % 8) >= 2) continue;
+      cells[y][x] = ch === 'M' ? 'W' : ch === 'm' ? 'M' : 'm';
+    }
+  }
+
+  /* Motes rising through transparent space beside the object. Columns are
+   * fixed per item and only the height changes, which is what separates an
+   * ember from a twinkle — a particle that appears in a new place each frame
+   * is noise, a particle that climbs is a fire.
+   *
+   * Epic gets three cold ones drifting; Legendary gets six and they are hot,
+   * lift from the lower half where the light source is, and carry a one-pixel
+   * tail. Spawning in the lower half matters: docs/09-story-bible.md §8 puts
+   * the key light low, and embers that fall out of the top of the frame
+   * contradict it. */
+  if (style.aura === 'ember' || style.aura === 'glint') {
+    const hot = style.aura === 'ember';
+    const count = hot ? 6 : 3;
+    const lift = hot ? h - 1 : Math.floor(h * 0.75);
+    for (let i = 0; i < count; i++) {
       const col = 1 + Math.floor(rand() * Math.max(1, w - 2));
       const phase = rand();
-      const y = Math.floor(h - 1 - (((f / frames) + phase) % 1) * (h - 1));
+      const t = ((f / frames) + phase) % 1;
+      const y = Math.floor((h - 1) - t * lift);
       const r = cells[y];
       if (!r || r[col] !== '.') continue;
       r[col] = ((f + i) & 1) ? 'R' : 'r';
+      /* The tail. One pixel of where the ember just was, dimmer, so the mote
+       * has a direction of travel instead of merely a position. */
+      const tail = cells[y + 1];
+      if (hot && tail && tail[col] === '.') tail[col] = 'r';
     }
   }
 
@@ -1301,10 +2092,18 @@ export function applyRarity(grid, rarity, opts = {}) {
   const style = rarityStyle(rarity);
   const shape = opts.shape || { gem: opts.gem || null, gem2: opts.gem2 || null };
   const seed = opts.seed === undefined ? 1 : opts.seed;
-  let g = ornament(grid, shape, style, seed);
+  const frame = opts.frame || 0;
+  /* silhouette -> ornament -> rim -> corrupt -> animate. The order is the
+   * whole design: grow the outline before anything reads it, decorate the
+   * grown outline, shade what is there, then take matter away, then move the
+   * light. Reversing any two of those produces a visible artefact — ornament
+   * before growth leaves fittings floating where the old edge used to be, and
+   * rim before ornament leaves every fitting unlit. */
+  let g = silhouette(grid, opts.shapeKey || '', style);
+  g = ornament(g, shape, style, seed, frame);
   g = applyRim(g);
   g = corrupt(g, style, seed);
-  g = animate(g, style, opts.frame || 0, seed);
+  g = animate(g, style, frame, seed);
   return g;
 }
 
@@ -1489,7 +2288,7 @@ export function itemGrid(item, frame = 0) {
   const f = ((frame % frames) + frames) % frames;
   const key = `${shapeKey}:${rarity}:${seed}:${f}`;
   return gridCache.get(key, () =>
-    applyRarity(shape.grid, rarity, { shape, seed, frame: f }));
+    applyRarity(shape.grid, rarity, { shape, shapeKey, seed, frame: f }));
 }
 
 /* A finished 24x24 canvas. */
@@ -1612,15 +2411,21 @@ export function lootBeam(rarity, opts = {}) {
     for (let y = 0; y < h; y++) {
       /* Fade toward the top: the light is coming out of the ground. */
       const fall = 0.35 + 0.65 * (y / h);
+      /* The base flare. The last sixth of the column widens as it meets the
+       * floor, because a beam that hits the ground and does not spread is a
+       * drawn rectangle, and the eye knows it. */
+      const toFloor = (h - 1 - y) / Math.max(1, h / 6);
+      const flare = toFloor < 1 ? Math.round((1 - toFloor) * 3) : 0;
       /* Scanline gaps travel up one row per frame, which is the whole reason
        * the beam looks like it is flowing rather than standing still. */
       const gap = ((y + f * 2) % 7) === 0;
       for (const b of bands) {
         const a = b.alpha * fall * (gap ? 0.35 : 1);
         if (a <= 0.02) continue;
+        const half = Math.min(Math.floor(w / 2), b.half + flare);
         ctx.globalAlpha = a;
         ctx.fillStyle = b.colour;
-        ctx.fillRect(cx - b.half, y, b.half * 2, 1);
+        ctx.fillRect(cx - half, y, half * 2, 1);
       }
     }
     /* Motes. Deterministic columns, position driven by the frame. */
@@ -1832,33 +2637,214 @@ export function drawLootCard(ctx, item, x, y, opts = {}) {
   return out;
 }
 
-/* The whole reward moment in one call. `t` is 0..1 across the drop animation:
- * the burst fires on the first third, the beam holds throughout, the item
- * rises out of the beam and settles into a bob.
+/* ---------------- the landing ----------------
+ * A drop that fades up is a notification. A drop that ARRIVES is an event, and
+ * arriving is three separate beats the eye can count: the fall, the moment the
+ * thing hits the floor, and the settle afterwards. The two cached pieces below
+ * are the middle beat — the ring the impact throws along the ground and the
+ * pool of light it leaves behind.
+ *
+ * Both are hard-edged fillRect like everything else in this section. A soft
+ * shockwave in a 16-bit frame reads as a mistake rather than as polish.
  */
+const IMPACT_FRAMES = 8;
+const POOL_FRAMES = 4;
+const impactCache = cappedCache(96);
+const poolCache = cappedCache(96);
+
+/* The shock ring, drawn in ground perspective: an ellipse three times wider
+ * than it is tall, because the floor is being seen at an angle and a circle
+ * would read as a hoop standing on its edge. Higher tiers throw shards. */
+export function lootImpact(rarity, opts = {}) {
+  const style = rarityStyle(rarity);
+  const w = Math.max(16, Math.round(opts.width || 44));
+  const h = Math.max(6, Math.round(opts.height || 16));
+  const frames = IMPACT_FRAMES;
+  const f = ((opts.frame || 0) % frames + frames) % frames;
+  const key = `${style.key}:${w}:${h}:${f}`;
+  return impactCache.get(key, () => {
+    const { canvas, ctx } = makeCanvas(w, h);
+    const cx = (w - 1) / 2, cy = h - 3;
+    const t = f / (frames - 1);
+    const fade = 1 - t;
+    const hot = mix(style.colour, '#ffffff', 0.75);
+    const rx = 2 + t * (w / 2 - 3);
+    const ry = Math.max(1, rx * 0.34);
+    /* The ring itself, stepped around the ellipse at a pitch fine enough that
+     * it closes at every radius and coarse enough that it stays stippled. */
+    ctx.globalAlpha = Math.max(0, fade * 0.9);
+    for (let a = 0; a < Math.PI * 2; a += 0.11) {
+      const px = Math.round(cx + Math.cos(a) * rx);
+      const py = Math.round(cy + Math.sin(a) * ry);
+      if (px < 0 || py < 0 || px >= w || py >= h) continue;
+      ctx.fillStyle = (Math.sin(a) > 0) ? style.colour : mix(style.colour, '#07060c', 0.35);
+      ctx.fillRect(px, py, 1, 1);
+    }
+    /* A second, faster ring for Epic and above. Two rings travelling at
+     * different speeds is the cheapest way to make an impact feel like it had
+     * force behind it rather than a radius. */
+    if (style.index >= 3) {
+      const r2 = 1 + Math.min(1, t * 1.7) * (w / 2 - 2);
+      ctx.globalAlpha = Math.max(0, (1 - Math.min(1, t * 1.7)) * 0.7);
+      ctx.fillStyle = hot;
+      for (let a = 0; a < Math.PI * 2; a += 0.16) {
+        const px = Math.round(cx + Math.cos(a) * r2);
+        const py = Math.round(cy + Math.sin(a) * r2 * 0.34);
+        if (px < 0 || py < 0 || px >= w || py >= h) continue;
+        ctx.fillRect(px, py, 1, 1);
+      }
+    }
+    /* Dust. Deterministic columns, thrown outward and settling — they rise for
+     * the first half of the beat and fall back for the second, which is what
+     * dust does and what a particle that only rises does not. */
+    const rand = rng(hash(`${style.key}:impact:${w}`) || 1);
+    const motes = 4 + style.index;
+    ctx.fillStyle = style.colour;
+    for (let i = 0; i < motes; i++) {
+      const dir = rand() < 0.5 ? -1 : 1;
+      const speed = 0.5 + rand() * 0.8;
+      const px = Math.round(cx + dir * speed * t * (w / 2));
+      const lift = Math.sin(Math.min(1, t * 1.2) * Math.PI) * (h * 0.55);
+      const py = Math.round(cy - lift);
+      if (px < 0 || py < 0 || px >= w || py >= h) continue;
+      ctx.globalAlpha = fade * 0.85;
+      ctx.fillStyle = (i & 1) ? hot : style.colour;
+      ctx.fillRect(px, py, 1, 1);
+    }
+    ctx.globalAlpha = 1;
+    return canvas;
+  });
+}
+
+export function drawLootImpact(ctx, rarity, cx, groundY, opts = {}) {
+  const scale = Math.max(1, Math.round(opts.scale || 1));
+  const img = lootImpact(rarity, opts);
+  const out = scale > 1 ? scaleSprite(img, scale) : img;
+  ctx.drawImage(out, Math.round(cx - out.width / 2), Math.round(groundY - out.height + 2 * scale));
+  return out;
+}
+
+/* The pool the beam leaves on the floor. Stippled rather than solid so it sits
+ * on the same grain as everything else, and it breathes on a four-frame cycle
+ * one beat slower than the beam so the two do not lock into a throb. */
+export function lootPool(rarity, opts = {}) {
+  const style = rarityStyle(rarity);
+  const w = Math.max(12, Math.round(opts.width || 30));
+  const h = Math.max(5, Math.round(opts.height || 11));
+  const f = ((opts.frame || 0) % POOL_FRAMES + POOL_FRAMES) % POOL_FRAMES;
+  const key = `${style.key}:${w}:${h}:${f}`;
+  return poolCache.get(key, () => {
+    const { canvas, ctx } = makeCanvas(w, h);
+    const cx = (w - 1) / 2, cy = (h - 1) / 2;
+    const breathe = 0.9 + 0.1 * (f === 1 || f === 2 ? 1 : 0);
+    const rx = (w / 2 - 1) * breathe, ry = (h / 2 - 1) * breathe;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const dx = (x - cx) / rx, dy = (y - cy) / ry;
+        const d = dx * dx + dy * dy;
+        if (d > 1) continue;
+        /* Stipple on the checker, denser toward the middle. The gap is what
+         * keeps it reading as light on a floor rather than as a painted disc. */
+        if (((x + y + f) & 1) === 1 && d > 0.28) continue;
+        ctx.globalAlpha = (1 - d) * 0.5;
+        ctx.fillStyle = d < 0.22 ? mix(style.colour, '#ffffff', 0.5) : style.colour;
+        ctx.fillRect(x, y, 1, 1);
+      }
+    }
+    ctx.globalAlpha = 1;
+    return canvas;
+  });
+}
+
+export function drawLootPool(ctx, rarity, cx, groundY, opts = {}) {
+  const scale = Math.max(1, Math.round(opts.scale || 1));
+  const img = lootPool(rarity, opts);
+  const out = scale > 1 ? scaleSprite(img, scale) : img;
+  ctx.drawImage(out, Math.round(cx - out.width / 2), Math.round(groundY - out.height / 2));
+  return out;
+}
+
+/* The whole reward moment in one call. `t` is 0..1 across the drop animation.
+ *
+ * Three beats, and they are deliberately unequal, because an evenly-paced
+ * arrival has no accent in it:
+ *
+ *   0.00 - 0.30   FALL     the item comes down the beam, fast and accelerating,
+ *                          with the pool already lit under where it will land
+ *   0.30          LAND     the impact ring, the dust and the rarity burst all
+ *                          fire on the same frame; the item squashes
+ *   0.30 - 0.52   SETTLE   the squash springs out into a small overshoot and
+ *                          damps, which is the beat that makes the object feel
+ *                          like it has weight
+ *   0.52 - 1.00   HOLD     the idle bob, the beam flowing, the aura running
+ *
+ * Reduced motion collapses all of it to the held frame. That is not a lesser
+ * version of the same thing — it is the same picture without the arrival.
+ */
+const LAND_T = 0.30;
+const SETTLE_T = 0.52;
+
 export function drawLootDrop(ctx, item, cx, groundY, opts = {}) {
   const scale = Math.max(1, Math.round(opts.scale || 2));
   const rarity = normaliseRarity(item && item.rarity);
+  const style = rarityStyle(rarity);
   const t = opts.t === undefined ? 1 : clamp(opts.t, 0, 1);
   const time = opts.time || 0;
   const reduced = isReduced(opts);
+  const size = N * scale;
+  const restY = groundY - 30 * scale;
+
+  /* The pool goes down first, under everything, and grows into the landing so
+   * the floor is already committed to the event before the object arrives. */
+  /* Quantised to four steps rather than to t. The pool is a cached canvas and
+   * a canvas keyed on a continuous value is a cache that never hits — the
+   * steady-state allocation harness catches exactly this, and it is the one
+   * mistake that turns a nice effect into a stutter on a slow machine. */
+  const poolStep = reduced ? 3 : Math.min(3, Math.floor((t / LAND_T) * 4));
+  const poolGrow = 0.55 + poolStep * 0.15;
+  drawLootPool(ctx, rarity, cx, groundY, {
+    width: Math.round(30 * poolGrow), height: Math.round(11 * poolGrow),
+    scale, frame: reduced ? 0 : Math.floor(time / (FRAME_MS * 2)),
+  });
 
   drawLootBeam(ctx, rarity, cx, groundY, {
     width: 24, height: 48, scale, time, reducedMotion: reduced,
   });
 
-  /* Rise, then settle. Reduced motion skips the rise and the bob entirely and
-   * simply puts the item where it ends up. */
-  const rise = reduced ? 0 : (1 - Math.min(1, t / 0.45)) * 14 * scale;
-  const bob = reduced ? 0
-    : Math.round(Math.sin(time / 380) * 1.5) * scale;
-  const size = N * scale;
-  const iy = groundY - 30 * scale + rise + bob;
+  /* Fall, land, settle, bob. The fall is quadratic so the item accelerates
+   * into the floor instead of drifting onto it; the settle is a damped
+   * overshoot rather than a linear return, because a linear return reads as a
+   * lift rather than as a landing. */
+  let dy = 0;
+  if (!reduced) {
+    if (t < LAND_T) {
+      const k = 1 - (t / LAND_T);
+      dy = -k * k * 34 * scale;
+    } else if (t < SETTLE_T) {
+      const k = (t - LAND_T) / (SETTLE_T - LAND_T);
+      dy = Math.sin(k * Math.PI * 1.5) * (1 - k) * 3 * scale;
+    } else {
+      dy = Math.round(Math.sin(time / 380) * 1.5) * scale;
+    }
+  }
+  const iy = restY + dy;
+
   drawItem(ctx, item, cx - size / 2, iy, { scale, time, reducedMotion: reduced });
 
-  if (!reduced && t < 0.55) {
-    const bf = Math.min(BURST_FRAMES - 1, Math.floor((t / 0.55) * BURST_FRAMES));
-    drawRarityBurst(ctx, rarity, cx, iy + size / 2, { size: 48, scale, frame: bf });
+  if (reduced) return;
+
+  /* The landing beat. Ring and burst fire together and are gone inside a third
+   * of a second — a reward flash that outstays that stops being a punctuation
+   * mark and becomes a wait. */
+  if (t >= LAND_T && t < LAND_T + 0.30) {
+    const k = (t - LAND_T) / 0.30;
+    drawLootImpact(ctx, rarity, cx, groundY, {
+      width: 32 + style.index * 4, height: 16, scale,
+      frame: Math.min(IMPACT_FRAMES - 1, Math.floor(k * IMPACT_FRAMES)),
+    });
+    drawRarityBurst(ctx, rarity, cx, iy + size / 2, {
+      size: 48, scale, frame: Math.min(BURST_FRAMES - 1, Math.floor(k * BURST_FRAMES)),
+    });
   }
 }
 
@@ -1866,9 +2852,28 @@ export function drawLootDrop(ctx, item, cx, groundY, opts = {}) {
  * EQUIPPED GEAR ON THE HERO
  * ================================================================
  * Loot the player cannot see on the character is loot the player stops caring
- * about. These overlays composite onto the 16x24 hero from sprites.js at the
- * same anchors sprites.js uses internally, so a weapon drawn here lands in the
- * hand rather than beside it.
+ * about, and the reward loop of this whole game is "solve a problem, look
+ * different". So this section is not an accessory to the item icons; it is the
+ * payoff, and everything above it exists to feed it.
+ *
+ * There are two ways gear reaches the hero, and both are used, because
+ * sprites.js already parameterises half the character and re-drawing that half
+ * as an overlay would be worse art at twice the cost:
+ *
+ *   TINT     heroFrame() takes cloak, tunic, boot, trim, metal and weapon.
+ *            Chest, feet, hands and weapon choice go through those, which is
+ *            why a new pair of boots changes a 4-pixel foot correctly instead
+ *            of having a 4-pixel foot pasted over it one pixel off.
+ *            -> heroEquipOpts()
+ *
+ *   OVERLAY  A helm, a cuirass with pauldrons, bracers, a shield and the held
+ *            weapon are SHAPE, and shape cannot be tinted on. Those composite
+ *            over the 16x24 frame at the anchors below.
+ *            -> heroGearLayers() / equippedHeroFrame()
+ *
+ * The single call that does both is equippedHeroSprites(), which returns
+ * exactly the structure sprites.heroSprites() returns and can be assigned
+ * straight over it. See INTEGRATION at the bottom.
  *
  * sprites.js keeps WEAPON_ANCHOR private, so the values are mirrored here. If
  * that file's anchors move, these move with them — it is four numbers, and the
@@ -1880,8 +2885,11 @@ export const HERO_WEAPON_ANCHOR = Object.freeze({
 const HERO_SHIELD_ANCHOR = Object.freeze({
   down: [0, 10], up: [10, 10], left: [10, 10], right: [0, 10],
 });
-const HERO_HELM_ANCHOR = Object.freeze({ down: [3, 1], up: [3, 1], left: [3, 1], right: [3, 1] });
-const HERO_CLOAK_ANCHOR = Object.freeze({ down: [1, 10], up: [1, 10], left: [1, 10], right: [1, 10] });
+const HERO_HELM_ANCHOR = Object.freeze({ down: [3, 1], up: [3, 1], left: [2, 1], right: [4, 1] });
+/* The torso runs y9..y17 and spans x2..x13 on every facing, so one anchor
+ * serves all four and the cuirass never needs to be re-registered. */
+const HERO_CLOAK_ANCHOR = Object.freeze({ down: [1, 9], up: [1, 9], left: [1, 9], right: [1, 9] });
+const HERO_BRACER_ANCHOR = Object.freeze({ left: [0, 11], right: [11, 11] });
 
 /* Weapon overlays live in the same 6x12 box HERO_WEAPONS uses and share its
  * keys, so `heroWeaponKeyFor()` can also be handed straight to heroFrame() by
@@ -1909,38 +2917,152 @@ const HERO_WEAPON_ART = {
            '..oo..', '..s...', '..s...', '..oo..', '......', '......'],
 };
 
-const HERO_SHIELD_ART = [
-  '.oooo.', 'oBBBBo', 'oBmmBo', 'oBmmBo', 'oBBBBo', '.oBBo.', '..oo..', '......',
-];
-
-/* Three head silhouettes, because a crown that covers the face is a helm and a
- * helm that shows the hair is a headband. */
-const HERO_HEAD_ART = {
-  helm: [
-    '..oooooo..', '.oBBBBBBo.', 'oBBBBBBBBo', 'oBeeeeeeBo',
-    'oBBBBBBBBo', '.oBBBBBBo.', '..oooooo..', '..........', '..........',
-  ],
-  crown: [
-    '..o..o..o.', '.oggggggo.', '.ogmggmgo.', '.oyyyyyyo.',
-    '..........', '..........', '..........', '..........', '..........',
-  ],
-  hood: [
-    '..oooooo..', '.occcccco.', 'occcccccco', 'occeeeecco',
-    'occeeeecco', 'occcccccco', '.occcccco.', '..oooooo..', '..........',
-  ],
+/* The held weapon gets its own growth table, because the 24x24 one would not
+ * fit and because the hero's hand is where the player sees the weapon MOST —
+ * a Legendary that is unmistakable in the inventory and identical to an iron
+ * one in the field has put its effort in the wrong place. Six pixels of extra
+ * guard at 16px is a lot of guard. */
+const HERO_WEAPON_GROWTH = {
+  sword:  { 2: [[7, 0, 'ogggo']], 3: [[6, 0, 'o'], [6, 4, 'o'], [10, 0, 'ogggo']],
+            4: [[5, 0, 'o'], [5, 4, 'o'], [11, 1, 'ooo']], 5: [[4, 0, 'o'], [4, 4, 'o']] },
+  sabers: { 2: [[6, 0, 'ogggo']], 3: [[5, 0, 'o'], [5, 4, 'o']],
+            4: [[8, 0, 'ogggo'], [9, 1, 'ooo']], 5: [[4, 0, 'o'], [4, 4, 'o']] },
+  dagger: { 2: [[6, 0, 'ogggo']], 3: [[5, 0, 'o'], [5, 4, 'o']],
+            4: [[8, 0, 'ogggo'], [9, 1, 'ooo']], 5: [[4, 0, 'o'], [4, 4, 'o']] },
+  axe:    { 2: [[0, 0, 'oooooo'], [1, 0, 'oBBgBo']], 3: [[4, 0, 'oo'], [4, 4, 'oo']],
+            4: [[0, 5, 'o'], [3, 0, 'oBBBBo']], 5: [[2, 0, 'o'], [2, 5, 'o']] },
+  hammer: { 2: [[0, 0, 'oooooo']], 3: [[1, 0, 'oBBBBo'], [4, 0, 'oo'], [4, 4, 'oo']],
+            4: [[4, 0, 'oBBBBo']], 5: [[5, 0, 'o'], [5, 5, 'o']] },
+  spear:  { 2: [[2, 0, 'oBBBo']], 3: [[3, 0, 'ogggo']], 4: [[1, 0, 'o'], [1, 4, 'o']],
+            5: [[4, 0, 'o'], [4, 4, 'o']] },
+  lance:  { 2: [[3, 0, 'oBBBo']], 3: [[4, 0, 'ogggo']], 4: [[5, 0, 'o'], [5, 4, 'o']],
+            5: [[2, 0, 'o'], [2, 4, 'o']] },
+  staff:  { 2: [[2, 0, 'ogmgo']], 3: [[1, 0, 'ogggo'], [3, 0, 'ogggo']],
+            4: [[0, 1, 'ooo'], [4, 1, 'ooo']], 5: [[0, 0, 'o'], [0, 4, 'o']] },
+  bow:    { 2: [[0, 0, 'ooo']], 3: [[10, 0, 'ooo']], 4: [[5, 4, 'w'], [6, 4, 'w']],
+            5: [[4, 0, 'og'], [7, 0, 'og']] },
+  relic:  { 2: [[2, 0, 'ogmmo'], [5, 0, 'ogmmo']], 3: [[1, 1, 'oooo']],
+            4: [[0, 2, 'oo'], [6, 1, 'oooo']], 5: [[1, 0, 'o'], [1, 5, 'o']] },
 };
 
-const HERO_CLOAK_ART = {
-  front: [
-    'ocCCCCCCCCCCco', 'occcccccccccco', 'oc..........co', 'oc..........co',
-    'oc..........co', 'ov..........vo', 'ov..........vo', 'oo..........oo',
-    '..............', '..............',
-  ],
-  back: [
-    'ocCCCCCCCCCCco', 'occcccccccccco', 'occcccccccccco', 'occcccccccccco',
-    'occcccccccccco', 'occcccccccccco', 'ovvvvvvvvvvvvo', 'ovvvvvvvvvvvvo',
-    'oooooooooooooo', '..............',
-  ],
+/* Shields are held, so they turn with the body: face-on when the hero faces
+ * the camera, edge-on from the side. Two silhouettes, not one rotated. */
+const HERO_SHIELD_ART = {
+  face: ['.oooo.', 'oBBBBo', 'oBmmBo', 'oBmmBo', 'oBBBBo', '.oBBo.', '..oo..', '......'],
+  edge: ['..oo..', '.oBBo.', '.oBBo.', '.oBmo.', '.oBBo.', '.oBBo.', '..oo..', '......'],
+};
+
+/* Three head silhouettes, because a crown that covers the face is a helm and a
+ * helm that shows the hair is a headband — and each of the three gets a back
+ * and a side, because a visor slit drawn on the back of a head is the kind of
+ * mistake that makes a whole character look wrong without the player being
+ * able to say why. 10x9 at [3,1]; the head occupies y1..y8. */
+const HERO_HEAD_ART = {
+  helm: {
+    down: ['..oooooo..', '.oBBBBBBo.', 'oBBBBBBBBo', 'oBeeeeeeBo',
+           'oBBBBBBBBo', 'oBBBBBBBBo', '.oBBBBBBo.', '..oooooo..', '..........'],
+    up:   ['..oooooo..', '.oBBBBBBo.', 'oBBBBBBBBo', 'oBBBBBBBBo',
+           'oBBggggBBo', 'oBBBBBBBBo', '.oBBBBBBo.', '..oooooo..', '..........'],
+    side: ['..oooooo..', '.oBBBBBBo.', 'oBBBBBBBBo', 'oBBBeeeBBo',
+           'oBBBBBBBBo', 'oBBBBBBBBo', '.oBBBBBBo.', '..oooooo..', '..........'],
+  },
+  crown: {
+    down: ['..o..o..o.', '.oggggggo.', '.ogmggmgo.', '.oyyyyyyo.',
+           '..........', '..........', '..........', '..........', '..........'],
+    up:   ['..o..o..o.', '.oggggggo.', '.oggggggo.', '.oyyyyyyo.',
+           '..........', '..........', '..........', '..........', '..........'],
+    side: ['..o..o....', '.oggggo...', '.ogmggo...', '.oyyyyo...',
+           '..........', '..........', '..........', '..........', '..........'],
+  },
+  hood: {
+    down: ['..oooooo..', '.occcccco.', 'occcccccco', 'occeeeecco',
+           'occeeeecco', 'occcccccco', '.occcccco.', '..oooooo..', '..........'],
+    up:   ['..oooooo..', '.occcccco.', 'occcccccco', 'occcccccco',
+           'occcvvccco', 'occcccccco', '.occcccco.', '..oooooo..', '..........'],
+    side: ['..oooooo..', '.occcccco.', 'occcccccco', 'occceeecco',
+           'occcccccco', 'occcccccco', '.occcccco.', '..oooooo..', '..........'],
+  },
+};
+
+/* Body armour. 14 wide at x1, so it reaches one pixel past the torso on each
+ * side — which is exactly what a pauldron is. Four kinds, because a cuirass, a
+ * gambeson, a robe and a cloak are four different silhouettes and picking the
+ * wrong one is the difference between a knight and a wizard.
+ */
+const HERO_BODY_ART = {
+  /* A cuirass: pauldrons across the shoulder line at y10-y11 where a real
+   * pauldron sits, and a breastplate down the middle from y12 that stops
+   * short of the arms so the walk cycle still reads. Armour that covers the
+   * arms is armour that deletes the animation. */
+  plate: {
+    down: ['..oBBBBBBBBo..', 'oBBBBBBBBBBBBo', 'oBBBBBBBBBBBBo', '...oBBggBBo...',
+           '...oBBggBBo...', '...oggggggo...', '...oBBBBBBo...', '...oBBBBBBo...',
+           '....oooooo....'],
+    up:   ['..oBBBBBBBBo..', 'oBBBBBBBBBBBBo', 'oBBBBBBBBBBBBo', '...oBBBBBBo...',
+           '...oBggggBo...', '...oBggggBo...', '...oBBBBBBo...', '...oBBBBBBo...',
+           '....oooooo....'],
+    side: ['..oBBBBBBBBo..', '.oBBBBBBBBBBo.', '.oBBBBBBBBBBo.', '...oBggBBBo...',
+           '...oBBBBBBo...', '...oggggggo...', '...oBBBBBBo...', '...oBBBBBBo...',
+           '....oooooo....'],
+  },
+  /* A gambeson: no shoulder, just a padded jerkin. The difference from plate
+   * has to be in the OUTLINE — same reason the item icons grow. */
+  mail: {
+    down: ['..............', '...occcccco...', '...occcccco...', '...occggcco...',
+           '...occcccco...', '...occcccco...', '...occcccco...', '...oooooooo...',
+           '..............'],
+    up:   ['..............', '...occcccco...', '...occcccco...', '...occcccco...',
+           '...occggcco...', '...occcccco...', '...occcccco...', '...oooooooo...',
+           '..............'],
+    side: ['..............', '...occcccco...', '...occcccco...', '...occggcco...',
+           '...occcccco...', '...occcccco...', '...occcccco...', '...oooooooo...',
+           '..............'],
+  },
+  /* A robe reaches the floor and hides the walk cycle. That is not a bug: a
+   * robed caster gliding is the read we want, and it is the single clearest
+   * signal the chest slot has changed at all. */
+  robe: {
+    down: ['..occcccccco..', '..occcccccco..', '..occcccccco..', '..occcggccco..',
+           '..occcccccco..', '..occcccccco..', '..occcccccco..', '..occcccccco..',
+           '..occcccccco..', '..occcccccco..', '.occcccccccco.', '.occcccccccco.',
+           'occcccccccccco', 'ovvvvvvvvvvvvo', 'oooooooooooooo'],
+    up:   ['..occcccccco..', '..occcccccco..', '..occcccccco..', '..occcccccco..',
+           '..occcggccco..', '..occcccccco..', '..occcccccco..', '..occcccccco..',
+           '..occcccccco..', '..occcccccco..', '.occcccccccco.', '.occcccccccco.',
+           'occcccccccccco', 'ovvvvvvvvvvvvo', 'oooooooooooooo'],
+    side: ['..occcccccco..', '..occcccccco..', '..occcccccco..', '..occggcccco..',
+           '..occcccccco..', '..occcccccco..', '..occcccccco..', '..occcccccco..',
+           '..occcccccco..', '..occcccccco..', '.occcccccccco.', '.occcccccccco.',
+           'occcccccccccco', 'ovvvvvvvvvvvvo', 'oooooooooooooo'],
+  },
+  /* Facing away the cloak is the whole back; facing the camera it hangs behind
+   * the body and only its collar and its two front edges are visible. */
+  cloak: {
+    down: ['ocCCCCCCCCCCco', 'occcccccccccco', 'oc..........co', 'oc..........co',
+           'oc..........co', 'ov..........vo', 'ov..........vo', 'oo..........oo',
+           '..............', '..............'],
+    up:   ['ocCCCCCCCCCCco', 'occcccccccccco', 'occcccccccccco', 'occcccccccccco',
+           'occcccccccccco', 'occcccccccccco', 'occcccccccccco', 'occcccccccccco',
+           '.occcccccccco.', '.occcccccccco.', '.ovvvvvvvvvvo.', '..oooooooooo..',
+           '..............'],
+    side: ['ocCCCCCCCCCco.', 'occccccccccco.', 'occ.......cco.', 'occ.......cco.',
+           'occ.......cco.', 'ovv.......vvo.', 'ovv.......vvo.', 'ooo.......ooo.',
+           '..............', '..............'],
+  },
+};
+
+/* Bracers. Authored per arm rather than as one strip, because the two arms
+ * swing out of phase and a single strip would leave one cuff floating a pixel
+ * off the wrist on half the walk cycle. */
+const HERO_BRACER_ART = {
+  plate: {
+    left:  ['.oBBo', '.oBBo', '.oggo', '..oo.'],
+    right: ['oBBo.', 'oBBo.', 'oggo.', '.oo..'],
+  },
+  cloth: {
+    left:  ['.occo', '.occo', '.ovvo', '..oo.'],
+    right: ['occo.', 'occo.', 'ovvo.', '.oo..'],
+  },
 };
 
 const SHAPE_TO_HERO_WEAPON = {
@@ -1963,6 +3085,29 @@ function headArtFor(item) {
   return 'helm';
 }
 
+/* Which body silhouette a chest item wears. Driven off the resolved shape, so
+ * a robe from the catalogue and a robe invented tomorrow agree. */
+function bodyArtFor(item) {
+  const shape = resolveShape(item);
+  if (shape === 'plate' || shape === 'greaves' || shape === 'gauntlets') return 'plate';
+  if (shape === 'robe') return 'robe';
+  if (shape === 'cloak') return 'cloak';
+  return 'mail';
+}
+
+function bracerArtFor(item) {
+  return resolveShape(item) === 'wraps' ? 'cloth' : 'plate';
+}
+
+/* Down and up are authored; left and right share one side drawing, because a
+ * torso seen from either side is the same torso. */
+function facingArt(table, facing) {
+  if (!table) return null;
+  if (facing === 'up') return table.up || table.down;
+  if (facing === 'left' || facing === 'right') return table.side || table.down;
+  return table.down;
+}
+
 /* Pose offsets, mirroring heroFrame(). The weapon rises on a cast and settles
  * on an idle; the head sinks a pixel on an idle because the body does. Getting
  * this wrong is not subtle — the sword detaches from the hand. */
@@ -1974,12 +3119,25 @@ function poseOffsets(facing, pose, frame) {
   return { weaponDY: pass ? -1 : 0, bodyDY: pass ? -1 : 0 };
 }
 
-const overlayCache = cappedCache(384);
+/* The arms swing out of phase by a row: on frame 0 the right hand is dropped,
+ * on frame 2 the left one is. HERO_ARMS in sprites.js says so, and a cuff that
+ * ignores it floats. Idle and cast hold both arms level. */
+function armOffsets(pose, frame) {
+  if (pose !== 'walk') return { left: pose === 'idle' ? 1 : -2, right: pose === 'idle' ? 1 : -2 };
+  const f = ((frame % 4) + 4) % 4;
+  return { left: f === 2 ? 1 : 0, right: f === 0 ? 1 : 0 };
+}
 
-/* Overlays get the same rarity ladder as the inventory icon, minus the
- * corruption pass — a 6x12 box does not have room for voids and a fracture
- * without dissolving, and a weapon that dissolves at 16px reads as damage. */
-function overlaySprite(art, item, w, h, frame, tag) {
+const overlayCache = cappedCache(512);
+
+/* Overlays get the same rarity ladder as the inventory icon, minus the passes
+ * that need room: a 6x12 box cannot hold voids and a fracture without
+ * dissolving, and a weapon that dissolves at 16px reads as damage rather than
+ * as Mythic. Growth, fittings, runes, gilding and the animated glint all
+ * survive the small box and all of them are visible at 3x, which is the scale
+ * the overworld actually draws at.
+ */
+function overlaySprite(art, item, w, h, frame, tag, growth) {
   const shapeKey = resolveShape(item);
   const shape = SHAPES[shapeKey] || SHAPES.relic;
   const rarity = normaliseRarity(item && item.rarity);
@@ -1988,10 +3146,33 @@ function overlaySprite(art, item, w, h, frame, tag) {
   const f = ((frame % style.frames) + style.frames) % style.frames;
   const key = `${tag}:${shapeKey}:${rarity}:${seed}:${f}`;
   return overlayCache.get(key, () => {
-    let g = applyRim(art);
+    let g = art;
+    if (style.grow > 0 && growth) {
+      const cells = toCells(g);
+      for (let lv = 2; lv <= style.grow; lv++) stamp(cells, growth[lv]);
+      g = toRows(cells);
+    }
+    g = ornament(g, { gem: null, gem2: null }, compactStyle(style), seed, f);
+    g = applyRim(g);
     g = animate(g, style, f, seed);
     return gridSprite(g, rarityPalette(shape.mat, rarity), w, h);
   });
+}
+
+/* The ornament level a small box can carry. Bands, a stone and runes read at
+ * 6x12; a faceted crystal, a pennant and a scar do not — they turn into three
+ * loose pixels. Clamping here rather than at the call site keeps the rule in
+ * one place. */
+const compactCache = new Map();
+function compactStyle(style) {
+  if (compactCache.has(style.key)) return compactCache.get(style.key);
+  const out = Object.freeze({
+    ...style,
+    ornament: Math.min(3, style.ornament),
+    crystal: false, pennant: false, engrave: false, history: false,
+  });
+  compactCache.set(style.key, out);
+  return out;
 }
 
 /* Each of these returns { canvas, ox, oy } in hero-sprite coordinates, so the
@@ -2001,10 +3182,14 @@ export function heroWeaponOverlay(item, opts = {}) {
   if (!item) return null;
   const facing = HERO_WEAPON_ANCHOR[opts.facing] ? opts.facing : 'down';
   const frame = frameFor(item, opts);
-  const art = HERO_WEAPON_ART[heroWeaponKeyFor(item)] || HERO_WEAPON_ART.sword;
+  const key = heroWeaponKeyFor(item);
+  const art = HERO_WEAPON_ART[key] || HERO_WEAPON_ART.sword;
   const [ax, ay] = HERO_WEAPON_ANCHOR[facing];
   const { weaponDY } = poseOffsets(facing, opts.pose || 'walk', opts.frameIndex || 0);
-  return { canvas: overlaySprite(art, item, 6, 12, frame, 'wpn'), ox: ax, oy: ay + weaponDY };
+  return {
+    canvas: overlaySprite(art, item, 6, 12, frame, 'wpn', HERO_WEAPON_GROWTH[key]),
+    ox: ax, oy: ay + weaponDY,
+  };
 }
 
 export function heroShieldOverlay(item, opts = {}) {
@@ -2013,34 +3198,90 @@ export function heroShieldOverlay(item, opts = {}) {
   const frame = frameFor(item, opts);
   const [ax, ay] = HERO_SHIELD_ANCHOR[facing];
   const { bodyDY } = poseOffsets(facing, opts.pose || 'walk', opts.frameIndex || 0);
-  return { canvas: overlaySprite(HERO_SHIELD_ART, item, 6, 8, frame, 'shd'), ox: ax, oy: ay + bodyDY };
+  const edge = facing === 'left' || facing === 'right';
+  const art = edge ? HERO_SHIELD_ART.edge : HERO_SHIELD_ART.face;
+  return {
+    canvas: overlaySprite(art, item, 6, 8, frame, edge ? 'shdE' : 'shdF'),
+    ox: ax, oy: ay + bodyDY,
+  };
 }
 
 export function heroHelmOverlay(item, opts = {}) {
   if (!item) return null;
   const facing = HERO_HELM_ANCHOR[opts.facing] ? opts.facing : 'down';
   const frame = frameFor(item, opts);
-  const art = HERO_HEAD_ART[headArtFor(item)];
+  const kind = headArtFor(item);
+  const art = facingArt(HERO_HEAD_ART[kind], facing);
   const [ax, ay] = HERO_HELM_ANCHOR[facing];
   const { bodyDY } = poseOffsets(facing, opts.pose || 'walk', opts.frameIndex || 0);
-  return { canvas: overlaySprite(art, item, 10, 9, frame, 'hlm'), ox: ax, oy: ay + bodyDY };
+  return {
+    canvas: overlaySprite(art, item, 10, 9, frame, `hlm${kind}${facing === 'up' ? 'U' : facing === 'down' ? 'D' : 'S'}`),
+    ox: ax, oy: ay + bodyDY,
+  };
 }
 
-export function heroCloakOverlay(item, opts = {}) {
+/* The chest slot, and the one the audit was really about: a cuirass with
+ * pauldrons, a gambeson, a robe to the floor or a cloak, chosen by shape and
+ * sized to the torso rather than pasted near it. */
+export function heroChestOverlay(item, opts = {}) {
   if (!item) return null;
   const facing = HERO_CLOAK_ANCHOR[opts.facing] ? opts.facing : 'down';
+  const kind = bodyArtFor(item);
+  const art = facingArt(HERO_BODY_ART[kind], facing);
+  if (!art) return null;
   const frame = frameFor(item, opts);
-  const art = HERO_CLOAK_ART[facing === 'up' ? 'back' : 'front'];
   const [ax, ay] = HERO_CLOAK_ANCHOR[facing];
   const { bodyDY } = poseOffsets(facing, opts.pose || 'walk', opts.frameIndex || 0);
-  return { canvas: overlaySprite(art, item, 14, 10, frame, 'clk'), ox: ax, oy: ay + bodyDY };
+  const tag = `bdy${kind}${facing === 'up' ? 'U' : facing === 'down' ? 'D' : 'S'}`;
+  return {
+    canvas: overlaySprite(art, item, 14, art.length, frame, tag),
+    ox: ax, oy: ay + bodyDY,
+  };
+}
+
+/* Kept because it is exported and other code may hold a reference. A cloak is
+ * one of the four body silhouettes now, so this is the chest overlay with the
+ * kind forced. */
+export function heroCloakOverlay(item, opts = {}) {
+  return heroChestOverlay(item, opts);
+}
+
+/* Bracers, as two layers. See armOffsets(): the arms swing a row out of phase
+ * and one strip cannot follow both. */
+export function heroHandsOverlays(item, opts = {}) {
+  if (!item) return [];
+  const facing = ['down', 'up', 'left', 'right'].includes(opts.facing) ? opts.facing : 'down';
+  const kind = bracerArtFor(item);
+  const frame = frameFor(item, opts);
+  const pose = opts.pose || 'walk';
+  const { bodyDY } = poseOffsets(facing, pose, opts.frameIndex || 0);
+  const swing = armOffsets(pose, opts.frameIndex || 0);
+  const out = [];
+  for (const side of ['left', 'right']) {
+    /* Facing sideways only the near arm is drawn by sprites.js, so only the
+     * near bracer is drawn here. A cuff hanging in space behind the shoulder
+     * is the exact artefact this whole file is trying to avoid. */
+    if (facing === 'left' && side === 'right') continue;
+    if (facing === 'right' && side === 'left') continue;
+    const [ax, ay] = HERO_BRACER_ANCHOR[side];
+    out.push({
+      canvas: overlaySprite(HERO_BRACER_ART[kind][side], item, 5, 4, frame, `brc${kind}${side}`),
+      ox: ax, oy: ay + bodyDY + swing[side],
+    });
+  }
+  return out;
+}
+
+export function heroHandsOverlay(item, opts = {}) {
+  return heroHandsOverlays(item, opts)[0] || null;
 }
 
 export function gearOverlay(kind, item, opts = {}) {
   if (kind === 'weapon') return heroWeaponOverlay(item, opts);
   if (kind === 'offhand' || kind === 'shield') return heroShieldOverlay(item, opts);
   if (kind === 'head' || kind === 'helm') return heroHelmOverlay(item, opts);
-  if (kind === 'chest' || kind === 'cloak' || kind === 'back') return heroCloakOverlay(item, opts);
+  if (kind === 'chest' || kind === 'cloak' || kind === 'back') return heroChestOverlay(item, opts);
+  if (kind === 'hands') return heroHandsOverlay(item, opts);
   return null;
 }
 
@@ -2051,14 +3292,29 @@ export function gearOverlay(kind, item, opts = {}) {
 export function heroGearLayers(gear, opts = {}) {
   const g = gear || {};
   const facing = ['down', 'up', 'left', 'right'].includes(opts.facing) ? opts.facing : 'down';
+  const o = { ...opts, facing };
   const behind = [], front = [];
-  const cloak = heroCloakOverlay(g.chest || g.cloak || g.back, { ...opts, facing });
-  if (cloak) (facing === 'up' ? front : behind).push(cloak);
-  const weapon = heroWeaponOverlay(g.weapon, { ...opts, facing });
+  /* A cloak is worn BEHIND the body when the hero faces the camera and IS the
+   * body when they face away; a cuirass, a jerkin and a robe are worn OVER the
+   * body from every angle. Getting that backwards is why the audit found the
+   * payoff dead: the armour was being drawn and then painted over by the hero
+   * it was supposed to be on. */
+  const back = g.back || g.cloak;
+  if (back && back !== g.chest) {
+    const layer = heroChestOverlay(back, o);
+    if (layer) (facing === 'up' ? front : behind).push(layer);
+  }
+  const chest = heroChestOverlay(g.chest, o);
+  if (chest) {
+    const isCloak = bodyArtFor(g.chest) === 'cloak';
+    (isCloak && facing !== 'up' ? behind : front).push(chest);
+  }
+  const weapon = heroWeaponOverlay(g.weapon, o);
   if (weapon) (facing === 'up' ? behind : front).push(weapon);
-  const shield = heroShieldOverlay(g.offhand, { ...opts, facing });
+  const shield = heroShieldOverlay(g.offhand, o);
   if (shield) (facing === 'up' ? behind : front).push(shield);
-  const helm = heroHelmOverlay(g.head, { ...opts, facing });
+  for (const b of heroHandsOverlays(g.hands, o)) front.push(b);
+  const helm = heroHelmOverlay(g.head, o);
   if (helm) front.push(helm);
   return { behind, front };
 }
@@ -2098,6 +3354,115 @@ export function heroWithGear(heroCanvas, gear, opts = {}) {
   return canvas;
 }
 
+/* ---------------- the tint half ----------------
+ * The half of the character sprites.js already parameterises. Everything here
+ * returns an opts object for heroFrame()/heroSprites(); nothing here draws.
+ */
+
+/* The best thing the player is wearing. Used for the trim, which is the one
+ * accent colour that runs across the whole character — so the hero picks up
+ * the colour of their proudest piece rather than of whatever the chest slot
+ * happens to hold. */
+export function gearRarity(gear) {
+  const g = gear || {};
+  let best = 'COMMON';
+  for (const k of ['weapon', 'offhand', 'head', 'chest', 'hands', 'feet', 'back', 'cloak']) {
+    const it = g[k];
+    if (!it) continue;
+    const r = normaliseRarity(it.rarity);
+    if (rarityStyle(r).index > rarityStyle(best).index) best = r;
+  }
+  return best;
+}
+
+function materialFor(item, fallback) {
+  const st = rarityStyle(item && item.rarity);
+  const mat = MATERIAL[shapeMaterial(resolveShape(item))] || MATERIAL[fallback];
+  return st.material(mat);
+}
+
+/* Equipment as heroFrame() options. This is the cheap half of the payoff and
+ * the half that needs no second draw pass: boots recolour the boot, a chest
+ * recolours the tunic and cloak, gauntlets recolour the metal, and the trim
+ * takes the colour of the best piece worn. Pass `base` to keep a region or
+ * NPC palette underneath.
+ */
+export function heroEquipOpts(gear, base) {
+  const g = gear || {};
+  /* heroOpts() in sprites.js treats an object carrying `sky` and `ground` as a
+   * REGION PALETTE and throws the rest of it away, keeping only `accent` as
+   * the trim. Spreading a region palette in here and then writing cloak and
+   * boot onto it would therefore silently lose every one of them — the gear
+   * would be equipped and invisible, which is the exact bug this whole section
+   * exists to fix. Translate it instead. */
+  const isPalette = base && base.sky && base.ground;
+  const out = isPalette ? (base.accent ? { trim: base.accent } : {}) : { ...(base || {}) };
+  const chest = g.chest || g.back || g.cloak;
+  if (chest) {
+    out.cloak = materialFor(chest, 'cloth');
+    out.tunic = materialFor(chest, 'cloth');
+  }
+  if (g.feet) out.boot = materialFor(g.feet, 'leather');
+  if (g.hands) out.metal = materialFor(g.hands, 'steel');
+  if (g.weapon) out.weapon = heroWeaponKeyFor(g.weapon);
+  const best = gearRarity(g);
+  if (best !== 'COMMON') out.trim = rarityStyle(best).colour;
+  return out;
+}
+
+/* ---------------- the whole character, in one call ----------------
+ * A drop-in for sprites.heroFrame() and sprites.heroSprites(). Same arguments,
+ * same return shapes, gear composited in. This is deliberately a superset
+ * rather than a new API: the wiring in main.js and overworld.js is then one
+ * assignment rather than a restructuring of every draw site, and the fewer
+ * lines a payoff needs the more likely it is to actually get wired up.
+ */
+const equippedCache = cappedCache(256);
+
+function equipKey(gear, opts, facing, frame, pose) {
+  const g = gear || {};
+  let k = `${facing}:${frame}:${pose}`;
+  for (const slot of ['weapon', 'offhand', 'head', 'chest', 'hands', 'feet', 'back', 'cloak']) {
+    const it = g[slot];
+    k += `|${it ? `${it.id || it.name || '?'}:${normaliseRarity(it.rarity)}` : ''}`;
+  }
+  const o = opts || {};
+  k += `|${o.cloak || ''}${o.tunic || ''}${o.skin || ''}${o.hair || ''}${o.boot || ''}${o.trim || ''}${o.metal || ''}`;
+  return k;
+}
+
+export function equippedHeroFrame(facing = 'down', frame = 0, gear = null, opts = null, pose = 'walk') {
+  const dir = ['down', 'up', 'left', 'right'].includes(facing) ? facing : 'down';
+  const f = ((frame % 4) + 4) % 4;
+  const tint = heroEquipOpts(gear, opts);
+  const key = equipKey(gear, tint, dir, f, pose);
+  return equippedCache.get(key, () => heroWithGear(
+    heroFrame(dir, f, tint, pose), gear,
+    /* Frame 0 of the item animation: an overworld hero at 3x is not the place
+     * for a drifting specular, and pinning it keeps the cache key finite. */
+    { facing: dir, pose, frameIndex: f, frame: 0 }));
+}
+
+/* Identical in shape to sprites.heroSprites(), so it can be assigned straight
+ * over it:  this.hero = lootart.equippedHeroSprites(G.equipped, palette); */
+export function equippedHeroSprites(gear, opts) {
+  const out = {};
+  for (const facing of ['down', 'up', 'left', 'right']) {
+    out[facing] = [0, 1, 2, 3].map(f => equippedHeroFrame(facing, f, gear, opts, 'walk'));
+  }
+  out.side = out.right;
+  out.idle = {};
+  out.cast = {};
+  for (const facing of ['down', 'up', 'left', 'right']) {
+    out.idle[facing] = [equippedHeroFrame(facing, 1, gear, opts, 'idle'),
+                        equippedHeroFrame(facing, 3, gear, opts, 'walk')];
+    out.cast[facing] = equippedHeroFrame(facing, 0, gear, opts, 'cast');
+  }
+  out.idle.side = out.idle.right;
+  out.cast.side = out.cast.right;
+  return out;
+}
+
 /* Render a base shape directly, without an item dict. Useful for anything that
  * wants the ladder applied to a known silhouette — a vendor stall, a boss
  * trophy, a set preview — and it is what the art harness renders to prove every
@@ -2109,7 +3474,7 @@ export function shapeGrid(shapeKey, rarity, opts = {}) {
   const seed = opts.seed === undefined ? (hash(shapeKey) || 1) : opts.seed;
   const f = ((opts.frame || 0) % style.frames + style.frames) % style.frames;
   const key = `shape:${shapeKey}:${style.key}:${seed}:${f}`;
-  return gridCache.get(key, () => applyRarity(shape.grid, style.key, { shape, seed, frame: f }));
+  return gridCache.get(key, () => applyRarity(shape.grid, style.key, { shape, shapeKey, seed, frame: f }));
 }
 
 export function shapeSprite(shapeKey, rarity, opts = {}) {
@@ -2133,6 +3498,8 @@ export function shapeMaterial(shapeKey) {
 export function clearLootArtCache() {
   gridCache.clear(); spriteCache.clear(); beamCache.clear();
   burstCache.clear(); cardCache.clear(); overlayCache.clear();
+  impactCache.clear(); poolCache.clear(); equippedCache.clear();
+  paletteCache.clear();
 }
 
 export function lootArtStats() {
@@ -2142,39 +3509,32 @@ export function lootArtStats() {
     grids: gridCache.size,
     sprites: spriteCache.size,
     overlays: overlayCache.size,
+    heroes: equippedCache.size,
+    drop: beamCache.size + burstCache.size + impactCache.size + poolCache.size,
   };
 }
 
 /* ================================================================
  * INTEGRATION
  * ================================================================
- * This module writes nothing and owns no canvas. Wiring is four edits.
+ * This module writes nothing and owns no canvas. Wiring is four edits, and the
+ * third one is the one that matters.
  *
- * 1) web/js/main.js — replace itemIcon(). The current version rasterises an
- *    8x8 pixel.icon into a canvas sized by CSS. The replacement:
+ * 1) web/js/main.js — itemIcon(). Already wired. For Epic and above the icon is
+ *    animated: either pass `time` from an existing rAF tick and redraw, or
+ *    leave it static in list views and animate only the detail panel. Both are
+ *    correct; a list of forty animated icons is not.
  *
- *      import * as lootart from './lootart.js';
+ *      lootart.drawItem(ctx, item, 0, 0, { scale, time: performance.now() });
  *
- *      function itemIcon(item, size = 28) {
- *        const scale = Math.max(1, Math.round(size / lootart.ITEM_SIZE));
- *        const px = lootart.ITEM_SIZE * scale;
- *        const canvas = document.createElement('canvas');
- *        canvas.width = px; canvas.height = px;
- *        canvas.style.width = canvas.style.height = size + 'px';
- *        canvas.style.imageRendering = 'pixelated';
- *        const ctx = canvas.getContext('2d');
- *        ctx.imageSmoothingEnabled = false;
- *        lootart.drawItem(ctx, item, 0, 0, { scale });
- *        return canvas;
- *      }
+ * 2) The drop moment. Already wired through drawLootDrop(). `t` is 0..1 across
+ *    the arrival and the three beats now land at fixed times — fall to 0.30,
+ *    impact at 0.30, settle to 0.52, hold after. Drive it from a real clock:
  *
- *    For Epic and above the icon is animated. Either pass `time` from an
- *    existing rAF tick and redraw, or leave it static in list views and animate
- *    only the detail panel. Both are correct; a list of forty animated icons is
- *    not.
+ *      lootart.drawLootDrop(ctx, item, cx, groundY,
+ *        { scale: 2, t: dropProgress, time, reducedMotion: this.reducedMotion });
  *
- * 2) The drop moment. Wherever a reward is currently announced, give it a
- *    canvas of CARD_W x CARD_H scaled 3x or 4x and call:
+ *    For a modal instead of an in-scene drop, the framed card is unchanged:
  *
  *      lootart.drawLootCard(ctx, item, 0, 0, { scale: 4, time });
  *
@@ -2183,29 +3543,53 @@ export function lootArtStats() {
  *    either unreadable or a second font engine, and DOM text stays selectable
  *    and readable by a screen reader.
  *
- *    For a drop inside the battle scene instead, fx.js already owns a canvas
- *    and a clock, so one call per frame does the whole moment:
+ * 3) GEAR ON THE HERO — the payoff, and currently the only part not wired.
+ *    Everything above it exists to feed this, and it is ONE assignment:
  *
- *      lootart.drawLootDrop(ctx, item, cx, groundY,
- *        { scale: 2, t: dropProgress, time, reducedMotion: this.reducedMotion });
+ *      // web/js/main.js, wherever equipment changes:
+ *      G.overworld.hero = lootart.equippedHeroSprites(G.equipped);
  *
- * 3) Gear on the hero. Wherever heroFrame() is drawn, wrap it:
+ *    equippedHeroSprites() returns exactly what sprites.heroSprites() returns —
+ *    { down, up, left, right, side, idle, cast } — with the helm, cuirass,
+ *    bracers, shield and weapon composited in and the boot, tunic, cloak, metal
+ *    and trim colours taken from what is worn. Nothing downstream changes.
  *
- *      const layers = lootart.heroGearLayers(G.equipped,
- *        { facing, pose, frameIndex: frame, time });
- *      lootart.drawHeroGear(ctx, layers.behind, x, y, scale);
- *      ctx.drawImage(sprites.scaleSprite(sprites.heroFrame(facing, frame, opts, pose), scale), x, y);
- *      lootart.drawHeroGear(ctx, layers.front, x, y, scale);
+ *    Overworld already has the seam for it; it currently calls heroSprites()
+ *    directly and nobody calls it:
  *
- *    `G.equipped` is read for the keys weapon, offhand, head and chest only;
- *    anything else on the object is ignored. A cheaper option that needs no
- *    second pass is to keep sprites.js drawing the weapon and just tell it
- *    which one: `opts.weapon = lootart.heroWeaponKeyFor(G.equipped.weapon)`.
+ *      // web/js/overworld.js — setEquipment(), one line:
+ *      setEquipment(gear) { this.hero = lootart.equippedHeroSprites(gear); }
+ *      // web/js/main.js — after equip/unequip and after loading a save:
+ *      G.overworld.setEquipment(G.equipped);
+ *
+ *    In the battle scene, fx.js builds its hero the same way at line ~430:
+ *
+ *      this.hero = lootart.equippedHeroSprites(gear, pixel.PALETTES[heroPalette]);
+ *
+ *    `G.equipped` is read for weapon, offhand, head, chest, hands, feet and
+ *    back only; anything else on the object is ignored, and a missing slot is
+ *    simply not drawn.
+ *
+ *    Two cheaper options exist and both are strictly worse, but both are one
+ *    line and neither needs a second draw pass, so they are listed:
+ *      - tint only:    sprites.heroSprites(lootart.heroEquipOpts(G.equipped))
+ *      - weapon only:  opts.weapon = lootart.heroWeaponKeyFor(G.equipped.weapon)
+ *
+ *    For a paperdoll in the GEAR panel, heroWithGear() composites onto a hero
+ *    canvas you already have, and equippedHeroFrame() builds the whole thing:
+ *
+ *      const img = lootart.equippedHeroFrame('down', 1, G.equipped, null, 'idle');
+ *      ctx.drawImage(sprites.scaleSprite(img, 4), x, y);
  *
  * 4) Reduced motion. Call `lootart.setReducedMotion(v)` from the same place
  *    that calls `BattleFX.setReducedMotion(v)`. Every animated path here also
  *    takes a per-call `reducedMotion` override, so fx.js can pass its own flag
  *    without the module-level default being set at all.
+ *
+ * Caches: everything is keyed and capped. equippedHeroSprites() builds 20
+ * canvases per distinct loadout and caches them, so calling it on every equip
+ * is free after the first; calling it every frame is not, and there is no
+ * reason to.
  *
  * Nothing in this module reads game state, calls the API, or knows what a
  * problem is. It takes the item dict the backend already sends and draws it.

@@ -6,8 +6,8 @@ from collections import deque
 from ._base import code_problem
 from ._tree import PREAMBLE, TreeNode, to_tree, from_tree, tree_ref
 
-Q = {"QUORA": 3.0, "GENERAL_SWE": 2.5, "SECURITY_ENGINEERING": 1.0}
-QS = {"QUORA": 1.0, "GENERAL_SWE": 1.0, "SECURITY_ENGINEERING": 3.0}
+Q = {"PRACTICAL": 3.0, "GENERAL_SWE": 2.5, "SECURITY_ENGINEERING": 1.0}
+QS = {"PRACTICAL": 1.0, "GENERAL_SWE": 1.0, "SECURITY_ENGINEERING": 3.0}
 VIZ = {"type": "tree", "caption": "The dungeon physically branches."}
 TREE_HINT = "root is a TreeNode with .val, .left and .right; children may be None"
 
@@ -222,7 +222,7 @@ def build() -> list:
               "the whole function.",
         visual="Ask both branches how tall they are, take the taller, add yourself.",
         pseudocode="if node is None: 0 else 1 + max(depth(left), depth(right))",
-        tags=["core", "quora"],
+        tags=["core", "practical"],
     ))
 
     P.append(code_problem(
@@ -258,7 +258,7 @@ def build() -> list:
     P.append(code_problem(
         id="tr-validate-bst", title="The Tree Dragon", pattern="TREE", difficulty="MEDIUM",
         family="bst", secondary=["RECURSION", "DFS"], boss=True, **common,
-        source_type="REPORTED_INTERVIEW", company="Quora", year="reported pattern",
+        source_type="REPORTED_INTERVIEW", year="reported pattern",
         provenance="Validating a BST is a repeatedly reported screen archetype.",
         statement="""
             Return `True` if the tree is a valid binary search tree: every value in a
@@ -305,13 +305,13 @@ def build() -> list:
         alternates=[{"name": "in-order traversal must be strictly increasing",
                      "note": "Equally valid and often easier to explain aloud.",
                      "complexity": "O(n)"}],
-        tags=["core", "quora", "boss"],
+        tags=["core", "practical", "boss"],
     ))
 
     P.append(code_problem(
         id="tr-path-sum", title="The Path-Sum Ent", pattern="TREE", difficulty="EASY",
         family="tree_paths", secondary=["RECURSION", "DFS"], **common,
-        source_type="REPORTED_INTERVIEW", company="Quora", year="reported pattern",
+        source_type="REPORTED_INTERVIEW", year="reported pattern",
         provenance="Path-sum variants are a repeatedly reported archetype.",
         statement="""
             Return `True` if any root-to-leaf path sums to `target`. A leaf is a node with
@@ -342,7 +342,7 @@ def build() -> list:
         nudge="Only a leaf may declare victory. A node with one child is not a leaf.",
         visual="Subtract as you descend. At a leaf, the remainder must be exactly zero.",
         pseudocode="leaf -> val == target; else -> either child with target - val",
-        variants=["tr-all-path-sums"], tags=["core", "quora"],
+        variants=["tr-all-path-sums"], tags=["core", "practical"],
     ))
 
     P.append(code_problem(
@@ -435,7 +435,7 @@ def build() -> list:
                 for _ in range(len(queue)):   # snapshot first
                     pop, record, enqueue children
         """,
-        variants=["tr-right-view"], tags=["core", "quora"],
+        variants=["tr-right-view"], tags=["core", "practical"],
     ))
 
     P.append(code_problem(
@@ -624,7 +624,7 @@ def build() -> list:
         family="tree_serialize", secondary=["RECURSION", "STRING"], boss=True,
         **{k: v for k, v in common.items()
            if k not in ("preamble", "arg_adapters", "starter_hint")},
-        source_type="REPORTED_INTERVIEW", company="Quora", year="reported pattern",
+        source_type="REPORTED_INTERVIEW", year="reported pattern",
         provenance="Serialize/deserialize is a repeatedly reported hard-tier archetype.",
         statement="""
             Implement `round_trip(values)`: build a tree from the level-order `values`,
@@ -717,7 +717,7 @@ def to_level_order(node):
             serialize:   None -> '#'; else val, serialize(left), serialize(right)
             deserialize: token '#' -> None; else node, left = build(), right = build()
         """,
-        tags=["core", "quora", "hard", "boss"],
+        tags=["core", "practical", "hard", "boss"],
     ))
 
     P.append(code_problem(

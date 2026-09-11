@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from ._base import code_problem
 
-Q = {"QUORA": 3.0, "GENERAL_SWE": 2.0, "SECURITY_ENGINEERING": 1.0}
-QS = {"QUORA": 1.0, "GENERAL_SWE": 1.0, "SECURITY_ENGINEERING": 3.0}
+Q = {"PRACTICAL": 3.0, "GENERAL_SWE": 2.0, "SECURITY_ENGINEERING": 1.0}
+QS = {"PRACTICAL": 1.0, "GENERAL_SWE": 1.0, "SECURITY_ENGINEERING": 3.0}
 VIZ = {"type": "two_pointer", "caption": "Two runners, closing or chasing."}
 PSEUDO = """
 lo, hi = 0, len(data) - 1

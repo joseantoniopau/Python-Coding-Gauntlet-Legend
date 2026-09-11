@@ -27,7 +27,7 @@ from __future__ import annotations
 from ._base import code_problem, dedent
 from ._tree import PREAMBLE as TREE_PREAMBLE, tree_ref
 
-Q = {"QUORA": 2.0, "GENERAL_SWE": 2.0, "SECURITY_ENGINEERING": 1.5}
+Q = {"PRACTICAL": 2.0, "GENERAL_SWE": 2.0, "SECURITY_ENGINEERING": 1.5}
 
 # Appended to every statement. The player must know that the rest of the function
 # is not under suspicion, or they will read the whole thing looking for a second bug.
@@ -641,7 +641,7 @@ def build() -> list:
         """,
         blanks=[("counts.get(ch, 0) + 1", "build the tally for this character"),
                 ("counts[ch] == 1", "this character's total over the whole string is one")],
-        visible=[("classic", ["leetcode"]), ("late answer", ["loveleetcode"])],
+        visible=[("classic", ["sandstorm"]), ("late answer", ["loveleetcode"])],
         hidden=[("none unique", ["aabb"]), ("first is unique", ["abab" + "c"])],
         edges=[("empty", [""]), ("single", ["z"])],
         failures=["Returning the character instead of its index",

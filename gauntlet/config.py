@@ -22,6 +22,10 @@ def data_dir() -> Path:
         p = Path(override).expanduser()
     elif sys.platform == "darwin":
         p = Path.home() / "Library" / "Application Support" / "GauntletLegend"
+    elif os.name == "nt":
+        # %APPDATA% is the roaming profile, which is where a save game belongs.
+        base = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
+        p = Path(base) / "GauntletLegend"
     else:
         p = Path.home() / ".local" / "share" / "gauntlet-legend"
     p.mkdir(parents=True, exist_ok=True)
@@ -58,5 +62,16 @@ MANA_MAX = 30
 MODE_ADVENTURE = "adventure"
 MODE_INTERVIEW = "interview"
 
-INTERVIEW_PROFILES = ("GENERAL_SWE", "QUORA", "SECURITY_ENGINEERING", "CUSTOM")
-DEFAULT_PROFILE = "QUORA"
+INTERVIEW_PROFILES = ("GENERAL_SWE", "PRACTICAL", "SECURITY_ENGINEERING", "CUSTOM")
+DEFAULT_PROFILE = "PRACTICAL"
+
+def normalise_profile(name: str | None) -> str:
+    """Resolve a stored profile id, however old, to one we still serve.
+
+    The profile id is written into saves, and this build renamed one, so a save
+    from an older build carries an id that no longer exists. Falling back to the
+    default is the whole migration: there is nothing to preserve beyond "keep
+    the game playable", and an unknown id should never strand a run.
+    """
+    name = (name or "").strip().upper()
+    return name if name in INTERVIEW_PROFILES else DEFAULT_PROFILE

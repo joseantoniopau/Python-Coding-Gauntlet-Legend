@@ -5,8 +5,8 @@ from functools import lru_cache
 
 from ._base import code_problem
 
-Q = {"QUORA": 2.5, "GENERAL_SWE": 2.5, "SECURITY_ENGINEERING": 1.0}
-QS = {"QUORA": 1.0, "GENERAL_SWE": 1.0, "SECURITY_ENGINEERING": 3.0}
+Q = {"PRACTICAL": 2.5, "GENERAL_SWE": 2.5, "SECURITY_ENGINEERING": 1.0}
+QS = {"PRACTICAL": 1.0, "GENERAL_SWE": 1.0, "SECURITY_ENGINEERING": 3.0}
 VIZ_R = {"type": "recursion", "caption": "Nested rooms; you return carrying results."}
 VIZ_DP = {"type": "dp", "caption": "Solved tiles light up and are reused."}
 
@@ -277,7 +277,7 @@ def build() -> list:
         id="rc-digit-reduce", title="The Reducing Rite", realm="recursive_forest",
         pattern="RECURSION", difficulty="EASY", family="recursion_basics",
         profile_weight=Q, viz=VIZ_R,
-        source_type="REPORTED_INTERVIEW", company="Quora", year="reported pattern",
+        source_type="REPORTED_INTERVIEW", year="reported pattern",
         provenance="Recursive number reduction is a repeatedly reported warm-up archetype.",
         statement="""
             Repeatedly replace `n` with the sum of its digits until a single digit remains.
@@ -302,7 +302,7 @@ def build() -> list:
         nudge="Count the transformations, not the result.",
         visual="A number folds into itself until it cannot fold again.",
         pseudocode="while n >= 10: n = sum of digits; steps += 1",
-        tags=["core", "quora"],
+        tags=["core", "practical"],
     ))
 
     P.append(code_problem(
@@ -560,7 +560,7 @@ def build() -> list:
         visual="Each tile from 1 to amount lights up using the cheapest already-lit tile "
                "one coin behind it.",
         pseudocode="dp[0]=0; for v in 1..amount: dp[v] = min(dp[v-coin] + 1)",
-        tags=["core", "quora"],
+        tags=["core", "practical"],
     ))
 
     P.append(code_problem(
@@ -628,7 +628,7 @@ def build() -> list:
         visual="A running total that resets whenever carrying the past costs more than "
                "starting over.",
         pseudocode="current = max(value, current + value); best = max(best, current)",
-        tags=["core", "quora"],
+        tags=["core", "practical"],
     ))
 
     P.append(code_problem(
@@ -771,7 +771,7 @@ def build() -> list:
                             break
                 return dp[-1]
         """,
-        visible=[("breakable", ["leetcode", ["leet", "code"]]),
+        visible=[("breakable", ["sandstorm", ["sand", "storm"]]),
                  ("not breakable", ["catsandog", ["cats", "dog", "sand", "and", "cat"]])],
         hidden=[("reuse", ["aaaa", ["a"]]), ("whole word", ["apple", ["apple"]]),
                 ("empty string", ["", ["a"]]), ("no words", ["abc", []])],

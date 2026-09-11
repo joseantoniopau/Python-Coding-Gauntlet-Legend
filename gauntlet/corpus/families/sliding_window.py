@@ -5,8 +5,8 @@ from collections import Counter, defaultdict, deque
 
 from ._base import code_problem
 
-Q = {"QUORA": 3.0, "GENERAL_SWE": 2.0, "SECURITY_ENGINEERING": 1.0}
-QS = {"QUORA": 1.0, "GENERAL_SWE": 1.0, "SECURITY_ENGINEERING": 3.0}
+Q = {"PRACTICAL": 3.0, "GENERAL_SWE": 2.0, "SECURITY_ENGINEERING": 1.0}
+QS = {"PRACTICAL": 1.0, "GENERAL_SWE": 1.0, "SECURITY_ENGINEERING": 3.0}
 VIZ = {"type": "sliding_window", "caption": "LEFT, RIGHT, COUNTS, CONSTRAINT, BEST."}
 
 PSEUDO = """
@@ -213,7 +213,7 @@ def build() -> list:
         id="sw-longest-no-repeat", title="The Window Wraith", realm="sliding_window_marsh",
         pattern="SLIDING_WINDOW", difficulty="MEDIUM", family="window_distinct",
         secondary=["HASH_MAP", "STRING"], boss=True, profile_weight=Q, viz=VIZ,
-        source_type="REPORTED_INTERVIEW", company="Quora", year="reported pattern",
+        source_type="REPORTED_INTERVIEW", year="reported pattern",
         provenance="One of the most widely reported string archetypes in SWE screens. "
                    "Historical pattern, not a guaranteed question.",
         statement="""
@@ -258,7 +258,7 @@ def build() -> list:
                      "note": "Same O(n), a little more code, harder to break.",
                      "complexity": "O(n)"}],
         variants=["sw-longest-no-repeat-substr", "sw-k-distinct", "sec-k-identities"],
-        tags=["core", "quora", "boss"],
+        tags=["core", "practical", "boss"],
     ))
 
     P.append(code_problem(
@@ -297,7 +297,7 @@ def build() -> list:
         id="sw-k-distinct", title="The K-Distinct Ward", realm="sliding_window_marsh",
         pattern="SLIDING_WINDOW", difficulty="MEDIUM", family="window_k_distinct",
         secondary=["HASH_MAP"], profile_weight=Q, viz=VIZ,
-        source_type="REPORTED_INTERVIEW", company="Quora", year="reported pattern",
+        source_type="REPORTED_INTERVIEW", year="reported pattern",
         provenance="At-most-K-distinct is a repeatedly reported screen archetype.",
         statement="""
             Return the length of the longest substring of `s` containing at most `k`
@@ -338,7 +338,7 @@ def build() -> list:
                "reaches zero its vault closes and the distinct count drops.",
         pseudocode=PSEUDO, prerequisites=["sw-longest-no-repeat"],
         variants=["sw-k-categories", "sec-k-identities"],
-        tags=["core", "quora"],
+        tags=["core", "practical"],
     ))
 
     P.append(code_problem(
@@ -449,7 +449,7 @@ def build() -> list:
         pattern="QUEUE", difficulty="HARD", family="rolling_max",
         secondary=["SLIDING_WINDOW", "HEAP"], profile_weight=Q, boss=True,
         viz={"type": "monotonic_deque", "caption": "The deque keeps only useful candidates."},
-        source_type="REPORTED_INTERVIEW", company="Quora", year="reported pattern",
+        source_type="REPORTED_INTERVIEW", year="reported pattern",
         provenance="Rolling maximum over a time window is a repeatedly reported archetype.",
         statement="""
             Return the maximum of every window of size `k` as it slides across `nums`,
@@ -503,7 +503,7 @@ def build() -> list:
         alternates=[{"name": "max-heap with lazy deletion",
                      "note": "O(n log n). Passes, but the deque is the expected answer.",
                      "complexity": "O(n log n)"}],
-        tags=["core", "quora", "hard", "boss"],
+        tags=["core", "practical", "hard", "boss"],
     ))
 
     P.append(code_problem(
@@ -652,7 +652,7 @@ def build() -> list:
         nudge="A fixed-width frame plus one equality check per step.",
         visual="A frame of width len(p) slides; its tally board must exactly match p's.",
         pseudocode="build need & first window; slide adding/removing one char; compare",
-        prerequisites=["ah-valid-anagram"], tags=["core", "quora"],
+        prerequisites=["ah-valid-anagram"], tags=["core", "practical"],
     ))
 
     P.append(code_problem(

@@ -469,6 +469,7 @@ def build() -> list:
             "def total(nums):\n    return sum(v for v in nums if v > 0)\n",  # drops negatives
             "def total(nums):\n    return sum(nums) if nums else 1\n",       # empty is wrong
         ],
+        kills=[[[1, 2]], [[-1]], [[]]],
         nudge="One Mimic drops the first element, one ignores negatives, one lies about "
               "the empty list. What three inputs catch them?"))
 
@@ -487,11 +488,17 @@ def build() -> list:
             "    best = 0\n"
             "    for v in nums:\n        best = max(best, v)\n    return best\n",
             "def largest(nums):\n    return max(nums) if nums else 0\n",
-            "def largest(nums):\n    return sorted(nums)[-1] if nums else None\n"
-            "    # correct-looking, but O(n log n) and crashes on generators\n",
+            # Sorting to find a maximum is defensible-looking and O(n log n)
+            # rather than O(n) — but sorting by `str` also silently compares
+            # numbers as text, so 9 beats 100. The previous version of this Mimic
+            # sorted normally, which made it behaviourally identical to `max` and
+            # therefore impossible for any suite to reject: an encounter nobody
+            # could win.
+            "def largest(nums):\n    return sorted(nums, key=str)[-1] if nums else None\n",
         ],
+        kills=[[[-5, -2]], [[]], [[9, 100]]],
         nudge="All-negative input exposes the zero-seeded Mimic. The empty list exposes "
-              "the one returning 0."))
+              "the one returning 0. Mixed magnitudes expose the one that sorts."))
 
     P.append(forge_problem(
         id="tf-dedupe", title="Forging Against the Deduplicator", realm="debugging_dungeon",
@@ -516,6 +523,7 @@ def build() -> list:
             "        if not out or out[-1] != v:\n            out.append(v)\n"
             "    return out\n",
         ],
+        kills=[[[3, 1, 3]], [[3, 1]], [[1, 2, 1]]],
         nudge="An input that is already sorted will not distinguish the sorting Mimics. "
               "The last Mimic only removes ADJACENT duplicates."))
 
@@ -539,6 +547,7 @@ def build() -> list:
             "    cleaned = [c.lower() for c in s if c.isalpha()]\n"
             "    return cleaned == cleaned[::-1]\n",
         ],
+        kills=[["A man, a plan, a canal: Panama"], ["Aa"], ["1a"]],
         nudge="Three separate requirements — punctuation, case, digits — and each Mimic "
               "ignores exactly one."))
 
@@ -560,6 +569,7 @@ def build() -> list:
             "def over_threshold(counts, threshold):\n"
             "    return sorted(k for k, v in counts.items() if v >= threshold)[:1]\n",
         ],
+        kills=[[{"a": 2}, 2], [{"b": 1, "a": 1}, 1], [{"a": 1, "b": 1}, 1]],
         nudge="One is off by one at the boundary, one forgets to sort, one truncates. "
               "The unsorted Mimic only shows itself with input inserted out of order."))
 

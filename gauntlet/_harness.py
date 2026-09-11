@@ -25,6 +25,61 @@ def _alarm(signum, frame):
     raise TestTimeout()
 
 
+# --- the per-test deadline, which is the one thing that is not portable.
+#
+# On POSIX we use SIGALRM, which interrupts the interpreter wherever it is. On
+# Windows there is no SIGALRM, so a watchdog thread asks the main thread to
+# raise instead. That is strictly weaker: it can only land between bytecodes, so
+# a player whose code blocks inside a single C call (a huge int multiply, say)
+# will not be caught here. The parent's wall-clock kill still catches them, so
+# the difference the player sees is "this test timed out" versus "your code ran
+# too long" — worse diagnostics, same safety.
+_HAS_SIGALRM = hasattr(signal, "SIGALRM") and hasattr(signal, "setitimer")
+
+if _HAS_SIGALRM:
+    def _deadline_install():
+        signal.signal(getattr(signal, "SIGALRM"), _alarm)
+
+    def _deadline_start(seconds):
+        signal.setitimer(signal.ITIMER_REAL, seconds)
+
+    def _deadline_clear():
+        signal.setitimer(signal.ITIMER_REAL, 0)
+else:
+    import ctypes
+    import threading
+
+    _watchdog = None
+    _main_tid = threading.get_ident()
+
+    def _deadline_install():
+        return None
+
+    def _raise_in_main():
+        ctypes.pythonapi.PyThreadState_SetAsyncExc(
+            ctypes.c_ulong(_main_tid), ctypes.py_object(TestTimeout))
+
+    def _deadline_start(seconds):
+        global _watchdog
+        _deadline_clear()
+        if seconds <= 0:
+            return
+        _watchdog = threading.Timer(seconds, _raise_in_main)
+        _watchdog.daemon = True
+        _watchdog.start()
+
+    def _deadline_clear():
+        global _watchdog
+        if _watchdog is not None:
+            _watchdog.cancel()
+            _watchdog = None
+        # A watchdog that fired microseconds before we cancelled leaves an async
+        # exception queued against the main thread. Drain it, or it lands on
+        # whatever innocent statement runs next.
+        ctypes.pythonapi.PyThreadState_SetAsyncExc(
+            ctypes.c_ulong(_main_tid), ctypes.c_void_p(0))
+
+
 MAP_TAG = "__map__"
 
 
@@ -152,8 +207,49 @@ def _from_tree(node, ns):
     return out
 
 
-_ARG_ADAPTERS = {"tree": _to_tree}
-_RESULT_ADAPTERS = {"tree": _from_tree}
+def _to_linked(values, ns):
+    """Level with the tree adapter: linked-list problems must hand the player a
+    real ListNode chain, not a Python list wearing a costume."""
+    node_cls = ns.get("ListNode")
+    if node_cls is None or not values:
+        return None
+    head = node_cls(values[0])
+    cur = head
+    for value in values[1:]:
+        cur.next = node_cls(value)
+        cur = cur.next
+    return head
+
+
+def _to_linked_cycle(spec, ns):
+    """[values, pos] -> a chain whose tail links back to index `pos` (-1: none)."""
+    values, pos = (list(spec) + [-1])[:2]
+    node_cls = ns.get("ListNode")
+    if node_cls is None or not values:
+        return None
+    nodes = [node_cls(v) for v in values]
+    for node, nxt in zip(nodes, nodes[1:]):
+        node.next = nxt
+    if isinstance(pos, int) and 0 <= pos < len(nodes):
+        nodes[-1].next = nodes[pos]
+    return nodes[0]
+
+
+def _from_linked(node, ns):
+    """Walk a returned chain back into a list. The seen-set is not decoration: a
+    player who mis-wires a reversal produces a ring, and without it the grader
+    hangs instead of failing."""
+    out, seen = [], set()
+    while node is not None and id(node) not in seen:
+        seen.add(id(node))
+        out.append(node.val)
+        node = node.next
+    return out
+
+
+_ARG_ADAPTERS = {"tree": _to_tree, "linked": _to_linked,
+                 "linked_cycle": _to_linked_cycle}
+_RESULT_ADAPTERS = {"tree": _from_tree, "linked": _from_linked}
 
 
 def _adapt_args(ns, entry, args):
@@ -221,7 +317,7 @@ def run_tests(ns, entry, tests, default_timeout_ms):
             "expected": None,
             "reveal": bool(test.get("reveal", True)),
         }
-        signal.setitimer(signal.ITIMER_REAL, timeout_ms / 1000.0)
+        _deadline_start(timeout_ms / 1000.0)
         started = time.perf_counter()
         try:
             if kind == "class_ops":
@@ -229,7 +325,7 @@ def run_tests(ns, entry, tests, default_timeout_ms):
             else:
                 got = run_function_test(ns, entry, test)
             elapsed = (time.perf_counter() - started) * 1000.0
-            signal.setitimer(signal.ITIMER_REAL, 0)
+            _deadline_clear()
             record["ms"] = round(elapsed, 3)
             ok, reason = compare(got, _decode(test["expected"]),
                                  test.get("cmp", "exact"))
@@ -239,17 +335,17 @@ def run_tests(ns, entry, tests, default_timeout_ms):
                 record["got"] = _short(got)
                 record["expected"] = _short(_decode(test["expected"]))
         except TestTimeout:
-            signal.setitimer(signal.ITIMER_REAL, 0)
+            _deadline_clear()
             record["status"] = "timeout"
             record["ms"] = timeout_ms
             record["message"] = "ran longer than %dms" % timeout_ms
         except RecursionError:
-            signal.setitimer(signal.ITIMER_REAL, 0)
+            _deadline_clear()
             record["status"] = "exception"
             record["message"] = "RecursionError: recursion went too deep (missing or wrong base case?)"
             record["exc_type"] = "RecursionError"
         except Exception as exc:  # noqa: BLE001 - player code, anything goes
-            signal.setitimer(signal.ITIMER_REAL, 0)
+            _deadline_clear()
             record["status"] = "exception"
             record["message"] = "%s: %s" % (type(exc).__name__, exc)
             record["exc_type"] = type(exc).__name__
@@ -280,7 +376,7 @@ def main():
         payload = json.load(fh)
 
     sys.setrecursionlimit(RECURSION_LIMIT)
-    signal.signal(signal.SIGALRM, _alarm)
+    _deadline_install()
     preamble = payload["entry"].get("preamble") or ""
     if preamble:
         source = preamble.rstrip() + "\n\n" + payload["source"]
@@ -312,16 +408,16 @@ def main():
         return
 
     try:
-        signal.setitimer(signal.ITIMER_REAL, payload.get("import_timeout_ms", 4000) / 1000.0)
+        _deadline_start(payload.get("import_timeout_ms", 4000) / 1000.0)
         exec(compiled, ns)  # noqa: S102 - this is the whole point, inside a sandbox
-        signal.setitimer(signal.ITIMER_REAL, 0)
+        _deadline_clear()
     except TestTimeout:
         outcome["phase"] = "toplevel"
         outcome["error"] = {"type": "Timeout", "message": "module-level code never finished"}
         _emit(result_path, outcome)
         return
     except Exception as exc:  # noqa: BLE001
-        signal.setitimer(signal.ITIMER_REAL, 0)
+        _deadline_clear()
         outcome["phase"] = "toplevel"
         outcome["error"] = {
             "type": type(exc).__name__,

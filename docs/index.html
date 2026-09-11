@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Python Coding Gauntlet Legend</title>
+<meta name="description" content="A 16-bit RPG that makes you fluent in Python under interview conditions. 904 validated problems, 17 regions, 14 bosses. Runs entirely on your machine.">
+<meta property="og:title" content="Python Coding Gauntlet Legend">
+<meta property="og:description" content="A 16-bit RPG that makes you fluent in Python under interview conditions.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#07060e; --ink2:#0d0b18; --panel:#141122; --line:#2a2440;
+    --text:#d8d2e8; --muted:#8d85a8;
+    --gold:#e8c37d; --gold-hi:#fff0b4; --violet:#8f6ad6; --violet-hi:#c8a8ff;
+    --red:#c8434f; --green:#6fbf73; --chrome:#c4ccdc;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--ink); color:var(--text);
+    font:16px/1.65 "IBM Plex Mono",ui-monospace,Menlo,monospace;
+    -webkit-font-smoothing:antialiased;
+  }
+  .px{font-family:"Press Start 2P",monospace; letter-spacing:.02em; line-height:1.5}
+  a{color:var(--violet-hi); text-decoration:none; border-bottom:1px solid #ffffff22}
+  a:hover{color:var(--gold-hi); border-bottom-color:var(--gold)}
+  .wrap{max-width:1080px; margin:0 auto; padding:0 24px}
+
+  /* ---------- hero ---------- */
+  .hero{position:relative; min-height:86vh; display:flex; align-items:center;
+        justify-content:center; text-align:center; overflow:hidden;
+        border-bottom:1px solid var(--line)}
+  #stars{position:absolute; inset:0; width:100%; height:100%; display:block}
+  .hero-in{position:relative; z-index:2; padding:80px 24px}
+  .kicker{font-size:11px; color:var(--muted); letter-spacing:.35em; margin-bottom:22px}
+  h1.title{margin:0; font-size:clamp(26px,6.4vw,62px)}
+  h1.title .a{color:var(--gold); text-shadow:0 4px 0 #3a2a08, 0 0 26px #e8c37d55; display:block}
+  h1.title .b{color:var(--violet-hi); text-shadow:0 4px 0 #241a45, 0 0 26px #8f6ad655; display:block; margin-top:.28em}
+  .sub{margin-top:26px; font-size:11px; color:var(--muted); letter-spacing:.3em}
+  .tag{margin:34px auto 0; max-width:660px; font-size:17px; color:#c3bcd8}
+  .cta{margin-top:38px; display:flex; gap:14px; justify-content:center; flex-wrap:wrap}
+  .btn{display:inline-block; padding:15px 26px; font-size:11px; border:1px solid var(--violet);
+       background:linear-gradient(#221a3d,#171232); color:var(--violet-hi); border-bottom:none}
+  .btn:hover{background:linear-gradient(#2e2352,#1d1740); color:#fff}
+  .btn.gold{border-color:var(--gold); color:var(--gold-hi); background:linear-gradient(#3a2c10,#241a08)}
+  .btn.gold:hover{background:linear-gradient(#4d3a16,#2e220b)}
+
+  /* ---------- stat strip ---------- */
+  .stats{display:grid; grid-template-columns:repeat(auto-fit,minmax(128px,1fr));
+         border-bottom:1px solid var(--line); background:var(--ink2)}
+  .stat{padding:24px 10px; text-align:center; border-right:1px solid var(--line)}
+  .stat:last-child{border-right:none}
+  .stat b{display:block; font-family:"Press Start 2P",monospace; font-size:21px; color:var(--gold)}
+  .stat span{display:block; margin-top:9px; font-size:11px; color:var(--muted); letter-spacing:.14em}
+
+  /* ---------- sections ---------- */
+  section{padding:88px 0; border-bottom:1px solid var(--line)}
+  h2{font-family:"Press Start 2P",monospace; font-size:17px; color:var(--gold);
+     margin:0 0 12px; line-height:1.6}
+  .lede{color:var(--muted); margin:0 0 40px; max-width:660px}
+  p{max-width:720px}
+
+  .grid{display:grid; gap:20px; grid-template-columns:repeat(auto-fit,minmax(270px,1fr))}
+  .card{background:var(--panel); border:1px solid var(--line); padding:24px}
+  .card h3{font-family:"Press Start 2P",monospace; font-size:11px; color:var(--violet-hi);
+           margin:0 0 12px; line-height:1.7}
+  .card p{margin:0; font-size:14.5px; color:#b9b2cf}
+
+  table{width:100%; border-collapse:collapse; margin-top:8px; font-size:14.5px}
+  th,td{text-align:left; padding:13px 14px; border-bottom:1px solid var(--line); vertical-align:top}
+  th{color:var(--gold); font-size:11px; letter-spacing:.14em; font-family:"Press Start 2P",monospace}
+  td:first-child{color:var(--violet-hi); white-space:nowrap}
+
+  /* ---------- ramp ---------- */
+  .ramp{margin-top:8px}
+  .row{display:flex; align-items:center; gap:14px; margin:11px 0; font-size:13px}
+  .row .nm{width:104px; color:var(--muted); letter-spacing:.1em}
+  .row .n{width:52px; text-align:right; color:var(--gold)}
+  .bar{flex:1; height:16px; background:#191430; border:1px solid var(--line); position:relative}
+  .bar i{position:absolute; inset:0 auto 0 0; display:block;
+         background:linear-gradient(90deg,var(--violet),var(--violet-hi))}
+
+  /* ---------- shots ---------- */
+  .shots{display:grid; gap:22px; grid-template-columns:repeat(auto-fit,minmax(400px,1fr))}
+  figure{margin:0; border:1px solid var(--line); background:#000; overflow:hidden}
+  figure img{width:100%; display:block; image-rendering:pixelated}
+  figcaption{padding:13px 16px; font-size:13px; color:var(--muted); background:var(--panel);
+             border-top:1px solid var(--line)}
+  .wide{grid-column:1/-1}
+
+  /* ---------- install ---------- */
+  pre{background:#0b0917; border:1px solid var(--line); padding:18px 20px; overflow-x:auto;
+      font-size:13.5px; color:#cfc7e6; margin:14px 0}
+  .os{display:grid; gap:20px; grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
+  .note{border-left:3px solid var(--gold); padding:14px 18px; background:#17122a;
+        color:#bdb5d4; font-size:14px; margin-top:22px}
+  .note b{color:var(--gold)}
+  footer{padding:52px 0 72px; color:var(--muted); font-size:13.5px; text-align:center}
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <canvas id="stars"></canvas>
+  <div class="hero-in">
+    <div class="kicker px">PYTHON CODING</div>
+    <h1 class="title px"><span class="a">GAUNTLET</span><span class="b">LEGEND</span></h1>
+    <div class="sub px">THE ALGORITHM REALMS</div>
+    <p class="tag">A 16-bit RPG that makes you fluent in Python under interview
+      conditions. It teaches the basics first, then ramps — and the last boss is
+      the practical, with every crutch removed.</p>
+    <div class="cta">
+      <a class="btn gold" href="#install">DOWNLOAD &amp; PLAY</a>
+      <a class="btn" href="https://github.com/joseantoniopau/Python-Coding-Gauntlet-Legend">SOURCE ON GITHUB</a>
+    </div>
+  </div>
+</div>
+
+<div class="stats">
+  <div class="stat"><b>956</b><span>PROBLEMS</span></div>
+  <div class="stat"><b>17</b><span>REGIONS</span></div>
+  <div class="stat"><b>16</b><span>DUNGEONS</span></div>
+  <div class="stat"><b>14</b><span>BOSSES</span></div>
+  <div class="stat"><b>74</b><span>QUESTS</span></div>
+  <div class="stat"><b>6</b><span>CLASSES</span></div>
+</div>
+
+<section>
+  <div class="wrap">
+    <h2>Every game system is a learning mechanic</h2>
+    <p class="lede">Freezing at a blank editor is a retrieval problem, not a
+      knowledge problem. It is fixed by doing the thing repeatedly under mild
+      pressure — which is what a good RPG already is. So nothing here is a
+      wrapper around flashcards.</p>
+    <table>
+      <tr><th>The game thing</th><th>What it actually is</th></tr>
+      <tr><td>Enemy weaknesses</td><td>The problem's real edge cases. Probe correctly and you land a critical, because you found the case that breaks it.</td></tr>
+      <tr><td>Enemy resistances</td><td>Its performance ceiling. Brute force genuinely bounces off a resistant enemy.</td></tr>
+      <tr><td>Memory shrines</td><td>Spaced repetition over <em>patterns</em>, served as disguised variants so you can't pass by recognising the wording.</td></tr>
+      <tr><td>Chapter gates</td><td>Evidence you can do the earlier thing unaided. Not time spent, not problems seen.</td></tr>
+      <tr><td>Hints</td><td>Real help at a real cost — they lower the rank you can earn, and they are refused outright in Interview Mode.</td></tr>
+      <tr><td>The last boss</td><td>A timed practical with no hints, no probes, no pattern label and no companion.</td></tr>
+    </table>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>It teaches the basics first</h2>
+    <p class="lede">The most common way a learning game fails is opening at a
+      difficulty that only helps people who didn't need it. The corpus is
+      deliberately bottom-heavy, and every topic enters as a fill-in-the-blank
+      before it is ever asked for cold.</p>
+    <div class="ramp">
+      <div class="row"><span class="nm">GUIDED</span><span class="n">206</span><span class="bar"><i style="width:64%"></i></span></div>
+      <div class="row"><span class="nm">TUTORIAL</span><span class="n">210</span><span class="bar"><i style="width:65%"></i></span></div>
+      <div class="row"><span class="nm">EASY</span><span class="n">321</span><span class="bar"><i style="width:100%"></i></span></div>
+      <div class="row"><span class="nm">MEDIUM</span><span class="n">196</span><span class="bar"><i style="width:61%"></i></span></div>
+      <div class="row"><span class="nm">HARD</span><span class="n">23</span><span class="bar"><i style="width:7%"></i></span></div>
+    </div>
+    <p style="margin-top:32px">Coverage spans the whole practical, not just
+      algorithm puzzles: comprehensions, slicing and unpacking; the standard
+      library you're expected to reach for; OOP and dunder methods; generators,
+      decorators, closures and context managers; exceptions; linked lists, trees,
+      graphs, DP, backtracking, greedy and bit manipulation — plus a family
+      shaped like the real thing: <em>here is an existing module, add a feature,
+      fix a bug, keep its tests green.</em></p>
+  </div>
+</section>
+
+<section id="shots">
+  <div class="wrap">
+    <h2>Screens</h2>
+    <p class="lede">Every pixel is generated at runtime by our own code. There are
+      no image assets in the repository — no sprite sheets, no tilesets, nothing
+      borrowed from any existing game.</p>
+    <div class="shots" id="gallery"></div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Pick a class, then a build</h2>
+    <p class="lede">Six classes, each a different way of solving problems rather
+      than a different stat block — and every bonus attaches to a measured
+      behaviour, so playing the class trains the habit it's named for.</p>
+    <div class="grid">
+      <div class="card"><h3>ANALYST</h3><p>Reasons before writing. Rewarded for correct probes and complexity calls, punished for guessing.</p></div>
+      <div class="card"><h3>BERSERKER</h3><p>Writes fast and iterates. Rewarded for speed, forgiving of failed attempts.</p></div>
+      <div class="card"><h3>ARCHIVIST</h3><p>Remembers. Strongest on spaced-repetition retests and pattern recognition.</p></div>
+      <div class="card"><h3>WARDEN</h3><p>Tests first. Rewarded for finding the edge case before submitting, not after.</p></div>
+      <div class="card"><h3>ARTIFICER</h3><p>Builds tools. Strongest on design and refactoring problems.</p></div>
+      <div class="card"><h3>SEER</h3><p>Reads code. Strongest on tracing, debugging and spot-the-flaw.</p></div>
+    </div>
+    <p style="margin-top:34px">Three branches each, seven nodes per branch, with
+      capstones that genuinely define a build. No node ever supplies an answer or
+      skips a problem — they change <em>how</em> you engage, never <em>whether</em>
+      you have to think.</p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Running your code is actually safe</h2>
+    <p class="lede">Your solutions execute in a separate process behind four
+      independent layers.</p>
+    <div class="grid">
+      <div class="card"><h3>1 · SEATBELT</h3><p>A <code>sandbox-exec</code> profile denies all network access and every write outside a scratch directory. macOS.</p></div>
+      <div class="card"><h3>2 · RLIMITS</h3><p>Hard ceilings on CPU seconds, address space, file size and process count.</p></div>
+      <div class="card"><h3>3 · WALL CLOCK</h3><p>The parent kills the whole process group for anything that survives the first two.</p></div>
+      <div class="card"><h3>4 · PER-TEST</h3><p>One runaway test times out on its own instead of taking the batch down with it.</p></div>
+    </div>
+    <div class="note"><b>On Windows</b>, layers 1 and 2 do not exist — there is no
+      seatbelt and no <code>resource</code> module. Isolation there rests on
+      process separation and the wall-clock kill. The code you run is code you
+      wrote, so the threat model is "my own infinite loop shouldn't wedge the
+      machine" — but it is genuinely weaker than the macOS path, and you should
+      know that rather than find out.</div>
+  </div>
+</section>
+
+<section id="install">
+  <div class="wrap">
+    <h2>Download and play</h2>
+    <p class="lede">You need Python 3.11 or newer and a browser. Nothing else —
+      there is no <code>pip install</code> step, because there are no
+      dependencies. It runs entirely on your machine: no accounts, no network,
+      no telemetry.</p>
+    <div class="os">
+      <div>
+        <h3 class="px" style="font-size:11px;color:var(--gold)">macOS &amp; LINUX</h3>
+<pre>git clone https://github.com/joseantoniopau/Python-Coding-Gauntlet-Legend.git
+cd Python-Coding-Gauntlet-Legend
+python3 run.py</pre>
+        <p style="font-size:14px;color:var(--muted)">For a double-clickable app
+          bundle, run <code>./scripts/build_app.sh</code>.</p>
+      </div>
+      <div>
+        <h3 class="px" style="font-size:11px;color:var(--gold)">WINDOWS</h3>
+<pre>Download the ZIP from GitHub, unzip it,
+then double-click:
+
+    Play on Windows.bat</pre>
+        <p style="font-size:14px;color:var(--muted)">Or from a terminal:
+          <code>py -3 run.py</code>. Installing Python? Tick
+          <b>"Add python.exe to PATH"</b> in the installer.</p>
+      </div>
+    </div>
+    <div class="note">Your save lives in <code>~/Library/Application Support/GauntletLegend</code>
+      on macOS, <code>%APPDATA%\GauntletLegend</code> on Windows, and
+      <code>~/.local/share/gauntlet-legend</code> on Linux.</div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p style="margin:0 auto 14px">All art, music and text are original and
+      generated procedurally. Problems tagged as reported interview patterns are
+      historically reported shapes, not guaranteed questions, and name no company.</p>
+    <p style="margin:0 auto">MIT licensed ·
+      <a href="https://github.com/joseantoniopau/Python-Coding-Gauntlet-Legend">github.com/joseantoniopau/Python-Coding-Gauntlet-Legend</a></p>
+  </div>
+</footer>
+
+<script>
+/* Starfield + horizon, drawn in the game's own palette so the page and the
+   product look like the same object. Deterministic: a fixed hash, not random,
+   so it renders identically every load. */
+(function () {
+  const c = document.getElementById('stars');
+  const ctx = c.getContext('2d');
+  let w = 0, h = 0, dpr = Math.min(2, window.devicePixelRatio || 1);
+
+  const hash = (n) => {
+    let x = (n * 374761393 + 668265263) >>> 0;
+    x = ((x ^ (x >>> 13)) * 1274126177) >>> 0;
+    return ((x ^ (x >>> 16)) >>> 0) / 4294967296;
+  };
+
+  function size() {
+    const r = c.getBoundingClientRect();
+    w = r.width; h = r.height;
+    c.width = Math.floor(w * dpr); c.height = Math.floor(h * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
+  function draw(t) {
+    ctx.clearRect(0, 0, w, h);
+    const g = ctx.createLinearGradient(0, 0, 0, h);
+    g.addColorStop(0, '#0a0718'); g.addColorStop(0.55, '#120d26'); g.addColorStop(1, '#1b1033');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+
+    for (let i = 0; i < 170; i++) {
+      const x = hash(i) * w, y = hash(i * 7 + 1) * h * 0.82;
+      const tw = 0.45 + 0.55 * Math.abs(Math.sin(t * 0.0009 + hash(i * 13) * 6.28));
+      ctx.fillStyle = 'rgba(226,214,255,' + (tw * (0.22 + hash(i * 3) * 0.6)) + ')';
+      const s = hash(i * 5) > 0.93 ? 2 : 1;
+      ctx.fillRect(Math.round(x), Math.round(y), s, s);
+    }
+
+    // the moon, and a low hot source under it
+    const mx = w * 0.72, my = h * 0.13;
+    const gl = ctx.createRadialGradient(mx, my, 0, mx, my, 120);
+    gl.addColorStop(0, 'rgba(232,195,125,0.20)'); gl.addColorStop(1, 'rgba(232,195,125,0)');
+    ctx.fillStyle = gl; ctx.beginPath(); ctx.arc(mx, my, 120, 0, 6.2832); ctx.fill();
+    ctx.strokeStyle = '#e8c37d'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(mx, my, 17, 0, 6.2832); ctx.stroke();
+
+    // layered hills, darkest in front
+    const bands = [[0.72, '#1a1236'], [0.80, '#150f2b'], [0.88, '#0f0a20']];
+    bands.forEach(([base, col], bi) => {
+      ctx.fillStyle = col; ctx.beginPath(); ctx.moveTo(0, h);
+      for (let x = 0; x <= w; x += 8) {
+        const y = h * base
+          + Math.sin(x * 0.0042 + bi * 2.1 + t * 0.00007) * (16 + bi * 9)
+          + Math.sin(x * 0.011 + bi) * 6;
+        ctx.lineTo(x, y);
+      }
+      ctx.lineTo(w, h); ctx.closePath(); ctx.fill();
+    });
+  }
+
+  let raf;
+  function loop(t) { draw(t); raf = requestAnimationFrame(loop); }
+  window.addEventListener('resize', () => { dpr = Math.min(2, window.devicePixelRatio || 1); size(); });
+  size();
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) draw(0);
+  else raf = requestAnimationFrame(loop);
+})();
+
+/* The gallery only lists shots that actually exist, so a missing capture never
+   leaves a broken image on the page. */
+(function () {
+  const shots = [
+    ['title.png',       'The title screen. Procedural starfield, hand-built pixel lettering — there are no image assets anywhere in this project.', true],
+    ['worldmap.png',    'The map. A “what to do next” strip that is never empty, ordered by what your evidence says would help most — not by what is shiniest.', true],
+    ['guided.png',      'A GUIDED encounter: type one expression into an otherwise complete function. Byte explains, once, that the gold slot is not Python.', false],
+    ['boss-dragon.png', 'A boss fight. The Tree Dragon tells you its own weakness — “Compare me only to my children. I dare you.”', false],
+    ['party.png',       'The skill tree. Every node says what it is MEASURED ON, so a point is a statement about how you intend to play.', true],
+    ['questlog.png',    '74 quests across 17 chains. Each locked one shows exactly what is blocking it.', false],
+    ['world.png',       'The overworld: autotiled terrain, townspeople, and the day’s board.', false],
+    ['practical.png',   'The ladder to the final practical — fourteen bosses, each removing one crutch.', true],
+  ];
+  const host = document.getElementById('gallery');
+  shots.forEach(([file, caption, wide]) => {
+    const img = new Image();
+    img.onload = () => {
+      const fig = document.createElement('figure');
+      if (wide) fig.className = 'wide';
+      fig.appendChild(img);
+      const cap = document.createElement('figcaption');
+      cap.textContent = caption;
+      fig.appendChild(cap);
+      host.appendChild(fig);
+    };
+    img.alt = caption;
+    img.src = 'assets/' + file;
+  });
+})();
+</script>
+</body>
+</html>

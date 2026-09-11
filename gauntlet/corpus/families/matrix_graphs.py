@@ -5,8 +5,8 @@ from collections import deque
 
 from ._base import code_problem
 
-Q = {"QUORA": 3.0, "GENERAL_SWE": 2.5, "SECURITY_ENGINEERING": 1.5}
-QS = {"QUORA": 1.0, "GENERAL_SWE": 1.0, "SECURITY_ENGINEERING": 3.0}
+Q = {"PRACTICAL": 3.0, "GENERAL_SWE": 2.5, "SECURITY_ENGINEERING": 1.5}
+QS = {"PRACTICAL": 1.0, "GENERAL_SWE": 1.0, "SECURITY_ENGINEERING": 3.0}
 VIZ_M = {"type": "matrix", "caption": "Rows and columns, index discipline."}
 VIZ_BFS = {"type": "bfs", "caption": "A wave of light expands ring by ring."}
 VIZ_DFS = {"type": "dfs", "caption": "One path, deeply, then visibly back out."}
@@ -321,7 +321,7 @@ def build() -> list:
         id="mx-rotate", title="The Matrix Golem", realm="matrix_citadel",
         pattern="MATRIX", difficulty="MEDIUM", family="matrix_transform", boss=True,
         profile_weight=Q, viz=VIZ_M,
-        source_type="REPORTED_INTERVIEW", company="Quora", year="reported pattern",
+        source_type="REPORTED_INTERVIEW", year="reported pattern",
         provenance="In-place matrix rotation is a repeatedly reported screen archetype.",
         statement="""
             Rotate the `n x n` matrix 90 degrees clockwise **in place** and return it.
@@ -358,7 +358,7 @@ def build() -> list:
                     swap matrix[r][c], matrix[c][r]
             for each row: row.reverse()
         """,
-        tags=["core", "quora", "boss"],
+        tags=["core", "practical", "boss"],
     ))
 
     P.append(code_problem(
@@ -416,7 +416,7 @@ def build() -> list:
                 if top <= bottom: walk bottom row left;  bottom -= 1
                 if left <= right: walk left col up;      left += 1
         """,
-        tags=["core", "quora"],
+        tags=["core", "practical"],
     ))
 
     P.append(code_problem(
@@ -514,7 +514,7 @@ def build() -> list:
         id="gr-count-islands", title="The Sundered Isles", realm="graph_wastes",
         pattern="DFS", difficulty="MEDIUM", family="grid_traverse",
         secondary=["BFS", "MATRIX"], profile_weight=Q, viz=VIZ_DFS,
-        source_type="REPORTED_INTERVIEW", company="Quora", year="reported pattern",
+        source_type="REPORTED_INTERVIEW", year="reported pattern",
         provenance="Grid connected-components is a repeatedly reported archetype.",
         statement="""
             `grid` holds `1` for land and `0` for water. Return the number of islands.
@@ -567,7 +567,7 @@ def build() -> list:
                     flood-fill (BFS or DFS) marking every connected land cell
         """,
         variants=["gr-max-island-area", "sec-infection-spread"],
-        tags=["core", "quora"],
+        tags=["core", "practical"],
     ))
 
     P.append(code_problem(
@@ -667,7 +667,7 @@ def build() -> list:
                     if it is the goal: return dist + 1
                     mark seen; push with dist + 1
         """,
-        tags=["core", "quora"],
+        tags=["core", "practical"],
     ))
 
     P.append(code_problem(

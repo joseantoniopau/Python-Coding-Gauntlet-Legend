@@ -19,14 +19,27 @@
  *      the layer width, so a layer canvas twice the stage wide scrolls forever
  *      without a seam. That is why the backdrop can move slowly and still never
  *      repeat visibly on screen.
- *   3. THE STAGE IS A LIT SET. Colour comes from the region palette, but every
- *      value is graded toward gunmetal and pushed down before it is used. The
- *      light — a key in the boss colour, a rim on the hero, a vignette eating
- *      the frame edges — is what separates the figures from the ground. A flat
- *      backdrop with two sprites on it is exactly what happens without it.
- *   4. THE CAMERA IS OVER-SCANNED. baseZoom is 1.03 and full-frame art is built
- *      PAD pixels oversize, so drift, shake and punch-in can never expose an
- *      edge. Callers never have to clamp anything.
+ *   3. THERE IS EXACTLY ONE LIGHT. Its position comes from the horizon, its
+ *      colour from the region, and EVERYTHING agrees with it: the beam hanging
+ *      in the air, the dust inside the beam, the pool on the deck, the lit face
+ *      of every parallax layer, the rim on BOTH combatants — same hue, same
+ *      side — and the cast shadows falling the other way. This is the single
+ *      highest-leverage thing in the file. A stage where two figures are rimmed
+ *      from opposite sides reads as a collage no matter how good the sprites
+ *      are; a stage that agrees with itself about where the light is reads as
+ *      expensive even when nothing in it is. scene.light is published and
+ *      drawRimLight / drawFigureShadow default to it, so a caller has to go out
+ *      of its way to break the agreement.
+ *   4. FOUR DEPTHS, NOT THREE. Far, mid and near parallax behind the fight; the
+ *      occluders framing it at the edges; and the apron — a strip of ground
+ *      between the camera and the platform, drawn in FRONT of the combatants
+ *      and moving faster than anything else. Depth is what the eye reads before
+ *      it reads any single object.
+ *   5. THE CAMERA IS OVER-SCANNED, AND IT HAS OPINIONS. baseZoom is 1.03 and
+ *      full-frame art is built PAD pixels oversize, so drift, lean, shake and
+ *      push-in can never expose an edge. It closes down during a fight, opens
+ *      out during a lull, kicks and springs back on an impact, and clamps the
+ *      sum of everything to seven pixels. Motion sickness is a failure.
  *
  * Wiring, in one line: the caller applies the camera, draws the stage, draws the
  * combatants, then draws the foreground. See the note at the foot of the file.
@@ -736,7 +749,7 @@ const BIOMES = {
   grass: {
     accent: METAL.violet, hue: 0.58, fog: '#26283a',
     sky: ['#080a14', '#141a2c', '#232a42'], horizon: 'storm',
-    anim: ['lightning', 'fog'], occluder: 'reed', platform: 'sod',
+    anim: ['lightning', 'rain', 'fog'], occluder: 'reed', platform: 'sod',
     layers: [
       { paint: 'ridge',    src: 'far',    h: 38, depth: 0.10, rate: 1, tone: -36, o: { wide: true, minH: 0.18 } },
       { paint: 'treeline', src: 'foliage', h: 34, depth: 0.32, rate: 5, tone: -22, o: { step: 9 } },
@@ -776,7 +789,7 @@ const BIOMES = {
   swamp: {
     accent: METAL.bile, hue: 0.6, fog: '#243026',
     sky: ['#070b09', '#121a14', '#1d2a1e'], horizon: 'fogbank',
-    anim: ['fog', 'flies'], occluder: 'reed', platform: 'bog',
+    anim: ['fog', 'rain', 'flies'], occluder: 'reed', platform: 'bog',
     layers: [
       { paint: 'treeline', src: 'far',     h: 44, depth: 0.10, rate: 1, tone: -38, o: { dead: true, step: 8 } },
       { paint: 'treeline', src: 'mid',     h: 36, depth: 0.32, rate: 4, tone: -24, o: { dead: true, step: 11 } },
@@ -866,7 +879,7 @@ const BIOMES = {
   tower: {
     accent: METAL.cyan, hue: 0.6, fog: '#20283a',
     sky: ['#05070f', '#0d1322', '#172034'], horizon: 'storm',
-    anim: ['lightning', 'fog'], occluder: 'chain', platform: 'iron',
+    anim: ['lightning', 'rain', 'fog'], occluder: 'chain', platform: 'iron',
     layers: [
       { paint: 'skyline', src: 'far',    h: 44, depth: 0.06, rate: 1, tone: -42, o: { style: 'castle' } },
       { paint: 'gantry',  src: 'mid',    h: 54, depth: 0.28, rate: 3, tone: -26, o: { decks: 3, gears: true } },
@@ -923,7 +936,10 @@ function stars(ctx, W, H, rand, colour, count) {
 
 function horizonMoon(ctx, W, H, rand, c) {
   stars(ctx, W, H, rand, c.bone, Math.round(W / 3));
-  const cx = Math.round(W * 0.68), cy = Math.round(H * 0.28), r = 11;
+  // Drawn where the light rig says the light is, not where it looked nice. The
+  // source being visibly in the same place it is lighting from is free, and it
+  // is the difference between a lit room and a room with a lamp drawn on it.
+  const cx = Math.round(W * c.ux), cy = Math.round(H * c.uy), r = 11;
   for (let i = 4; i >= 1; i--) {                            // halo
     ctx.globalAlpha = 0.05 * i;
     blockEllipse(ctx, cx, cy, r + i * 5, r + i * 5, c.accent);
@@ -941,7 +957,7 @@ function horizonMoon(ctx, W, H, rand, c) {
 }
 
 function horizonSun(ctx, W, H, rand, c) {
-  const cx = Math.round(W * 0.5), cy = H - 2, r = 26;
+  const cx = Math.round(W * c.ux), cy = H - 2, r = 26;
   for (let i = 5; i >= 1; i--) {
     ctx.globalAlpha = 0.07 * i;
     blockEllipse(ctx, cx, cy, r + i * 9, Math.round((r + i * 9) * 0.7), c.accent);
@@ -1000,11 +1016,11 @@ function horizonGlow(ctx, W, H, rand, c) {
 function horizonGlass(ctx, W, H, rand, c) {
   // A rose window. Lead lines are drawn as gaps, which is how real glass reads
   // at a distance: colour, black line, colour.
-  const cx = Math.round(W * 0.5), cy = Math.round(H * 0.36), r = 30;
+  const cx = Math.round(W * c.ux), cy = Math.round(H * c.uy), r = 30;
   const panes = [c.accent, shade(c.accent, -30), c.bone, METAL.blood, METAL.violet];
   for (let i = 5; i >= 1; i--) {
-    ctx.globalAlpha = 0.05 * i;
-    blockEllipse(ctx, cx, cy, r + i * 7, r + i * 7, c.accent);
+    ctx.globalAlpha = 0.028 * i;
+    blockEllipse(ctx, cx, cy, r + i * 5, Math.round((r + i * 5) * 0.66), c.accent);
   }
   ctx.globalAlpha = 1;
   blockEllipse(ctx, cx, cy, r, r, shade(c.accent, -50));
@@ -1036,7 +1052,7 @@ function horizonCeiling(ctx, W, H, rand, c) {
     ctx.fillStyle = shade(c.rock, rand() < 0.5 ? 12 : -14);
     ctx.fillRect(x, y, 1 + (rand() < 0.15 ? 1 : 0), 1);
   }
-  let x = rand() * W * 0.5;
+  let x = W * c.ux;                    // the crack is the source: put it there
   let y = 0;
   while (y < H * 0.8) {                                      // the crack
     const len = 3 + rand() * 6;
@@ -1054,6 +1070,19 @@ function horizonCeiling(ctx, W, H, rand, c) {
 
 function horizonFogbank(ctx, W, H, rand, c) {
   stars(ctx, W, H, rand, c.bone, Math.round(W / 10));
+  // A fog bank with nothing behind it is a grey field, and a room whose key
+  // light has no visible source in frame reads as underexposed rather than as
+  // atmospheric. So: a moon, diffused, drawn first and then buried in the bank.
+  const mx = Math.round(W * c.ux), my = Math.round(H * c.uy);
+  for (let i = 6; i >= 1; i--) {
+    ctx.globalAlpha = 0.022 * i;
+    blockEllipse(ctx, mx, my, 7 + i * 5, Math.round((7 + i * 5) * 0.78), c.accent);
+  }
+  ctx.globalAlpha = 0.42;
+  blockEllipse(ctx, mx, my, 8, 8, mix(c.bone, c.accent, 0.45));
+  ctx.globalAlpha = 0.34;
+  blockEllipse(ctx, mx + 2, my + 2, 7, 7, c.fog);
+  ctx.globalAlpha = 1;
   for (let band = 0; band < 7; band++) {
     const y = H - 4 - band * 5;
     ctx.globalAlpha = 0.1 + band * 0.035;
@@ -1070,6 +1099,113 @@ const HORIZONS = {
   moon: horizonMoon, sun: horizonSun, storm: horizonStorm, glow: horizonGlow,
   glass: horizonGlass, ceiling: horizonCeiling, fogbank: horizonFogbank,
 };
+
+/* ================================================================
+ * THE LIGHT RIG
+ * ================================================================
+ * ONE dominant source per room, and everything on the stage agrees with it.
+ *
+ * This is the highest-leverage thing a 2D stage can do and it costs almost
+ * nothing. Two figures rimmed from opposite sides is the tell of a scene
+ * assembled out of separately-drawn parts. Two figures rimmed from the SAME
+ * side, with their cast shadows falling the other way, a pool of that same
+ * colour on the deck between them and a shaft of it hanging in the air, reads
+ * as a lit set. Nothing else here is more of what "expensive" means.
+ *
+ * So the rig is singular and it is published: scene.light carries the position,
+ * the colour, the direction and the rim, and drawRimLight / drawFigureShadow
+ * default to it rather than to whatever the caller felt like. A caller has to
+ * go out of its way to break the agreement.
+ *
+ * Position comes from the horizon treatment, because the horizon is where the
+ * source visibly is. The moon is high and to the right; the crack in a cave
+ * roof is high and to the left; the lava seam is low and central. The colour
+ * comes from the region accent, warmed or cooled by what kind of thing is
+ * burning, so each realm is lit in its own hue without leaving the register.
+ *
+ *   ux, uy  apparent source, as a fraction of stage width / ground height
+ *   warm    0 is moonlight, 1 is a furnace
+ *   spread  how far the pool of it reaches across the deck
+ *   flick   how much it gutters; 0 would be daylight and we have none
+ *   shaft   how much of it hangs visibly in the air between camera and set
+ */
+const LIGHT = {
+  moon:    { ux: 0.72, uy: 0.20, warm: 0.10, spread: 1.00, flick: 0.04, shaft: 0.34 },
+  sun:     { ux: 0.54, uy: 0.74, warm: 0.92, spread: 1.26, flick: 0.06, shaft: 0.60 },
+  storm:   { ux: 0.24, uy: 0.14, warm: 0.22, spread: 1.12, flick: 0.11, shaft: 0.24 },
+  glow:    { ux: 0.54, uy: 0.94, warm: 1.00, spread: 1.18, flick: 0.18, shaft: 0.00 },
+  glass:   { ux: 0.54, uy: 0.30, warm: 0.58, spread: 1.06, flick: 0.03, shaft: 0.86 },
+  ceiling: { ux: 0.32, uy: 0.12, warm: 0.30, spread: 0.92, flick: 0.13, shaft: 0.72 },
+  fogbank: { ux: 0.64, uy: 0.34, warm: 0.26, spread: 1.28, flick: 0.05, shaft: 0.44 },
+};
+
+function buildLightRig(spec, stage, accent, isBoss) {
+  const L = LIGHT[spec.horizon] || LIGHT.moon;
+  // Which side the light lives on. A boss slides the key further onto its own
+  // shoulder but never across the centre line: swapping sides inside a region
+  // would break the one thing this rig exists to hold together.
+  const dir = L.ux >= 0.5 ? 1 : -1;
+  const ux = clamp(L.ux + (isBoss ? dir * 0.05 : 0), 0.06, 0.94);
+  const sx = Math.round(stage.w * ux);
+  // The apparent source can sit anywhere, but the beam has to start far enough
+  // above the deck to read as a beam rather than as a stain on the floor.
+  const sy = Math.min(Math.round(stage.ground * L.uy) - 6, stage.ground - 56);
+  // Where the light lands. Pulled back toward the middle of the fight, because
+  // a key that lands outside the frame lights nothing the player is looking at.
+  const x = Math.round(lerp(stage.w / 2, sx, 0.66)) + (isBoss ? dir * 6 : 0);
+  const y = stage.ground - (isBoss ? 40 : 32);
+  const colour = mix(accent, L.warm > 0.5 ? METAL.ember : METAL.chrome,
+                     Math.abs(L.warm - 0.5) * 0.46);
+  return {
+    x, y, sx, sy, dir,
+    warm: L.warm, spread: L.spread, flick: L.flick, shaft: L.shaft,
+    colour,
+    // The hot rim off the story bible: the key's own hue pushed toward bone.
+    rim: mix(colour, METAL.bone, 0.36 + L.warm * 0.14),
+    // The only other light in the room, and it is not a second key: it is this
+    // one coming back off the deck, so it is dimmer, cooler and much lower.
+    bounce: mix(shade(colour, -46), METAL.steel, 0.5),
+  };
+}
+
+/* The visible beam. Four overlapping wedges from the source to the deck, each
+ * quantised to four alpha steps. A smooth cone is a bloom shader; four steps is
+ * a cartridge, and it is also what makes the dust inside it read as dust. */
+function buildShaft(light, stage, seed) {
+  const W = stage.w + PAD * 2;
+  const H = stage.ground + PAD + 4;
+  const s = surface(W, H);
+  const ctx = s.ctx;
+  const rand = rng((seed ^ 0x5417f00d) >>> 0);
+  const oy = PAD + light.sy;
+  const ty = PAD + stage.ground + 2;
+  const span = Math.max(8, ty - oy);
+  for (let b = 0; b < 4; b++) {
+    const ap = 2 + rand() * 4;                     // half-width at the aperture
+    const foot = 13 + rand() * 24;                 // half-width where it lands
+    const lx = PAD + light.sx + (rand() - 0.5) * 11;
+    const land = PAD + light.x + (rand() - 0.5) * 26;
+    const peak = 0.09 + rand() * 0.11;
+    for (let y = 0; y < span; y++) {
+      const k = y / span;
+      const q = Math.round(Math.pow(1 - k, 1.4) * 4) / 4;
+      if (q <= 0) continue;
+      const half = Math.max(1, Math.round(lerp(ap, foot, k)));
+      const cxp = Math.round(lerp(lx, land, k));
+      ctx.globalAlpha = peak * q;
+      ctx.fillStyle = light.colour;
+      ctx.fillRect(cxp - half, oy + y, half * 2, 1);
+      if (half > 3) {
+        ctx.globalAlpha = peak * q * 0.55;
+        ctx.fillStyle = light.rim;
+        const core = Math.max(1, Math.round(half * 0.5));
+        ctx.fillRect(cxp - (core >> 1), oy + y, core, 1);
+      }
+    }
+  }
+  ctx.globalAlpha = 1;
+  return s.canvas;
+}
 
 /* ---------------- sky ----------------
  * Banded in whole rows. A smooth vertical gradient is the tell of a CSS
@@ -1095,12 +1231,16 @@ function buildSky(spec, tint, seed, W, H, boss) {
     for (let x = (i % 2); x < W; x += 2) s.ctx.fillRect(x, y1 - 1, 1, 1);
   }
   const paint = HORIZONS[spec.horizon] || horizonMoon;
+  const lr = LIGHT[spec.horizon] || LIGHT.moon;
   paint(s.ctx, W, H, rand, {
     accent: spec.accent,
     bone: METAL.bone,
     fog: spec.fog,
     cloud: mix(spec.sky[1], METAL.steel, 0.4),
     rock: mix(spec.sky[2], METAL.gun, 0.5),
+    // Where the one light lives, so the disc, the seam, the window and the
+    // crack are all drawn at the same place the stage is lit from.
+    ux: lr.ux, uy: clamp(lr.uy, 0.08, 0.62),
   });
   return s.canvas;
 }
@@ -1557,6 +1697,143 @@ function addTorchBracket(canvas, c, x, y) {
   return { x, y: y - 1 };
 }
 
+/* ================================================================
+ * THE APRON
+ * ================================================================
+ * The fourth depth: a strip of ground between the camera and the platform,
+ * drawn in front of the combatants, moving faster than anything else in the
+ * frame. Far, mid, near, and then this.
+ *
+ * It is the cheapest way to say "you are standing in this room, looking across
+ * it". The occluders frame the fight from the sides; the apron puts something
+ * under the camera's own feet. It is near-black, because it is the closest
+ * thing to the lens and nothing that close is lit — except its crest, which
+ * takes one pixel of the key like everything else on the stage does.
+ *
+ * Its tall elements are kept to the outer thirty pixels of the frame. A tuft of
+ * grass through the middle of a sword swing is not staging, it is an obstacle.
+ */
+const APRON_OFF = 20;      // slack either side, so parallax cannot show an edge
+const APRON_LIFT = 2;      // rows above the standing line the crest may reach
+
+function buildApron(kind, c, seed, stage) {
+  const W = stage.w + PAD * 2 + APRON_OFF * 2;
+  const H = Math.max(10, stage.h + PAD - (stage.ground - APRON_LIFT));
+  const s = surface(W, H);
+  const ctx = s.ctx;
+  const rand = rng((seed ^ 0x4a27b19d) >>> 0);
+  const edgeOf = (x) => {
+    const xs = x - PAD - APRON_OFF;
+    return xs < 34 || xs > stage.w - 28;
+  };
+
+  // The crest: two sines and a hash jitter, so the near edge is a ragged line
+  // rather than a ruled one. A straight foreground edge reads as a letterbox.
+  const crest = new Int16Array(W);
+  for (let x = 0; x < W; x++) {
+    const u = (x / W) * 6.283;
+    // Sixteen rows down, which puts the near edge just below the platform's
+    // front lip: low enough to leave the chiselled face visible, high enough
+    // that the tall pieces at the frame edges can reach the standing line.
+    crest[x] = Math.max(6, Math.round(
+      16 + Math.sin(u * 3.1 + 0.6) * 3.4 + Math.sin(u * 7.7 + 2.2) * 1.8 + ((x * 37) % 3)));
+  }
+  for (let x = 0; x < W; x++) {
+    const top = crest[x];
+    ctx.fillStyle = c.body;
+    ctx.fillRect(x, top, 1, H - top);
+    ctx.fillStyle = c.mid;                       // one row of turned-up face
+    ctx.fillRect(x, top + 1, 1, 2);
+    ctx.fillStyle = c.rim;                       // the one lit pixel: the crest
+    ctx.fillRect(x, top, 1, 1);
+  }
+
+  // Scatter across the whole width, but low enough to stay under a knee.
+  for (let x = 2; x < W; x += 2 + Math.round(rand() * 3)) {
+    const top = crest[x];
+    const h = 1 + Math.round(rand() * (kind === 'blade' ? 4 : 2));
+    if (kind === 'blade') {
+      const lean = (rand() - 0.5) * 3;
+      for (let i = 0; i < h; i++) {
+        ctx.fillStyle = i === h - 1 ? c.rim : c.body;
+        ctx.fillRect(Math.round(x + lean * (i / Math.max(1, h))), top - i, 1, 1);
+      }
+    } else if (kind === 'plank') {
+      ctx.fillStyle = c.body;
+      ctx.fillRect(x, top - h, 3, h + 2);
+      ctx.fillStyle = c.rim;
+      ctx.fillRect(x, top - h, 3, 1);
+    } else {
+      const w = 2 + Math.round(rand() * 3);
+      ctx.fillStyle = c.body;
+      ctx.fillRect(x, top - h, w, h + 2);
+      ctx.fillStyle = c.mid;
+      ctx.fillRect(x, top - h, 1, h + 1);
+      ctx.fillStyle = c.rim;
+      ctx.fillRect(x, top - h, w, 1);
+    }
+  }
+
+  // The tall pieces, out at the edges where they frame rather than obstruct.
+  for (let x = 1; x < W; x += 9 + Math.round(rand() * 13)) {
+    if (!edgeOf(x)) continue;
+    const top = crest[x];
+    // Capped by the crest itself, so nothing can be driven up past row 0 and
+    // pile into a solid bar along the top of the strip.
+    const th = Math.min(top - 1, 9 + Math.round(rand() * 11));
+    if (th < 4) continue;
+    if (kind === 'blade') {
+      const blades = 3 + Math.round(rand() * 4);
+      for (let b = 0; b < blades; b++) {
+        const bx = x + b - (blades >> 1);
+        const bh = Math.round(th * (0.45 + rand() * 0.55));
+        const lean = (rand() - 0.5) * 7;
+        for (let i = 0; i < bh; i++) {
+          const k = i / Math.max(1, bh);
+          ctx.fillStyle = k > 0.82 ? c.rim : (k > 0.5 ? c.mid : c.body);
+          ctx.fillRect(Math.round(bx + lean * k * k), Math.max(0, top - i), 1, 1);
+        }
+      }
+    } else if (kind === 'plank') {
+      const w = 4 + Math.round(rand() * 4);
+      ctx.fillStyle = c.body;
+      ctx.fillRect(x, Math.max(0, top - th), w, th + 3);
+      ctx.fillStyle = c.mid;
+      ctx.fillRect(x, Math.max(0, top - th), 1, th + 2);
+      ctx.fillStyle = c.rim;
+      ctx.fillRect(x, Math.max(0, top - th), w, 1);
+      for (let y = top - th + 3; y < top; y += 5) {   // bolt heads
+        ctx.fillStyle = c.rim;
+        ctx.fillRect(x + 2, Math.max(0, y), 1, 1);
+      }
+    } else {
+      // A broken block: wider at the base, one chipped shoulder, lit crown.
+      const w = 5 + Math.round(rand() * 6);
+      for (let i = 0; i < th; i++) {
+        const k = i / th;
+        const cw = Math.max(2, Math.round(w * (1 - k * 0.4)));
+        ctx.fillStyle = c.body;
+        ctx.fillRect(x, Math.max(0, top - i), cw, 1);
+        ctx.fillStyle = c.mid;
+        ctx.fillRect(x, Math.max(0, top - i), 1, 1);
+      }
+      ctx.fillStyle = c.rim;
+      ctx.fillRect(x, Math.max(0, top - th), Math.max(2, w - 2), 1);
+      if (rand() < 0.5) {
+        ctx.clearRect(x + w - 3, Math.max(0, top - th), 3, 2 + Math.round(rand() * 3));
+      }
+    }
+  }
+  return s.canvas;
+}
+
+function apronKind(platform) {
+  if (platform === 'sod' || platform === 'bog' || platform === 'root'
+      || platform === 'branch') return 'blade';
+  if (platform === 'plank' || platform === 'iron') return 'plank';
+  return 'rubble';
+}
+
 function mirrorCanvas(src) {
   const s = surface(src.width, src.height);
   s.ctx.translate(src.width, 0);
@@ -1712,6 +1989,77 @@ function drawFlame(ctx, x, y, size, t, seed, cool, alpha = 1) {
   ctx.globalAlpha = 1;
 }
 
+/* Rain. Analytic like everything else: a drop's position is its phase through a
+ * fall, so there is no simulation and no state. Sheared by a fixed wind rather
+ * than falling straight, because vertical rain reads as a scratched film print.
+ *
+ * x, y, speed, length — four floats, one flat array.
+ */
+function buildRain(seed, count, W, H) {
+  const rand = rng((seed ^ 0x9a17c3) >>> 0);
+  const a = new Float32Array(count * 4);
+  for (let i = 0; i < count; i++) {
+    a[i * 4 + 0] = rand() * W;
+    a[i * 4 + 1] = rand() * H;
+    a[i * 4 + 2] = 0.7 + rand() * 0.6;
+    a[i * 4 + 3] = 3 + rand() * 5;
+  }
+  return a;
+}
+
+const RAIN_WIND = 0.42;                  // horizontal pixels per vertical pixel
+
+function drawRain(ctx, a, t, o) {
+  const W = o.w, H = o.h, speed = o.speed, colour = o.colour;
+  const splash = o.splash;
+  ctx.fillStyle = colour;
+  for (let i = 0; i < a.length; i += 4) {
+    const sp = a[i + 2];
+    let y = a[i + 1] + t * speed * sp;
+    const cycle = ((y % H) + H) % H;
+    let x = a[i] - cycle * RAIN_WIND;
+    x = ((x % W) + W) % W;
+    const len = Math.round(a[i + 3] * (o.stretch || 1));
+    const yy = Math.round(cycle) + o.y0;
+    ctx.globalAlpha = o.alpha;
+    for (let k = 0; k < len; k++) {
+      ctx.fillRect(Math.round(x + k * RAIN_WIND) + o.x0, yy - k, 1, 1);
+    }
+    // The hit. Only the drops that land on the deck get one, which is what
+    // tells the eye where the floor is.
+    if (splash && cycle > H - 5) {
+      const s2 = (cycle - (H - 5)) / 5;
+      ctx.globalAlpha = o.alpha * (1 - s2) * 0.9;
+      const r = 1 + Math.round(s2 * 3);
+      ctx.fillRect(Math.round(x) + o.x0 - r, yy - 1, r * 2, 1);
+      ctx.fillRect(Math.round(x) + o.x0, yy - 2 - Math.round(s2 * 2), 1, 1);
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+/* Dust hanging in the key light. It drifts up rather than falling, it is drawn
+ * additively in the key's own colour, and it is only bright where the beam is.
+ * A mote that glows on the shadow side of the room is a sticker; a mote that
+ * only lights up when it crosses the shaft is what makes air look like air. */
+function drawDust(ctx, a, t, o) {
+  const W = o.w, H = o.h, lx = o.lightX, reach = o.reach;
+  ctx.fillStyle = o.colour;
+  for (let i = 0; i < a.length; i += 5) {
+    const sp = a[i + 2], ph = a[i + 3];
+    let y = a[i + 1] - t * o.speed * sp;
+    y = ((y % H) + H) % H;
+    const x = a[i] + Math.sin(t * 0.42 * sp + ph) * 7;
+    const inBeam = 1 - Math.min(1, Math.abs(x - lx) / reach);
+    if (inBeam <= 0.02) continue;
+    const twinkle = 0.55 + 0.45 * Math.sin(t * 1.9 + ph * 4);
+    ctx.globalAlpha = o.alpha * inBeam * inBeam * twinkle;
+    ctx.fillRect(Math.round(((x % W) + W) % W) + o.x0, Math.round(y) + o.y0,
+                 a[i + 4] > 0.9 ? 2 : 1, 1);
+  }
+  ctx.globalAlpha = 1;
+}
+
 function buildDrips(seed, count, stage) {
   const rand = rng(seed ^ 0xd819);
   const a = new Float32Array(count * 4);
@@ -1789,17 +2137,28 @@ function drawBolt(ctx, pts, env, colour) {
 /* ================================================================
  * CAMERA
  * ================================================================
- * The stage never moves on its own; the camera does. Four behaviours, and the
- * FX layer drives all of them:
+ * The stage never moves on its own; the camera does, and it has opinions about
+ * when. Six behaviours, and the FX layer drives all of them:
  *
- *   idle    a slow lissajous drift, about a pixel and a half, always running
- *   shake   decaying, on impact
+ *   idle    a slow lissajous drift that OPENS OUT during a lull and closes
+ *           down the instant anything lands. A camera that breathes the same
+ *           way through a quiet turn and a finisher is a camera nobody
+ *           believes.
+ *   shake   decaying, on impact, with a directional kick and an overshoot back
+ *           through centre — the snap back, which is the part that sells it.
  *   punch   a fast push-in and release, on a critical strike
+ *   cast    a slow push-in, a hold, and a slow release, over a whole cast
+ *   focus   a gentle lean toward whoever is acting, eased in and eased out
  *   push    a slow, long push-in for a boss entrance
  *
  * baseZoom is 1.03 rather than 1 so the frame is always slightly over-scanned.
- * That is what lets drift and shake move the whole world without any caller
- * having to clamp them, and it costs 3% of a 192x128 stage.
+ * That is what lets drift, lean and shake move the whole world without any
+ * caller having to clamp them, and it costs 3% of a 192x128 stage.
+ *
+ * MOTION SICKNESS IS A FAILURE, so every term is small and the sum is clamped
+ * hard at the end: seven logical pixels across, five down, and a fifth of a
+ * stop of zoom. Everything here is meant to be felt and not seen. If you can
+ * point at the camera move, it is too big.
  */
 export function createCamera(opts = {}) {
   const base = opts.baseZoom || 1.03;
@@ -1811,16 +2170,31 @@ export function createCamera(opts = {}) {
     reducedMotion: !!opts.reducedMotion,
     drift: opts.drift === undefined ? 1 : opts.drift,
     _shake: 0, _shakeT: 0, _shakeDur: 0,
+    _kick: 0, _kickDir: 1, _kickT: 1,
     _punch: 0, _punchT: 0, _punchDur: 0,
+    _cast: 0, _castT: 0, _castDur: 0, _castHold: 0,
     _pushFrom: 0, _pushT: 0, _pushDur: 0, _pushLift: 0,
+    _lean: 0, _leanTo: 0,
+    _calm: 9,
 
     setReducedMotion(v) { this.reducedMotion = !!v; return this; },
 
-    /* mag is in logical pixels of throw. 3 is a hit, 6 a crit, 10 a boss. */
-    shake(mag, dur = 0.36) {
+    /* Anything the fight does closes the idle drift down. It reopens on its
+     * own over the next few seconds of quiet. */
+    _busy() { this._calm = 0; return this; },
+
+    /* mag is in logical pixels of throw. 3 is a hit, 6 a crit, 10 a boss.
+     * dirX is which way the blow came from: -1, 0 or +1. */
+    shake(mag, dur = 0.36, dirX = 0) {
       const m = Math.max(0, mag) * (this.reducedMotion ? 0.2 : 1);
+      this._calm = 0;
       if (m <= this._shake * Math.max(0, 1 - this._shakeT / Math.max(0.01, this._shakeDur))) return this;
       this._shake = m; this._shakeT = 0; this._shakeDur = Math.max(0.05, dur);
+      // The kick: the frame is shoved once along the blow and springs back
+      // through centre. Without it a shake is a vibration, not an impact.
+      this._kick = m * 0.55;
+      this._kickDir = dirX < 0 ? -1 : dirX > 0 ? 1 : (noise(this.t * 53.1) < 0.5 ? -1 : 1);
+      this._kickT = 0;
       return this;
     },
 
@@ -1828,6 +2202,41 @@ export function createCamera(opts = {}) {
     punch(amount = 0.06, dur = 0.42) {
       this._punch = amount * (this.reducedMotion ? 0.25 : 1);
       this._punchT = 0; this._punchDur = Math.max(0.08, dur);
+      this._calm = 0;
+      return this;
+    },
+
+    /* The cast: in over a quarter of a second, hold while the spell builds,
+     * out as it lands. Slower and smaller than a punch, and the two stack. */
+    cast(amount = 0.05, dur = 1.1, hold = 0.34) {
+      this._cast = amount * (this.reducedMotion ? 0.2 : 1);
+      this._castT = 0;
+      this._castDur = Math.max(0.15, dur);
+      this._castHold = clamp(hold, 0, 0.6);
+      this._calm = 0;
+      return this;
+    },
+
+    /* Lean toward whoever is acting. `x` is a logical stage x; the frame moves
+     * a small fraction of the way there and eases back when released. */
+    focus(x, stage = SCENE_STAGE) {
+      const half = Math.max(1, stage.w / 2);
+      this._leanTo = clamp((x - half) / half * 2.6, -3, 3);
+      this._calm = 0;
+      return this;
+    },
+
+    release() { this._leanTo = 0; return this; },
+
+    /* Snap back: drop the lean and the cast now, and spring through centre.
+     * This is the beat after a finisher, not something to call every frame. */
+    snap() {
+      this._leanTo = 0;
+      this._castT = this._castDur;
+      this._kick = Math.max(this._kick * 0.5, Math.abs(this._lean) * 0.6);
+      this._kickDir = this._lean > 0 ? -1 : 1;
+      this._kickT = 0;
+      this._calm = 0;
       return this;
     },
 
@@ -1837,6 +2246,7 @@ export function createCamera(opts = {}) {
       this._pushLift = lift;
       this._pushT = 0;
       this._pushDur = this.reducedMotion ? 0.3 : Math.max(0.2, dur);
+      this._calm = 0;
       return this;
     },
 
@@ -1845,26 +2255,50 @@ export function createCamera(opts = {}) {
     reset() {
       this.zoom = this.baseZoom; this.ox = 0; this.oy = 0; this.t = 0;
       this._shake = 0; this._shakeT = 0; this._shakeDur = 0;
+      this._kick = 0; this._kickT = 1; this._kickDir = 1;
       this._punch = 0; this._punchT = 0; this._punchDur = 0;
+      this._cast = 0; this._castT = 0; this._castDur = 0; this._castHold = 0;
       this._pushDur = 0; this._pushT = 0;
+      this._lean = 0; this._leanTo = 0;
+      this._calm = 9;
       return this;
     },
 
     update(dt) {
       const step = Math.min(0.05, Math.max(0, dt || 0));
       this.t += step;
+      this._calm += step;
       let x = 0, y = 0, z = this.baseZoom;
 
       if (!this.reducedMotion && this.drift) {
-        x += (Math.sin(this.t * 0.37) * 1.1 + Math.sin(this.t * 0.11 + 2.1) * 0.6) * this.drift;
-        y += (Math.sin(this.t * 0.23 + 1.7) * 0.7) * this.drift;
+        // Half amplitude while the fight is live, full after five seconds of
+        // nothing happening. The lull is the only time the camera wanders.
+        const lull = 0.5 + 0.5 * clamp((this._calm - 1.1) / 5, 0, 1);
+        const d = this.drift * lull;
+        x += (Math.sin(this.t * 0.37) * 1.1 + Math.sin(this.t * 0.11 + 2.1) * 0.6) * d;
+        y += (Math.sin(this.t * 0.23 + 1.7) * 0.7) * d;
       }
+      // The lean is always easing somewhere, which is why it never reads as a
+      // cut. Frozen under reduced motion, like everything else lateral.
+      this._lean += (this._leanTo - this._lean) * Math.min(1, step * 3.2);
+      if (!this.reducedMotion) x += this._lean;
+
       if (this._shakeT < this._shakeDur) {
         this._shakeT += step;
         const k = Math.max(0, 1 - this._shakeT / this._shakeDur);
         const m = this._shake * k * k;
         x += (noise(this._shakeT * 137.1) - 0.5) * 2 * m;
         y += (noise(this._shakeT * 91.7 + 9.3) - 0.5) * 2 * m * 0.7;
+      }
+      if (this._kickT < 1) {
+        // One shove out, one overshoot back, settled by a second. A decaying
+        // sine rather than a decaying random: the eye reads it as the room
+        // taking the hit and recovering, which is the point.
+        this._kickT += step / 0.55;
+        const k = Math.min(1, this._kickT);
+        const sp = Math.sin(k * 8.6) * Math.pow(1 - k, 2.2);
+        x += this._kick * this._kickDir * sp;
+        y += this._kick * sp * 0.3;
       }
       if (this._punchT < this._punchDur) {
         this._punchT += step;
@@ -1873,15 +2307,28 @@ export function createCamera(opts = {}) {
         const curve = k < 0.2 ? easeOut(k / 0.2) : 1 - easeInOut((k - 0.2) / 0.8);
         z += this._punch * curve;
       }
+      if (this._castT < this._castDur) {
+        this._castT += step;
+        const k = this._castT / this._castDur;
+        const rise = clamp(k / 0.26, 0, 1);
+        const tail = Math.max(0.08, 0.74 - this._castHold);
+        const fall = clamp((k - 0.26 - this._castHold) / tail, 0, 1);
+        const held = easeInOut(rise) - easeInOut(fall);
+        z += this._cast * held;
+        y += this._cast * 9 * held;         // a breath of lift with the push
+      }
       if (this._pushT < this._pushDur) {
         this._pushT += step;
         const k = this._pushT / this._pushDur;
         z = lerp(this._pushFrom, z, easeInOut(k));
         y += this._pushLift * (1 - easeInOut(k));
       }
-      this.ox = x;
-      this.oy = y;
-      this.zoom = z;
+      // The hard stop. Every term above is deliberately small; this is what
+      // guarantees they can never sum into something that makes anyone ill,
+      // and it is also what lets the over-scan margin be a fixed 16 pixels.
+      this.ox = clamp(x, -7, 7);
+      this.oy = clamp(y, -5, 5);
+      this.zoom = clamp(z, this.baseZoom - 0.02, this.baseZoom + 0.22);
       return this;
     },
   };
@@ -1908,12 +2355,39 @@ export function applyCamera(ctx, cam, stage = SCENE_STAGE) {
  * boss stage lifts the standing line by a pixel or two. */
 export function sceneAnchors(scene) {
   const stage = (scene && scene.stage) || SCENE_STAGE;
+  const rig = scene && scene.light;
   return {
     ground: stage.ground,
     heroX: stage.heroX,
     enemyX: stage.enemyX,
     centreX: stage.w / 2,
     keyX: scene ? scene.keyX : stage.enemyX,
+    // Added alongside, never in place of: the one light, so a caller that
+    // wants to lean a sprite's own shading the right way can ask.
+    lightX: rig ? rig.x : stage.enemyX,
+    lightY: rig ? rig.y : stage.ground - 32,
+    lightDir: rig ? rig.dir : 1,
+  };
+}
+
+/* The scene's light rig, for anything outside this module that has to agree
+ * with it — a sprite that wants its own specular on the correct side, an
+ * effect that wants to be the same colour as the room. Added alongside
+ * sceneAnchors rather than folded into it, because it is a different question.
+ */
+export function sceneLight(scene) {
+  const rig = scene && scene.light;
+  if (!rig) {
+    return {
+      x: SCENE_STAGE.enemyX, y: SCENE_STAGE.ground - 32, sx: SCENE_STAGE.enemyX,
+      sy: 20, dir: 1, warm: 0.2, spread: 1,
+      colour: METAL.chrome, rim: METAL.bone, bounce: METAL.steel,
+    };
+  }
+  return {
+    x: rig.x, y: rig.y, sx: rig.sx, sy: rig.sy, dir: rig.dir,
+    warm: rig.warm, spread: rig.spread,
+    colour: rig.colour, rim: rig.rim, bounce: rig.bounce,
   };
 }
 
@@ -2010,6 +2484,25 @@ export function createScene(opts = {}) {
     joint: shade(deck, -40),
   }, seed, stage, isBoss);
 
+  /* ---- light ----
+   * One source. Its position, colour, direction and rim are all published on
+   * the scene so that the figures, their shadows, the deck pool and the beam
+   * in the air cannot disagree about where it is. See THE LIGHT RIG above. */
+  const light = buildLightRig(spec, stage, accent, isBoss);
+  const keyX = light.x;
+  const keyY = light.y;
+  const keyGlow = radialGlow(Math.round((isBoss ? 78 : 62) * light.spread), light.colour, 9, 1);
+  const floorPool = ovalGlow(Math.round((isBoss ? 62 : 46) * light.spread),
+                             isBoss ? 15 : 11, light.colour, 8, 0.9);
+  // Not a second key: the key coming back off the deck. Dimmer, cooler, low.
+  const fillGlow = radialGlow(44, light.bounce, 7, 1);
+  const shaft = light.shaft > 0.1 ? buildShaft(light, stage, seed) : null;
+  // The corners fall to the region's own darkness rather than to pure black,
+  // which is a quarter of the per-realm mood on its own.
+  const vignette = buildVignette(stage.w + PAD * 2, stage.h + PAD * 2,
+                                 isBoss ? 2.2 : 1.5,
+                                 mix(METAL.black, spec.fog, 0.13));
+
   /* ---- frame furniture ---- */
   const occC = {
     dark: mix(METAL.black, accent, 0.09),
@@ -2032,22 +2525,24 @@ export function createScene(opts = {}) {
   }
   const occRight = mirrorCanvas(occRightSrc);
 
-  /* ---- light ---- */
-  const keyX = isBoss ? stage.enemyX : Math.round(stage.w * 0.66);
-  const keyY = stage.ground - (isBoss ? 40 : 32);
-  const keyGlow = radialGlow(isBoss ? 78 : 62, bossColour, 9, 1);
-  const floorPool = ovalGlow(isBoss ? 62 : 46, isBoss ? 15 : 11, bossColour, 8, 0.9);
-  const fillGlow = radialGlow(46, mix(METAL.cyan, METAL.chrome, 0.5), 7, 1);
-  const vignette = buildVignette(stage.w + PAD * 2, stage.h + PAD * 2,
-                                 isBoss ? 2.2 : 1.5, METAL.black);
+  /* ---- the apron: the fourth depth, in front of the fight ---- */
+  const apron = buildApron(apronKind(spec.platform), {
+    body: mix(METAL.black, accent, 0.06),
+    mid: mix(METAL.black, occC.mid, 0.45),
+    rim: mix(light.rim, METAL.black, 0.45),
+  }, seed ^ 0x33, stage);
+  const apronY = stage.ground - APRON_LIFT;
 
   /* ---- volumetrics and weather ---- */
+  // Every room has air in it. A biome that does not call for fog still gets the
+  // three bands, at a third of the weight: the point is not weather, it is that
+  // there is something between the camera and the far layer, and without it the
+  // depth ramp has nothing to hang on.
+  const fogK = (has('fog') || has('godray')) ? 1 : 0.34;
   const fog = [];
-  if (has('fog') || has('godray')) {
-    fog.push({ canvas: buildFogBand(spec.fog, seed + 3, W2, 34), y: stage.ground - 44, rate: 3, depth: 0.25, alpha: 0.55 });
-    fog.push({ canvas: buildFogBand(spec.fog, seed + 7, W2, 26), y: stage.ground - 22, rate: 7, depth: 0.5, alpha: 0.6 });
-    fog.push({ canvas: buildFogBand(mix(spec.fog, METAL.black, 0.3), seed + 11, W2, 30), y: stage.ground + 2, rate: 13, depth: 0.9, alpha: 0.5 });
-  }
+  fog.push({ canvas: buildFogBand(spec.fog, seed + 3, W2, 34), y: stage.ground - 44, rate: 3, depth: 0.25, alpha: 0.55 * fogK });
+  fog.push({ canvas: buildFogBand(spec.fog, seed + 7, W2, 26), y: stage.ground - 22, rate: 7, depth: 0.5, alpha: 0.42 * fogK });
+  fog.push({ canvas: buildFogBand(mix(spec.fog, METAL.black, 0.3), seed + 11, W2, 30), y: stage.ground + 2, rate: 13, depth: 0.9, alpha: 0.5 * fogK });
   const godrays = has('godray')
     ? buildGodrays(mix(accent, METAL.bone, 0.35), seed, stage.w + PAD * 2, stage.ground + PAD)
     : null;
@@ -2068,6 +2563,12 @@ export function createScene(opts = {}) {
   const wisps = has('flies') ? buildMotes(seed + 31, 18, stage.w, stage.ground - 12) : null;
   const drips = has('drip') ? buildDrips(seed, 9, stage) : null;
   const bolts = has('lightning') && !reducedMotion ? buildBolts(seed, 6, stage) : null;
+  // Rain is two sheets at two depths. The depth cue is entirely the speed and
+  // the length of the streak; the near sheet is what puts the camera outside.
+  const rain = (has('rain') && !reducedMotion) ? buildRain(seed + 41, 46, stage.w, stage.ground + 4) : null;
+  const foreRain = rain ? buildRain(seed + 43, 22, stage.w, stage.h) : null;
+  // Dust in the beam. Every room gets it, because every room has a key light.
+  const dust = buildMotes(seed + 53, 18, stage.w, stage.ground - 6);
 
   /* ---- boss furniture ---- */
   const sigil = isBoss ? buildSigil(bossColour, seed, stage) : null;
@@ -2095,14 +2596,28 @@ export function createScene(opts = {}) {
     boss: isBoss, bossColour, accent,
     sky, layers, platform, fog, godrays,
     occLeft, occRight, occX: { left: -PAD, right: stage.w + PAD - OCC_W },
+    apron, apronY, apronX: -PAD - APRON_OFF,
     torches,
     motes, moteStyle, foreMotes, wisps, drips, bolts, weather,
+    rain, foreRain, dust,
     sigil, brazier, braziers,
-    keyGlow, floorPool, fillGlow, vignette,
-    keyX, keyY,
-    rimColour: mix(bossColour, METAL.bone, 0.35),
-    heroRim: mix(METAL.cyan, METAL.bone, 0.4),
+    keyGlow, floorPool, fillGlow, shaft, vignette,
+    keyX, keyY, light,
+    // Both figures are rimmed in the SAME colour from the SAME side. This is
+    // the whole point of the rig: rimColour and heroRim are deliberately equal
+    // now, and heroRim survives only so older callers keep working.
+    rimColour: light.rim,
+    heroRim: light.rim,
+    rimDir: light.dir,
+    bounceColour: light.bounce,
+    // The grade, in two passes. A multiply in the region's own shadow tone
+    // pulls everything into one colour space; a very low additive pass in a
+    // near-black version of the key hue tints the blacks, which is what stops
+    // seventeen dark rooms reading as the same dark room.
     gradeColour: mix(spec.sky[1], isBoss ? bossColour : spec.accent, 0.22),
+    gradeLift: mix(METAL.black, light.colour, 0.15),
+    gradeK: isBoss ? 0.26 : 0.18,
+    liftK: 0.18 + light.warm * 0.1,
     lavaPulse: has('lava'),
     tintPool, tintNext: 0,
   };
@@ -2116,8 +2631,10 @@ export function destroyScene(scene) {
   scene.fog = [];
   scene.tintPool = [];
   scene.sky = scene.platform = scene.sigil = scene.brazier = null;
-  scene.occLeft = scene.occRight = scene.vignette = null;
+  scene.occLeft = scene.occRight = scene.vignette = scene.apron = null;
   scene.keyGlow = scene.floorPool = scene.fillGlow = scene.godrays = null;
+  scene.shaft = null;
+  scene.rain = scene.foreRain = scene.dust = null;
 }
 
 /* ================================================================
@@ -2170,7 +2687,7 @@ export function drawScene(ctx, scene, time = 0, cam = null) {
       drawBolt(ctx, scene.bolts[idx], boltEnv, mix(scene.accent, '#ffffff', 0.6));
     }
   }
-  scene._bolt = boltEnv;
+  scene._bolt = boltEnv || 0;
 
   /* --- lava seam breathing at the horizon --- */
   if (scene.lavaPulse) {
@@ -2215,6 +2732,13 @@ export function drawScene(ctx, scene, time = 0, cam = null) {
     drawWisps(ctx, scene.wisps, t, { colour: mix(scene.accent, '#ffffff', 0.4), alpha: 0.7 });
   }
   if (scene.drips) drawDrips(ctx, scene.drips, t, mix(scene.accent, '#ffffff', 0.5), stage);
+  if (scene.rain) {
+    drawRain(ctx, scene.rain, t, {
+      w: stage.w, h: stage.ground + 4, x0: 0, y0: 0,
+      colour: mix(scene.light.rim, '#ffffff', 0.3),
+      speed: 96, alpha: 0.28, stretch: 1, splash: true,
+    });
+  }
 
   /* --- the platform, and the light pooled on it --- */
   ctx.drawImage(scene.platform, -PAD, Math.round(stage.ground - PLATFORM_TOP));
@@ -2231,7 +2755,7 @@ export function drawScene(ctx, scene, time = 0, cam = null) {
   }
 
   ctx.globalCompositeOperation = 'lighter';
-  ctx.globalAlpha = (scene.boss ? 0.5 : 0.3) + 0.06 * noise(t * 3.3);
+  ctx.globalAlpha = (scene.boss ? 0.38 : 0.24) + 0.05 * noise(t * 3.3);
   ctx.drawImage(scene.floorPool,
                 Math.round(scene.keyX - scene.floorPool.width / 2),
                 Math.round(stage.ground - scene.floorPool.height / 2 + 2));
@@ -2249,16 +2773,40 @@ export function drawScene(ctx, scene, time = 0, cam = null) {
     }
   }
 
-  /* --- the key light itself: a cone of the boss's own colour --- */
+  /* --- THE LIGHT ---------------------------------------------------------
+   * One source, in the region's colour, and everything downstream of it is
+   * subordinate: the beam hanging in the air, the dust inside the beam, the
+   * pool it lands in, and a single dim bounce off the deck. There is no second
+   * key. Both figures are rimmed off this, from the same side, by drawRimLight
+   * defaulting to scene.rimDir — which is the change that makes the stage read
+   * as lit rather than as assembled. */
+  const rig = scene.light;
+  const flick = 1 + rig.flick * (noise(t * 7.3) - 0.5) * 2 + 0.4 * scene._bolt;
+
   ctx.globalCompositeOperation = 'lighter';
-  ctx.globalAlpha = (scene.boss ? 0.3 : 0.18) + 0.05 * noise(t * 2.7 + 4);
+  if (scene.shaft) {
+    ctx.globalAlpha = clamp(rig.shaft * 0.34 * flick, 0, 1);
+    ctx.drawImage(scene.shaft, Math.round(-PAD - cx * 0.45),
+                  Math.round(-PAD - cy * 0.4));
+  }
+  if (scene.dust) {
+    drawDust(ctx, scene.dust, t, {
+      w: stage.w, h: stage.ground - 6, x0: 0, y0: 0,
+      colour: rig.rim, alpha: 0.5, speed: 3.2,
+      lightX: lerp(rig.sx, rig.x, 0.5), reach: 44 * rig.spread,
+    });
+  }
+  ctx.globalAlpha = clamp(((scene.boss ? 0.24 : 0.16) + 0.04 * noise(t * 2.7 + 4)) * flick, 0, 1);
   ctx.drawImage(scene.keyGlow, Math.round(scene.keyX - scene.keyGlow.width / 2),
                 Math.round(scene.keyY - scene.keyGlow.height / 2));
-  // A cold fill on the hero's side, so the two figures are lit by different
-  // sources. One light source flattens a stage; two carve it.
-  ctx.globalAlpha = 0.12;
-  ctx.drawImage(scene.fillGlow, Math.round(stage.heroX - 10 - scene.fillGlow.width / 2),
-                Math.round(stage.ground - 30 - scene.fillGlow.height / 2));
+  // The only other light in the room is this one coming back off the deck:
+  // low, dim, on the shadow side, in a cooled version of the same hue. A fill
+  // that is a second key of its own colour flattens the stage; a bounce keeps
+  // the shadow side from going to a dead black, which is all it is for.
+  ctx.globalAlpha = 0.09;
+  ctx.drawImage(scene.fillGlow,
+                Math.round(stage.w / 2 - rig.dir * 42 - scene.fillGlow.width / 2),
+                Math.round(stage.ground - 6 - scene.fillGlow.height / 2));
   ctx.globalAlpha = 1;
   ctx.globalCompositeOperation = 'source-over';
 }
@@ -2270,6 +2818,7 @@ export function drawForeground(ctx, scene, time = 0, cam = null) {
   const stage = scene.stage;
   const t = scene.reducedMotion ? 0 : (time || 0);
   const cx = cam ? cam.ox : 0;
+  const cy = cam ? cam.oy : 0;
   const fw = stage.w + PAD * 2;
   const fh = stage.h + PAD * 2;
 
@@ -2283,6 +2832,25 @@ export function drawForeground(ctx, scene, time = 0, cam = null) {
     });
   }
   if (scene.fog[2]) blitFog(ctx, scene.fog[2], t, cx, 4.4);
+
+  /* --- the near sheet of rain: shorter cycle, longer streaks, twice the
+   *     speed. Nothing else about it is different, and that is the whole
+   *     depth cue. --- */
+  if (scene.foreRain) {
+    drawRain(ctx, scene.foreRain, t, {
+      w: stage.w, h: stage.h, x0: 0, y0: -PAD,
+      colour: mix(scene.light.rim, '#ffffff', 0.45),
+      speed: 210, alpha: 0.2, stretch: 2.1, splash: false,
+    });
+  }
+
+  /* --- the apron: the fourth depth, under the camera's own feet, moving
+   *     faster than the occluders and far faster than the set --- */
+  if (scene.apron) {
+    ctx.drawImage(scene.apron,
+                  Math.round(scene.apronX + cx * 0.55),
+                  Math.round(scene.apronY + cy * 0.3));
+  }
 
   /* --- the occluders, moving faster than anything behind them --- */
   const occShift = Math.round(cx * 0.32);
@@ -2304,15 +2872,31 @@ export function drawForeground(ctx, scene, time = 0, cam = null) {
   }
 
   /* --- darkness toward the frame --- */
-  ctx.globalAlpha = scene.boss ? 0.9 : 0.72;
+  ctx.globalAlpha = scene.boss ? 0.95 : 0.78;
   ctx.drawImage(scene.vignette, -PAD, -PAD);
   ctx.globalAlpha = 1;
 
-  /* --- one grade pass, so sky, stone and sprite share a colour space --- */
+  /* --- the grade, in two passes, so sky, stone and sprite share a colour
+   *     space and each realm still has its own mood.
+   *
+   *     Pass one multiplies the region's shadow tone over everything: this is
+   *     what makes a sprite drawn from one palette and a backdrop drawn from
+   *     another look like they were photographed together.
+   *
+   *     Pass two adds a near-black version of the KEY colour. Additive at this
+   *     weight touches almost nothing in the highlights and tints the blacks,
+   *     which is exactly what a colour grade does and exactly what stops
+   *     seventeen dark rooms reading as one dark room. --- */
   ctx.globalCompositeOperation = 'multiply';
-  ctx.globalAlpha = scene.boss ? 0.26 : 0.18;
+  ctx.globalAlpha = scene.gradeK === undefined ? (scene.boss ? 0.26 : 0.18) : scene.gradeK;
   ctx.fillStyle = scene.gradeColour;
   ctx.fillRect(-PAD, -PAD, fw, fh);
+  if (scene.gradeLift) {
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = scene.liftK === undefined ? 0.3 : scene.liftK;
+    ctx.fillStyle = scene.gradeLift;
+    ctx.fillRect(-PAD, -PAD, fw, fh);
+  }
   ctx.globalAlpha = 1;
   ctx.globalCompositeOperation = 'source-over';
 }
@@ -2349,7 +2933,11 @@ export function drawRimLight(ctx, scene, image, x, y, opts = {}) {
   if (w > pool.canvas.width || h > pool.canvas.height) return;
   const colour = opts.colour || scene.rimColour;
   const alpha = opts.alpha === undefined ? 0.75 : opts.alpha;
-  const dir = opts.dir === undefined ? 1 : opts.dir;   // +1 lit from the right
+  // THE DEFAULT IS THE SCENE'S OWN LIGHT, not a per-caller guess. Pass dir
+  // explicitly only when you mean to contradict the rig, which is almost never:
+  // two figures rimmed from opposite sides is the thing this file exists to
+  // stop. +1 is lit from the right.
+  const dir = opts.dir === undefined ? (scene.rimDir || 1) : opts.dir;
   const img = tinted(scene, image, colour);
   ctx.globalCompositeOperation = 'lighter';
   ctx.globalAlpha = alpha;
@@ -2358,6 +2946,15 @@ export function drawRimLight(ctx, scene, image, x, y, opts = {}) {
   ctx.drawImage(img, 0, 0, w, h, Math.round(x + dir), Math.round(y - 1), w, h);
   ctx.globalAlpha = alpha * 0.5;
   ctx.drawImage(img, 0, 0, w, h, Math.round(x), Math.round(y - 1), w, h);
+  // The bounce off the deck, on the shadow side, at a third of the weight.
+  // Not a second rim light: it is what stops the unlit side going to a flat
+  // silhouette, and it is drawn in the key's own cooled hue so the figure is
+  // still only ever lit by one thing.
+  if (scene.bounceColour && opts.bounce !== false) {
+    ctx.globalAlpha = alpha * 0.26;
+    ctx.drawImage(tinted(scene, image, scene.bounceColour), 0, 0, w, h,
+                  Math.round(x - dir), Math.round(y + 1), w, h);
+  }
   ctx.globalAlpha = 1;
   ctx.globalCompositeOperation = 'source-over';
 }
@@ -2370,14 +2967,24 @@ export function drawFigureShadow(ctx, scene, x, width, opts = {}) {
   const rx = Math.max(3, Math.round(width * 0.42));
   const ry = Math.max(1, Math.round(rx * 0.34));
   const y = (opts.y === undefined ? stage.ground + 1 : opts.y);
-  ctx.globalAlpha = opts.alpha === undefined ? 0.5 : opts.alpha;
-  blockEllipse(ctx, x, y, rx, ry, METAL.black);
-  ctx.globalAlpha = (opts.alpha === undefined ? 0.5 : opts.alpha) * 0.5;
-  blockEllipse(ctx, x, y, rx + 2, ry + 1, METAL.black);
+  const a = opts.alpha === undefined ? 0.5 : opts.alpha;
+  // A shadow directly under a figure says the light is directly overhead, and
+  // nothing in this game is lit from directly overhead. It is thrown away from
+  // the key, which is the other half of the rim: together they are what tells
+  // the eye where the source is without the source ever being in shot.
+  const dir = opts.dir === undefined ? ((scene && scene.rimDir) || 1) : opts.dir;
+  const cast = opts.offset === undefined
+    ? -dir * Math.max(1, Math.round(rx * 0.5)) : opts.offset;
+  ctx.globalAlpha = a * 0.45;
+  blockEllipse(ctx, x + cast, y, rx + 1, ry, METAL.black);      // the cast
+  ctx.globalAlpha = a * 0.3;
+  blockEllipse(ctx, x + cast, y, rx + 3, ry + 1, METAL.black);  // its penumbra
+  ctx.globalAlpha = a;
+  blockEllipse(ctx, x, y, Math.max(2, rx - 2), ry, METAL.black); // the contact
   ctx.globalAlpha = 1;
 }
 
-export const SCENE_VERSION = '1.0.0';
+export const SCENE_VERSION = '1.1.0';
 
 /* ================================================================
  * WIRING (for whoever integrates this; nothing below runs)
@@ -2412,22 +3019,32 @@ export const SCENE_VERSION = '1.0.0';
  *   ctx.restore();
  *   ... _drawHud and everything else, outside the camera transform ...
  *
- * _drawHero should call, immediately before its drawImage:
+ * THE ONE RULE FOR THE FIGURES. Both of them are lit by the same thing, from
+ * the same side. _drawHero and _drawEnemy should each call, immediately before
+ * their drawImage, EXACTLY THE SAME WAY:
  *
- *   stagelayer.drawFigureShadow(ctx, this.stage3d, STAGE.heroX, sprites.HERO_W);
- *   stagelayer.drawRimLight(ctx, this.stage3d, frame, x, y,
- *                           { colour: this.stage3d.rimColour, dir: 1 });
+ *   stagelayer.drawFigureShadow(ctx, this.stage3d, x, width);
+ *   stagelayer.drawRimLight(ctx, this.stage3d, frame, x, y);
  *
- * and _drawEnemy the same with { colour: this.stage3d.heroRim, dir: -1 }, so
- * each figure is rimmed by the light on the far side of it.
+ * with no colour and no dir. Both default off scene.light: the same rim hue,
+ * the same side, and a cast shadow thrown the other way. Passing { dir: -1 } to
+ * one of them to make it "face" the other is the single easiest way to undo
+ * everything this module does — it is what makes a stage read as two sprites on
+ * a picture instead of two bodies in a room. If a figure needs to be special,
+ * change its alpha, not its direction.
  *
- * Then delete BattleFX.shakeMag's use in _render and point the existing impact
- * calls at the camera instead:
+ * The camera has opinions and wants to be told what is happening:
  *
- *   this.cam.shake(mag);                 where shakeMag was set
- *   this.cam.punch(0.08, 0.45);          on DAMAGE_KIND.CRIT
- *   this.cam.push(4.5);                  on the boss name card
- *   this.cam.setReducedMotion(v);        in setReducedMotion
+ *   this.cam.shake(mag, 0.36, fromLeft ? -1 : 1);   where shakeMag was set
+ *   this.cam.punch(0.08, 0.45);                     on DAMAGE_KIND.CRIT
+ *   this.cam.cast(0.05);        this.cam.focus(x);  when a spell starts
+ *   this.cam.snap();                                when it lands
+ *   this.cam.release();                             at the end of a turn
+ *   this.cam.push(4.5);                             on the boss name card
+ *   this.cam.setReducedMotion(v);                   in setReducedMotion
+ *
+ * Nothing has to be clamped by the caller: update() clamps the sum to seven
+ * logical pixels across and five down, and the art is built PAD oversize.
  *
  * BattleFX._drawBackdrop, buildBackdrop, silhouette, BIOME_FORM and the weather
  * particle set in fx.js are all superseded and can go.

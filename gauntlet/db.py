@@ -197,9 +197,12 @@ def interview_history(conn: sqlite3.Connection, limit: int = 20) -> list:
     return [dict(r) for r in rows]
 
 
+SAVE_FORMAT_VERSION = 1
+
+
 def export_save(conn: sqlite3.Connection) -> dict:
     return {
-        "version": 1,
+        "version": SAVE_FORMAT_VERSION,
         "exported_at": time.time(),
         "state": load_state(conn),
         "attempts": recent_attempts(conn, limit=100000),
@@ -208,18 +211,75 @@ def export_save(conn: sqlite3.Connection) -> dict:
     }
 
 
+class InvalidSave(ValueError):
+    """A save file we refuse to load, with a reason fit to show a player."""
+
+
+def _validate_save(payload: object) -> dict:
+    """Refuse anything that is not recognisably one of our exports.
+
+    The previous version accepted any dict at all and then unconditionally
+    deleted the attempts and boss_records tables, so importing ``{}`` silently
+    destroyed every piece of graded evidence the learning engine owns — which
+    is the whole save. Anything we cannot positively identify is refused.
+    """
+    if not isinstance(payload, dict):
+        raise InvalidSave("that file is not a save file")
+    if "version" not in payload:
+        raise InvalidSave("that file has no save-format version")
+    try:
+        version = int(payload["version"])
+    except (TypeError, ValueError):
+        raise InvalidSave("that save file's version is not a number") from None
+    if version > SAVE_FORMAT_VERSION:
+        raise InvalidSave(
+            "that save was written by a newer version of the game (format %d, "
+            "this build reads up to %d)" % (version, SAVE_FORMAT_VERSION))
+    state = payload.get("state")
+    if not isinstance(state, dict) or not state:
+        raise InvalidSave("that save file has no game state in it")
+    for key in ("attempts", "boss_records", "interview_runs"):
+        if key in payload and not isinstance(payload[key], list):
+            raise InvalidSave("that save file's %s section is damaged" % key)
+    return payload
+
+
 def import_save(conn: sqlite3.Connection, payload: dict) -> None:
-    if payload.get("state"):
+    """Replace the game with ``payload``, or raise InvalidSave and change nothing.
+
+    History is only cleared when the payload actually carries a replacement for
+    it. A save that predates a table keeps what is already on disk rather than
+    having it deleted, because losing graded evidence costs the player real work.
+    """
+    _validate_save(payload)
+
+    with conn:  # one transaction: a mid-import failure rolls the whole thing back
         save_state(conn, payload["state"])
-    conn.execute("DELETE FROM attempts")
-    for row in payload.get("attempts", []):
-        row = {k: v for k, v in row.items() if k != "id"}
-        record_attempt(conn, **row)
-    conn.execute("DELETE FROM boss_records")
-    for row in payload.get("boss_records", []):
-        conn.execute(
-            "INSERT INTO boss_records (boss_id, attempt_no, seconds, hints_used,"
-            " rank, defeated, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (row["boss_id"], row["attempt_no"], row["seconds"], row["hints_used"],
-             row["rank"], row["defeated"], row["created_at"]))
-    conn.commit()
+
+        if "attempts" in payload:
+            conn.execute("DELETE FROM attempts")
+            for row in payload["attempts"]:
+                row = {k: v for k, v in row.items() if k != "id"}
+                record_attempt(conn, **row)
+
+        if "boss_records" in payload:
+            conn.execute("DELETE FROM boss_records")
+            for row in payload["boss_records"]:
+                conn.execute(
+                    "INSERT INTO boss_records (boss_id, attempt_no, seconds,"
+                    " hints_used, rank, defeated, created_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (row["boss_id"], row["attempt_no"], row["seconds"],
+                     row["hints_used"], row["rank"], row["defeated"],
+                     row["created_at"]))
+
+        # Exported since version 1 and never imported, so a round trip quietly
+        # dropped every interview result the player had earned.
+        if "interview_runs" in payload:
+            conn.execute("DELETE FROM interview_runs")
+            for row in payload["interview_runs"]:
+                cols = [k for k in row.keys() if k != "id"]
+                conn.execute(
+                    "INSERT INTO interview_runs (%s) VALUES (%s)"
+                    % (", ".join(cols), ", ".join("?" * len(cols))),
+                    tuple(row[c] for c in cols))

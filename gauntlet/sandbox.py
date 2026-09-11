@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import os
-import resource
 import shutil
 import subprocess
 import sys
@@ -27,6 +26,15 @@ from pathlib import Path
 from typing import Any
 
 from . import config
+
+# POSIX-only, and imported at module scope by the original, which meant the
+# whole package failed to import on Windows before it could say why.
+try:
+    import resource
+except ImportError:  # Windows
+    resource = None
+
+WINDOWS = os.name == "nt"
 
 HARNESS = Path(__file__).resolve().parent / "_harness.py"
 SANDBOX_EXEC = shutil.which("sandbox-exec")
@@ -119,6 +127,10 @@ class ExecutionReport:
 
 
 def _preexec(cpu: int, mem_mb: int):
+    """Returns None where rlimits do not exist, which subprocess accepts."""
+    if resource is None or WINDOWS:
+        return None
+
     def apply():
         resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu + 1))
         resource.setrlimit(resource.RLIMIT_FSIZE, (8 << 20, 8 << 20))
@@ -188,7 +200,7 @@ def run_tests(
             hardened = True
 
         env = {
-            "PATH": "/usr/bin:/bin",
+            "PATH": os.environ.get("PATH", "") if WINDOWS else "/usr/bin:/bin",
             "HOME": str(scratch),
             "TMPDIR": str(scratch),
             "LC_ALL": "C.UTF-8",
@@ -196,12 +208,21 @@ def run_tests(
             "PYTHONDONTWRITEBYTECODE": "1",
             "PYTHONHASHSEED": "0",
         }
+        if WINDOWS:
+            # CPython will not boot without these two.
+            for key in ("SystemRoot", "SYSTEMROOT", "ComSpec"):
+                if key in os.environ:
+                    env[key] = os.environ[key]
+            env["USERPROFILE"] = str(scratch)
+            env["TEMP"] = env["TMP"] = str(scratch)
 
         try:
             proc = subprocess.run(
                 argv, capture_output=True, text=True, timeout=wall_seconds,
                 cwd=str(scratch), env=env, preexec_fn=_preexec(cpu_seconds, memory_mb),
                 check=False,
+                **({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+                   if WINDOWS else {}),
             )
             stdout, stderr, killed = proc.stdout, proc.stderr, False
         except subprocess.TimeoutExpired as exc:

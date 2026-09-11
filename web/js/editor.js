@@ -6,6 +6,11 @@
  * contextual reminder. That flag is honoured here, and the server refuses hints
  * independently — the guarantee does not rest on the UI alone.
  */
+/* The fill-in-the-blank marker. 59 starters ship with one and it is not Python:
+ * it is a slot the player replaces. It is highlighted as such, the cursor lands
+ * on it, and main.js explains it once the first time a player meets one. */
+export const BLANK = '__BLANK__';
+
 const KEYWORDS = new Set([
   'False', 'None', 'True', 'and', 'as', 'assert', 'async', 'await', 'break',
   'class', 'continue', 'def', 'del', 'elif', 'else', 'except', 'finally',
@@ -76,7 +81,8 @@ export function highlight(source) {
       while (j < n && /[A-Za-z0-9_]/.test(source[j])) j++;
       const word = source.slice(i, j);
       let cls = '';
-      if (KEYWORDS.has(word)) cls = 'tok-keyword';
+      if (word === BLANK) cls = 'tok-blank';
+      else if (KEYWORDS.has(word)) cls = 'tok-keyword';
       else if (BUILTINS.has(word)) cls = 'tok-builtin';
       else if (source[j] === '(') cls = 'tok-call';
       else if (source.slice(i - 4, i) === 'def ') cls = 'tok-def';
@@ -145,9 +151,23 @@ export class Editor {
 
   reset(starter) {
     this.value = starter || '';
-    this.input.setSelectionRange(this.value.length, this.value.length);
+    // A starter with a slot in it is asking for exactly one thing. Select the
+    // first slot so the very first keystroke replaces it.
+    const slot = this.value.indexOf(BLANK);
+    if (slot !== -1) {
+      this.input.setSelectionRange(slot, slot + BLANK.length);
+      if (this.assist) {
+        this.hintEl.textContent = `${BLANK} is a slot, not Python — replace the `
+          + 'marker with the expression that belongs there.';
+      }
+    } else {
+      this.input.setSelectionRange(this.value.length, this.value.length);
+    }
     this.focus();
   }
+
+  /* True while an unreplaced slot is still sitting in the buffer. */
+  hasBlank() { return this.input.value.includes(BLANK); }
 
   syncScroll() {
     const pre = this.root.querySelector('.editor-highlight');

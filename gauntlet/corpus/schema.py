@@ -70,6 +70,11 @@ TARGET_SECONDS = {
 # not on this list is withheld and lives only on the server, where the grader is.
 
 PUZZLE_VISIBLE_MCQ = {
+    # The Forge's `mcq` carries `kill_inputs` — one input per Mimic, on which
+    # that Mimic provably differs from the honest implementation. That is the
+    # answer to the encounter, so the only field that travels is how many Mimics
+    # have to die.
+    "TEST_FORGE":       ("min_kills",),
     "RUNE_ASSEMBLY":    ("runes", "shuffle"),
     "TRACE":            ("code", "checkpoints"),
     "SPOT_THE_FLAW":    ("code", "reference_code"),

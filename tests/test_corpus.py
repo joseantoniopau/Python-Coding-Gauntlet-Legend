@@ -34,7 +34,7 @@ class TestCorpus(GameTest):
                 self.assertEqual(p.reported_company, "",
                                  f"{p.id} is generated but names a company")
 
-    def test_quora_profile_covers_its_declared_emphasis(self):
+    def test_practical_profile_covers_its_declared_emphasis(self):
         wanted = {"ARRAY", "STRING", "HASH_MAP", "SET", "SORTING", "SLIDING_WINDOW",
                   "TWO_POINTER", "MATRIX", "TREE", "RECURSION", "BFS", "DFS",
                   "DESIGN", "DEBUGGING", "COMPLEXITY", "TESTING"}

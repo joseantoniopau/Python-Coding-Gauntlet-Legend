@@ -5,8 +5,8 @@ from collections import deque
 
 from ._base import code_problem
 
-Q = {"QUORA": 2.5, "GENERAL_SWE": 2.5, "SECURITY_ENGINEERING": 1.0}
-QS = {"QUORA": 1.0, "GENERAL_SWE": 1.0, "SECURITY_ENGINEERING": 3.0}
+Q = {"PRACTICAL": 2.5, "GENERAL_SWE": 2.5, "SECURITY_ENGINEERING": 1.0}
+QS = {"PRACTICAL": 1.0, "GENERAL_SWE": 1.0, "SECURITY_ENGINEERING": 3.0}
 VIZ_S = {"type": "stack", "caption": "Objects pile up and come off the top."}
 VIZ_Q = {"type": "queue", "caption": "First in the line is first out the door."}
 
@@ -207,7 +207,7 @@ def build() -> list:
                 closer -> stack empty or pop() != match -> False
             return stack is empty
         """,
-        tags=["core", "quora"],
+        tags=["core", "practical"],
     ))
 
     P.append(code_problem(
@@ -294,7 +294,7 @@ def build() -> list:
                     j = stack.pop(); out[j] = i - j
                 stack.append(i)
         """,
-        variants=["sq-next-greater"], tags=["core", "quora"],
+        variants=["sq-next-greater"], tags=["core", "practical"],
     ))
 
     P.append(code_problem(

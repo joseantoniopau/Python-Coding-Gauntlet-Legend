@@ -39,7 +39,7 @@ from ._base import code_problem
 
 # The player this family exists for. Weighted toward his declared profile so the
 # selector reaches for onboarding before it reaches for idiom drills.
-Q = {"QUORA": 2.0, "GENERAL_SWE": 2.0, "SECURITY_ENGINEERING": 2.0}
+Q = {"PRACTICAL": 2.0, "GENERAL_SWE": 2.0, "SECURITY_ENGINEERING": 2.0}
 
 VISUAL = {
     "GUIDED": "The program already works. Read it top to bottom, then fill the "

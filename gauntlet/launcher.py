@@ -29,6 +29,29 @@ def _wait_for_port(port: int, timeout: float = 25.0) -> bool:
 
 
 def _chrome_binary() -> str | None:
+    """Any Chromium will do; we only want its --app window mode.
+
+    Edge is listed for Windows because it ships with the OS, so the fallback
+    there is a real app window rather than a browser tab.
+    """
+    if os.name == "nt":
+        roots = [os.environ.get(v, "") for v in
+                 ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA")]
+        rel = [
+            r"Google\Chrome\Application\chrome.exe",
+            r"Microsoft\Edge\Application\msedge.exe",
+            r"BraveSoftware\Brave-Browser\Application\brave.exe",
+            r"Chromium\Application\chrome.exe",
+        ]
+        for root in roots:
+            if not root:
+                continue
+            for tail in rel:
+                candidate = Path(root) / tail
+                if candidate.exists():
+                    return str(candidate)
+        return shutil.which("chrome") or shutil.which("msedge")
+
     candidates = [
         "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
         "/Applications/Chromium.app/Contents/MacOS/Chromium",
@@ -58,8 +81,9 @@ def open_window(url: str) -> subprocess.Popen | None:
              "--disable-sync", "--disable-extensions",
              "--disable-features=Translate,MediaRouter,OptimizationHints"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    subprocess.Popen(["open", url], stdout=subprocess.DEVNULL,
-                     stderr=subprocess.DEVNULL)
+    # No Chromium anywhere: hand it to whatever the OS considers the browser.
+    import webbrowser
+    webbrowser.open(url)
     return None
 
 
@@ -99,8 +123,13 @@ def main() -> int:
         if window and window.poll() is None:
             window.terminate()
 
-    signal.signal(signal.SIGTERM, stop)
-    signal.signal(signal.SIGINT, stop)
+    for signame in ("SIGTERM", "SIGINT"):
+        sig = getattr(signal, signame, None)
+        if sig is not None:
+            try:
+                signal.signal(sig, stop)
+            except (ValueError, OSError):
+                pass  # not the main thread, or unsupported on this platform
 
     try:
         if window is not None:

@@ -1,0 +1,5 @@
+{
+  "_comment": "Optional sample layer. The game synthesises everything by default and needs none of this. Drop licence-clear audio files beside this manifest and list them here, and the engine will prefer them over synthesis for the entries it recognises. Every entry MUST carry a licence and a source, and the loader refuses any entry missing either.",
+  "version": 1,
+  "samples": []
+}
