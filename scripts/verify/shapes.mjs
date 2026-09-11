@@ -1,0 +1,23 @@
+import { installStub } from './stub.mjs';
+installStub();
+const L = await import('../../web/js/lootart.js');
+const B = await import('../../web/js/bosses.js');
+const S = await import('../../web/js/spellfx.js');
+console.log('rarityStyle(EPIC) =', JSON.stringify(L.rarityStyle('EPIC')));
+console.log('RARITY_COLOUR     =', JSON.stringify(L.RARITY_COLOUR));
+console.log('frames per rarity =', JSON.stringify(Object.fromEntries(L.RARITY_KEYS.map(r => [r, L.rarityStyle(r).frames]))));
+console.log('ITEM_SIZE', L.ITEM_SIZE, 'FRAME_MS', L.FRAME_MS, 'CARD', L.CARD_W + 'x' + L.CARD_H);
+console.log('HERO_WEAPON_ANCHOR.down =', JSON.stringify(L.HERO_WEAPON_ANCHOR.down));
+console.log('heroWeaponKeyFor(sword item) =', L.heroWeaponKeyFor({ icon: 'sword', slot: 'weapon' }));
+console.log('gearOverlay ret =', JSON.stringify(Object.keys(L.gearOverlay('weapon', { icon:'sword', slot:'weapon', rarity:'EPIC' }) || {})));
+console.log();
+console.log('bossInfo(lich) =', JSON.stringify(B.bossInfo('lich')).slice(0, 300));
+console.log('bossSize(dragon)=', JSON.stringify(B.bossSize('dragon')), ' bossSize(knight)=', JSON.stringify(B.bossSize('knight')));
+console.log('BOSS_STAGE_SCALE', B.BOSS_STAGE_SCALE, 'BOSS_W/H', B.BOSS_W, B.BOSS_H, 'WIDE', B.BOSS_WIDE_W);
+console.log('wide archetypes =', B.BOSS_ARCHETYPES.filter(k => B.bossMotion(k).wide));
+console.log('floating archetypes =', B.BOSS_ARCHETYPES.filter(k => B.bossMotion(k).floats));
+console.log();
+console.log('durations =', JSON.stringify(Object.fromEntries(Object.keys(S.EFFECT_INDEX).map(k => [k, [S.effectDuration(k), S.effectDuration(k, { reducedMotion: true })]]))));
+const e = S.createEffect('PHOENIX', {});
+console.log('effect public fields: duration,t,k,done,shakeHint,flashHint,impactAt,onImpact,onBeat =',
+  [e.duration, e.t, e.k, e.done, e.shakeHint, e.flashHint, e.impactAt, typeof e.onImpact, typeof e.onBeat].join(' | '));

@@ -77,7 +77,8 @@ def code_problem(
     source_type: str = "GENERAL_INTERVIEW", company: str = "", year: str = "",
     provenance: str = "", encounter: str = "CODE_BATTLE", boss: bool = False,
     prerequisites: list[str] = (), profile_weight: dict = None,
-    starter_hint: str = "", tags: list[str] = (), examples: list[dict] = None,
+    starter_hint: str = "", starter_code: str = "",
+    tags: list[str] = (), examples: list[dict] = None,
     alternates: list[dict] = (), variants: list[str] = (),
     preamble: str = "", arg_adapters: list = (), result_adapter: str = "",
 ) -> Problem:
@@ -112,7 +113,10 @@ def code_problem(
         reported_company=company, reported_year=year,
         provenance_note=with_disclaimer(source_type, provenance),
         examples=examples, constraints=list(constraints),
-        starter_code=starter_for(fn_name, params, starter_hint),
+        # A scaffolded tier hands the player working code with holes in it, so
+        # the generated `def ...: pass` stub has to be overridable.
+        starter_code=dedent(starter_code) if starter_code else starter_for(
+            fn_name, params, starter_hint),
         visible_tests=vis, hidden_tests=hid, edge_cases=edg, perf_tests=prf,
         alternate_solutions=list(alternates),
         optimal_complexity={"time": time_complexity, "space": space_complexity},

@@ -2,6 +2,11 @@
 import { api } from './api.js';
 import { audio } from './audio.js';
 import * as pixel from './pixel.js';
+import * as sprites from './sprites.js';
+import * as lootart from './lootart.js';
+import { createBattleFX, DAMAGE_KIND, trialsFromFeedback } from './fx.js';
+import * as puzzleui from './puzzleui.js';
+import { TitleScreen } from './title.js';
 import { Editor } from './editor.js';
 import { Overworld } from './overworld.js';
 import { Visualiser, hasViz } from './viz.js';
@@ -61,7 +66,7 @@ function say(who, lines, portraitKind) {
   G.dialogueQueue = Array.isArray(lines) ? lines.slice() : [lines];
   const box = $('#dialogue');
   const pc = $('#dialogue-portrait');
-  const img = pixel.portrait(portraitKind || 'scholar');
+  const img = sprites.portrait(portraitKind || 'scholar');
   pc.width = img.width; pc.height = img.height;
   pc.getContext('2d').drawImage(img, 0, 0);
   $('#dialogue-who').textContent = who;
@@ -71,7 +76,11 @@ function say(who, lines, portraitKind) {
 
 function advanceDialogue() {
   const next = G.dialogueQueue.shift();
-  if (next === undefined) { $('#dialogue').classList.remove('show'); return; }
+  if (next === undefined) {
+    $('#dialogue').classList.remove('show');
+    if (G.storyQueue && G.storyQueue.length) setTimeout(playStoryQueue, 120);
+    return;
+  }
   $('#dialogue-what').textContent = next;
   audio.sfx('tick');
 }
@@ -160,10 +169,24 @@ function loadRegion(regionId, spawn) {
 
 function paintWorldSide() {
   const side = $('#world-side');
+  const s_ = G.state;
   const s = G.state;
   const region = currentRegion();
   const due = s.retests_due.length;
   side.innerHTML = '';
+
+  const ch = s_.chapter;
+  if (ch) {
+    const card = el('div', 'chapter-card',
+      `<div class="ct">CHAPTER ${ch.number} OF ${ch.total}</div>
+       <div class="cg"><b style="color:var(--gold-hi)">${ch.title}</b><br>${ch.goal}</div>
+       <div class="bar" style="margin-top:8px"><i style="width:${ch.progress.percent}%"></i></div>
+       <div class="small muted" style="margin-top:5px">
+         ${ch.progress.clears}/${ch.progress.clears_target} cleared ·
+         mastery ${ch.progress.mastery}/${ch.progress.mastery_target}
+         ${ch.next_title ? `· next: ${ch.next_title}` : ''}</div>`);
+    side.appendChild(card);
+  }
 
   side.appendChild(el('div', 'section-title', 'TODAY'));
   const quest = el('div');
@@ -349,15 +372,9 @@ function enterBattle(payload) {
   // enemy
   const enemy = payload.enemy;
   $('#enemy-name').textContent = enemy.name.toUpperCase();
-  drawEnemy(enemy, 0);
   $('#enemy-hp').querySelector('i').style.width = '100%';
   $('#enemy-hp-label').textContent = `${enemy.hp} / ${enemy.hp_max}`;
-  G.enemyFrame = 0;
-  clearInterval(G.enemyAnim);
-  G.enemyAnim = setInterval(() => {
-    G.enemyFrame ^= 1;
-    drawEnemy(enemy, G.enemyFrame);
-  }, 520);
+  setEnemyScene(payload);
 
   $('#battle-target').textContent = fmtTime(p.target_seconds);
 
@@ -370,11 +387,15 @@ function enterBattle(payload) {
   }
   G.editor.setAssist(!interview);
 
-  if (p.entry && p.entry.kind === 'mcq') {
+  G.puzzle = null;
+  if (puzzleui.isPuzzle(p.encounter_kind)) {
+    renderPuzzle(p);
+  } else if (p.entry && p.entry.kind === 'mcq') {
     renderMcq(p);
   } else {
     G.editor.reset(p.starter_code || '');
     $('#editor-host').style.display = '';
+    $('#puzzle-host').style.display = 'none';
     $('#btn-run').style.display = '';
     $('#btn-submit').textContent = p.entry.kind === 'test_forge' ? 'FORGE ✦' : 'CAST ✦';
   }
@@ -385,6 +406,9 @@ function enterBattle(payload) {
   audio.play(enemy.boss ? 'boss' : 'battle');
 
   if (enemy.boss && enemy.taunt) {
+    audio.sfx('boss');
+    ensureStage().bossIntro({ name: enemy.name, taunt: enemy.taunt,
+                              colour: enemy.colour });
     say(enemy.name.toUpperCase(), [enemy.taunt], 'interviewer');
   } else if (payload.encounter.is_retest) {
     toast('MEMORY AMBUSH',
@@ -393,19 +417,38 @@ function enterBattle(payload) {
   if (payload.interview) paintInterviewTimer();
 }
 
-function drawEnemy(enemy, frame) {
-  const c = $('#enemy-canvas');
-  const ctx = c.getContext('2d');
-  ctx.imageSmoothingEnabled = false;
-  ctx.clearRect(0, 0, c.width, c.height);
-  const img = enemy.boss
-    ? pixel.bossSprite(enemy.sprite, enemy.colour || '#d84a7a', frame)
-    : pixel.enemySprite(enemy.sprite, G.problem ? G.problem.pattern : 'ARRAY', frame);
-  c.width = 48; c.height = 48;
-  const ctx2 = c.getContext('2d');
-  ctx2.imageSmoothingEnabled = false;
-  if (enemy.boss) ctx2.drawImage(img, 0, 0);
-  else ctx2.drawImage(img, 0, 0, 16, 16, 8, 8, 32, 32);
+function ensureStage() {
+  if (G.fx) return G.fx;
+  G.fx = createBattleFX($('#battle-stage'), {});
+  G.fx.setAudio(audio);
+  G.fx.setReducedMotion(!!(G.state && G.state.settings.reduced_motion));
+  return G.fx;
+}
+
+function setEnemyScene(payload) {
+  const fx = ensureStage();
+  fx.setScene({
+    region: (payload.region || {}).palette || 'spring',
+    enemy: payload.enemy,
+    pattern: payload.problem.pattern,
+  });
+  fx.setEnemyHp(payload.enemy.hp, payload.enemy.hp_max);
+  fx.start();
+  return fx;
+}
+
+function renderPuzzle(p) {
+  $('#editor-host').style.display = 'none';
+  $('#btn-run').style.display = 'none';
+  const host = $('#puzzle-host');
+  host.style.display = '';
+  $('#btn-submit').textContent = puzzleui.PUZZLE_VERB[p.encounter_kind] || 'ANSWER ✦';
+  G.puzzle = puzzleui.createPuzzle(p, () => {
+    $('#btn-submit').disabled = !G.puzzle.ready();
+  });
+  if (!G.puzzle) { host.textContent = 'This puzzle cannot be shown.'; return; }
+  G.puzzle.render(host);
+  $('#btn-submit').disabled = !G.puzzle.ready();
 }
 
 function renderMcq(p) {
@@ -497,13 +540,29 @@ function paintTrials(body, report) {
   }
 }
 
-function itemIcon(item, size = 28) {
+/* A real 24x24 item sprite whose material, ornament and aura all read its
+ * rarity — not a tinted glyph. Epic and above animate. */
+function itemIcon(item, size = 48) {
   const canvas = document.createElement('canvas');
-  canvas.width = 8; canvas.height = 8;
+  canvas.width = lootart.ITEM_SIZE;
+  canvas.height = lootart.ITEM_SIZE;
   canvas.style.width = size + 'px';
   canvas.style.height = size + 'px';
-  const img = pixel.icon(item.icon || 'relic', item.rarity_colour || '#e8c37d');
-  canvas.getContext('2d').drawImage(img, 0, 0);
+  canvas.style.imageRendering = 'pixelated';
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  const frames = lootart.itemFrameCount(item);
+  const paint = () => {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    lootart.drawItem(ctx, item, 0, 0, { scale: 1, time: performance.now() });
+  };
+  paint();
+  if (frames > 1 && !(G.state && G.state.settings.reduced_motion)) {
+    const timer = setInterval(() => {
+      if (!canvas.isConnected) { clearInterval(timer); return; }
+      paint();
+    }, lootart.FRAME_MS);
+  }
   return canvas;
 }
 
@@ -669,6 +728,7 @@ function paintSpells(body) {
         if (r.error) { toast('NOT ENOUGH FOCUS', r.message || r.error, 'red'); return; }
         G.hints.push(rung.level);
         audio.sfx('spell');
+        if (G.fx) G.fx.castSpell(rung.spell);
         await refresh();
         setTab('spells');
         const target = $('#battle-side-body');
@@ -818,8 +878,22 @@ async function doRun() {
 async function doSubmit() {
   if (!G.encounter) return;
   const btn = $('#btn-submit');
+  const label = btn.textContent;
   btn.disabled = true;
   btn.textContent = 'CASTING…';
+  if (G.puzzle) {
+    try {
+      const answer = G.puzzle.answer();
+      if (answer === null) {
+        toast('MALFORMED', 'That input is not valid JSON.', 'red');
+      } else {
+        showResult(await api.puzzle(answer));
+      }
+    } catch (e) { toast('FAILED', e.message, 'red'); }
+    btn.disabled = false;
+    btn.textContent = label;
+    return;
+  }
   try {
     const result = await api.submit({
       code: G.editor.value,
@@ -830,7 +904,7 @@ async function doSubmit() {
     showResult(result);
   } catch (e) { toast('CAST FAILED', e.message, 'red'); }
   btn.disabled = false;
-  btn.textContent = 'CAST ✦';
+  btn.textContent = label;
 }
 
 async function showResult(result) {
@@ -845,6 +919,21 @@ async function showResult(result) {
   $('#enemy-hp-label').textContent = `${fb.total - fb.passed} / ${fb.total}`;
   setTab('trials');
   paintTrials($('#battle-side-body'), fb);
+
+  // Play the exchange on the stage before the report appears: each passing
+  // trial is a hit, each exposed weakness a critical, each perf failure a
+  // resist. The modal then explains what the player just watched.
+  if (G.fx) {
+    try {
+      G.fx.setCombo(G.state.player.combo,
+                    result.combo_multiplier || 1);
+      await G.fx.resolveTrials(trialsFromFeedback(fb, result.combat), {});
+      G.fx.setEnemyHp(Math.max(0, fb.total - fb.passed), fb.total);
+      if (result.solved) await G.fx.victory({ rank: result.rank, xp: result.xp,
+                                              loot: result.loot });
+      else await G.fx.defeat({ cause: (result.analysis || {}).root_cause });
+    } catch (err) { /* the report must appear even if the animation cannot */ }
+  }
 
   if (result.solved) {
     audio.sfx(result.rank === 'S' ? 'victory' : 'crit');
@@ -938,7 +1027,9 @@ async function showResult(result) {
     for (const sec of result.secrets) {
       html += `<h3 style="color:var(--red)">★ SECRET — ${sec.name.toUpperCase()}</h3>
         <p>${sec.condition}</p>
-        ${sec.item_detail ? `<div class="item-card" style="border-color:${sec.item_detail.rarity_colour}">
+        ${sec.item_detail ? `<div class="item-card rarity-${
+          String(sec.item_detail.rarity || 'mythic').toLowerCase()}"
+          style="border-color:${sec.item_detail.rarity_colour}">
           <div class="grow"><div class="in" style="color:${sec.item_detail.rarity_colour}">
             ${sec.item_detail.name} <span class="muted">· ${sec.item_detail.rarity}</span></div>
           <div class="ie">${sec.item_detail.effect_text.join(' · ')}</div>
@@ -1003,9 +1094,13 @@ async function showResult(result) {
     n.onclick = () => { closeModal(); startProblem(n.dataset.problem); };
   });
   const bind = (id, fn) => { const b = m.querySelector('#' + id); if (b) b.onclick = fn; };
-  bind('r-next', () => { closeModal(); startNext(); });
+  bind('r-next', () => {
+    closeModal();
+    if (playStoryQueue()) { G.afterStory = () => startNext(); return; }
+    startNext();
+  });
   bind('r-retry', () => { closeModal(); G.startedAt = Date.now(); startTimer(); G.editor.focus(); });
-  bind('r-world', () => { closeModal(); returnToWorld(); });
+  bind('r-world', () => { closeModal(); returnToWorld(); playStoryQueue(); });
   bind('r-camp', () => {
     closeModal();
     const camp = result.training_camp;
@@ -1019,7 +1114,8 @@ async function showResult(result) {
   bind('r-iv-report', () => { closeModal(); showInterviewReport(result.interview_next); });
 
   if (result.loot) {
-    audio.sfx('unlock');
+    showLootDrop(result.loot);
+    audio.sfx('loot');
     toast('LOOT', result.loot.name, result.loot.kind === 'consumable' ? '' : 'gold');
   }
   if (result.secrets && result.secrets.length) {
@@ -1027,6 +1123,10 @@ async function showResult(result) {
     for (const sec of result.secrets) {
       toast('★ SECRET FOUND', sec.name, 'red');
     }
+  }
+  if (result.story && result.story.length) {
+    // Beats queue behind the report so a milestone never talks over the result
+    G.storyQueue = (G.storyQueue || []).concat(result.story);
   }
   if (result.levels_gained) {
     const levels = result.levels_gained;
@@ -1066,9 +1166,24 @@ async function searchHere() {
   $('#sec-ok').onclick = closeModal;
 }
 
+function playStoryQueue() {
+  const entry = (G.storyQueue || []).shift();
+  if (!entry) return false;
+  const speaker = entry.speaker_name || entry.speaker || 'THE SOURCE';
+  const portraitKind = entry.portrait
+    || (entry.speaker === 'narrator' ? 'oracle'
+        : (G.world.mentors[entry.speaker] || {}).sprite) || 'scholar';
+  const lines = (entry.lines || []).slice();
+  if (entry.objective) lines.push(`OBJECTIVE — ${entry.objective}`);
+  for (const r of entry.reward_summary || []) lines.push(`REWARD — ${r}`);
+  audio.sfx(entry.kind === 'milestone' ? 'unlock' : 'select');
+  say(String(speaker).toUpperCase(), lines, portraitKind);
+  return true;
+}
+
 function returnToWorld() {
-  clearInterval(G.enemyAnim);
   clearInterval(G.timer);
+  if (G.fx) G.fx.stop();
   document.body.classList.remove('interview-mode');
   G.encounter = null;
   G.interview = null;
@@ -1082,6 +1197,7 @@ function returnToWorld() {
 $('#btn-run').onclick = doRun;
 $('#btn-submit').onclick = doSubmit;
 $('#btn-reset').onclick = () => {
+  if (G.puzzle && G.problem) { renderPuzzle(G.problem); return; }
   if (G.problem) G.editor.reset(G.problem.starter_code || '');
 };
 $('#btn-flee').onclick = () => {
@@ -1242,7 +1358,56 @@ function paintStatus() {
 
 function paintQuests() {
   const s = G.state;
+  const ladder = (s.ladder || []).map(r => `
+    <div class="rung ${r.state}">
+      <span class="rn">${r.number}</span>
+      <span class="grow"><b>${r.title}</b> — ${r.goal}
+        ${r.state === 'current'
+          ? `<br><span class="muted small">${r.progress.clears}/${r.progress.clears_target} cleared · mastery ${r.progress.mastery}/${r.progress.mastery_target}</span>`
+          : ''}</span>
+      <span>${r.state === 'done' ? '✔' : r.state === 'current' ? `${r.progress.percent}%` : ''}</span>
+    </div>`).join('');
+
+  const q = s.quest_log || {};
+  const main = q.main || {};
+  const cur = main.current || {};
+  const chains = (q.chains || []).filter(c => !c.complete);
+  const rival = q.rival || {};
+
   panel('QUEST LOG', `
+    <div class="frame" style="padding:14px;margin-bottom:12px">
+      <div class="section-title">THE CURRICULUM</div>
+      ${ladder || '<p class="small muted">No ladder yet.</p>'}
+    </div>
+    ${cur.title ? `<div class="frame" style="padding:14px;margin-bottom:12px">
+      <div class="section-title">MAIN QUEST — ${main.act || ''}
+        (${main.completed || 0}/${main.total || 0})</div>
+      <div class="list-item"><span class="t">${cur.title}</span>
+        <span class="d">${cur.objective || ''}
+        ${cur.requirement ? `<br><span class="muted small">${cur.requirement}</span>` : ''}
+        ${cur.region_name ? `<br><span class="muted small">in ${cur.region_name}</span>` : ''}
+        </span></div>
+    </div>` : ''}
+    ${chains.length ? `<div class="frame" style="padding:14px;margin-bottom:12px">
+      <div class="section-title">SIDE CHAINS</div>
+      ${chains.map(c => `<div class="list-item">
+        <span class="t">${c.title} — step ${c.step}/${c.steps} · ${c.mentor_name}</span>
+        <span class="d">${c.objective || c.premise}</span>
+      </div>`).join('')}
+    </div>` : ''}
+    ${rival.name ? `<div class="frame" style="padding:14px;margin-bottom:12px">
+      <div class="section-title">${rival.name} — ${rival.meetings_held || 0} meeting(s)</div>
+      <div class="skill-row">
+        <span class="sn">YOU · ${rival.skill_label || ''}</span>
+        <span class="bar"><i style="width:${rival.player_mastery || 0}%"></i></span>
+        <span class="sv">${Math.round(rival.player_mastery || 0)}</span></div>
+      <div class="skill-row">
+        <span class="sn">${rival.name}</span>
+        <span class="bar"><i style="width:${rival.rival_mastery || 0}%;background:var(--red)"></i></span>
+        <span class="sv">${Math.round(rival.rival_mastery || 0)}</span></div>
+      <p class="small" style="color:${rival.ahead ? 'var(--orange)' : 'var(--green)'}">
+        ${rival.note || ''}</p>
+    </div>` : ''}
     <div class="frame" style="padding:14px">
       <div class="section-title">TODAY — ${s.daily.date}</div>
       ${s.daily.quests.map(q => `<div class="list-item">
@@ -1450,8 +1615,10 @@ function paintCharacter() {
     </div>`).join('');
 
   const inventory = lo.inventory.length
-    ? lo.inventory.map(item => `<div class="item-card ${item.equipped ? 'equipped' : ''}"
+    ? lo.inventory.map(item => `<div class="item-card rarity-${
+        String(item.rarity || 'common').toLowerCase()} ${item.equipped ? 'equipped' : ''}"
         data-item="${item.id}">
+        <span class="item-art" data-art="${item.id}"></span>
         <div class="grow">
           <div class="in" style="color:${item.rarity_colour}">${item.name}
             <span class="muted">· ${rar[item.rarity].label} · ${item.slot}</span>
@@ -1519,6 +1686,15 @@ function paintCharacter() {
         ${secrets}
       </div>
     </div>`);
+
+  // The art placeholders are filled after the panel exists, so each card gets a
+  // live canvas rather than a data URL baked into the HTML string.
+  const byId = Object.create(null);
+  for (const item of lo.inventory) byId[item.id] = item;
+  document.querySelectorAll('[data-art]').forEach(slot => {
+    const item = byId[slot.dataset.art];
+    if (item) slot.appendChild(itemIcon(item, 40));
+  });
 
   document.querySelectorAll('[data-item]').forEach(node => {
     node.onclick = async () => {
@@ -1592,6 +1768,36 @@ function showLevelUp(levels, points) {
   m.querySelector('#lvl-later').onclick = closeModal;
 }
 
+/* The reward moment: a rarity burst, a beam, and the item rising into a bob.
+ * A drop the player did not see is a drop that did not happen. */
+function showLootDrop(drop) {
+  if (!drop || drop.kind === 'consumable') return;
+  const host = document.createElement('div');
+  host.className = 'loot-drop-stage';
+  const canvas = document.createElement('canvas');
+  canvas.width = 192; canvas.height = 128;
+  canvas.style.cssText = 'width:288px;height:192px;image-rendering:pixelated';
+  host.appendChild(canvas);
+  const target = $('#modal');
+  const anchor = target && target.querySelector('.loot-anchor');
+  (anchor || document.body).appendChild(host);
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  const reduced = !!(G.state && G.state.settings.reduced_motion);
+  const started = performance.now();
+  const DURATION = 1400;
+  const step = () => {
+    if (!canvas.isConnected) return;
+    const now = performance.now();
+    const t = Math.min(1, (now - started) / DURATION);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    lootart.drawLootDrop(ctx, drop, 96, 104,
+      { t: reduced ? 1 : t, time: now, scale: 2, reducedMotion: reduced });
+    if (t < 1 || !reduced) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
 function lootHtml(drop) {
   if (!drop) return '';
   if (drop.kind === 'consumable') {
@@ -1599,7 +1805,9 @@ function lootHtml(drop) {
       ${drop.blurb}</p>`;
   }
   return `<h3>LOOT</h3>
-    <div class="item-card" style="border-color:${drop.rarity_colour}">
+    <div class="loot-anchor center"></div>
+    <div class="item-card rarity-${String(drop.rarity || 'common').toLowerCase()}"
+         style="border-color:${drop.rarity_colour}">
       <div class="grow">
         <div class="in" style="color:${drop.rarity_colour}">${drop.name}
           <span class="muted">· ${drop.rarity} · ${drop.slot}</span>
@@ -1733,6 +1941,7 @@ window.addEventListener('keydown', (e) => {
 });
 
 window.addEventListener('resize', () => {
+  if (G.title) G.title.resize();
   if (G.overworld) G.overworld.resize();
   if (G.viz) G.viz.render();
 });
@@ -1778,6 +1987,96 @@ async function intro() {
   };
 }
 
+/* The Trial of the Architect: five short encounters that decide where on the
+ * ladder to start. It can place you forward as well as back, and skipping is
+ * always safe because a skip starts you at the beginning. */
+async function runDiagnostic() {
+  const spec = await api.diagnostic();
+  const answers = {};
+  let index = 0;
+
+  const intro = modal(`<h2>THE TRIAL OF THE ARCHITECT</h2>
+    <p>Five short questions. They are not a test you can fail — they decide where
+    you start, and they can just as easily start you further in.</p>
+    <p class="small muted">About four minutes. Skipping is safe: it starts you at
+    the beginning, which is never the wrong answer.</p>
+    <div class="actions">
+      <button class="btn primary" id="dg-go">BEGIN</button>
+      <button class="btn" id="dg-skip">SKIP — START AT THE BEGINNING</button>
+    </div>`);
+  intro.querySelector('#dg-go').onclick = () => step();
+  intro.querySelector('#dg-skip').onclick = async () => {
+    audio.sfx('select');
+    finish(await api.diagnosticFinish({}, true));
+  };
+
+  function step() {
+    if (index >= spec.trials.length) {
+      api.diagnosticFinish(answers, false).then(finish);
+      return;
+    }
+    const trial = spec.trials[index];
+    const body = trial.kind === 'mcq'
+      ? `${trial.code ? `<pre class="spell-body">${trial.code
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;')}</pre>` : ''}
+         <div id="dg-choices">${trial.choices.map((c, i) =>
+           `<div class="list-item" data-choice="${i}"><span class="d">${c}</span></div>`
+         ).join('')}</div>`
+      : `<div id="dg-editor" style="height:240px;border:2px solid var(--line)"></div>
+         <div class="actions"><button class="btn primary" id="dg-run">SUBMIT</button></div>`;
+
+    const m2 = modal(`<h2>TRIAL ${index + 1} OF ${spec.trials.length}</h2>
+      ${trial.narration ? `<p class="small muted">${trial.narration}</p>` : ''}
+      <p style="font-size:15px;color:var(--ink)">${trial.prompt}</p>
+      ${body}`);
+
+    if (trial.kind === 'mcq') {
+      m2.querySelectorAll('[data-choice]').forEach(node => {
+        node.onclick = async () => {
+          const r = await api.diagnosticCheck(trial.id, Number(node.dataset.choice));
+          answers[trial.id] = { correct: r.correct };
+          audio.sfx(r.correct ? 'select' : 'fail');
+          index++;
+          step();
+        };
+      });
+    } else {
+      const ed = new Editor(m2.querySelector('#dg-editor'), { assist: false });
+      ed.reset(trial.starter || '');
+      m2.querySelector('#dg-run').onclick = async () => {
+        const r = await api.diagnosticCheck(trial.id, ed.value);
+        answers[trial.id] = { correct: r.correct };
+        audio.sfx(r.correct ? 'crit' : 'fail');
+        index++;
+        step();
+      };
+    }
+  }
+
+  function finish(placement) {
+    audio.sfx('levelup');
+    const detail = (placement.detail || []).map(d =>
+      `<div class="gate ${d.correct ? 'pass' : 'fail'}">
+        <span class="mark">${d.correct ? '✔' : '·'}</span>
+        <span>${d.probes} <span class="muted small">— ${d.note}</span></span></div>`).join('');
+    const chapter = placement.chapter || {};
+    const m3 = modal(`<h2>YOUR PLACEMENT</h2>
+      ${detail}
+      <h3>${chapter.title || placement.chapter_title}</h3>
+      <p>${placement.verdict}</p>
+      <p class="small muted">${chapter.goal || ''}</p>
+      <div class="actions">
+        <button class="btn primary" id="dg-done">ENTER PYTHON VILLAGE</button>
+      </div>`, { wide: true });
+    m3.querySelector('#dg-done').onclick = async () => {
+      closeModal();
+      await refresh();
+      if (!G.state.build) { chooseBuild(); return; }
+      loadRegion(G.state.player.region);
+    };
+  }
+}
+
 function chooseBuild() {
   const lo = G.state.loadout;
   const cards = Object.entries(lo.builds).map(([id, spec]) => `
@@ -1803,6 +2102,7 @@ function chooseBuild() {
       closeModal();
       toast(r.build.name.toUpperCase(),
         'Starting gear equipped. Check GEAR to spend your first points.', 'gold');
+      loadRegion(G.state.player.region);
       const mentor = G.world.mentors.byte;
       say(mentor.name, [
         mentor.greeting,
@@ -1825,6 +2125,7 @@ async function boot() {
   try {
     await api.ping();
   } catch (e) {
+    document.body.classList.remove('titling');
     document.body.innerHTML = `<div style="padding:40px;font-family:monospace;color:#e8c37d">
       Could not reach the local game server.<br><br>${e.message}</div>`;
     return;
@@ -1842,27 +2143,88 @@ async function boot() {
   show('world');
   G.overworld.start();
 
-  // deep link: #problem/<id> opens an encounter directly
+  // deep links: #world drops straight into the overworld, #problem/<id> into
+  // an encounter. Both skip the title screen.
+  if ((location.hash || '') === '#world') {
+    document.body.classList.remove('titling');
+    if (!G.state.build) await api.chooseBuild('ANALYST').catch(() => {});
+    await refresh();
+    loadRegion(G.state.player.region);
+    show('world');
+    G.overworld.start();
+    return;
+  }
   const deep = /^#problem\/(.+)$/.exec(location.hash || '');
   if (deep) {
+    document.body.classList.remove('titling');
     if (!G.state.build) await api.chooseBuild('ANALYST').catch(() => {});
     await refresh();
     startProblem(decodeURIComponent(deep[1]));
     return;
   }
 
-  const first = !localStorage.getItem('gauntlet-intro');
-  if (first) {
-    localStorage.setItem('gauntlet-intro', '1');
-    intro();
-  } else if (!G.state.build) {
-    chooseBuild();
-  } else {
-    const due = G.state.retests_due.length;
-    if (due) {
-      toast('RETESTS DUE', `${due} pattern${due > 1 ? 's' : ''} waiting to be proved `
-        + 'again — in disguise.', 'violet');
-    }
+  showTitle();
+}
+
+/* ---------------- title screen ---------------- */
+
+function showTitle() {
+  document.body.classList.add('titling');
+  const started = !!(G.state.build && G.state.stats.encounters);
+  G.title = new TitleScreen($('#title-canvas'), {
+    hasSave: started,
+    reducedMotion: !!G.state.settings.reduced_motion,
+    onSelect: (id) => {
+      audio.resume();
+      if (id === 'move') { audio.sfx('select'); return; }
+      audio.sfx('unlock');
+      if (id === 'settings') { leaveTitle(); paintSettings(); return; }
+      if (id === 'about') { showAbout(); return; }
+      if (id === 'continue') { leaveTitle(); return; }
+      leaveTitle();
+      beginNewRun();
+    },
+  });
+  G.title.resize();
+  G.title.start();
+  audio.play('town');
+}
+
+function leaveTitle() {
+  const layer = $('#title-layer');
+  layer.classList.add('fading');
+  setTimeout(() => {
+    document.body.classList.remove('titling');
+    layer.classList.remove('fading');
+    if (G.title) { G.title.destroy(); G.title = null; }
+    if (G.overworld) { G.overworld.resize(); G.overworld.start(); }
+    const region = currentRegion();
+    audio.play(region.music || 'overworld');
+  }, 520);
+}
+
+function showAbout() {
+  modal(`<h2>PYTHON CODING GAUNTLET LEGEND</h2>
+    <p class="pixel" style="color:var(--violet);font-size:11px">THE ALGORITHM REALMS</p>
+    <p>A 16-bit RPG whose combat system is a Python coding-interview trainer.
+    Adventure Mode teaches. Interview Mode measures. They are never confused.</p>
+    <p class="small muted">Everything here — art, music, text, problems — is original
+    to this project. No third-party game assets are used. Problems drawn from publicly
+    reported interview patterns are labelled as historical patterns and are never
+    presented as guaranteed questions.</p>
+    <p class="small muted">Your code runs locally under a sandbox that denies network
+    access and enforces CPU, memory and wall-clock limits. Nothing leaves this machine.</p>
+    <div class="actions"><button class="btn primary" id="about-back">BACK</button></div>`);
+  $('#about-back').onclick = closeModal;
+}
+
+async function beginNewRun() {
+  if (!G.state.diagnostic_done) { runDiagnostic(); return; }
+  if (!G.state.build) { chooseBuild(); return; }
+  const due = G.state.retests_due.length;
+  if (due) {
+    toast('RETESTS DUE', `${due} pattern${due > 1 ? 's' : ''} waiting to be proved `
+      + 'again — in disguise.', 'violet');
   }
 }
 

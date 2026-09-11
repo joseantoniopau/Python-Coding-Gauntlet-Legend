@@ -194,7 +194,10 @@ class TestEngine(GameTest):
         g = self.game()
         first = g.next_encounter()["problem"]["id"]
         p = self.by_id(first)
-        if p.entry.get("kind") == "mcq":
+        from gauntlet import puzzles
+        if p.encounter_kind in puzzles.PUZZLE_KINDS:
+            g.solve_puzzle(puzzles.answer_key(p))
+        elif p.entry.get("kind") == "mcq":
             g.answer_mcq(p.mcq["answer"])
         else:
             g.submit(p.canonical_solution)

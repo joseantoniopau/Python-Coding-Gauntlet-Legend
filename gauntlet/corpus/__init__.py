@@ -8,9 +8,10 @@ from .. import config
 from .schema import Problem
 
 _FAMILIES = (
+    "onboarding", "scaffolds", "parsons", "breaking",
     "arrays_hashing", "sliding_window", "two_pointers", "stacks_queues",
     "trees", "matrix_graphs", "recursion_dp", "python_village",
-    "binary_search", "design_oop", "debugging", "meta",
+    "binary_search", "design_oop", "debugging", "meta", "reasoning",
 )
 
 
@@ -40,13 +41,50 @@ def load(path: Path | None = None) -> list:
     return [Problem(**entry) for entry in raw]
 
 
+def fingerprint() -> str:
+    """A hash of everything that can change the corpus.
+
+    Without this, a player who started before new content shipped would keep
+    their original corpus forever: the old ensure() only checked whether the
+    file existed. Content is part of the program, so it has to invalidate the
+    way code does.
+    """
+    import hashlib
+    here = Path(__file__).resolve().parent
+    digest = hashlib.sha256()
+    sources = sorted(here.glob("families/*.py")) + [
+        here / "generator.py", here / "schema.py", here / "validate.py",
+    ]
+    for source in sources:
+        if source.exists():
+            digest.update(source.name.encode())
+            digest.update(source.read_bytes())
+    return digest.hexdigest()[:16]
+
+
+def _stamp_path(path: Path) -> Path:
+    return path.with_suffix(".stamp")
+
+
 def ensure(path: Path | None = None, *, rebuild: bool = False) -> list:
-    """Load the corpus, building and validating it first if necessary."""
+    """Load the corpus, rebuilding and revalidating whenever the content that
+    produces it has changed."""
     path = path or config.corpus_path()
-    if rebuild or not path.exists():
+    stamp = _stamp_path(path)
+    current = fingerprint()
+    stale = True
+    if path.exists() and stamp.exists():
+        try:
+            stale = stamp.read_text().strip() != current
+        except OSError:
+            stale = True
+
+    if rebuild or not path.exists() or stale:
         from .validate import validate
         problems = build_all()
         report = validate(problems)
         write(report.accepted, path)
+        stamp.parent.mkdir(parents=True, exist_ok=True)
+        stamp.write_text(current)
         return report.accepted
     return load(path)

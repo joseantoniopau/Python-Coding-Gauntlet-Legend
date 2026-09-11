@@ -148,6 +148,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self._json(g.problem(pid, mode=mode))
             if path == "/api/interview/current":
                 return self._json(g.interview_current())
+            if path == "/api/diagnostic":
+                return self._json(g.diagnostic_trials())
+            if path == "/api/curriculum":
+                from . import curriculum
+                return self._json({"objective": curriculum.next_objective(g.skills),
+                                   "ladder": curriculum.ladder(g.skills)})
+            if path == "/api/story":
+                from . import story as storymod
+                ctx = g.story_context()
+                return self._json({
+                    "log": storymod.quest_log(ctx, g.state["story"]),
+                    "session": storymod.session_script(g.state["story"]),
+                    "honorific": storymod.honorific(g.state["story"]),
+                })
             if path == "/api/loadout":
                 return self._json(g.loadout())
             if path == "/api/probes":
@@ -199,6 +213,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         body.get("format", "GAUNTLET"), body.get("profile")))
                 if path == "/api/interview/finish":
                     return self._json(g.finish_interview())
+                if path == "/api/puzzle":
+                    return self._json(g.solve_puzzle(body.get("answer")))
+                if path == "/api/diagnostic/check":
+                    return self._json(g.diagnostic_check(body.get("trial", ""),
+                                                         body.get("answer")))
+                if path == "/api/diagnostic/finish":
+                    return self._json(g.diagnostic_finish(
+                        body.get("answers") or {}, skipped=bool(body.get("skipped"))))
+                if path == "/api/story/advance":
+                    from . import story as storymod
+                    g.state["story"] = storymod.advance_session(g.state["story"]) \
+                        or g.state["story"]
+                    g.save()
+                    return self._json(storymod.session_script(g.state["story"]))
                 if path == "/api/probe":
                     return self._json(g.probe(body.get("args", []),
                                               body.get("expected"),

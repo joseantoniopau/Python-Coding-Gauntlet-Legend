@@ -119,7 +119,7 @@ def _median(values: list) -> float:
 
 
 DIFFICULTY_WEIGHT = {
-    "TUTORIAL": 0.5, "EASY": 1.0, "MEDIUM": 1.8, "HARD": 2.6,
+    "GUIDED": 0.3, "TUTORIAL": 0.5, "EASY": 1.0, "MEDIUM": 1.8, "HARD": 2.6,
     "ELITE": 3.0, "BOSS": 3.4,
 }
 

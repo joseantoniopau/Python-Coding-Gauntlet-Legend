@@ -1,0 +1,1345 @@
+{
+ "bosses": [
+  {
+   "id": "hash_titan",
+   "name": "The Hash Titan",
+   "region": "hashmap_highlands",
+   "skill": "HASH_MAP",
+   "problem_id": "ah-group-anagrams",
+   "taunt": "Compare every scroll against every other. I will wait. I have time.",
+   "sprite": "titan",
+   "colour": "#e8a33d"
+  },
+  {
+   "id": "three_sum_hydra",
+   "name": "The Three-Sum Hydra",
+   "region": "array_caverns",
+   "skill": "TWO_POINTER",
+   "problem_id": "ah-three-sum",
+   "taunt": "For every duplicate you fail to skip, I grow another head.",
+   "sprite": "hydra",
+   "colour": "#4fb783"
+  },
+  {
+   "id": "window_wraith",
+   "name": "The Window Wraith",
+   "region": "sliding_window_marsh",
+   "skill": "SLIDING_WINDOW",
+   "problem_id": "sw-longest-no-repeat",
+   "taunt": "Restart your scan. Please. I feed on restarts.",
+   "sprite": "wraith",
+   "colour": "#7f6ad6"
+  },
+  {
+   "id": "twin_behemoth",
+   "name": "The Twin Pointer Behemoth",
+   "region": "twin_pointer_pass",
+   "skill": "TWO_POINTER",
+   "problem_id": "tp-container-water",
+   "taunt": "Move the taller wall. Go on. Lose the width for nothing.",
+   "sprite": "behemoth",
+   "colour": "#c4553f"
+  },
+  {
+   "id": "matrix_golem",
+   "name": "The Matrix Golem",
+   "region": "matrix_citadel",
+   "skill": "MATRIX",
+   "problem_id": "mx-rotate",
+   "taunt": "Allocate a second matrix. I will simply take it from you.",
+   "sprite": "golem",
+   "colour": "#8a8f9c"
+  },
+  {
+   "id": "tree_dragon",
+   "name": "The Tree Dragon",
+   "region": "binary_tree_canopy",
+   "skill": "TREE",
+   "problem_id": "tr-validate-bst",
+   "taunt": "Compare me only to my children. I dare you.",
+   "sprite": "dragon",
+   "colour": "#3f9c5a"
+  },
+  {
+   "id": "path_sum_ent",
+   "name": "The Path-Sum Ent",
+   "region": "binary_tree_canopy",
+   "skill": "TREE",
+   "problem_id": "tr-path-sum",
+   "taunt": "A node with one child is not a leaf, little architect.",
+   "sprite": "ent",
+   "colour": "#6b8f3f"
+  },
+  {
+   "id": "graph_necromancer",
+   "name": "The Graph Necromancer",
+   "region": "graph_wastes",
+   "skill": "BFS",
+   "problem_id": "gr-shortest-hops",
+   "taunt": "Depth-first, was it? Enjoy the scenic route.",
+   "sprite": "necromancer",
+   "colour": "#6a4f8f"
+  },
+  {
+   "id": "rolling_titan",
+   "name": "The Rolling Titan",
+   "region": "sliding_window_marsh",
+   "skill": "QUEUE",
+   "problem_id": "sw-max-sliding-window",
+   "taunt": "Call max() again. I have all day. You have three seconds.",
+   "sprite": "titan",
+   "colour": "#3f7f9c"
+  },
+  {
+   "id": "editor_automaton",
+   "name": "The Editor Automaton",
+   "region": "matrix_citadel",
+   "skill": "DESIGN",
+   "problem_id": "ds-text-editor",
+   "taunt": "Undo that. No \u2014 the *other* undo. The one you did not implement.",
+   "sprite": "automaton",
+   "colour": "#b0763f"
+  },
+  {
+   "id": "complexity_wyrm",
+   "name": "The Complexity Wyrm",
+   "region": "complexity_tower",
+   "skill": "BIG_O",
+   "problem_id": "sw-min-window",
+   "taunt": "Correct is not the same as fast. I am the difference.",
+   "sprite": "wyrm",
+   "colour": "#3f6f9c"
+  },
+  {
+   "id": "serialization_lich",
+   "name": "The Serialization Lich",
+   "region": "recursive_forest",
+   "skill": "TREE",
+   "problem_id": "tr-serialize",
+   "taunt": "Write the tree down. Now read it back. Exactly.",
+   "sprite": "lich",
+   "colour": "#8f3f6f"
+  },
+  {
+   "id": "bug_demon",
+   "name": "The Bug Demon",
+   "region": "debugging_dungeon",
+   "skill": "DEBUGGING",
+   "problem_id": "db-bfs-visited",
+   "taunt": "It works on your machine.",
+   "sprite": "demon",
+   "colour": "#c43f4f"
+  },
+  {
+   "id": "the_interviewer",
+   "name": "The Interviewer",
+   "region": "null_kings_castle",
+   "skill": "RECALL",
+   "problem_id": "ds-lru-cache",
+   "final": true,
+   "taunt": "Walk me through your approach before you write anything.",
+   "sprite": "interviewer",
+   "colour": "#d8d8e0"
+  }
+ ],
+ "regions": [
+  {
+   "id": "python_village",
+   "name": "Python Village",
+   "biome": "village",
+   "palette": "dawn",
+   "skill": "PYTHON"
+  },
+  {
+   "id": "fields_of_syntax",
+   "name": "Fields of Syntax",
+   "biome": "grass",
+   "palette": "spring",
+   "skill": "PYTHON"
+  },
+  {
+   "id": "hashmap_highlands",
+   "name": "Hashmap Highlands",
+   "biome": "highland",
+   "palette": "amber",
+   "skill": "HASH_MAP"
+  },
+  {
+   "id": "stringwood_labyrinth",
+   "name": "Stringwood Labyrinth",
+   "biome": "forest",
+   "palette": "verdant",
+   "skill": "STRING"
+  },
+  {
+   "id": "array_caverns",
+   "name": "Array Caverns",
+   "biome": "cave",
+   "palette": "stone",
+   "skill": "ARRAY"
+  },
+  {
+   "id": "sliding_window_marsh",
+   "name": "Sliding Window Marsh",
+   "biome": "swamp",
+   "palette": "moss",
+   "skill": "SLIDING_WINDOW"
+  },
+  {
+   "id": "twin_pointer_pass",
+   "name": "Twin Pointer Pass",
+   "biome": "mountain",
+   "palette": "slate",
+   "skill": "TWO_POINTER"
+  },
+  {
+   "id": "stack_queue_mines",
+   "name": "Stack & Queue Mines",
+   "biome": "mine",
+   "palette": "ember",
+   "skill": "STACK"
+  },
+  {
+   "id": "matrix_citadel",
+   "name": "Matrix Citadel",
+   "biome": "citadel",
+   "palette": "royal",
+   "skill": "MATRIX"
+  },
+  {
+   "id": "recursive_forest",
+   "name": "Recursive Forest",
+   "biome": "deepforest",
+   "palette": "dusk",
+   "skill": "RECURSION"
+  },
+  {
+   "id": "binary_tree_canopy",
+   "name": "Binary Tree Canopy",
+   "biome": "canopy",
+   "palette": "verdant",
+   "skill": "TREE"
+  },
+  {
+   "id": "graph_wastes",
+   "name": "Graph Wastes",
+   "biome": "wastes",
+   "palette": "ash",
+   "skill": "GRAPH"
+  },
+  {
+   "id": "dp_ruins",
+   "name": "Dynamic Programming Ruins",
+   "biome": "ruins",
+   "palette": "gold",
+   "skill": "DP"
+  },
+  {
+   "id": "debugging_dungeon",
+   "name": "Debugging Dungeon",
+   "biome": "dungeon",
+   "palette": "iron",
+   "skill": "DEBUGGING"
+  },
+  {
+   "id": "complexity_tower",
+   "name": "Complexity Tower",
+   "biome": "tower",
+   "palette": "azure",
+   "skill": "BIG_O"
+  },
+  {
+   "id": "coding_coliseum",
+   "name": "The Coding Coliseum",
+   "biome": "arena",
+   "palette": "sun",
+   "skill": "SPEED"
+  },
+  {
+   "id": "null_kings_castle",
+   "name": "The Null King's Castle",
+   "biome": "castle",
+   "palette": "void",
+   "skill": "RECALL"
+  }
+ ],
+ "rarities": {
+  "COMMON": {
+   "weight": 100,
+   "colour": "#9b96b8",
+   "mult": 1.0,
+   "label": "Common"
+  },
+  "UNCOMMON": {
+   "weight": 46,
+   "colour": "#8fd07a",
+   "mult": 1.4,
+   "label": "Uncommon"
+  },
+  "RARE": {
+   "weight": 20,
+   "colour": "#7ec8ff",
+   "mult": 1.9,
+   "label": "Rare"
+  },
+  "EPIC": {
+   "weight": 7,
+   "colour": "#c8a8ff",
+   "mult": 2.6,
+   "label": "Epic"
+  },
+  "LEGENDARY": {
+   "weight": 2,
+   "colour": "#e8c37d",
+   "mult": 3.4,
+   "label": "Legendary"
+  },
+  "MYTHIC": {
+   "weight": 0,
+   "colour": "#ff6a7a",
+   "mult": 4.5,
+   "label": "Mythic"
+  }
+ },
+ "items": [
+  {
+   "id": "hashblade",
+   "name": "Hashblade",
+   "slot": "weapon",
+   "rarity": "UNCOMMON",
+   "icon": "sword",
+   "set_id": "",
+   "effects": {
+    "xp_bonus": 0.1,
+    "mana_max": 4
+   }
+  },
+  {
+   "id": "hashblade_prime",
+   "name": "Hashblade Prime",
+   "slot": "weapon",
+   "rarity": "EPIC",
+   "icon": "sword",
+   "set_id": "",
+   "effects": {
+    "xp_bonus": 0.25,
+    "mana_max": 8,
+    "probe_charges": 1
+   }
+  },
+  {
+   "id": "twin_sabers",
+   "name": "Twin Sabers",
+   "slot": "weapon",
+   "rarity": "UNCOMMON",
+   "icon": "sabers",
+   "set_id": "",
+   "effects": {
+    "rank_grace": 0.1,
+    "crit_bonus": 0.15
+   }
+  },
+  {
+   "id": "window_staff",
+   "name": "Window Staff",
+   "slot": "weapon",
+   "rarity": "RARE",
+   "icon": "staff",
+   "set_id": "",
+   "effects": {
+    "mana_max": 8,
+    "hint_discount": 0.15
+   }
+  },
+  {
+   "id": "recursion_spear",
+   "name": "Recursion Spear",
+   "slot": "weapon",
+   "rarity": "RARE",
+   "icon": "spear",
+   "set_id": "",
+   "effects": {
+    "xp_bonus": 0.15,
+    "probe_charges": 1
+   }
+  },
+  {
+   "id": "queue_lance",
+   "name": "Queue Lance",
+   "slot": "weapon",
+   "rarity": "RARE",
+   "icon": "lance",
+   "set_id": "",
+   "effects": {
+    "crit_bonus": 0.2,
+    "stamina_max": 3
+   }
+  },
+  {
+   "id": "depthblade",
+   "name": "Depthblade",
+   "slot": "weapon",
+   "rarity": "RARE",
+   "icon": "dagger",
+   "set_id": "",
+   "effects": {
+    "crit_bonus": 0.25,
+    "loot_luck": 0.1
+   }
+  },
+  {
+   "id": "tree_axe",
+   "name": "Tree Axe",
+   "slot": "weapon",
+   "rarity": "RARE",
+   "icon": "axe",
+   "set_id": "",
+   "effects": {
+    "xp_bonus": 0.15,
+    "mana_max": 6
+   }
+  },
+  {
+   "id": "heap_hammer",
+   "name": "Heap Hammer",
+   "slot": "weapon",
+   "rarity": "RARE",
+   "icon": "hammer",
+   "set_id": "",
+   "effects": {
+    "crit_bonus": 0.2,
+    "rank_grace": 0.1
+   }
+  },
+  {
+   "id": "matrix_bow",
+   "name": "Matrix Bow",
+   "slot": "weapon",
+   "rarity": "RARE",
+   "icon": "bow",
+   "set_id": "",
+   "effects": {
+    "probe_charges": 1,
+    "xp_bonus": 0.1
+   }
+  },
+  {
+   "id": "dynamic_relic",
+   "name": "Dynamic Relic",
+   "slot": "weapon",
+   "rarity": "EPIC",
+   "icon": "relic",
+   "set_id": "",
+   "effects": {
+    "xp_bonus": 0.3,
+    "mana_regen": 3,
+    "retest_bonus": 0.2
+   }
+  },
+  {
+   "id": "testsmith_monocle",
+   "name": "Testsmith's Monocle",
+   "slot": "head",
+   "rarity": "RARE",
+   "icon": "helm",
+   "set_id": "testsmith",
+   "effects": {
+    "probe_charges": 1
+   }
+  },
+  {
+   "id": "testsmith_gloves",
+   "name": "Testsmith's Gloves",
+   "slot": "hands",
+   "rarity": "RARE",
+   "icon": "gauntlets",
+   "set_id": "testsmith",
+   "effects": {
+    "crit_bonus": 0.2
+   }
+  },
+  {
+   "id": "testsmith_shield",
+   "name": "Testsmith's Shield",
+   "slot": "offhand",
+   "rarity": "RARE",
+   "icon": "shield",
+   "set_id": "testsmith",
+   "effects": {
+    "stamina_max": 4
+   }
+  },
+  {
+   "id": "testsmith_ring",
+   "name": "Testsmith's Band",
+   "slot": "ring1",
+   "rarity": "EPIC",
+   "icon": "relic",
+   "set_id": "testsmith",
+   "effects": {
+    "probe_charges": 1,
+    "loot_luck": 0.1
+   }
+  },
+  {
+   "id": "testsmith_boots",
+   "name": "Testsmith's Treads",
+   "slot": "feet",
+   "rarity": "RARE",
+   "icon": "boots",
+   "set_id": "testsmith",
+   "effects": {
+    "xp_bonus": 0.12
+   }
+  },
+  {
+   "id": "chrono_crown",
+   "name": "Chronomancer's Circlet",
+   "slot": "head",
+   "rarity": "RARE",
+   "icon": "helm",
+   "set_id": "chronomancer",
+   "effects": {
+    "rank_grace": 0.12
+   }
+  },
+  {
+   "id": "chrono_boots",
+   "name": "Chronomancer's Striders",
+   "slot": "feet",
+   "rarity": "RARE",
+   "icon": "boots",
+   "set_id": "chronomancer",
+   "effects": {
+    "rank_grace": 0.12,
+    "xp_bonus": 0.08
+   }
+  },
+  {
+   "id": "chrono_ring",
+   "name": "Ring of the Held Hour",
+   "slot": "ring1",
+   "rarity": "EPIC",
+   "icon": "relic",
+   "set_id": "chronomancer",
+   "effects": {
+    "combo_shield": 1
+   }
+  },
+  {
+   "id": "chrono_trinket",
+   "name": "Hourglass of Second Thought",
+   "slot": "trinket",
+   "rarity": "EPIC",
+   "icon": "relic",
+   "set_id": "chronomancer",
+   "effects": {
+    "second_wind": 1
+   }
+  },
+  {
+   "id": "chrono_chest",
+   "name": "Chronomancer's Mantle",
+   "slot": "chest",
+   "rarity": "RARE",
+   "icon": "chest",
+   "set_id": "chronomancer",
+   "effects": {
+    "stamina_max": 4,
+    "rank_grace": 0.1
+   }
+  },
+  {
+   "id": "archivist_hood",
+   "name": "Archivist's Hood",
+   "slot": "head",
+   "rarity": "RARE",
+   "icon": "helm",
+   "set_id": "archivist",
+   "effects": {
+    "hint_discount": 0.15
+   }
+  },
+  {
+   "id": "archivist_robe",
+   "name": "Archivist's Robe",
+   "slot": "chest",
+   "rarity": "RARE",
+   "icon": "chest",
+   "set_id": "archivist",
+   "effects": {
+    "mana_max": 8
+   }
+  },
+  {
+   "id": "archivist_ring",
+   "name": "Band of the Deep Index",
+   "slot": "ring2",
+   "rarity": "EPIC",
+   "icon": "relic",
+   "set_id": "archivist",
+   "effects": {
+    "retest_bonus": 0.25
+   }
+  },
+  {
+   "id": "archivist_gloves",
+   "name": "Archivist's Wraps",
+   "slot": "hands",
+   "rarity": "UNCOMMON",
+   "icon": "gauntlets",
+   "set_id": "archivist",
+   "effects": {
+    "mana_regen": 2
+   }
+  },
+  {
+   "id": "archivist_trinket",
+   "name": "Codex Fragment",
+   "slot": "trinket",
+   "rarity": "RARE",
+   "icon": "relic",
+   "set_id": "archivist",
+   "effects": {
+    "hint_discount": 0.15,
+    "xp_bonus": 0.1
+   }
+  },
+  {
+   "id": "nullbane_helm",
+   "name": "Nullbane Helm",
+   "slot": "head",
+   "rarity": "LEGENDARY",
+   "icon": "helm",
+   "set_id": "nullbane",
+   "effects": {
+    "probe_charges": 1,
+    "crit_bonus": 0.2
+   }
+  },
+  {
+   "id": "nullbane_plate",
+   "name": "Nullbane Plate",
+   "slot": "chest",
+   "rarity": "LEGENDARY",
+   "icon": "plate",
+   "set_id": "nullbane",
+   "effects": {
+    "stamina_max": 6,
+    "combo_shield": 1
+   }
+  },
+  {
+   "id": "nullbane_grips",
+   "name": "Nullbane Grips",
+   "slot": "hands",
+   "rarity": "LEGENDARY",
+   "icon": "gauntlets",
+   "set_id": "nullbane",
+   "effects": {
+    "crit_bonus": 0.3,
+    "loot_luck": 0.15
+   }
+  },
+  {
+   "id": "nullbane_greaves",
+   "name": "Nullbane Greaves",
+   "slot": "feet",
+   "rarity": "LEGENDARY",
+   "icon": "boots",
+   "set_id": "nullbane",
+   "effects": {
+    "rank_grace": 0.2,
+    "xp_bonus": 0.2
+   }
+  },
+  {
+   "id": "nullbane_sigil",
+   "name": "Nullbane Sigil",
+   "slot": "trinket",
+   "rarity": "LEGENDARY",
+   "icon": "relic",
+   "set_id": "nullbane",
+   "effects": {
+    "probe_charges": 1,
+    "mana_max": 10
+   }
+  },
+  {
+   "id": "oracle_amulet",
+   "name": "Big-O Amulet",
+   "slot": "trinket",
+   "rarity": "EPIC",
+   "icon": "relic",
+   "set_id": "",
+   "effects": {
+    "perf_insight": 1,
+    "xp_bonus": 0.15
+   }
+  },
+  {
+   "id": "debuggers_lens",
+   "name": "Debugger's Lens",
+   "slot": "offhand",
+   "rarity": "EPIC",
+   "icon": "shield",
+   "set_id": "",
+   "effects": {
+    "reveal_category": 1,
+    "armor_repair": 0.3
+   }
+  },
+  {
+   "id": "shrine_charm",
+   "name": "Charm of Recall",
+   "slot": "ring2",
+   "rarity": "UNCOMMON",
+   "icon": "relic",
+   "set_id": "",
+   "effects": {
+    "shrine_bonus": 0.4,
+    "mana_regen": 2
+   }
+  },
+  {
+   "id": "apprentice_ring",
+   "name": "Apprentice's Ring",
+   "slot": "ring1",
+   "rarity": "COMMON",
+   "icon": "relic",
+   "set_id": "",
+   "effects": {
+    "mana_max": 3
+   }
+  },
+  {
+   "id": "worn_boots",
+   "name": "Worn Boots",
+   "slot": "feet",
+   "rarity": "COMMON",
+   "icon": "boots",
+   "set_id": "",
+   "effects": {
+    "stamina_max": 2
+   }
+  },
+  {
+   "id": "training_vest",
+   "name": "Training Vest",
+   "slot": "chest",
+   "rarity": "COMMON",
+   "icon": "chest",
+   "set_id": "",
+   "effects": {
+    "stamina_max": 3
+   }
+  },
+  {
+   "id": "scribes_gloves",
+   "name": "Scribe's Gloves",
+   "slot": "hands",
+   "rarity": "COMMON",
+   "icon": "gauntlets",
+   "set_id": "",
+   "effects": {
+    "xp_bonus": 0.05
+   }
+  },
+  {
+   "id": "rusty_blade",
+   "name": "Rusty Blade",
+   "slot": "weapon",
+   "rarity": "COMMON",
+   "icon": "sword",
+   "set_id": "",
+   "effects": {
+    "xp_bonus": 0.03
+   }
+  },
+  {
+   "id": "null_key",
+   "name": "The Null Key",
+   "slot": "trinket",
+   "rarity": "MYTHIC",
+   "icon": "sword",
+   "set_id": "",
+   "effects": {
+    "probe_charges": 2,
+    "hint_discount": 0.3,
+    "loot_luck": 0.3,
+    "xp_bonus": 0.3
+   }
+  },
+  {
+   "id": "linear_edge",
+   "name": "The Linear Edge",
+   "slot": "weapon",
+   "rarity": "MYTHIC",
+   "icon": "sword",
+   "set_id": "",
+   "effects": {
+    "crit_bonus": 0.6,
+    "xp_bonus": 0.4,
+    "perf_insight": 1
+   }
+  },
+  {
+   "id": "phoenix_feather",
+   "name": "Phoenix Feather",
+   "slot": "offhand",
+   "rarity": "LEGENDARY",
+   "icon": "sword",
+   "set_id": "",
+   "effects": {
+    "second_wind": 1,
+    "combo_shield": 1,
+    "stamina_max": 5
+   }
+  },
+  {
+   "id": "mimic_tooth",
+   "name": "Mimic's Tooth",
+   "slot": "ring2",
+   "rarity": "LEGENDARY",
+   "icon": "sword",
+   "set_id": "",
+   "effects": {
+    "reveal_category": 1,
+    "probe_reveal_value": 1,
+    "crit_bonus": 0.25
+   }
+  },
+  {
+   "id": "architects_seal",
+   "name": "The Architect's Seal",
+   "slot": "ring1",
+   "rarity": "MYTHIC",
+   "icon": "sword",
+   "set_id": "",
+   "effects": {
+    "mana_max": 15,
+    "stamina_max": 8,
+    "xp_bonus": 0.5,
+    "loot_luck": 0.25
+   }
+  },
+  {
+   "id": "honed_blade",
+   "name": "Honed Blade",
+   "slot": "weapon",
+   "rarity": "UNCOMMON",
+   "icon": "sword",
+   "set_id": "",
+   "effects": {
+    "xp_bonus": 0.08,
+    "stamina_max": 2
+   }
+  },
+  {
+   "id": "fluent_edge",
+   "name": "Fluent Edge",
+   "slot": "weapon",
+   "rarity": "RARE",
+   "icon": "sword",
+   "set_id": "",
+   "effects": {
+    "xp_bonus": 0.16,
+    "mana_max": 5,
+    "rank_grace": 0.08
+   }
+  },
+  {
+   "id": "clarion_edge",
+   "name": "Clarion Edge",
+   "slot": "weapon",
+   "rarity": "EPIC",
+   "icon": "sword",
+   "set_id": "",
+   "effects": {
+    "xp_bonus": 0.28,
+    "mana_max": 8,
+    "hint_discount": 0.15
+   }
+  },
+  {
+   "id": "sourceforged_edge",
+   "name": "Sourceforged Edge",
+   "slot": "weapon",
+   "rarity": "LEGENDARY",
+   "icon": "sword",
+   "set_id": "",
+   "effects": {
+    "xp_bonus": 0.4,
+    "mana_max": 12,
+    "probe_charges": 1,
+    "crit_bonus": 0.25
+   }
+  },
+  {
+   "id": "hashblade_eternal",
+   "name": "Hashblade Eternal",
+   "slot": "weapon",
+   "rarity": "LEGENDARY",
+   "icon": "sword",
+   "set_id": "",
+   "effects": {
+    "xp_bonus": 0.35,
+    "mana_max": 12,
+    "probe_charges": 1,
+    "retest_bonus": 0.3
+   }
+  },
+  {
+   "id": "converging_sabers",
+   "name": "Converging Sabers",
+   "slot": "weapon",
+   "rarity": "RARE",
+   "icon": "sabers",
+   "set_id": "",
+   "effects": {
+    "rank_grace": 0.16,
+    "crit_bonus": 0.25
+   }
+  },
+  {
+   "id": "narrowing_sabers",
+   "name": "Sabers of the Narrowing Pass",
+   "slot": "weapon",
+   "rarity": "EPIC",
+   "icon": "sabers",
+   "set_id": "",
+   "effects": {
+    "rank_grace": 0.24,
+    "crit_bonus": 0.4,
+    "combo_shield": 1
+   }
+  },
+  {
+   "id": "held_frame_staff",
+   "name": "Staff of the Held Frame",
+   "slot": "weapon",
+   "rarity": "EPIC",
+   "icon": "staff",
+   "set_id": "",
+   "effects": {
+    "mana_max": 12,
+    "hint_discount": 0.25,
+    "combo_shield": 1
+   }
+  },
+  {
+   "id": "smaller_call_spear",
+   "name": "Spear of the Smaller Call",
+   "slot": "weapon",
+   "rarity": "EPIC",
+   "icon": "spear",
+   "set_id": "",
+   "effects": {
+    "xp_bonus": 0.28,
+    "probe_charges": 1,
+    "mana_regen": 3
+   }
+  },
+  {
+   "id": "expanding_rings_lance",
+   "name": "Lance of Expanding Rings",
+   "slot": "weapon",
+   "rarity": "EPIC",
+   "icon": "lance",
+   "set_id": "",
+   "effects": {
+    "crit_bonus": 0.35,
+    "stamina_max": 5,
+    "probe_charges": 1
+   }
+  },
+  {
+   "id": "abyssal_depthblade",
+   "name": "Abyssal Depthblade",
+   "slot": "weapon",
+   "rarity": "EPIC",
+   "icon": "dagger",
+   "set_id": "",
+   "effects": {
+    "crit_bonus": 0.4,
+    "loot_luck": 0.2,
+    "xp_bonus": 0.15
+   }
+  },
+  {
+   "id": "split_canopy_axe",
+   "name": "Axe of the Split Canopy",
+   "slot": "weapon",
+   "rarity": "EPIC",
+   "icon": "axe",
+   "set_id": "",
+   "effects": {
+    "xp_bonus": 0.28,
+    "mana_max": 10,
+    "crit_bonus": 0.2
+   }
+  },
+  {
+   "id": "kth_weight_hammer",
+   "name": "Hammer of the Kth Weight",
+   "slot": "weapon",
+   "rarity": "EPIC",
+   "icon": "hammer",
+   "set_id": "",
+   "effects": {
+    "crit_bonus": 0.32,
+    "rank_grace": 0.18,
+    "perf_insight": 1
+   }
+  },
+  {
+   "id": "turned_floor_bow",
+   "name": "Bow of the Turned Floor",
+   "slot": "weapon",
+   "rarity": "EPIC",
+   "icon": "bow",
+   "set_id": "",
+   "effects": {
+    "probe_charges": 1,
+    "xp_bonus": 0.22,
+    "crit_bonus": 0.2
+   }
+  },
+  {
+   "id": "paid_once_relic",
+   "name": "Relic of the Debt Paid Once",
+   "slot": "weapon",
+   "rarity": "LEGENDARY",
+   "icon": "relic",
+   "set_id": "",
+   "effects": {
+    "xp_bonus": 0.45,
+    "mana_regen": 5,
+    "retest_bonus": 0.35
+   }
+  },
+  {
+   "id": "read_failure_lens",
+   "name": "Lens of the Read Failure",
+   "slot": "offhand",
+   "rarity": "LEGENDARY",
+   "icon": "shield",
+   "set_id": "",
+   "effects": {
+    "reveal_category": 1,
+    "armor_repair": 0.5,
+    "stamina_max": 5
+   }
+  },
+  {
+   "id": "journeyman_ring",
+   "name": "Journeyman's Ring",
+   "slot": "ring1",
+   "rarity": "UNCOMMON",
+   "icon": "relic",
+   "set_id": "",
+   "effects": {
+    "mana_max": 6,
+    "mana_regen": 1
+   }
+  },
+  {
+   "id": "adepts_ring",
+   "name": "Adept's Ring",
+   "slot": "ring1",
+   "rarity": "RARE",
+   "icon": "relic",
+   "set_id": "",
+   "effects": {
+    "mana_max": 10,
+    "mana_regen": 2,
+    "hint_discount": 0.1
+   }
+  },
+  {
+   "id": "vernacular_hood",
+   "name": "Vernacular Hood",
+   "slot": "head",
+   "rarity": "RARE",
+   "icon": "helm",
+   "set_id": "vernacular",
+   "effects": {
+    "hint_discount": 0.12
+   }
+  },
+  {
+   "id": "vernacular_tunic",
+   "name": "Vernacular Tunic",
+   "slot": "chest",
+   "rarity": "RARE",
+   "icon": "chest",
+   "set_id": "vernacular",
+   "effects": {
+    "mana_max": 6
+   }
+  },
+  {
+   "id": "vernacular_wraps",
+   "name": "Vernacular Wraps",
+   "slot": "hands",
+   "rarity": "UNCOMMON",
+   "icon": "gauntlets",
+   "set_id": "vernacular",
+   "effects": {
+    "mana_regen": 2
+   }
+  },
+  {
+   "id": "vernacular_sandals",
+   "name": "Vernacular Sandals",
+   "slot": "feet",
+   "rarity": "UNCOMMON",
+   "icon": "boots",
+   "set_id": "vernacular",
+   "effects": {
+    "stamina_max": 3
+   }
+  },
+  {
+   "id": "vernacular_charm",
+   "name": "Charm of Plain Speech",
+   "slot": "trinket",
+   "rarity": "RARE",
+   "icon": "relic",
+   "set_id": "vernacular",
+   "effects": {
+    "xp_bonus": 0.1
+   }
+  },
+  {
+   "id": "pathfinder_cowl",
+   "name": "Pathfinder's Cowl",
+   "slot": "head",
+   "rarity": "RARE",
+   "icon": "helm",
+   "set_id": "pathfinder",
+   "effects": {
+    "probe_charges": 1
+   }
+  },
+  {
+   "id": "pathfinder_coat",
+   "name": "Pathfinder's Coat",
+   "slot": "chest",
+   "rarity": "RARE",
+   "icon": "chest",
+   "set_id": "pathfinder",
+   "effects": {
+    "stamina_max": 5
+   }
+  },
+  {
+   "id": "pathfinder_grips",
+   "name": "Pathfinder's Grips",
+   "slot": "hands",
+   "rarity": "RARE",
+   "icon": "gauntlets",
+   "set_id": "pathfinder",
+   "effects": {
+    "crit_bonus": 0.18
+   }
+  },
+  {
+   "id": "pathfinder_boots",
+   "name": "Pathfinder's Boots",
+   "slot": "feet",
+   "rarity": "RARE",
+   "icon": "boots",
+   "set_id": "pathfinder",
+   "effects": {
+    "rank_grace": 0.1,
+    "xp_bonus": 0.08
+   }
+  },
+  {
+   "id": "pathfinder_compass",
+   "name": "Pathfinder's Compass",
+   "slot": "trinket",
+   "rarity": "EPIC",
+   "icon": "relic",
+   "set_id": "pathfinder",
+   "effects": {
+    "loot_luck": 0.15,
+    "probe_charges": 1
+   }
+  },
+  {
+   "id": "memoist_visor",
+   "name": "Memoist's Visor",
+   "slot": "head",
+   "rarity": "RARE",
+   "icon": "helm",
+   "set_id": "memoist",
+   "effects": {
+    "mana_max": 8
+   }
+  },
+  {
+   "id": "memoist_mail",
+   "name": "Memoist's Ledger-Mail",
+   "slot": "chest",
+   "rarity": "EPIC",
+   "icon": "plate",
+   "set_id": "memoist",
+   "effects": {
+    "stamina_max": 5,
+    "mana_regen": 2
+   }
+  },
+  {
+   "id": "memoist_cuffs",
+   "name": "Memoist's Cuffs",
+   "slot": "hands",
+   "rarity": "RARE",
+   "icon": "gauntlets",
+   "set_id": "memoist",
+   "effects": {
+    "retest_bonus": 0.15
+   }
+  },
+  {
+   "id": "memoist_treads",
+   "name": "Memoist's Treads",
+   "slot": "feet",
+   "rarity": "RARE",
+   "icon": "boots",
+   "set_id": "memoist",
+   "effects": {
+    "xp_bonus": 0.12
+   }
+  },
+  {
+   "id": "memoist_ledger",
+   "name": "The Standing Ledger",
+   "slot": "trinket",
+   "rarity": "EPIC",
+   "icon": "relic",
+   "set_id": "memoist",
+   "effects": {
+    "retest_bonus": 0.2,
+    "mana_regen": 2
+   }
+  },
+  {
+   "id": "interviewers_coin",
+   "name": "The Interviewer's Coin",
+   "slot": "ring1",
+   "rarity": "MYTHIC",
+   "icon": "sword",
+   "set_id": "",
+   "effects": {
+    "xp_bonus": 0.45,
+    "rank_grace": 0.25,
+    "retest_bonus": 0.35,
+    "loot_luck": 0.2
+   }
+  },
+  {
+   "id": "thirty_day_signet",
+   "name": "Signet of the Thirtieth Day",
+   "slot": "ring2",
+   "rarity": "LEGENDARY",
+   "icon": "sword",
+   "set_id": "",
+   "effects": {
+    "retest_bonus": 0.5,
+    "mana_max": 10,
+    "xp_bonus": 0.2
+   }
+  },
+  {
+   "id": "silent_crown",
+   "name": "The Silent Crown",
+   "slot": "head",
+   "rarity": "MYTHIC",
+   "icon": "sword",
+   "set_id": "",
+   "effects": {
+    "mana_max": 18,
+    "hint_discount": 0.4,
+    "xp_bonus": 0.35,
+    "crit_bonus": 0.25
+   }
+  },
+  {
+   "id": "armorers_last_plate",
+   "name": "The Armorer's Last Plate",
+   "slot": "chest",
+   "rarity": "LEGENDARY",
+   "icon": "sword",
+   "set_id": "",
+   "effects": {
+    "stamina_max": 10,
+    "armor_repair": 0.6,
+    "combo_shield": 1
+   }
+  },
+  {
+   "id": "asymptote_shard",
+   "name": "Shard of the Unreachable Floor",
+   "slot": "trinket",
+   "rarity": "MYTHIC",
+   "icon": "sword",
+   "set_id": "",
+   "effects": {
+    "perf_insight": 1,
+    "xp_bonus": 0.4,
+    "mana_regen": 4,
+    "rank_grace": 0.2
+   }
+  },
+  {
+   "id": "rematch_spurs",
+   "name": "Spurs of the Second Meeting",
+   "slot": "feet",
+   "rarity": "LEGENDARY",
+   "icon": "sword",
+   "set_id": "",
+   "effects": {
+    "rank_grace": 0.35,
+    "crit_bonus": 0.3,
+    "xp_bonus": 0.2
+   }
+  },
+  {
+   "id": "forgekeepers_grips",
+   "name": "Forgekeeper's Grips",
+   "slot": "hands",
+   "rarity": "LEGENDARY",
+   "icon": "sword",
+   "set_id": "",
+   "effects": {
+    "probe_charges": 2,
+    "reveal_category": 1,
+    "crit_bonus": 0.3
+   }
+  },
+  {
+   "id": "quicksilver_edge",
+   "name": "The Quicksilver Edge",
+   "slot": "weapon",
+   "rarity": "MYTHIC",
+   "icon": "sabers",
+   "set_id": "",
+   "effects": {
+    "rank_grace": 0.4,
+    "crit_bonus": 0.5,
+    "xp_bonus": 0.35,
+    "second_wind": 1
+   }
+  }
+ ],
+ "spells": [
+  "ORACLE",
+  "REVEAL_PATH",
+  "VISION",
+  "PSEUDOSIGHT",
+  "CODE_FRAGMENT",
+  "PHOENIX"
+ ]
+}

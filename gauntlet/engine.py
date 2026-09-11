@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass, field, asdict
 
 from . import adaptive, config, coach as coachmod, db, grading, items, sandbox
-from . import tactics
+from . import curriculum, diagnostic, puzzles, story as storymod, tactics
 from . import skills as skillmod
 from . import srs as srsmod
 from . import world
@@ -50,6 +50,16 @@ class Encounter:
         return asdict(self)
 
 
+# Which learning failure a puzzle miss actually represents.
+_PUZZLE_CAUSE = {
+    "RUNE_ASSEMBLY": "PYTHON_RECALL",
+    "TRACE": "DEBUGGING",
+    "SPOT_THE_FLAW": "DEBUGGING",
+    "STATE_PREDICT": "PYTHON_RECALL",
+    "BREAK_IT": "TESTING",
+    "COMPLEXITY_MATCH": "COMPLEXITY",
+}
+
 DEFAULT_STATE = {
     "player": {
         "name": "The Security Architect",
@@ -80,6 +90,8 @@ DEFAULT_STATE = {
     "secrets_found": [],
     "perf_failed_ids": [],
     "crit_streak": 0,
+    "story": {},
+    "diagnostic": {},
     "grimoire": [],
     "codex": [],
     "settings": {"music": True, "sfx": True, "reduced_motion": False,
@@ -111,6 +123,7 @@ class Game:
             state = _deep_copy(DEFAULT_STATE)
             state["player"]["created_at"] = time.time()
             state["skills"] = {k: v.to_dict() for k, v in skillmod.new_skills().items()}
+            state["story"] = storymod.new_story_state()
             db.save_state(self.conn, state)
             return state
         # forward-compatible: fill in anything a newer build added
@@ -118,6 +131,8 @@ class Game:
         _merge(merged, raw)
         for name in skillmod.SKILLS:
             merged["skills"].setdefault(name, skillmod.SkillState(name=name).to_dict())
+        if not merged.get("story"):
+            merged["story"] = storymod.new_story_state()
         return merged
 
     def save(self) -> None:
@@ -148,11 +163,64 @@ class Game:
     def _write_encounter(self, enc: Encounter | None) -> None:
         self.state["encounter"] = enc.to_dict() if enc else None
 
+    # -- story -------------------------------------------------------------
+    def story_context(self, *, readiness: dict | None = None,
+                      events=()) -> dict:
+        """build_context folds the whole engine state, so hand it the real thing
+        rather than a reconstruction that could drift out of step."""
+        merged = dict(self.state)
+        merged["stats"] = {**self.state["stats"], **db.attempt_stats(self.conn)}
+        return storymod.build_context(merged, self.skills, readiness=readiness,
+                                      events=events)
+
+    def collect_story(self, *, readiness: dict | None = None, events=()) -> list:
+        """Fire every narrative beat whose trigger is now satisfied."""
+        ctx = self.story_context(readiness=readiness, events=events)
+        fired = []
+        for entry in storymod.pending(ctx, self.state["story"]):
+            # apply() MUTATES the story state and returns only the part of the
+            # reward the engine has to pay. Titles, cards, codex entries, set
+            # pieces, techniques and mentor favour are banked inside story itself.
+            payable = storymod.apply(self.state["story"], entry)
+            if not payable and entry["id"] not in self.state["story"].get("fired", []):
+                continue                       # already shown on an earlier pass
+            player = self.state["player"]
+            if payable.get("xp"):
+                player["xp"] += int(payable["xp"])
+                player["level"] = world.level_for(player["xp"])
+                player["title"] = world.title_for(player["level"])
+            if payable.get("gold"):
+                player["gold"] += int(payable["gold"])
+            companion = payable.get("companion")
+            if companion and companion not in self.state["companions"]:
+                self.state["companions"].append(companion)
+            consumable = payable.get("consumable")
+            if consumable:
+                self.state["consumables"][consumable] = \
+                    self.state["consumables"].get(consumable, 0) + 1
+            # keep the player-facing grimoire and codex in step with story's ledger
+            for card in self.state["story"].get("cards", []):
+                if card not in self.state["grimoire"]:
+                    self.state["grimoire"].append(card)
+            for note in self.state["story"].get("codex", []):
+                if note not in self.state["codex"]:
+                    self.state["codex"].append(note)
+            entry["reward_summary"] = storymod.reward_summary(entry.get("reward") or {})
+            fired.append(entry)
+        return fired
+
     # -- build / loadout ---------------------------------------------------
     def effects(self, *, include_temp: bool = True) -> dict:
         enc = self.encounter
         temp = dict(enc.temp_effects) if (enc and include_temp) else {}
-        return items.total_effects(self.state["equipped"], self.state["attributes"], temp)
+        base = items.total_effects(self.state["equipped"], self.state["attributes"], temp)
+        # mentor techniques are earned by demonstrated mastery, so they fold in
+        # exactly like gear does — and obey the same rule about never answering
+        earned = storymod.technique_effects(self.state["story"], self.story_context())
+        for key, value in (earned or {}).items():
+            if key in items.EFFECT_LABELS:
+                base[key] = base.get(key, 0) + value
+        return base
 
     def _sync_caps(self) -> None:
         """Equipment and attributes change the ceilings, never the current values
@@ -438,6 +506,13 @@ class Game:
             "build": self.state["build"],
             "secrets_found": self.state["secrets_found"],
             "castle": castle,
+            "chapter": curriculum.next_objective(skills),
+            "ladder": curriculum.ladder(skills),
+            "quest_log": storymod.quest_log(
+                self.story_context(readiness=ready), self.state["story"]),
+            "honorific": storymod.honorific(self.state["story"]),
+            "codex": self.state["codex"],
+            "diagnostic_done": bool(self.state.get("diagnostic", {}).get("done")),
         }
 
     def _unaided_counts(self) -> tuple:
@@ -464,13 +539,20 @@ class Game:
                        kind: str | None = None) -> dict:
         skills = self.skills
         selection = adaptive.select_next(
+            # parenthesised deliberately: the previous form parsed as
+            # `(matches_kind and not_boss) or matches_kind`, which let an explicit
+            # kind smuggle boss encounters into ordinary selection
             [p for p in self.corpus
              if (kind is None or p.encounter_kind == kind)
-             and p.difficulty != "BOSS" or p.encounter_kind == kind],
+             and p.difficulty != "BOSS"],
             skills=skills, schedule=self.schedule,
             profile=self.state["player"]["profile"],
             solved_ids=set(self.state["solved_ids"]),
             recent_ids=self.state["recent_ids"],
+            # Named from the full corpus rather than the filtered slice above, so
+            # asking for one kind cannot blind the selector to what came before.
+            recent_kinds=[self.by_id[i].encounter_kind
+                          for i in self.state["recent_ids"] if i in self.by_id],
             region=region, allow_retest=(mode == config.MODE_ADVENTURE),
         )
         return self.start_encounter(selection.problem.id, mode=mode,
@@ -621,6 +703,8 @@ class Game:
 
         if problem.entry.get("kind") == "test_forge":
             return self._grade_forge(code, problem, enc)
+        if problem.encounter_kind in puzzles.PUZZLE_KINDS:
+            return self._grade_puzzle(problem, enc, code)
 
         report = sandbox.run_tests(code, problem.entry, problem.all_tests,
                                    timeout_ms=3000, wall_seconds=20)
@@ -741,6 +825,112 @@ class Game:
                                    extra={"suite_size": suite_size, "kills": kills,
                                           "mutants": len(problem.mutants)})
 
+    def solve_puzzle(self, payload) -> dict:
+        """Puzzle encounters take a structured answer rather than source code."""
+        enc = self.encounter
+        if not enc:
+            return {"error": "no active encounter"}
+        problem = self.by_id[enc.problem_id]
+        if problem.encounter_kind not in puzzles.PUZZLE_KINDS:
+            return {"error": "this encounter is not a puzzle"}
+        enc.submits += 1
+        self._write_encounter(enc)
+        return self._grade_puzzle(problem, enc, payload)
+
+    def _grade_puzzle(self, problem: Problem, enc: Encounter, payload) -> dict:
+        outcome = puzzles.grade(problem, payload)
+        solved = bool(outcome["solved"])
+        seconds = max(1.0, time.time() - enc.started_at)
+        first_try = solved and enc.submits <= 1
+        rank = grading.rank_for(solved=solved, hints_used=enc.hints_used,
+                                seconds=seconds,
+                                target_seconds=self._graced_target(problem),
+                                used_phoenix=enc.used_phoenix, first_try=first_try)
+        feedback = {
+            "damage": outcome["passed"], "enemy_hp_total": outcome["total"],
+            "passed": outcome["passed"], "total": outcome["total"],
+            "cleared": solved, "lines": outcome["lines"], "slowest_ms": 0,
+        }
+
+        class _Fake:
+            phase = "tests"
+            tests: list = []
+            error = None
+            ok = True
+            all_passed = solved
+            passed_count = outcome["passed"]
+            slowest_ms = 0.0
+
+        report = outcome.get("report") or _Fake()
+        analysis = grading.Analysis(
+            root_cause="" if solved else _PUZZLE_CAUSE.get(problem.encounter_kind,
+                                                           "DEBUGGING"),
+            narrative="" if solved else next(
+                (line["message"] for line in outcome["lines"]
+                 if line["status"] != "pass" and line["message"]), ""))
+        result = self._apply_outcome(problem, enc, report, analysis, feedback,
+                                     solved=solved, rank=rank, seconds=seconds,
+                                     first_try=first_try, code="",
+                                     extra={"puzzle": problem.encounter_kind})
+        for key in ("explanation", "answer", "assembled_source"):
+            if key in outcome:
+                result[key] = outcome[key]
+        return result
+
+    # -- the opening diagnostic --------------------------------------------
+    def diagnostic_trials(self) -> dict:
+        state = self.state.setdefault("diagnostic", {})
+        return {
+            "done": bool(state.get("done")),
+            "placement": state.get("placement"),
+            "trials": [
+                {"id": t.id, "probes": t.probes, "kind": t.kind, "prompt": t.prompt,
+                 "code": t.code, "choices": list(t.choices), "narration": t.narration,
+                 "fn_name": t.fn_name, "starter": t.starter,
+                 "tests": [{"name": n, "args": list(a), "expected": x}
+                           for n, a, x in t.tests]}
+                for t in diagnostic.TRIALS
+            ],
+        }
+
+    def diagnostic_check(self, trial_id: str, answer) -> dict:
+        """Grade one trial. The coding trial is run in the real sandbox."""
+        trial = diagnostic.TRIAL_BY_ID.get(trial_id)
+        if trial is None:
+            return {"error": "unknown trial"}
+        if trial.kind == "mcq":
+            correct = int(answer) == trial.answer
+            return {"correct": correct, "expected": trial.answer,
+                    "probes": trial.probes}
+        tests = [{"name": n, "args": list(a), "expected": x, "cmp": "exact",
+                  "hidden": False} for n, a, x in trial.tests]
+        report = sandbox.run_tests(str(answer),
+                                   {"kind": "function", "name": trial.fn_name},
+                                   tests, timeout_ms=2500, wall_seconds=12)
+        return {
+            "correct": report.all_passed,
+            "probes": trial.probes,
+            "phase": report.phase,
+            "error": report.error,
+            "tests": [{"name": t.name, "status": t.status, "message": t.message}
+                      for t in report.tests],
+        }
+
+    def diagnostic_finish(self, answers: dict, *, skipped: bool = False) -> dict:
+        placement = (diagnostic.skip_placement() if skipped
+                     else diagnostic.evaluate(answers or {}))
+        skills = self.skills
+        diagnostic.seed_skills(skills, placement)
+        self._write_skills(skills)
+        self.state["diagnostic"] = {"done": True, "placement": placement.to_dict()}
+        self.state["player"]["diagnostic_done"] = True
+        self.save()
+        return {
+            **placement.to_dict(),
+            "chapter": curriculum.next_objective(self.skills),
+            "story": self.collect_story(events=("diagnostic_done",)),
+        }
+
     def answer_mcq(self, choice: int) -> dict:
         enc = self.encounter
         if not enc:
@@ -797,6 +987,24 @@ class Game:
             hints_used=enc.hints_used, seconds=seconds,
             target_seconds=problem.target_seconds, first_try=first_try,
             is_retest=enc.is_retest, interval_days=enc.interval_days, mode=enc.mode)
+        # Fluency tiers credit PYTHON itself. A GUIDED fill-in-the-blank is filed
+        # under whatever pattern it happens to use, but what it is actually
+        # teaching is the language — and the curriculum's first chapters measure
+        # exactly that.
+        if problem.difficulty in ("GUIDED", "TUTORIAL") and skill_name != "PYTHON":
+            skillmod.apply_outcome(
+                skills["PYTHON"], solved=solved, difficulty=problem.difficulty,
+                hints_used=enc.hints_used, seconds=seconds,
+                target_seconds=problem.target_seconds, first_try=first_try,
+                is_retest=enc.is_retest, mode=enc.mode)
+        elif problem.spaced_repetition_family.startswith(("python_", "onboarding_")) \
+                and skill_name != "PYTHON":
+            skillmod.apply_outcome(
+                skills["PYTHON"], solved=solved, difficulty="TUTORIAL",
+                hints_used=enc.hints_used, seconds=seconds,
+                target_seconds=problem.target_seconds, first_try=first_try,
+                is_retest=False, mode=enc.mode)
+
         for secondary in problem.secondary_patterns:
             name = skillmod.PATTERN_TO_SKILL.get(secondary)
             if name and name in skills and name != skill_name:
@@ -975,6 +1183,33 @@ class Game:
             if enc.first_code_at else 0.0,
             submitted_code=code[:20000])
 
+        # --- narrative: which events did this outcome actually produce?
+        events = ["encounter_cleared"] if solved else []
+        if solved and enc.hints_used == 0:
+            events.append("first_unaided_clear")
+        if rank == "S":
+            events.append("first_s_rank")
+        if solved and problem.difficulty == "MEDIUM" and enc.hints_used == 0:
+            events.append("first_medium_unaided")
+        if enc.boss_id and solved:
+            events.append("first_boss_cleared")
+        if enc.is_retest and solved and enc.interval_days >= 7:
+            events.append("retest_survived_7d")
+        if armor_event and armor_event.get("repaired"):
+            events.append("armor_repaired")
+        if levels_gained:
+            events.append("level_gained")
+        if drop:
+            events.append("loot_taken")
+        if enc.probes_used and any(l for l in enc.probe_log if l.get("correct")):
+            events.append("probe_correct")
+        if player["combo"] >= 5:
+            events.append("combo_five")
+        if solved and problem.id in self.state["perf_failed_ids"]:
+            events.append("perf_recovered")
+        if solved and any(not a["solved"] for a in db.attempts_for(self.conn, problem.id)):
+            events.append("comeback_clear")
+
         history = db.attempts_for(self.conn, problem.id)
         reply = coachmod.coach(mode=enc.mode, analysis=analysis, problem=problem,
                                report=report, hints_used=enc.hints_used,
@@ -1035,6 +1270,12 @@ class Game:
 
         if solved or enc.mode == config.MODE_INTERVIEW:
             self._write_encounter(None)
+
+        # Story beats are collected AFTER the outcome is folded in, so a beat
+        # whose trigger is "reach mastery 30" fires on the attempt that reaches it
+        # rather than on the one after.
+        result["story"] = self.collect_story(events=events)
+        result["chapter"] = curriculum.next_objective(self.skills)
         self.save()
         return result
 

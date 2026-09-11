@@ -25,7 +25,7 @@ PATTERNS = [
     "DESIGN", "GREEDY", "INTERVALS", "DEBUGGING", "COMPLEXITY", "TESTING",
 ]
 
-DIFFICULTIES = ["TUTORIAL", "EASY", "MEDIUM", "HARD", "ELITE", "BOSS"]
+DIFFICULTIES = ["GUIDED", "TUTORIAL", "EASY", "MEDIUM", "HARD", "ELITE", "BOSS"]
 
 SOURCE_TYPES = [
     "REPORTED_INTERVIEW",   # archetype publicly reported for a company
@@ -53,9 +53,57 @@ REALMS = [
 
 # Difficulty -> target solve seconds for the FAST mastery stage.
 TARGET_SECONDS = {
-    "TUTORIAL": 180, "EASY": 420, "MEDIUM": 900,
+    "GUIDED": 120, "TUTORIAL": 180, "EASY": 420, "MEDIUM": 900,
     "HARD": 1500, "ELITE": 1500, "BOSS": 2100,
 }
+
+
+# ---------------------------------------------------------------------------
+# What a puzzle is allowed to tell the client
+# ---------------------------------------------------------------------------
+#
+# Puzzle encounters carry their grading key in `mcq`, and `player_view` used to
+# ship `mcq` whole. That handed `flawed_line`, `final_state`, every checkpoint's
+# expected value and every snippet's cost straight to the browser, where a
+# player who opens devtools once never has to solve another puzzle. So the key
+# is named here, per kind, by what the interface genuinely renders — anything
+# not on this list is withheld and lives only on the server, where the grader is.
+
+PUZZLE_VISIBLE_MCQ = {
+    "RUNE_ASSEMBLY":    ("runes", "shuffle"),
+    "TRACE":            ("code", "checkpoints"),
+    "SPOT_THE_FLAW":    ("code", "reference_code"),
+    "STATE_PREDICT":    ("code", "operations"),
+    "BREAK_IT":         ("flawed_code",),
+    "COMPLEXITY_MATCH": ("snippets", "options"),
+}
+
+# Those three fields are lists of records, and some of the record is the answer.
+PUZZLE_VISIBLE_ITEM = {
+    "runes": ("text",),
+    "checkpoints": ("after_line", "variable"),
+    "snippets": ("label", "code"),
+}
+
+
+def redact_mcq(encounter_kind: str, mcq: dict) -> dict:
+    """The part of `mcq` the player may see before their answer is graded."""
+    keep = PUZZLE_VISIBLE_MCQ.get(encounter_kind)
+    if keep is None:
+        # Plain multiple choice: the choices are the question, the index is not.
+        return {k: v for k, v in mcq.items()
+                if k not in ("answer", "explanation", "distractors")}
+    out = {}
+    for key in keep:
+        if key not in mcq:
+            continue
+        fields = PUZZLE_VISIBLE_ITEM.get(key)
+        if fields is None:
+            out[key] = mcq[key]
+        else:
+            out[key] = [{f: item[f] for f in fields if f in item}
+                        for item in mcq[key]]
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +163,7 @@ class Problem:
     def player_view(self, *, mode: str) -> dict:
         """What the client is allowed to see before a submission is graded."""
         d = self.to_dict()
+        d["mcq"] = redact_mcq(self.encounter_kind, self.mcq)
         d.pop("canonical_solution", None)
         d.pop("hidden_tests", None)
         d.pop("edge_cases", None)

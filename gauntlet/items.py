@@ -135,8 +135,14 @@ class Item:
     icon: str = "sword"
     flavour: str = ""
     hidden: bool = False
-    source: str = "drop"        # drop | boss | secret | quest | vendor
+    source: str = "drop"        # drop | boss | secret | quest | vendor | upgrade
     skill: str = ""             # thematic tie to a skill, for drop weighting
+    # Upgrades are earned, never bought. `upgrades` names what this becomes and
+    # `upgrade_requirement` is the evidence that earns it; both are filled in from
+    # UPGRADE_PATHS at import, so the whole progression reads as one table rather
+    # than as a field scattered across forty item literals.
+    upgrades: str = ""
+    upgrade_requirement: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -184,6 +190,39 @@ SETS = {
             2: {"crit_bonus": 0.3},
             3: {"xp_bonus": 0.25, "loot_luck": 0.2},
             5: {"probe_charges": 2, "second_wind": 1, "xp_bonus": 0.5},
+        },
+    },
+
+    # ---- chapter sets: one wearable identity per movement of the ladder ----
+    # Each answers the chapter it is named for. Vernacular makes the language
+    # itself cheap, so chapter I stops costing focus; Pathfinder pays for probing
+    # a maze instead of guessing at it; Memoist pays you for never solving the
+    # same subproblem twice, which is the entire argument of chapter IX.
+    "vernacular": {
+        "name": "Vernacular Weave",
+        "blurb": "Cloth for someone who has stopped fighting the syntax.",
+        "bonuses": {
+            2: {"hint_discount": 0.15},
+            3: {"mana_regen": 2, "stamina_max": 4},
+            5: {"hint_discount": 0.3, "mana_max": 12, "xp_bonus": 0.15},
+        },
+    },
+    "pathfinder": {
+        "name": "Pathfinder's Kit",
+        "blurb": "Every road on the map was walked by someone carrying this.",
+        "bonuses": {
+            2: {"probe_charges": 1},
+            3: {"crit_bonus": 0.25, "loot_luck": 0.15},
+            5: {"probe_charges": 2, "reveal_category": 1, "xp_bonus": 0.25},
+        },
+    },
+    "memoist": {
+        "name": "Memoist's Ledger-Mail",
+        "blurb": "Each ring is a subproblem, written down once and never again.",
+        "bonuses": {
+            2: {"retest_bonus": 0.2},
+            3: {"mana_regen": 3, "perf_insight": 1},
+            5: {"xp_bonus": 0.35, "hint_discount": 0.25, "mana_regen": 5},
         },
     },
 }
@@ -357,9 +396,442 @@ CATALOGUE: list = [
        hidden=True, source="secret",
        effects={"mana_max": 15, "stamina_max": 8, "xp_bonus": 0.5, "loot_luck": 0.25},
        flavour="You were always going to be the one to find this."),
+
+    # ---- upgrade tiers: earned forms, never found ----
+    # source="upgrade" keeps every one of these out of roll_drop. Finding the
+    # Sourceforged Edge in a chest would say the opposite of what it is for: it
+    # exists to be the same blade you were handed on the first morning, later.
+    _i(id="honed_blade", name="Honed Blade", slot="weapon", rarity="UNCOMMON",
+       icon="sword", skill="PYTHON", source="upgrade",
+       effects={"xp_bonus": 0.08, "stamina_max": 2},
+       flavour="The rust came off. What was underneath had always been straight."),
+    _i(id="fluent_edge", name="Fluent Edge", slot="weapon", rarity="RARE",
+       icon="sword", skill="PYTHON", source="upgrade",
+       effects={"xp_bonus": 0.16, "mana_max": 5, "rank_grace": 0.08},
+       flavour="It stopped costing you anything to swing. That was the lesson."),
+    _i(id="clarion_edge", name="Clarion Edge", slot="weapon", rarity="EPIC",
+       icon="sword", skill="COMMUNICATION", source="upgrade",
+       effects={"xp_bonus": 0.28, "mana_max": 8, "hint_discount": 0.15},
+       flavour="Named for the habit of saying the plan aloud before the first cut."),
+    _i(id="sourceforged_edge", name="Sourceforged Edge", slot="weapon",
+       rarity="LEGENDARY", icon="sword", skill="RECALL", source="upgrade",
+       effects={"xp_bonus": 0.4, "mana_max": 12, "probe_charges": 1,
+                "crit_bonus": 0.25},
+       flavour="Reforged from a rusty blade. Same steel. Entirely different owner."),
+    _i(id="hashblade_eternal", name="Hashblade Eternal", slot="weapon",
+       rarity="LEGENDARY", icon="sword", skill="HASH_MAP", source="upgrade",
+       effects={"xp_bonus": 0.35, "mana_max": 12, "probe_charges": 1,
+                "retest_bonus": 0.3},
+       flavour="It stopped needing to look. It simply knows which vault."),
+    _i(id="converging_sabers", name="Converging Sabers", slot="weapon", rarity="RARE",
+       icon="sabers", skill="TWO_POINTER", source="upgrade",
+       effects={"rank_grace": 0.16, "crit_bonus": 0.25},
+       flavour="They no longer have to be aimed. They only have to be released."),
+    _i(id="narrowing_sabers", name="Sabers of the Narrowing Pass", slot="weapon",
+       rarity="EPIC", icon="sabers", skill="TWO_POINTER", source="upgrade",
+       effects={"rank_grace": 0.24, "crit_bonus": 0.4, "combo_shield": 1},
+       flavour="The gap between them is the only part of the problem still open."),
+    _i(id="held_frame_staff", name="Staff of the Held Frame", slot="weapon",
+       rarity="EPIC", icon="staff", skill="SLIDING_WINDOW", source="upgrade",
+       effects={"mana_max": 12, "hint_discount": 0.25, "combo_shield": 1},
+       flavour="The frame breaks, shrinks from the left, and the scan never restarts."),
+    _i(id="smaller_call_spear", name="Spear of the Smaller Call", slot="weapon",
+       rarity="EPIC", icon="spear", skill="RECURSION", source="upgrade",
+       effects={"xp_bonus": 0.28, "probe_charges": 1, "mana_regen": 3},
+       flavour="You stopped checking whether the stack would unwind. It unwinds."),
+    _i(id="expanding_rings_lance", name="Lance of Expanding Rings", slot="weapon",
+       rarity="EPIC", icon="lance", skill="BFS", source="upgrade",
+       effects={"crit_bonus": 0.35, "stamina_max": 5, "probe_charges": 1},
+       flavour="Marked when queued, not when reached. The distinction cost you a boss."),
+    _i(id="abyssal_depthblade", name="Abyssal Depthblade", slot="weapon", rarity="EPIC",
+       icon="dagger", skill="DFS", source="upgrade",
+       effects={"crit_bonus": 0.4, "loot_luck": 0.2, "xp_bonus": 0.15},
+       flavour="It goes all the way down and still remembers every door it passed."),
+    _i(id="split_canopy_axe", name="Axe of the Split Canopy", slot="weapon",
+       rarity="EPIC", icon="axe", skill="TREE", source="upgrade",
+       effects={"xp_bonus": 0.28, "mana_max": 10, "crit_bonus": 0.2},
+       flavour="A node with one child is not a leaf. The Ent made sure you knew."),
+    _i(id="kth_weight_hammer", name="Hammer of the Kth Weight", slot="weapon",
+       rarity="EPIC", icon="hammer", skill="HEAP", source="upgrade",
+       effects={"crit_bonus": 0.32, "rank_grace": 0.18, "perf_insight": 1},
+       flavour="It never sorts the pile. It only ever asks the pile one question."),
+    _i(id="turned_floor_bow", name="Bow of the Turned Floor", slot="weapon",
+       rarity="EPIC", icon="bow", skill="MATRIX", source="upgrade",
+       effects={"probe_charges": 1, "xp_bonus": 0.22, "crit_bonus": 0.2},
+       flavour="Transpose, then reverse each row. The Golem hates this bow."),
+    _i(id="paid_once_relic", name="Relic of the Debt Paid Once", slot="weapon",
+       rarity="LEGENDARY", icon="relic", skill="DP", source="upgrade",
+       effects={"xp_bonus": 0.45, "mana_regen": 5, "retest_bonus": 0.35},
+       flavour="Every tile it has lit stays lit, including the ones you forgot."),
+    _i(id="read_failure_lens", name="Lens of the Read Failure", slot="offhand",
+       rarity="LEGENDARY", icon="shield", skill="DEBUGGING", source="upgrade",
+       effects={"reveal_category": 1, "armor_repair": 0.5, "stamina_max": 5},
+       flavour="Still refuses to say the fix. It has only got better at pointing."),
+    _i(id="journeyman_ring", name="Journeyman's Ring", slot="ring1", rarity="UNCOMMON",
+       icon="relic", source="upgrade", effects={"mana_max": 6, "mana_regen": 1},
+       flavour="Everyone starts somewhere. Very few stay there."),
+    _i(id="adepts_ring", name="Adept's Ring", slot="ring1", rarity="RARE",
+       icon="relic", source="upgrade",
+       effects={"mana_max": 10, "mana_regen": 2, "hint_discount": 0.1},
+       flavour="The band has worn thin where you turn it while thinking."),
+
+    # ---- Vernacular Weave: chapter I, the language itself ----
+    _i(id="vernacular_hood", name="Vernacular Hood", slot="head", rarity="RARE",
+       icon="helm", set_id="vernacular", skill="PYTHON",
+       effects={"hint_discount": 0.12},
+       flavour="Asking costs less when you can already name what you are asking about."),
+    _i(id="vernacular_tunic", name="Vernacular Tunic", slot="chest", rarity="RARE",
+       icon="chest", set_id="vernacular", skill="PYTHON", effects={"mana_max": 6},
+       flavour="Plain weave. Nothing here is showing off, and nothing here is slow."),
+    _i(id="vernacular_wraps", name="Vernacular Wraps", slot="hands", rarity="UNCOMMON",
+       icon="gauntlets", set_id="vernacular", skill="PYTHON",
+       effects={"mana_regen": 2},
+       flavour="Wound for people who type the whole line before they think about it."),
+    _i(id="vernacular_sandals", name="Vernacular Sandals", slot="feet",
+       rarity="UNCOMMON", icon="boots", set_id="vernacular", skill="PYTHON",
+       effects={"stamina_max": 3},
+       flavour="Village-made. They have never once been anywhere difficult."),
+    _i(id="vernacular_charm", name="Charm of Plain Speech", slot="trinket",
+       rarity="RARE", icon="relic", set_id="vernacular", skill="COMMUNICATION",
+       effects={"xp_bonus": 0.1},
+       flavour="Say the structure, then the loop. It is warm when you do."),
+
+    # ---- Pathfinder's Kit: chapter VIII, maps and mazes ----
+    _i(id="pathfinder_cowl", name="Pathfinder's Cowl", slot="head", rarity="RARE",
+       icon="helm", set_id="pathfinder", skill="GRAPH",
+       effects={"probe_charges": 1},
+       flavour="Hood up, count the neighbours, then move. In that order."),
+    _i(id="pathfinder_coat", name="Pathfinder's Coat", slot="chest", rarity="RARE",
+       icon="chest", set_id="pathfinder", skill="GRAPH",
+       effects={"stamina_max": 5},
+       flavour="Long enough for the Wastes, short enough for the canopy."),
+    _i(id="pathfinder_grips", name="Pathfinder's Grips", slot="hands", rarity="RARE",
+       icon="gauntlets", set_id="pathfinder", skill="BFS",
+       effects={"crit_bonus": 0.18},
+       flavour="For holding a frontier and a visited set at the same time."),
+    _i(id="pathfinder_boots", name="Pathfinder's Boots", slot="feet", rarity="RARE",
+       icon="boots", set_id="pathfinder", skill="DFS",
+       effects={"rank_grace": 0.1, "xp_bonus": 0.08},
+       flavour="They have walked a cycle exactly once and then refused to again."),
+    _i(id="pathfinder_compass", name="Pathfinder's Compass", slot="trinket",
+       rarity="EPIC", icon="relic", set_id="pathfinder", skill="GRAPH",
+       effects={"loot_luck": 0.15, "probe_charges": 1},
+       flavour="It does not point north. It points at the edge you have not tried."),
+
+    # ---- Memoist's Ledger-Mail: chapter IX, paying once ----
+    _i(id="memoist_visor", name="Memoist's Visor", slot="head", rarity="RARE",
+       icon="helm", set_id="memoist", skill="DP", effects={"mana_max": 8},
+       flavour="Ruled in faint lines, like a table nobody has filled in yet."),
+    _i(id="memoist_mail", name="Memoist's Ledger-Mail", slot="chest", rarity="EPIC",
+       icon="plate", set_id="memoist", skill="DP",
+       effects={"stamina_max": 5, "mana_regen": 2},
+       flavour="Each ring is a subproblem. None of them is written twice."),
+    _i(id="memoist_cuffs", name="Memoist's Cuffs", slot="hands", rarity="RARE",
+       icon="gauntlets", set_id="memoist", skill="RECALL",
+       effects={"retest_bonus": 0.15},
+       flavour="Stiff from being consulted. That is not the same as being read."),
+    _i(id="memoist_treads", name="Memoist's Treads", slot="feet", rarity="RARE",
+       icon="boots", set_id="memoist", skill="DP", effects={"xp_bonus": 0.12},
+       flavour="The Ruins light up under them. You have walked this tile before."),
+    _i(id="memoist_ledger", name="The Standing Ledger", slot="trinket", rarity="EPIC",
+       icon="relic", set_id="memoist", skill="DP",
+       effects={"retest_bonus": 0.2, "mana_regen": 2},
+       flavour="A debt recorded once is a debt never paid twice."),
+
+    # ---- hidden: the second tier of secrets ----
+    _i(id="interviewers_coin", name="The Interviewer's Coin", slot="ring1",
+       rarity="MYTHIC", hidden=True, source="secret",
+       effects={"xp_bonus": 0.45, "rank_grace": 0.25, "retest_bonus": 0.35,
+                "loot_luck": 0.2},
+       flavour="Handed over without comment at the end of a run with no scratches."),
+    _i(id="thirty_day_signet", name="Signet of the Thirtieth Day", slot="ring2",
+       rarity="LEGENDARY", hidden=True, source="secret",
+       effects={"retest_bonus": 0.5, "mana_max": 10, "xp_bonus": 0.2},
+       flavour="A month of silence, and the pattern was still where you left it."),
+    _i(id="silent_crown", name="The Silent Crown", slot="head", rarity="MYTHIC",
+       hidden=True, source="secret",
+       effects={"mana_max": 18, "hint_discount": 0.4, "xp_bonus": 0.35,
+                "crit_bonus": 0.25},
+       flavour="An entire chapter, and not one spell cast. Nobody was watching."),
+    _i(id="armorers_last_plate", name="The Armorer's Last Plate", slot="chest",
+       rarity="LEGENDARY", hidden=True, source="secret",
+       effects={"stamina_max": 10, "armor_repair": 0.6, "combo_shield": 1},
+       flavour="She keeps one on the wall unfinished. You finished it for her."),
+    _i(id="asymptote_shard", name="Shard of the Unreachable Floor", slot="trinket",
+       rarity="MYTHIC", hidden=True, source="secret",
+       effects={"perf_insight": 1, "xp_bonus": 0.4, "mana_regen": 4,
+                "rank_grace": 0.2},
+       flavour="The top floor cannot be brute-forced. You did not brute-force it."),
+    _i(id="rematch_spurs", name="Spurs of the Second Meeting", slot="feet",
+       rarity="LEGENDARY", hidden=True, source="secret",
+       effects={"rank_grace": 0.35, "crit_bonus": 0.3, "xp_bonus": 0.2},
+       flavour="It took an hour the first time. It took a verse of a song the second."),
+    _i(id="forgekeepers_grips", name="Forgekeeper's Grips", slot="hands",
+       rarity="LEGENDARY", hidden=True, source="secret",
+       effects={"probe_charges": 2, "reveal_category": 1, "crit_bonus": 0.3},
+       flavour="Three forges, no survivors. The Testsmith wrote the date down."),
+    _i(id="quicksilver_edge", name="The Quicksilver Edge", slot="weapon",
+       rarity="MYTHIC", icon="sabers", hidden=True, source="secret",
+       effects={"rank_grace": 0.4, "crit_bonus": 0.5, "xp_bonus": 0.35,
+                "second_wind": 1},
+       flavour="Half the budget, whole answer. The clock is still checking its work."),
 ]
 
 BY_ID = {item.id: item for item in CATALOGUE}
+
+
+# --------------------------------------------------------------------------
+# Upgrade tiers — gear that improves because you did, not because you paid
+# --------------------------------------------------------------------------
+#
+# There is no forge, no vendor and no currency here on purpose. A blade that can
+# be bought says the money was the achievement. Every rung below is unlocked by
+# the same evidence the ramp already trusts: mastery, unaided clears, retention,
+# speed. The player's starting Rusty Blade walks the spine at the top of the
+# table — honed, fluent, clarion, sourceforged — so a single object records the
+# whole playthrough, and the weapon on the sprite is a readable progress bar.
+#
+# A requirement is {"text": <one sentence>, "needs": [<clause>, ...]} where a
+# clause is either a skill bar:
+#     {"skill": "HASH_MAP", "mastery": 60, "unaided": 6}
+# or a lifetime counter from the run's stats dict:
+#     {"stat": "armor_repairs", "at_least": 10}
+# Clauses are conjunctive. Nothing here reads the corpus, so no requirement can
+# ever be satisfied by anything but graded evidence.
+
+UPGRADE_METRICS = {
+    "mastery":   ("mastery", "mastery"),
+    "unaided":   ("unaided_clears", "unaided clears"),
+    "clears":    ("clears", "clears"),
+    "retention": ("retention", "retention"),
+    "speed":     ("speed", "speed"),
+}
+
+UPGRADE_PATHS = {
+    # the spine: one blade, five forms, the length of a playthrough
+    "rusty_blade": {
+        "to": "honed_blade",
+        "requirement": {
+            "text": "Clear three encounters in Python with no spells cast.",
+            "needs": [{"skill": "PYTHON", "mastery": 25, "unaided": 3}],
+        }},
+    "honed_blade": {
+        "to": "fluent_edge",
+        "requirement": {
+            "text": "Reach real fluency: Python mastery 45 and eight unaided clears.",
+            "needs": [{"skill": "PYTHON", "mastery": 45, "unaided": 8}],
+        }},
+    "fluent_edge": {
+        "to": "clarion_edge",
+        "requirement": {
+            "text": "Say the approach as well as you write it — Python 62, "
+                    "Communication 40.",
+            "needs": [{"skill": "PYTHON", "mastery": 62},
+                      {"skill": "COMMUNICATION", "mastery": 40}],
+        }},
+    "clarion_edge": {
+        "to": "sourceforged_edge",
+        "requirement": {
+            "text": "Recall it cold in the unlabelled rooms: Recall 60 with "
+                    "retention to match.",
+            "needs": [{"skill": "RECALL", "mastery": 60, "retention": 55},
+                      {"skill": "PYTHON", "mastery": 70}],
+        }},
+
+    # branch lines: each weapon answers to the skill it was named for
+    "hashblade": {
+        "to": "hashblade_prime",
+        "requirement": {
+            "text": "Hash-map mastery 60 across six unaided clears.",
+            "needs": [{"skill": "HASH_MAP", "mastery": 60, "unaided": 6}],
+        }},
+    "hashblade_prime": {
+        "to": "hashblade_eternal",
+        "requirement": {
+            "text": "Hash-map mastery 80, and it survives the delayed retests.",
+            "needs": [{"skill": "HASH_MAP", "mastery": 80, "retention": 65}],
+        }},
+    "twin_sabers": {
+        "to": "converging_sabers",
+        "requirement": {
+            "text": "Two-pointer mastery 50 with four unaided clears.",
+            "needs": [{"skill": "TWO_POINTER", "mastery": 50, "unaided": 4}],
+        }},
+    "converging_sabers": {
+        "to": "narrowing_sabers",
+        "requirement": {
+            "text": "Two-pointer mastery 70 across eight unaided clears.",
+            "needs": [{"skill": "TWO_POINTER", "mastery": 70, "unaided": 8}],
+        }},
+    "window_staff": {
+        "to": "held_frame_staff",
+        "requirement": {
+            "text": "Sliding-window mastery 60 with five unaided clears.",
+            "needs": [{"skill": "SLIDING_WINDOW", "mastery": 60, "unaided": 5}],
+        }},
+    "recursion_spear": {
+        "to": "smaller_call_spear",
+        "requirement": {
+            "text": "Recursion mastery 60 with five unaided clears.",
+            "needs": [{"skill": "RECURSION", "mastery": 60, "unaided": 5}],
+        }},
+    "queue_lance": {
+        "to": "expanding_rings_lance",
+        "requirement": {
+            "text": "Breadth-first mastery 60, and a graph you can read.",
+            "needs": [{"skill": "BFS", "mastery": 60, "unaided": 5},
+                      {"skill": "GRAPH", "mastery": 40}],
+        }},
+    "depthblade": {
+        "to": "abyssal_depthblade",
+        "requirement": {
+            "text": "Depth-first mastery 60 with five unaided clears.",
+            "needs": [{"skill": "DFS", "mastery": 60, "unaided": 5}],
+        }},
+    "tree_axe": {
+        "to": "split_canopy_axe",
+        "requirement": {
+            "text": "Tree mastery 62 with six unaided clears.",
+            "needs": [{"skill": "TREE", "mastery": 62, "unaided": 6}],
+        }},
+    "heap_hammer": {
+        "to": "kth_weight_hammer",
+        "requirement": {
+            "text": "Heap mastery 58, and the cost stated before you are asked.",
+            "needs": [{"skill": "HEAP", "mastery": 58, "unaided": 4},
+                      {"skill": "BIG_O", "mastery": 45}],
+        }},
+    "matrix_bow": {
+        "to": "turned_floor_bow",
+        "requirement": {
+            "text": "Matrix mastery 58 with four unaided clears.",
+            "needs": [{"skill": "MATRIX", "mastery": 58, "unaided": 4}],
+        }},
+    "dynamic_relic": {
+        "to": "paid_once_relic",
+        "requirement": {
+            "text": "Dynamic-programming mastery 70 that survives a retest.",
+            "needs": [{"skill": "DP", "mastery": 70, "retention": 60}],
+        }},
+
+    # off the weapon line, because progression should be visible everywhere
+    "debuggers_lens": {
+        "to": "read_failure_lens",
+        "requirement": {
+            "text": "Debugging mastery 65, and ten programs actually repaired.",
+            "needs": [{"skill": "DEBUGGING", "mastery": 65},
+                      {"stat": "armor_repairs", "at_least": 10}],
+        }},
+    "apprentice_ring": {
+        "to": "journeyman_ring",
+        "requirement": {
+            "text": "Any twelve clears at all. Turning up is the requirement.",
+            "needs": [{"skill": "PYTHON", "clears": 12}],
+        }},
+    "journeyman_ring": {
+        "to": "adepts_ring",
+        "requirement": {
+            "text": "Python mastery 55, and recall that holds without the map.",
+            "needs": [{"skill": "PYTHON", "mastery": 55},
+                      {"skill": "RECALL", "mastery": 35}],
+        }},
+}
+
+# Fill the Item fields from the table, so `item.upgrades` works everywhere an
+# Item is already passed around and to_dict() carries it to the client for free.
+for _from_id, _path in UPGRADE_PATHS.items():
+    _source = BY_ID.get(_from_id)
+    if _source is not None:
+        _source.upgrades = _path["to"]
+        _source.upgrade_requirement = _path["requirement"]
+
+
+def _clause_checks(clause: dict, skills: dict, stats: dict) -> list:
+    """One row per bar in a clause, phrased for a progress bar."""
+    rows = []
+    if "stat" in clause:
+        have = float((stats or {}).get(clause["stat"], 0) or 0)
+        need = float(clause.get("at_least", 1))
+        rows.append({"label": clause["stat"].replace("_", " "),
+                     "have": round(have, 1), "need": need, "met": have >= need})
+        return rows
+    name = clause.get("skill", "")
+    data = (skills or {}).get(name) or {}
+    for key, (field_name, label) in UPGRADE_METRICS.items():
+        if key not in clause:
+            continue
+        have = float(data.get(field_name, 0) or 0)
+        need = float(clause[key])
+        rows.append({"label": f"{name} {label}", "have": round(have, 1),
+                     "need": need, "met": have >= need})
+    return rows
+
+
+def upgrade_progress(item_id: str, skills: dict | None = None,
+                     stats: dict | None = None) -> dict | None:
+    """What this item becomes, and how close the evidence is. None if it is
+    already at the end of its line."""
+    source = BY_ID.get(item_id)
+    if source is None or not source.upgrades:
+        return None
+    target = BY_ID.get(source.upgrades)
+    if target is None:
+        return None
+    requirement = source.upgrade_requirement or {}
+    checks = []
+    for clause in requirement.get("needs", []):
+        checks.extend(_clause_checks(clause, skills or {}, stats or {}))
+    return {
+        "from": source.id,
+        "from_name": source.name,
+        "to": target.id,
+        "to_name": target.name,
+        "rarity": target.rarity,
+        "text": requirement.get("text", ""),
+        "requirement": requirement,
+        "checks": checks,
+        "met": all(row["met"] for row in checks) if checks else False,
+        "item": target.to_dict(),
+    }
+
+
+def upgrade_available(item_id: str, skills: dict | None = None,
+                      stats: dict | None = None) -> dict | None:
+    """The upgrade this item has EARNED, or None.
+
+    Pure: it reads the skill table and the run's counters and returns a
+    description. Granting it is the caller's business, which keeps the rule that
+    mastery moves only on graded evidence in exactly one place.
+    """
+    progress = upgrade_progress(item_id, skills, stats)
+    if progress is None or not progress["met"]:
+        return None
+    return progress
+
+
+def upgrades_for(inventory, skills: dict | None = None,
+                 stats: dict | None = None) -> list:
+    """Every earned upgrade across an inventory, for the one notification the
+    player should get when they walk back into town."""
+    out = []
+    for item_id in inventory or []:
+        found = upgrade_available(item_id, skills, stats)
+        if found:
+            out.append(found)
+    return out
+
+
+def upgrade_chain(item_id: str) -> list:
+    """The whole line this item belongs to, from where it stands onward. Used by
+    the codex to show a Rusty Blade what it is going to be."""
+    chain = [item_id]
+    seen = {item_id}
+    current = BY_ID.get(item_id)
+    while current is not None and current.upgrades and current.upgrades not in seen:
+        chain.append(current.upgrades)
+        seen.add(current.upgrades)
+        current = BY_ID.get(current.upgrades)
+    return chain
 
 
 # --------------------------------------------------------------------------
@@ -426,9 +898,251 @@ SECRETS = [
      "name": "The Architect's Seal",
      "hint": "Strike three weaknesses in a row without missing.",
      "condition": "Land three critical weakness strikes consecutively."},
+
+    # The second tier. Every condition below is a thing a player does rather than
+    # a thing a player grinds, and no two are satisfied by the same behaviour —
+    # one rewards silence, one rewards a month of absence, one rewards walking
+    # into a wall in the right tower. `trigger` names the hook the engine should
+    # dispatch on; the five above it predate the key and are matched by id in
+    # Game._check_secrets.
+    {"id": "secret_flawless_run", "item": "interviewers_coin",
+     "trigger": "interview_finished",
+     "name": "No Scratches",
+     "hint": "Somebody, somewhere, finished a whole interview without a single "
+             "failed submission. Nobody clapped.",
+     "condition": "Complete an Interview Mode run solving every problem with no "
+                  "failed submission."},
+    {"id": "secret_long_memory", "item": "thirty_day_signet",
+     "trigger": "retest_cleared",
+     "name": "The Thirtieth Day",
+     "hint": "A month of silence is the only honest test of whether you learned it.",
+     "condition": "Clear a disguised retest of a pattern you last saw thirty or "
+                  "more days ago."},
+    {"id": "secret_silent_chapter", "item": "silent_crown",
+     "trigger": "chapter_graduated",
+     "name": "The Silent Chapter",
+     "hint": "There is a crown for the player who never once asked.",
+     "condition": "Graduate a chapter without casting a single learning spell."},
+    {"id": "secret_full_repair", "item": "armorers_last_plate",
+     "trigger": "armor_repaired",
+     "name": "The Armorer's Last Plate",
+     "hint": "She keeps one unfinished plate on the wall. She is waiting to see "
+             "whether anyone finishes the other six first.",
+     "condition": "Restore every armour piece to full in a single session."},
+    {"id": "secret_tower_alcove", "item": "asymptote_shard",
+     "trigger": "location",
+     "name": "The Unreachable Floor",
+     "hint": "The top floor of the Complexity Tower cannot be reached by brute "
+             "force. The stair on the north wall disagrees.",
+     "condition": "Find the hidden alcove on the top floor of the Complexity Tower."},
+    {"id": "secret_rematch", "item": "rematch_spurs",
+     "trigger": "boss_cleared",
+     "name": "The Second Meeting",
+     "hint": "The first time it took an hour. There is a prize for how long it "
+             "takes the second time.",
+     "condition": "Beat a boss on a rematch in less than half the time your first "
+                  "win took."},
+    {"id": "secret_forge_streak", "item": "forgekeepers_grips",
+     "trigger": "forge_cleared",
+     "name": "Three Forges, No Survivors",
+     "hint": "Killing every Mimic once is luck. The Testsmith counts to three.",
+     "condition": "Kill every Mimic on the first submission in three consecutive "
+                  "Test Forges."},
+    {"id": "secret_half_clock", "item": "quicksilver_edge",
+     "trigger": "encounter_cleared",
+     "name": "Half The Budget",
+     "hint": "The clock is still checking its arithmetic.",
+     "condition": "Solve a Medium unaided in under half its target time."},
 ]
 
 SECRET_BY_ID = {s["id"]: s for s in SECRETS}
+
+
+# --------------------------------------------------------------------------
+# Visible progression — what the hero actually looks like
+# --------------------------------------------------------------------------
+#
+# Numbers in a menu are not progression the player can feel. These tables say
+# what each armour piece LOOKS like at each repair tier, in the exact vocabulary
+# web/js/sprites.js already understands: heroFrame() takes {cloak, tunic, skin,
+# hair, boot, trim, metal, weapon} and ramps every colour itself, so a tier only
+# has to name the base colours it changes.
+#
+# Piece ids mirror world.ARMOR (helmet, chestplate, gauntlets, boots, shield,
+# legendary). Mirrored rather than imported: this module has no package imports
+# and gains nothing by acquiring one.
+#
+# Tiers are ordered and "at" is the integrity floor, so armor_tier() takes the
+# last tier whose floor the piece has reached. Cracked armour should look
+# cracked — the Debugging Dungeon is the only way to get the shine back, which
+# is the point of the whole repair loop.
+
+ARMOR_TIERS = {
+    "helmet": (
+        {"at": 0,   "name": "Split Helm", "metal": "#4a4450", "trim": "#3c3846",
+         "look": "a hairline crack from brow to crest, and no crest left"},
+        {"at": 25,  "name": "Bound Helm", "metal": "#6b6470", "trim": "#7a6a4a",
+         "look": "wire-bound over the break, functional and ugly"},
+        {"at": 50,  "name": "Patched Helm", "metal": "#8a8494", "trim": "#a08a52",
+         "look": "the seam still shows, but it holds under a full swing"},
+        {"at": 75,  "name": "Sound Helm", "metal": "#b0aabd", "trim": "#c9a05a",
+         "look": "clean lines, a short crest, no visible repair"},
+        {"at": 100, "name": "Mirrorbright Helm", "metal": "#e2dcf0", "trim": "#e8c37d",
+         "look": "a full crest and a polish that throws the torchlight back"},
+    ),
+    "chestplate": (
+        {"at": 0,   "name": "Staved Plate", "tunic": "#4e4258", "metal": "#4a4450",
+         "look": "a caved panel over the ribs, lacing where a buckle used to be"},
+        {"at": 25,  "name": "Lashed Plate", "tunic": "#5d5068", "metal": "#6b6470",
+         "look": "leather cord across the dent, holding it roughly in shape"},
+        {"at": 50,  "name": "Beaten Plate", "tunic": "#6e5f7d", "metal": "#8a8494",
+         "look": "hammered back out, the panel proud of the others"},
+        {"at": 75,  "name": "Fitted Plate", "tunic": "#7d6b90", "metal": "#b0aabd",
+         "look": "every panel flush, the buckles matched"},
+        {"at": 100, "name": "Sunplate", "tunic": "#9a7fd0", "metal": "#e2dcf0",
+         "look": "a chased sunburst across the chest, unmarked"},
+    ),
+    "gauntlets": (
+        {"at": 0,   "name": "Bare Wraps", "metal": "#5a4f46",
+         "look": "cloth wraps where the plates were"},
+        {"at": 25,  "name": "Half Gauntlets", "metal": "#75675a",
+         "look": "knuckle plates only, the fingers left open"},
+        {"at": 50,  "name": "Riveted Gauntlets", "metal": "#96887a",
+         "look": "articulated to the second knuckle"},
+        {"at": 75,  "name": "Fitted Gauntlets", "metal": "#b8a893",
+         "look": "full articulation, no rattle"},
+        {"at": 100, "name": "Keysmith's Gauntlets", "metal": "#e6d2ae",
+         "look": "fine-jointed, a vault-key motif etched across the back"},
+    ),
+    "boots": (
+        {"at": 0,   "name": "Split Boots", "boot": "#3e3228",
+         "look": "the sole parting from the upper at the toe"},
+        {"at": 25,  "name": "Bound Boots", "boot": "#4e3f31",
+         "look": "wrapped at the ankle to keep them together"},
+        {"at": 50,  "name": "Resoled Boots", "boot": "#5f4c3a",
+         "look": "new sole, old upper, honest about it"},
+        {"at": 75,  "name": "Marching Boots", "boot": "#715b45",
+         "look": "greaved at the shin, cut for long roads"},
+        {"at": 100, "name": "Wayfarer's Boots", "boot": "#8c7050",
+         "look": "greaved and trimmed, quiet on stone"},
+    ),
+    "shield": (
+        {"at": 0,   "name": "Broken Boss", "metal": "#4a4450", "trim": "#3c3846",
+         "look": "the boss punched through, the rim bent back"},
+        {"at": 25,  "name": "Braced Shield", "metal": "#6b6470", "trim": "#5a4f38",
+         "look": "a cross-brace nailed over the hole"},
+        {"at": 50,  "name": "Faced Shield", "metal": "#8a8494", "trim": "#7f6a44",
+         "look": "refaced, the old hole a pale disc under the paint"},
+        {"at": 75,  "name": "Rimmed Shield", "metal": "#b0aabd", "trim": "#a08a52",
+         "look": "a whole rim and a true boss"},
+        {"at": 100, "name": "Testsmith's Aegis", "metal": "#e2dcf0", "trim": "#e8c37d",
+         "look": "every edge case that ever struck it, filed out and forgotten"},
+    ),
+    "legendary": (
+        {"at": 0,   "name": "Empty Stand", "cloak": "#2f2a3c", "metal": "#4a4450",
+         "trim": "#3c3846",
+         "look": "not worn: it hangs on the Armorer's wall, unfinished"},
+        {"at": 25,  "name": "Half-Forged", "cloak": "#39304a", "metal": "#6b6470",
+         "trim": "#5a4f38",
+         "look": "one shoulder complete, the other still raw stock"},
+        {"at": 50,  "name": "Quenched", "cloak": "#443a5c", "metal": "#8a8494",
+         "trim": "#7f6a44",
+         "look": "both shoulders set, the cloak newly dyed"},
+        {"at": 75,  "name": "Fitted", "cloak": "#52456e", "metal": "#b0aabd",
+         "trim": "#a08a52",
+         "look": "it fits. It did not fit when you started."},
+        {"at": 100, "name": "Sourceforged Panoply", "cloak": "#6a4fb0",
+         "metal": "#e2dcf0", "trim": "#e8c37d",
+         "look": "a full cloak, gold at every seam, and the Source's mark at "
+                 "the collar"},
+    ),
+    # The weapon slot is never repaired, only upgraded, so its tiers step with
+    # rarity instead of integrity. "key" is the sprite to draw and every value is
+    # one of HERO_WEAPON_KEYS below, which mirrors web/js/sprites.js exactly —
+    # the frontend looks the sprite up by that literal string and silently falls
+    # back to 'sword' on a miss, which would quietly undo the whole point.
+    "weapon": (
+        {"at": 0, "name": "Rusted", "key": "sword", "metal": "#7a6f5a",
+         "trim": "#4a4236", "look": "pitted edge, no shine, honest about its cost"},
+        {"at": 1, "name": "Honed", "key": "sword", "metal": "#9a9384",
+         "trim": "#6a5f46", "look": "the rust ground off, the edge true"},
+        {"at": 2, "name": "Tempered", "key": "sword", "metal": "#b8b6c4",
+         "trim": "#8a7a52", "look": "a blued temper line up the spine"},
+        {"at": 3, "name": "Runed", "key": "sword", "metal": "#cfd2e8",
+         "trim": "#a89aff", "look": "runework along the fuller, lit from inside"},
+        {"at": 4, "name": "Legendary", "key": "sword", "metal": "#eadfae",
+         "trim": "#e8c37d", "look": "gold at the guard, and a light that does not "
+                                    "come from the room"},
+        {"at": 5, "name": "Mythic", "key": "sword", "metal": "#ffd9df",
+         "trim": "#ff6a7a", "look": "it hums at a pitch the Null King recognises"},
+    ),
+}
+
+# Mirrors HERO_WEAPON_KEYS in web/js/sprites.js. Every weapon icon in CATALOGUE
+# and every "key" in ARMOR_TIERS["weapon"] must be in here, or the hero draws
+# holding the wrong thing.
+HERO_WEAPON_KEYS = ("sword", "sabers", "dagger", "axe", "hammer", "spear",
+                    "lance", "staff", "bow", "relic")
+
+
+def armor_tier(piece: str, integrity: float) -> dict:
+    """The tier a piece is currently showing. Unknown pieces report nothing
+    rather than raising: the sprite layer must never be the thing that crashes."""
+    tiers = ARMOR_TIERS.get(piece)
+    if not tiers:
+        return {}
+    current = tiers[0]
+    for tier in tiers:
+        if integrity >= tier["at"]:
+            current = tier
+    return {"piece": piece, **current}
+
+
+def hero_weapon_key(item_id: str) -> str:
+    """The sprites.js key for an equipped weapon, validated. A weapon whose icon
+    is not a real hero weapon key falls back to the starting sword."""
+    item = BY_ID.get(item_id)
+    if item is not None and item.icon in HERO_WEAPON_KEYS:
+        return item.icon
+    return "sword"
+
+
+def weapon_look(item_id: str) -> dict:
+    """Sprite key plus the metal and trim colours for an equipped weapon, keyed
+    off its rarity — so an upgrade is visible on the sprite the moment it lands."""
+    item = BY_ID.get(item_id)
+    rung = RARITY_ORDER.index(item.rarity) if item is not None else 0
+    tier = ARMOR_TIERS["weapon"][min(rung, len(ARMOR_TIERS["weapon"]) - 1)]
+    return {"key": hero_weapon_key(item_id), "name": tier["name"],
+            "look": tier["look"], "metal": tier["metal"], "trim": tier["trim"]}
+
+
+def hero_look(armor: dict | None = None, equipped: dict | None = None) -> dict:
+    """One dict of sprite options, ready to hand to heroFrame() in sprites.js.
+
+    Armour is applied worst-piece-first so the Legendary Plate, which is the last
+    thing anyone finishes, overrides the rest of the kit when it is whole.
+    """
+    out: dict = {}
+    order = ["boots", "gauntlets", "shield", "helmet", "chestplate", "legendary"]
+    for piece in order:
+        integrity = (armor or {}).get(piece, 0)
+        # The Legendary Plate at zero is not damaged, it is unbuilt — it is still
+        # on the Armorer's wall. Letting it paint the hero would dress the player
+        # in armour they have not earned yet.
+        if piece == "legendary" and integrity <= 0:
+            continue
+        tier = armor_tier(piece, integrity)
+        for key in ("cloak", "tunic", "boot", "trim", "metal"):
+            if key in tier:
+                out[key] = tier[key]
+    weapon_id = (equipped or {}).get("weapon", "")
+    weapon = weapon_look(weapon_id) if weapon_id else weapon_look("rusty_blade")
+    out["weapon"] = weapon["key"]
+    out["metal"] = weapon["metal"]          # the blade sets the metal ramp
+    out["_weapon"] = weapon
+    out["_pieces"] = [armor_tier(p, (armor or {}).get(p, 0)) for p in order]
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -492,7 +1206,7 @@ def base_probe_charges(effects: dict) -> int:
 # --------------------------------------------------------------------------
 
 DIFFICULTY_DROP_CHANCE = {
-    "TUTORIAL": 0.16, "EASY": 0.28, "MEDIUM": 0.46,
+    "GUIDED": 0.1, "TUTORIAL": 0.16, "EASY": 0.28, "MEDIUM": 0.46,
     "HARD": 0.66, "ELITE": 0.8, "BOSS": 1.0,
 }
 
@@ -545,6 +1259,7 @@ def roll_drop(*, difficulty: str, rank: str, luck: float, is_boss: bool,
 
     candidates = [it for it in CATALOGUE
                   if it.rarity == rarity and not it.hidden
+                  and it.source != "upgrade"     # earned forms are never found
                   and (it.source != "boss" or is_boss)]
     if skill:
         themed = [it for it in candidates if it.skill == skill]

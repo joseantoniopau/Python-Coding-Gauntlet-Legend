@@ -59,6 +59,18 @@ export const api = {
   move: (region, x, y) =>
     call('/api/move', { method: 'POST', body: JSON.stringify({ region, x, y }) }),
   loadout: () => call('/api/loadout'),
+  curriculum: () => call('/api/curriculum'),
+  story: () => call('/api/story'),
+  diagnostic: () => call('/api/diagnostic'),
+  diagnosticCheck: (trial, answer) =>
+    call('/api/diagnostic/check', { method: 'POST', body: JSON.stringify({ trial, answer }) }),
+  diagnosticFinish: (answers, skipped) =>
+    call('/api/diagnostic/finish', {
+      method: 'POST', body: JSON.stringify({ answers, skipped }),
+    }),
+  puzzle: (answer) =>
+    call('/api/puzzle', { method: 'POST', body: JSON.stringify({ answer }) }),
+  storyAdvance: () => call('/api/story/advance', { method: 'POST', body: '{}' }),
   probes: () => call('/api/probes'),
   probe: (args, expected, ops) =>
     call('/api/probe', { method: 'POST', body: JSON.stringify({ args, expected, ops }) }),

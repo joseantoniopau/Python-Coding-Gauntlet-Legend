@@ -11,11 +11,27 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from . import curriculum
+from . import puzzles
 from . import skills as skillmod
 from . import srs, world
 from .config import SRS_INTERVALS_DAYS
 
-DIFF_ORDER = ["TUTORIAL", "EASY", "MEDIUM", "HARD", "ELITE", "BOSS"]
+DIFF_ORDER = ["GUIDED", "TUTORIAL", "EASY", "MEDIUM", "HARD", "ELITE", "BOSS"]
+
+# Variety targets. The six puzzle kinds exist because every encounter being
+# "type a function" was both the hardest interaction for this player and the
+# dullest. They are a change of pace, not the main course: roughly one encounter
+# in four, mixed through the code battles rather than served in a block.
+PUZZLE_SHARE = 0.25
+VARIETY_WINDOW = 12
+VARIETY_SEED = 4
+# The puzzle families weight themselves toward this player's profile, which is
+# right for choosing WHICH puzzle and a standing thumb on the scale for choosing
+# WHETHER — it held the mix near a third. Paid back here so the share above is
+# what actually decides, and measured rather than guessed: it is the gap between
+# `2.0 * profile_weight` at their weighting and at the default.
+PUZZLE_PROFILE_EDGE = 2.0
 
 PROFILE_PATTERN_WEIGHT = {
     "QUORA": {
@@ -89,11 +105,27 @@ class Selection:
     tags: list = field(default_factory=list)
 
 
-def _difficulty_target(state) -> str:
-    """Where this skill should be pitched right now."""
+def _difficulty_target(state, fluency=None) -> str:
+    """Where this skill should be pitched right now.
+
+    A skill with no evidence at all starts on the scaffold rungs, not on a blank
+    screen: GUIDED hands the player complete code with a blank in it. The band is
+    narrow on purpose — it is an on-ramp, not a destination — and it ends where
+    the EASY tier gate opens, so targeting and unlocking agree.
+    """
     if state is None or state.attempts == 0:
-        return "TUTORIAL"
+        # An unfamiliar pattern still starts gently — but not from zero for someone
+        # who already writes fluent Python. General fluency raises the floor, so a
+        # capable player meeting their first graph problem gets a skeleton rather
+        # than a fill-in-the-blank.
+        if fluency is not None and fluency.mastery >= 55:
+            return "EASY"
+        if fluency is not None and fluency.mastery >= 30:
+            return "TUTORIAL"
+        return "GUIDED"
     m = state.mastery
+    if m < 10:
+        return "GUIDED"
     if m < 18:
         return "TUTORIAL"
     if m < 42:
@@ -112,8 +144,47 @@ def _difficulty_distance(problem_difficulty: str, target: str) -> int:
         return 3
 
 
+def _variety_bonus(problem, recent_kinds: list) -> float:
+    """Steer the SHAPE of the sequence, not the quality of one problem.
+
+    Everything on the opening rungs scores identically, and Python's sort is
+    stable, so before this term existed every tie was won by whichever family
+    happened to be built first. That served fourteen fill-in-the-blanks in a row
+    and put exactly one rune assembly in sixty encounters — the monotony the six
+    puzzle kinds were written to end.
+
+    Every term here is worth less than one difficulty tier (5.0 per step, below).
+    Wanting a change of pace must never be able to drag in material the
+    curriculum has not opened or the player is not ready for.
+    """
+    kind = problem.encounter_kind
+    window = list(recent_kinds[:VARIETY_WINDOW])
+    bonus = 0.0
+
+    if kind in puzzles.PUZZLE_KINDS:
+        # A one-encounter history is not evidence of a 100% puzzle diet, so the
+        # denominator never falls below a handful. It reaches the true window
+        # size as soon as there is a real history to measure.
+        seen = max(len(window), VARIETY_SEED)
+        share = sum(1 for k in window if k in puzzles.PUZZLE_KINDS) / seen
+        # Below the target this pulls puzzles in, above it pushes them back out,
+        # so the sequence settles at the target rather than at either extreme.
+        bonus += 12.0 * (PUZZLE_SHARE - share) - PUZZLE_PROFILE_EDGE
+        if window[:1] and window[0] in puzzles.PUZZLE_KINDS:
+            bonus -= 3.0          # a change of pace, not a second mode
+
+    # Whatever just happened is the least interesting thing to do again. This is
+    # what keeps the mix interleaved instead of arriving in blocks.
+    if window[:1] == [kind]:
+        bonus -= 3.0
+    if len(window) > 1 and window[1] == kind:
+        bonus -= 1.5
+    return bonus
+
+
 def score_problem(problem, *, skills: dict, profile: str, solved_ids: set,
-                  recent_ids: list, region: str | None, now: float) -> float:
+                  recent_ids: list, region: str | None, now: float,
+                  recent_kinds: list = ()) -> float:
     """Higher is a better next encounter. This is the whole selection policy."""
     skill_name = skillmod.PATTERN_TO_SKILL.get(problem.pattern, "PYTHON")
     state = skills.get(skill_name)
@@ -123,7 +194,7 @@ def score_problem(problem, *, skills: dict, profile: str, solved_ids: set,
     score += 4.0 * weights.get(problem.pattern, 1.0)
     score += 2.0 * problem.profile_weight.get(profile, 1.0)
 
-    target = _difficulty_target(state)
+    target = _difficulty_target(state, skills.get("PYTHON"))
     score -= 5.0 * _difficulty_distance(problem.difficulty, target)
 
     if state is not None:
@@ -146,12 +217,18 @@ def score_problem(problem, *, skills: dict, profile: str, solved_ids: set,
     if problem.encounter_kind in ("PATTERN_ENCOUNTER", "COMPLEXITY_DUEL",
                                   "CODE_READING", "EDGE_CASE_TRAP"):
         score -= 6.0                         # spice, not the main course
+    # The six graded puzzle kinds are NOT spiced down with those. They are graded
+    # by running real Python or by an exact structural match, they carry full
+    # hint trees, and they move mastery — they are encounters, not flavour. Their
+    # share is steered instead, so they arrive mixed in rather than never.
+    score += _variety_bonus(problem, list(recent_kinds))
     return score
 
 
 def select_next(corpus: list, *, skills: dict, schedule: dict, profile: str,
                 solved_ids: set, recent_ids: list, region: str | None = None,
-                now: float | None = None, allow_retest: bool = True) -> Selection:
+                now: float | None = None, allow_retest: bool = True,
+                recent_kinds: list | None = None) -> Selection:
     """Retests come first — a due pattern is the highest-value thing we can show.
     Otherwise pick the best-scoring fresh encounter."""
     now = now or time.time()
@@ -169,10 +246,30 @@ def select_next(corpus: list, *, skills: dict, schedule: dict, profile: str,
                     interval_days=days, encounter_kind="MEMORY_AMBUSH",
                     tags=["retest", f"{int(days)}d"])
 
+    # The curriculum gate is a guarantee, not a preference: a pattern or tier the
+    # player has not unlocked must not appear at all. Scoring alone only made
+    # advanced material unlikely, which is how tree recursion still reached a
+    # chapter-one player. Retests above are exempt by design — retention outranks
+    # sequencing — and an empty gate falls back to the whole corpus so that a
+    # misconfigured chapter can never dead-end the player.
+    eligible = [p for p in corpus
+                if curriculum.is_permitted(
+                    p, skills,
+                    skill_state=skills.get(
+                        skillmod.PATTERN_TO_SKILL.get(p.pattern, "PYTHON")))]
+    if not eligible:
+        eligible = corpus
+
+    # The caller knows the whole corpus and can name the kinds it has just
+    # served; falling back to this filtered slice is only for direct callers.
+    if recent_kinds is None:
+        kind_of = {p.id: p.encounter_kind for p in corpus}
+        recent_kinds = [kind_of[i] for i in recent_ids if i in kind_of]
+
     scored = [(score_problem(p, skills=skills, profile=profile,
                              solved_ids=solved_ids, recent_ids=recent_ids,
-                             region=region, now=now), p)
-              for p in corpus]
+                             region=region, now=now, recent_kinds=recent_kinds), p)
+              for p in eligible]
     scored.sort(key=lambda pair: pair[0], reverse=True)
     if not scored:
         raise ValueError("empty corpus")

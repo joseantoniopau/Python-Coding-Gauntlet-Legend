@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Python Coding Gauntlet Legend — The Algorithm Realms</title>
 <link rel="stylesheet" href="/css/game.css">
+<!-- the dark 80s metal skin; overrides game.css, never replaces it -->
+<link rel="stylesheet" href="/css/metal.css">
 <style>
 /* Bundled pixel face. Falls back to the monospace stack when unavailable. */
 @font-face {
@@ -15,7 +17,11 @@
 </style>
 <script>window.__GAUNTLET_TOKEN__ = "%%GAUNTLET_SESSION_TOKEN%%";</script>
 </head>
-<body class="crt">
+<body class="crt titling">
+<div id="title-layer">
+  <canvas id="title-canvas"></canvas>
+</div>
+
 <div id="app">
 
   <div id="topbar">
@@ -79,7 +85,7 @@
   <section class="screen" id="screen-battle">
     <div id="battle-top">
       <div id="enemy-stage">
-        <canvas id="enemy-canvas" width="48" height="48"></canvas>
+        <div id="battle-stage"></div>
         <div id="enemy-name">—</div>
         <div id="enemy-hp" class="bar hp"><i style="width:100%"></i></div>
         <div class="small muted" id="enemy-hp-label">0 / 0</div>
@@ -103,6 +109,7 @@
           <button class="btn small danger" id="btn-flee">RETREAT</button>
         </div>
         <div id="editor-host"></div>
+        <div id="puzzle-host" style="display:none;flex:1;overflow-y:auto;padding:14px"></div>
       </div>
       <aside id="battle-side">
         <div id="battle-side-tabs">
