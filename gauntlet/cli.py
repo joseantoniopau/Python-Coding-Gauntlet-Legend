@@ -83,7 +83,6 @@ def main(argv=None) -> int:
 
     if command == "doctor":
         from . import sandbox
-        from .corpus import corpus_path
         print(f"python       {sys.version.split()[0]}")
         print(f"data dir     {config.data_dir()}")
         print(f"database     {config.db_path()} "
