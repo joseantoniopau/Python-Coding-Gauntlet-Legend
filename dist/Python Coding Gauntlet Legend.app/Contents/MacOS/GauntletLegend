@@ -1,0 +1,48 @@
+#!/bin/bash
+# Resolve a usable python3 and hand off to the game launcher.
+set -uo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP_ROOT="$(cd "$HERE/../Resources/app" && pwd)"
+LOG_DIR="$HOME/Library/Logs/GauntletLegend"
+mkdir -p "$LOG_DIR"
+LOG="$LOG_DIR/launch.log"
+
+note() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOG"; }
+
+note "starting from $APP_ROOT"
+
+pick_python() {
+  local best=""
+  local best_minor=-1
+  # Prefer a modern interpreter, but the system one is always an acceptable floor.
+  for candidate in \
+      /opt/homebrew/bin/python3.13 /opt/homebrew/bin/python3.12 \
+      /opt/homebrew/bin/python3.11 /opt/homebrew/bin/python3 \
+      /usr/local/bin/python3 "$HOME/.local/bin/python3" \
+      "$(command -v python3 2>/dev/null)" /usr/bin/python3; do
+    [ -x "$candidate" ] || continue
+    local minor
+    minor="$("$candidate" -c 'import sys; print(sys.version_info[1] if sys.version_info[0]==3 else -1)' 2>/dev/null)" || continue
+    [ -n "$minor" ] || continue
+    if [ "$minor" -ge 9 ] && [ "$minor" -gt "$best_minor" ]; then
+      best="$candidate"
+      best_minor="$minor"
+    fi
+  done
+  printf '%s' "$best"
+}
+
+PY="$(pick_python)"
+if [ -z "$PY" ]; then
+  note "no python3 found"
+  /usr/bin/osascript -e 'display alert "Python 3 not found" message "Python Coding Gauntlet Legend needs Python 3.9 or newer.\n\nInstall the Xcode Command Line Tools with:\n\n    xcode-select --install\n\nthen open the app again." as critical'
+  exit 1
+fi
+note "using $PY ($("$PY" -V 2>&1))"
+
+cd "$APP_ROOT"
+export PYTHONPATH="$APP_ROOT"
+export PYTHONDONTWRITEBYTECODE=1
+
+exec "$PY" -u -m gauntlet.launcher >> "$LOG" 2>&1

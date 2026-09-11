@@ -1,0 +1,288 @@
+"""Problem schema, test helpers and the hint-tree scaffolding.
+
+Every problem carries a *reference implementation* (a live Python callable used
+at build time to compute expected outputs) and a *canonical solution* (source
+text shown to the player as the worked solution). Validation runs the canonical
+solution in the sandbox against tests derived from the reference. Two
+independent implementations agreeing is what earns a problem its place in the
+corpus.
+"""
+from __future__ import annotations
+
+import copy
+import json
+from dataclasses import dataclass, field, asdict
+from typing import Any, Callable, Iterable
+
+# ---------------------------------------------------------------------------
+# Vocabulary
+# ---------------------------------------------------------------------------
+
+PATTERNS = [
+    "HASH_MAP", "SET", "SLIDING_WINDOW", "TWO_POINTER", "STACK", "QUEUE",
+    "BFS", "DFS", "TREE", "RECURSION", "BINARY_SEARCH", "MATRIX", "HEAP",
+    "PREFIX_SUM", "SORTING", "SIMULATION", "DP", "STRING", "ARRAY",
+    "DESIGN", "GREEDY", "INTERVALS", "DEBUGGING", "COMPLEXITY", "TESTING",
+]
+
+DIFFICULTIES = ["TUTORIAL", "EASY", "MEDIUM", "HARD", "ELITE", "BOSS"]
+
+SOURCE_TYPES = [
+    "REPORTED_INTERVIEW",   # archetype publicly reported for a company
+    "COMPANY_PATTERN",      # family a company is widely reported to favour
+    "GENERAL_INTERVIEW",    # classic, company-agnostic
+    "GENERATED_VARIANT",    # authored variant of a family
+    "SECURITY_VARIANT",     # security-domain transfer skin
+    "REMEDIATION",          # micro-drill produced by failure analysis
+]
+
+ENCOUNTER_KINDS = [
+    "CODE_BATTLE", "DEBUG_BATTLE", "MISSING_RUNE", "PATTERN_ENCOUNTER",
+    "COMPLEXITY_DUEL", "EDGE_CASE_TRAP", "REFACTOR_QUEST", "CODE_READING",
+    "TEST_FORGE", "SPEED_DUEL", "MEMORY_AMBUSH", "ELITE", "BOSS",
+]
+
+REALMS = [
+    "python_village", "fields_of_syntax", "hashmap_highlands",
+    "stringwood_labyrinth", "array_caverns", "sliding_window_marsh",
+    "twin_pointer_pass", "stack_queue_mines", "matrix_citadel",
+    "recursive_forest", "binary_tree_canopy", "graph_wastes",
+    "dp_ruins", "debugging_dungeon", "complexity_tower", "coding_coliseum",
+    "null_kings_castle",
+]
+
+# Difficulty -> target solve seconds for the FAST mastery stage.
+TARGET_SECONDS = {
+    "TUTORIAL": 180, "EASY": 420, "MEDIUM": 900,
+    "HARD": 1500, "ELITE": 1500, "BOSS": 2100,
+}
+
+
+# ---------------------------------------------------------------------------
+# Problem record
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Problem:
+    id: str
+    title: str
+    realm: str
+    pattern: str
+    difficulty: str
+    problem_statement: str
+    entry: dict                                   # {kind, name, signature}
+    canonical_solution: str
+    encounter_kind: str = "CODE_BATTLE"
+    secondary_patterns: list[str] = field(default_factory=list)
+    source_type: str = "GENERAL_INTERVIEW"
+    source_reference: str = ""
+    reported_company: str = ""
+    reported_year: str = ""
+    provenance_note: str = ""
+    examples: list[dict] = field(default_factory=list)
+    constraints: list[str] = field(default_factory=list)
+    starter_code: str = ""
+    visible_tests: list[dict] = field(default_factory=list)
+    hidden_tests: list[dict] = field(default_factory=list)
+    edge_cases: list[dict] = field(default_factory=list)
+    perf_tests: list[dict] = field(default_factory=list)
+    alternate_solutions: list[dict] = field(default_factory=list)
+    optimal_complexity: dict = field(default_factory=dict)   # {time, space}
+    complexity_choices: list[str] = field(default_factory=list)
+    common_failures: list[str] = field(default_factory=list)
+    hint_tree: list[dict] = field(default_factory=list)
+    visualization: dict = field(default_factory=dict)
+    variants: list[str] = field(default_factory=list)
+    security_variant: bool = False
+    spaced_repetition_family: str = ""
+    prerequisites: list[str] = field(default_factory=list)
+    estimated_seconds: int = 600
+    target_seconds: int = 600
+    boss_eligible: bool = False
+    profile_weight: dict = field(default_factory=dict)       # profile -> weight
+    mcq: dict = field(default_factory=dict)                  # non-coding encounters
+    tags: list[str] = field(default_factory=list)
+    mutants: list[str] = field(default_factory=list)         # TEST_FORGE only
+
+    # -- derived ------------------------------------------------------------
+    @property
+    def all_tests(self) -> list[dict]:
+        return self.visible_tests + self.hidden_tests + self.edge_cases + self.perf_tests
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    def player_view(self, *, mode: str) -> dict:
+        """What the client is allowed to see before a submission is graded."""
+        d = self.to_dict()
+        d.pop("canonical_solution", None)
+        d.pop("hidden_tests", None)
+        d.pop("edge_cases", None)
+        d.pop("perf_tests", None)
+        d.pop("alternate_solutions", None)
+        d.pop("mutants", None)
+        d["hidden_test_count"] = len(self.hidden_tests) + len(self.edge_cases)
+        if mode == "interview":
+            # Interview Mode measures. No teaching surface whatsoever.
+            d["hint_tree"] = []
+            d["visualization"] = {}
+            d["common_failures"] = []
+            d["pattern"] = "REDACTED"
+            d["secondary_patterns"] = []
+            d["optimal_complexity"] = {}
+            d["variants"] = []
+            d["prerequisites"] = []
+        return d
+
+
+# ---------------------------------------------------------------------------
+# Test construction helpers
+# ---------------------------------------------------------------------------
+
+MAP_TAG = "__map__"
+
+
+def encode_value(value: Any) -> Any:
+    """JSON turns integer dict keys into strings. Tag such dicts so the sandbox
+    can rebuild them exactly, or `{1: 'a'}` silently becomes `{'1': 'a'}` and
+    every test involving a non-string key is quietly wrong."""
+    if isinstance(value, dict):
+        if any(not isinstance(k, str) for k in value):
+            return {MAP_TAG: [[encode_value(k), encode_value(v)]
+                              for k, v in value.items()]}
+        return {k: encode_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [encode_value(v) for v in value]
+    return value
+
+
+def case(name: str, args: list, expected: Any, *, cmp: str = "exact",
+         hidden: bool = False, kind: str = "correctness", reveal: bool = True,
+         timeout_ms: int | None = None) -> dict:
+    t = {"name": name, "args": encode_value(copy.deepcopy(args)),
+         "expected": encode_value(expected),
+         "cmp": cmp, "hidden": hidden, "kind": kind, "reveal": reveal}
+    if timeout_ms:
+        t["timeout_ms"] = timeout_ms
+    return t
+
+
+def derive(reference: Callable, name: str, args: list, *, cmp: str = "exact",
+           hidden: bool = False, kind: str = "correctness",
+           reveal: bool = True, timeout_ms: int | None = None) -> dict:
+    """Build a test whose expected value comes from the reference implementation."""
+    expected = reference(*copy.deepcopy(args))
+    if isinstance(expected, tuple):
+        expected = list(expected)
+    if isinstance(expected, set):
+        expected = sorted(expected, key=repr)
+        cmp = "set"
+    return case(name, args, expected, cmp=cmp, hidden=hidden, kind=kind,
+                reveal=reveal, timeout_ms=timeout_ms)
+
+
+def ops_case(name: str, ops: list[str], args: list[list], expected: list,
+             *, hidden: bool = False, reveal: bool = True) -> dict:
+    return {"name": name, "ops": ops, "args": encode_value(copy.deepcopy(args)),
+            "expected": encode_value(expected), "cmp": "exact", "hidden": hidden,
+            "kind": "correctness", "reveal": reveal}
+
+
+def derive_ops(cls: type, name: str, ops: list[str], args: list[list],
+               *, hidden: bool = False, reveal: bool = True) -> dict:
+    obj, out = None, []
+    for op, a in zip(ops, args):
+        if op == "__init__":
+            obj = cls(*a)
+            out.append(None)
+            continue
+        if obj is None:
+            obj = cls()
+        r = getattr(obj, op)(*a)
+        out.append(list(r) if isinstance(r, tuple) else r)
+    return ops_case(name, ops, args, out, hidden=hidden, reveal=reveal)
+
+
+# ---------------------------------------------------------------------------
+# Hint tree
+# ---------------------------------------------------------------------------
+
+HINT_SPELLS = ["ORACLE", "REVEAL_PATH", "VISION", "PSEUDOSIGHT",
+               "CODE_FRAGMENT", "PHOENIX"]
+
+PATTERN_ORACLE = {
+    "HASH_MAP": "This is a HASH MAP problem. You are trading memory for lookup speed.",
+    "SET": "This is a SET problem. You only care about membership, not counts.",
+    "SLIDING_WINDOW": "This is a SLIDING WINDOW problem. A contiguous range under a constraint.",
+    "TWO_POINTER": "This is a TWO POINTER problem. Two indices moving with intent.",
+    "STACK": "This is a STACK problem. The most recent thing matters most.",
+    "QUEUE": "This is a QUEUE problem. Oldest in, oldest out.",
+    "BFS": "This is a BFS problem. Explore in expanding rings; the first arrival is shortest.",
+    "DFS": "This is a DFS problem. Commit to one path, then unwind.",
+    "TREE": "This is a TREE problem. Think about what each node needs from its children.",
+    "RECURSION": "This is a RECURSION problem. Define the base case, then shrink the input.",
+    "BINARY_SEARCH": "This is a BINARY SEARCH problem. Halve the search space each step.",
+    "MATRIX": "This is a MATRIX problem. Watch your row/column index discipline.",
+    "HEAP": "This is a HEAP problem. You need the extreme element repeatedly, not a full sort.",
+    "PREFIX_SUM": "This is a PREFIX SUM problem. Precompute cumulative totals.",
+    "SORTING": "This is a SORTING problem. Order first, then the answer becomes local.",
+    "SIMULATION": "This is a SIMULATION problem. Model the state faithfully, step by step.",
+    "DP": "This is a DYNAMIC PROGRAMMING problem. Overlapping subproblems, reused answers.",
+    "STRING": "This is a STRING problem. Think in characters, counts and slices.",
+    "ARRAY": "This is an ARRAY problem. Index arithmetic and a single clean pass.",
+    "DESIGN": "This is a DESIGN problem. Choose the data structures before writing methods.",
+    "GREEDY": "This is a GREEDY problem. A locally best choice is provably globally best here.",
+    "INTERVALS": "This is an INTERVALS problem. Sort by start, then merge or count overlaps.",
+    "DEBUGGING": "The algorithm is already right. One small mechanical detail is wrong.",
+    "COMPLEXITY": "Count the work per element, then multiply by the number of elements.",
+    "TESTING": "Think about what an incorrect implementation would still get right.",
+}
+
+PATTERN_STRUCTURE = {
+    "HASH_MAP": "Reach for `dict` (or `collections.Counter` / `defaultdict`).",
+    "SET": "Reach for `set` — O(1) membership.",
+    "SLIDING_WINDOW": "Two indices `left`/`right` plus a `dict` of counts inside the window.",
+    "TWO_POINTER": "Two integer indices, usually `left = 0` and `right = len(x) - 1`.",
+    "STACK": "A plain Python `list` used with `.append()` and `.pop()`.",
+    "QUEUE": "`collections.deque` with `.append()` and `.popleft()`.",
+    "BFS": "`collections.deque` as the frontier plus a `visited` set.",
+    "DFS": "Recursion (or an explicit list-as-stack) plus a `visited` set.",
+    "TREE": "Recursion over `node.left` / `node.right`, with `None` as the base case.",
+    "RECURSION": "A function that calls itself on a strictly smaller input.",
+    "BINARY_SEARCH": "`lo`, `hi`, and `mid = (lo + hi) // 2`.",
+    "MATRIX": "Nested indexing `grid[r][c]`; consider `zip(*grid)` for transpose.",
+    "HEAP": "`heapq` over a list; negate values for a max-heap.",
+    "PREFIX_SUM": "A running total plus a `dict` mapping prefix value to index/count.",
+    "SORTING": "`sorted(..., key=...)` — then a single pass.",
+    "SIMULATION": "Whatever fields the state genuinely needs. Keep them minimal.",
+    "DP": "A list `dp` indexed by subproblem, or a memo `dict`.",
+    "STRING": "`collections.Counter`, slicing, and `str.join`.",
+    "ARRAY": "The list itself plus a couple of index variables.",
+    "DESIGN": "Compose a `dict` with a `list`/`deque` — one for lookup, one for order.",
+    "GREEDY": "Sort, then a single accumulator variable.",
+    "INTERVALS": "A list sorted by start, plus the current merged interval.",
+    "DEBUGGING": "Read the failing test, then trace that exact input by hand.",
+    "COMPLEXITY": "Nothing — reason about the loops you can see.",
+    "TESTING": "A list of (input, expected) tuples that includes the ugly cases.",
+}
+
+
+def build_hint_tree(pattern: str, *, nudge: str, visual: str, pseudocode: str,
+                    fragment: str, solution: str) -> list[dict]:
+    """Five escalating rungs. Nobody stays stuck; the cost is only rank."""
+    return [
+        {"level": 1, "spell": "ORACLE", "mana": 3, "rank_cost": "A",
+         "title": "Oracle", "body": PATTERN_ORACLE.get(pattern, "") + "\n\n" + nudge},
+        {"level": 2, "spell": "REVEAL_PATH", "mana": 4, "rank_cost": "A",
+         "title": "Reveal Path", "body": PATTERN_STRUCTURE.get(pattern, "") + "\n\n" + visual},
+        {"level": 3, "spell": "PSEUDOSIGHT", "mana": 6, "rank_cost": "B",
+         "title": "Pseudosight", "body": pseudocode},
+        {"level": 4, "spell": "CODE_FRAGMENT", "mana": 8, "rank_cost": "C",
+         "title": "Code Fragment", "body": fragment},
+        {"level": 5, "spell": "PHOENIX", "mana": 12, "rank_cost": "LEARNING_CLEAR",
+         "title": "Phoenix", "body": solution},
+    ]
+
+
+def dumps(problems: Iterable[Problem]) -> str:
+    return json.dumps([p.to_dict() for p in problems], indent=1)
