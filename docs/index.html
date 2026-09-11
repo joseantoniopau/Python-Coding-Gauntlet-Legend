@@ -98,6 +98,29 @@
   .note{border-left:3px solid var(--gold); padding:14px 18px; background:#17122a;
         color:#bdb5d4; font-size:14px; margin-top:22px}
   .note b{color:var(--gold)}
+  /* ---------- theme player ---------- */
+  .theme{margin-top:30px; display:flex; align-items:center; justify-content:center;
+         gap:14px; flex-wrap:wrap}
+  .theme-btn{display:inline-flex; align-items:center; gap:11px; padding:13px 22px;
+             font-family:"Press Start 2P",monospace; font-size:10px; letter-spacing:.06em;
+             color:var(--gold-hi); background:linear-gradient(#3a2c10,#241a08);
+             border:1px solid var(--gold); cursor:pointer; line-height:1}
+  .theme-btn:hover{background:linear-gradient(#4d3a16,#2e220b)}
+  .theme-btn .glyph{font-size:13px; line-height:1}
+  .theme-cred{font-size:12.5px; color:var(--muted); text-align:left}
+  .theme-cred b{color:var(--text); font-weight:600}
+  /* Five bars that move only while something is actually playing. */
+  .eq{display:inline-flex; align-items:flex-end; gap:2px; height:14px}
+  .eq i{width:3px; height:4px; background:var(--gold-hi); display:block}
+  .theme-btn.on .eq i{animation:bounce .9s ease-in-out infinite}
+  .theme-btn.on .eq i:nth-child(2){animation-delay:.12s}
+  .theme-btn.on .eq i:nth-child(3){animation-delay:.24s}
+  .theme-btn.on .eq i:nth-child(4){animation-delay:.36s}
+  .theme-btn.on .eq i:nth-child(5){animation-delay:.48s}
+  @keyframes bounce{0%,100%{height:4px}50%{height:14px}}
+  @media (prefers-reduced-motion: reduce){
+    .theme-btn.on .eq i{animation:none; height:9px}
+  }
   footer{padding:52px 0 72px; color:var(--muted); font-size:13.5px; text-align:center}
 </style>
 </head>
@@ -115,6 +138,17 @@
     <div class="cta">
       <a class="btn gold" href="#install">DOWNLOAD &amp; PLAY</a>
       <a class="btn" href="https://github.com/joseantoniopau/Python-Coding-Gauntlet-Legend">SOURCE ON GITHUB</a>
+    </div>
+    <div class="theme" id="theme-player" hidden>
+      <button class="theme-btn" id="theme-btn" type="button" aria-pressed="false">
+        <span class="glyph" id="theme-glyph">&#9654;</span>
+        <span id="theme-label">PLAY THE TITLE THEME</span>
+        <span class="eq" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+      </button>
+      <div class="theme-cred">
+        <b>80s Style Surf Thrash Instrumental</b> — nickpanek<br>
+        the track that plays on the game's title screen
+      </div>
     </div>
   </div>
 </div>
@@ -257,9 +291,14 @@ then double-click:
 
 <footer>
   <div class="wrap">
-    <p style="margin:0 auto 14px">All art, music and text are original and
-      generated procedurally. Problems tagged as reported interview patterns are
-      historically reported shapes, not guaranteed questions, and name no company.</p>
+    <p style="margin:0 auto 14px">All art and text are original and generated
+      procedurally — there are no image assets in the repository. The soundtrack
+      is six licence-clear tracks from
+      <a href="https://pixabay.com/music/">Pixabay</a> under the Pixabay Content
+      License (nickpanek, alec_koff, Alex Morgan, myshoun), and the game
+      synthesises its own music as a fallback if they are absent. Problems tagged
+      as reported interview patterns are historically reported shapes, not
+      guaranteed questions, and name no company.</p>
     <p style="margin:0 auto">MIT licensed ·
       <a href="https://github.com/joseantoniopau/Python-Coding-Gauntlet-Legend">github.com/joseantoniopau/Python-Coding-Gauntlet-Legend</a></p>
   </div>
@@ -329,6 +368,66 @@ then double-click:
   size();
   if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) draw(0);
   else raf = requestAnimationFrame(loop);
+})();
+
+/* The title theme, on request only.
+ *
+ * Never autoplayed: browsers block it, and a landing page that starts playing
+ * thrash metal at someone is a landing page they close. preload="none" means the
+ * four megabytes are not fetched until somebody actually asks for them, so the
+ * page stays light for everyone who does not.
+ */
+(function () {
+  const host = document.getElementById('theme-player');
+  const btn = document.getElementById('theme-btn');
+  const glyph = document.getElementById('theme-glyph');
+  const label = document.getElementById('theme-label');
+  if (!host || !btn) return;
+
+  const audio = new Audio('assets/theme.mp3');
+  audio.preload = 'none';
+  audio.loop = true;
+
+  // Only offer the control once we know the file is actually there.
+  fetch('assets/theme.mp3', { method: 'HEAD' })
+    .then((r) => { if (r.ok) host.hidden = false; })
+    .catch(() => { /* no theme, no button */ });
+
+  // Track intent separately from audio.paused. A stalled or buffering element
+  // fires `pause` on its own, and a toggle that reads the element's state gets
+  // out of step with the button the moment that happens.
+  let wanted = false;
+
+  const setState = (playing) => {
+    btn.classList.toggle('on', playing);
+    btn.setAttribute('aria-pressed', playing ? 'true' : 'false');
+    glyph.innerHTML = playing ? '&#10074;&#10074;' : '&#9654;';
+    label.textContent = playing ? 'STOP THE TITLE THEME' : 'PLAY THE TITLE THEME';
+  };
+
+  btn.addEventListener('click', () => {
+    if (wanted) {
+      wanted = false;
+      audio.pause();
+      setState(false);
+      return;
+    }
+    wanted = true;
+    setState(true);                 // respond to the press immediately
+    audio.play().catch(() => {
+      // Genuinely could not start. Go back to offering it rather than leaving a
+      // dead button with an error printed on it — the next press may well work.
+      wanted = false;
+      setState(false);
+      label.textContent = 'TAP AGAIN TO PLAY';
+    });
+  });
+
+  // Only follow the element's own events while they agree with what was asked
+  // for, so a buffering stall does not flip the button under the reader.
+  audio.addEventListener('play', () => { if (wanted) setState(true); });
+  audio.addEventListener('ended', () => { wanted = false; setState(false); });
+  audio.addEventListener('error', () => { host.hidden = true; });
 })();
 
 /* The gallery only lists shots that actually exist, so a missing capture never
