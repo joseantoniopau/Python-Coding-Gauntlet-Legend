@@ -4,12 +4,21 @@ A problem earns its place only if its canonical solution passes every one of its
 own tests inside the real sandbox. Two independent implementations — the build-time
 reference that produced the expected values, and the canonical source shown to the
 player — must agree. Anything else is rejected, not shipped.
+
+Two kinds of check live here. Most are about one problem and reject that problem.
+The last set is about the corpus as a whole — lineage and the sealed hold-out —
+and it cannot reject anything, because there is no single problem to blame. It
+fails the build instead. That is the right severity: a hold-out that overlaps
+what the player was taught does not produce a slightly wrong transfer score, it
+produces a confident one that is false, and shipping that is worse than shipping
+nothing.
 """
 from __future__ import annotations
 
 import ast
 import copy
 import sys
+from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
@@ -466,6 +475,129 @@ def _run_puzzle(p: Problem):
     return None
 
 
+# ---------------------------------------------------------------------------
+# The corpus as a whole: lineage and the sealed hold-out
+# ---------------------------------------------------------------------------
+
+CORPUS = "<corpus>"     # the problem_id for a finding that belongs to no problem
+
+
+def _corpus_checks(problems: list) -> list:
+    """The four rules the hold-out has to satisfy, checked on what shipped.
+
+    Deliberately re-derived from the accepted problems rather than trusted from
+    the selection code that produced them. The selector and the check agreeing
+    by construction would make this decoration; they have to agree by evidence.
+    """
+    from . import (GENTLE, SEALED_BAND, SEALED_HARD_SHARE,
+                   SEALED_ORDINARY_SHARE, STEEP, coverable_patterns,
+                   named_in_source, reserved_ids, seal_holdout)
+
+    out = []
+    err = lambda m: out.append(Issue(CORPUS, "error", m))     # noqa: E731
+    total = len(problems)
+    if not total:
+        return out
+
+    unassigned = [p.id for p in problems if not p.lineage_id]
+    if unassigned:
+        err(f"{len(unassigned)} problem(s) carry no lineage_id, starting with "
+            f"{unassigned[0]} — an unlineaged problem cannot be proven unseen")
+        return out
+
+    lineages = defaultdict(list)
+    for problem in problems:
+        lineages[problem.lineage_id].append(problem)
+    sealed = [p for p in problems if p.sealed]
+    teachable = [p for p in problems if not p.sealed]
+
+    # RULE 1. Whole lineages or none of it.
+    for lineage_id, group in sorted(lineages.items()):
+        marked = [p for p in group if p.sealed]
+        if marked and len(marked) != len(group):
+            open_siblings = sorted(p.id for p in group if not p.sealed)
+            err(f"lineage {lineage_id} is sealed in part: {len(marked)} of "
+                f"{len(group)} held back while {open_siblings[0]} stays "
+                f"teachable — the sealed ones are not unseen")
+
+    # RULE 1b. And no teachable problem points AT the hold-out. `prerequisites`
+    # and `variants` are lists of problem ids and player_view ships both, so a
+    # single surviving reference hands a sealed id to a player in an ordinary
+    # Adventure payload — which is enough to go and read it, and enough to stop
+    # it ever being met cold. corpus.sever_references cuts these at build time;
+    # this proves it on what shipped rather than trusting that it ran.
+    sealed_ids = {p.id for p in sealed}
+    for problem in teachable:
+        for field_name in ("prerequisites", "variants"):
+            for referenced in sorted(set(getattr(problem, field_name, ()) or ())
+                                     & sealed_ids):
+                err(f"{problem.id} names sealed problem {referenced} in "
+                    f"{field_name}, so Adventure Mode ships a hold-out id to "
+                    f"the player and points the ramp at a door that cannot open")
+
+    # RULE 2. Every topic keeps a doorway. A topic that had no gentle rung to
+    # begin with is not something sealing broke, so the rule is conditional on
+    # the corpus having had one.
+    for label, key in (("topic", lambda p: p.spaced_repetition_family),
+                       ("pattern", lambda p: p.pattern)):
+        had = {key(p) for p in problems if p.difficulty in GENTLE}
+        left = {key(p) for p in teachable if p.difficulty in GENTLE}
+        for name in sorted(had - left):
+            err(f"{label} {name!r} has no GUIDED or TUTORIAL doorway left in the "
+                f"teachable set — sealing it made the topic unlearnable")
+    vanished = ({p.spaced_repetition_family for p in problems}
+                - {p.spaced_repetition_family for p in teachable})
+    for name in sorted(vanished):
+        err(f"topic {name!r} is sealed in its entirety — nothing left to teach")
+
+    # RULE 3. Spread. Every pattern that could be represented, is.
+    missing = coverable_patterns(problems) - {p.pattern for p in sealed}
+    for pattern in sorted(missing):
+        err(f"pattern {pattern!r} has a sealable lineage but no sealed problem — "
+            f"transfer readiness would be blind to it")
+
+    # RULE 4. Ordinary difficulties, and enough of them to mean something.
+    share = len(sealed) / total
+    low, high = SEALED_BAND
+    if not low <= share <= high:
+        err(f"the sealed set is {len(sealed)}/{total} ({share:.1%}), outside the "
+            f"{low:.0%}-{high:.0%} band")
+    counts = Counter(p.difficulty for p in sealed)
+    ordinary = counts["EASY"] + counts["MEDIUM"]
+    if sealed and ordinary / len(sealed) < SEALED_ORDINARY_SHARE:
+        err(f"only {ordinary}/{len(sealed)} sealed problems are EASY or MEDIUM; "
+            f"the hold-out is meant to measure whether ordinary knowledge "
+            f"transferred")
+    steep = sum(counts[d] for d in STEEP)
+    if sealed and steep / len(sealed) > SEALED_HARD_SHARE:
+        err(f"{steep}/{len(sealed)} sealed problems are {'/'.join(STEEP)}; that "
+            f"measures whether hard problems are hard")
+    for difficulty in ("EASY", "MEDIUM"):
+        if not counts[difficulty]:
+            err(f"nothing sealed at {difficulty} — the mix is not representative")
+
+    # The protected list has to keep up with the game that names those ids.
+    # Under-protection is the error: a quest pointing at a sealed problem either
+    # leaks the hold-out into Adventure Mode or dead-ends the quest.
+    for problem_id in sorted(named_in_source(problems) - reserved_ids(problems)):
+        err(f"{problem_id} is named elsewhere in the source but is not in "
+            f"corpus.RESERVED, so the hold-out could seal content the game "
+            f"already promised — add it to RESERVED")
+
+    # The hold-out has to be a function of the content and nothing else. Run the
+    # selection again over the same problems in the opposite order: a different
+    # answer means something in there is reading a dict, a set or a clock.
+    before = {p.id for p in sealed}
+    seal_holdout(list(reversed(problems)))
+    again = {p.id for p in problems if p.sealed}
+    for problem in problems:        # put back exactly what was there, flag by flag
+        problem.sealed = problem.id in before
+    if again != before:
+        err(f"the sealed set depends on the order problems arrive in: "
+            f"{len(before ^ again)} problem(s) differ between two runs")
+    return out
+
+
 def validate(problems: list, *, workers: int = 8) -> Report:
     report = Report(checked=len(problems))
 
@@ -501,4 +633,7 @@ def validate(problems: list, *, workers: int = 8) -> Report:
 
     bad = {i.problem_id for i in report.issues if i.severity == "error"}
     report.accepted = [p for p in problems if p.id not in bad]
+    # Run last, and on what actually survived: the hold-out's guarantees are
+    # about the corpus that ships, not the one that was proposed.
+    report.issues.extend(_corpus_checks(report.accepted))
     return report

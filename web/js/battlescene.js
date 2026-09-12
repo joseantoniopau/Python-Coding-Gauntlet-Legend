@@ -2173,6 +2173,7 @@ export function createCamera(opts = {}) {
     _kick: 0, _kickDir: 1, _kickT: 1,
     _punch: 0, _punchT: 0, _punchDur: 0,
     _cast: 0, _castT: 0, _castDur: 0, _castHold: 0,
+    _hold: 0,
     _pushFrom: 0, _pushT: 0, _pushDur: 0, _pushLift: 0,
     _lean: 0, _leanTo: 0,
     _calm: 9,
@@ -2240,6 +2241,23 @@ export function createCamera(opts = {}) {
       return this;
     },
 
+    /* THE HOLD FRAME. Everything the camera is doing stops where it is for
+     * `dur` seconds and then resumes. This is the sixteen-bit impact freeze:
+     * the shake stops dead mid-throw, the push-in stays pushed in, and the
+     * frame the blow landed on is the one the eye gets to read.
+     *
+     * It is a hold, not a reset — nothing is zeroed and every decay picks up
+     * exactly where it was — so a caller can scale it by how big the blow was
+     * without having to reconstruct the camera state afterwards. Reduced motion
+     * keeps a short hold rather than none: a still frame is not what makes
+     * anybody ill, and it is the half of this that reads without movement.
+     */
+    hold(dur = 0.12) {
+      this._hold = Math.max(this._hold, Math.max(0, dur));
+      this._calm = 0;
+      return this;
+    },
+
     /* The boss entrance: start wide and creep in over several seconds. */
     push(dur = 4.5, from = 1.16, lift = 3) {
       this._pushFrom = from;
@@ -2258,6 +2276,7 @@ export function createCamera(opts = {}) {
       this._kick = 0; this._kickT = 1; this._kickDir = 1;
       this._punch = 0; this._punchT = 0; this._punchDur = 0;
       this._cast = 0; this._castT = 0; this._castDur = 0; this._castHold = 0;
+      this._hold = 0;
       this._pushDur = 0; this._pushT = 0;
       this._lean = 0; this._leanTo = 0;
       this._calm = 9;
@@ -2266,6 +2285,13 @@ export function createCamera(opts = {}) {
 
     update(dt) {
       const step = Math.min(0.05, Math.max(0, dt || 0));
+      // The hold burns real time and advances nothing else, so ox/oy/zoom stay
+      // exactly where the blow left them. It is spent here rather than skipped
+      // in the caller so a held frame cannot leak into the next encounter.
+      if (this._hold > 0) {
+        this._hold -= step;
+        return this;
+      }
       this.t += step;
       this._calm += step;
       let x = 0, y = 0, z = this.baseZoom;
@@ -2984,7 +3010,9 @@ export function drawFigureShadow(ctx, scene, x, width, opts = {}) {
   ctx.globalAlpha = 1;
 }
 
-export const SCENE_VERSION = '1.1.0';
+/* 1.2.0 adds camera.hold(): the impact freeze a forged technique scales by
+ * its rung. Nothing else in the camera changed. */
+export const SCENE_VERSION = '1.2.0';
 
 /* ================================================================
  * WIRING (for whoever integrates this; nothing below runs)

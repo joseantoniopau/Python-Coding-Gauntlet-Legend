@@ -18,7 +18,16 @@ SKILLS = [
 ]
 
 # Which pattern a solved problem credits, and what it partially credits.
+#
+# LANGUAGE credits PYTHON, which is the whole reason the pattern exists. A
+# fill-in-the-blank whose content is `doubled = n * 2` used to be filed under
+# STRING and therefore credited the STRING skill, so the ramp measured a
+# beginner's grasp of strings out of evidence about assignment. The engine
+# already patched around it by paying PYTHON a second time for every GUIDED and
+# TUTORIAL clear (engine._apply_outcome); with an honest label that patch is a
+# top-up rather than a correction.
 PATTERN_TO_SKILL = {
+    "LANGUAGE": "PYTHON",
     "HASH_MAP": "HASH_MAP", "SET": "SET", "SLIDING_WINDOW": "SLIDING_WINDOW",
     "TWO_POINTER": "TWO_POINTER", "STACK": "STACK", "QUEUE": "QUEUE",
     "BFS": "BFS", "DFS": "DFS", "TREE": "TREE", "RECURSION": "RECURSION",
@@ -75,6 +84,30 @@ PREREQUISITES = {
 }
 
 
+class SkillBook(dict):
+    """A skills mapping that can also carry where the player was PLACED.
+
+    The diagnostic can say "you do not need the alphabet, start at Counting".
+    That is a statement about the chapter ladder, and the ladder is computed
+    from mastery — which a diagnostic deliberately cannot move very far,
+    because a diagnostic is weak evidence. So the placement travels beside the
+    mastery rather than inside it: `placement_floor` is the lowest chapter the
+    player starts on, and `curriculum.frontier` floors its answer with it.
+
+    It is a dict subclass rather than an extra argument threaded through
+    twenty-odd call sites because every one of those call sites already
+    receives this exact object from `Game.skills`. Anything that rebuilds a
+    plain dict loses the floor and falls back to zero, which is the safe
+    direction: a lost floor under-places, it never over-places.
+    """
+
+    placement_floor: int = 0
+
+    def with_floor(self, floor: int) -> "SkillBook":
+        self.placement_floor = max(0, int(floor or 0))
+        return self
+
+
 @dataclass
 class SkillState:
     name: str
@@ -95,13 +128,21 @@ class SkillState:
     stage: str = "UNKNOWN"
     last_seen: float = 0.0
     solve_times: list = field(default_factory=list)
+    # Clears broken out by the tier they were earned at. `clears` alone cannot
+    # answer "has the scaffolding come off?", because eight fill-in-the-blanks
+    # and eight blank screens are the same number. The ramp needs to tell them
+    # apart, so the evidence is recorded at the grain the question is asked at.
+    # Absent on a save written before this existed, which is not the same as
+    # zero — see curriculum.scaffold_target.
+    tier_clears: dict = field(default_factory=dict)
+    tier_unaided: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self)
 
 
-def new_skills() -> dict:
-    return {name: SkillState(name=name) for name in SKILLS}
+def new_skills() -> SkillBook:
+    return SkillBook({name: SkillState(name=name) for name in SKILLS})
 
 
 def _clamp(value: float, lo: float = 0.0, hi: float = 100.0) -> float:
@@ -136,8 +177,11 @@ def apply_outcome(state: SkillState, *, solved: bool, difficulty: str,
 
     if solved:
         state.clears += 1
+        state.tier_clears[difficulty] = state.tier_clears.get(difficulty, 0) + 1
         if hints_used == 0:
             state.unaided_clears += 1
+            state.tier_unaided[difficulty] = \
+                state.tier_unaided.get(difficulty, 0) + 1
         if first_try:
             state.first_try_clears += 1
         state.solve_times.append(round(seconds, 1))

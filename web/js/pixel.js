@@ -20,7 +20,15 @@ export const PALETTES = {
   gold:     { sky: '#3a3018', far: '#5c4a22', mid: '#7c6430', ground: '#96793a', ground2: '#7f6631', accent: '#ffd97a', foliage: '#7a7a3a', dark: '#1e1809' },
   iron:     { sky: '#20222a', far: '#32353f', mid: '#454955', ground: '#525665', ground2: '#434754', accent: '#8fa8c8', foliage: '#40604a', dark: '#111216' },
   azure:    { sky: '#16263e', far: '#223a5c', mid: '#2f5080', ground: '#3a629c', ground2: '#305285', accent: '#7ec8ff', foliage: '#3a6a5a', dark: '#0b1420' },
-  sun:      { sky: '#4a3a22', far: '#7c6234', ground: '#c8a55c', mid: '#a88a48', ground2: '#b8955180', accent: '#ffe08a', foliage: '#7f8a3a', dark: '#241a0e' },
+  /* `ground2` carried an eight-digit hex, '#b8955180', for as long as this
+   * table has existed. Two things went wrong with it and both were invisible
+   * in the source: canvas read the trailing '80' as 50% alpha and painted the
+   * Arena's ground half-transparent, so the layer behind it bled through and
+   * broke the one-grain rule for that whole region; and shade() parses with
+   * parseInt(hex.slice(1), 16), which on eight digits overflows the top byte
+   * out of range and returns '#955180' — so every speckle and tuft on Arena
+   * ground was drawn purple instead of amber. Six digits, opaque. */
+  sun:      { sky: '#4a3a22', far: '#7c6234', mid: '#a88a48', ground: '#c8a55c', ground2: '#b89551', accent: '#ffe08a', foliage: '#7f8a3a', dark: '#241a0e' },
   void:     { sky: '#0c0a14', far: '#191426', mid: '#261e38', ground: '#2e2444', ground2: '#241c36', accent: '#d84a7a', foliage: '#2a3a35', dark: '#050408' },
 };
 
@@ -75,13 +83,36 @@ export function gridSprite(grid, pal) {
 /* ---------- terrain tiles ---------- */
 const TILE = 16;
 
+/* Every tile colour in this module goes through here, so this is the one place
+ * a malformed palette entry can quietly poison a whole region's art — which is
+ * exactly what '#b8955180' did above. Normalise the shapes a hex can arrive in
+ * instead of trusting six digits; a six-digit input is byte-identical to what
+ * this returned before. */
 function shade(hex, amount) {
-  const n = parseInt(hex.slice(1), 16);
+  if (typeof hex !== 'string') return '#000000';
+  let h = hex.charCodeAt(0) === 35 ? hex.slice(1) : hex;
+  if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  else if (h.length > 6) h = h.slice(0, 6);          // drop alpha; we do not use it
+  const n = parseInt(h, 16);
+  if (!Number.isFinite(n)) return '#000000';
   let r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
   r = Math.max(0, Math.min(255, r + amount));
   g = Math.max(0, Math.min(255, g + amount));
   b = Math.max(0, Math.min(255, b + amount));
   return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
+}
+
+/* Blend two hexes. Used where a tint has to stay on the pixel grid's own colour
+ * set rather than being applied as a translucent overlay — an alpha pass over a
+ * sprite produces colours nobody authored and is the fastest way to break a
+ * fifteen-colour budget. */
+function mixHex(a, b, t) {
+  const pa = parseInt(shade(a, 0).slice(1), 16), pb = parseInt(shade(b, 0).slice(1), 16);
+  const k = Math.max(0, Math.min(1, t));
+  const r = Math.round(((pa >> 16) & 255) + (((pb >> 16) & 255) - ((pa >> 16) & 255)) * k);
+  const g = Math.round(((pa >> 8) & 255) + (((pb >> 8) & 255) - ((pa >> 8) & 255)) * k);
+  const c = Math.round((pa & 255) + ((pb & 255) - (pa & 255)) * k);
+  return `#${((r << 16) | (g << 8) | c).toString(16).padStart(6, '0')}`;
 }
 
 function speckle(ctx, base, seed, density, amount) {
@@ -136,9 +167,14 @@ export function lavaTile(seed, frame = 0) {
   const { canvas, ctx } = make(TILE, TILE);
   ctx.fillStyle = '#6a1c10';
   ctx.fillRect(0, 0, TILE, TILE);
+  /* `seed` was accepted and never read, so every lava tile in the game was the
+   * same two sine waves and a field of them tiled into a visible plaid. It is a
+   * per-tile phase offset now: hashed from the seed, so still deterministic. */
+  const px = ((seed | 0) % 97) * 0.0647;
+  const py = (((seed | 0) >> 5) % 89) * 0.0706;
   for (let y = 0; y < TILE; y++) {
     for (let x = 0; x < TILE; x++) {
-      const v = Math.sin(x * 0.7 + frame * 1.3) * Math.cos(y * 0.6 - frame) * 0.5 + 0.5;
+      const v = Math.sin(x * 0.7 + px + frame * 1.3) * Math.cos(y * 0.6 + py - frame) * 0.5 + 0.5;
       if (v > 0.78) { ctx.fillStyle = '#ffcc4a'; ctx.fillRect(x, y, 1, 1); }
       else if (v > 0.62) { ctx.fillStyle = '#ff8a2a'; ctx.fillRect(x, y, 1, 1); }
       else if (v > 0.45) { ctx.fillStyle = '#d2451a'; ctx.fillRect(x, y, 1, 1); }
@@ -350,7 +386,14 @@ function legSwap(grid, phase) {
 }
 
 export function heroSprites(pal) {
-  const p = { ...HERO_PAL, c: pal.accent ? HERO_PAL.c : HERO_PAL.c };
+  /* The tunic used to be picked with `pal.accent ? HERO_PAL.c : HERO_PAL.c`,
+   * which is the same colour on both arms of the branch — the parameter was read
+   * and then thrown away. It tints properly now: an accent shifts the tunic and
+   * its lit face together, so a palette actually reaches the sprite. */
+  const accent = pal && typeof pal.accent === 'string' ? pal.accent : null;
+  const p = accent
+    ? { ...HERO_PAL, c: mixHex(HERO_PAL.c, accent, 0.3), C: mixHex(HERO_PAL.C, accent, 0.3) }
+    : { ...HERO_PAL };
   const out = {};
   for (const facing of ['down', 'up', 'side']) {
     out[facing] = [0, 1, 0, 2].map(phase =>
@@ -518,7 +561,7 @@ const SHAPE_FOR = {
   ledgerling: 'construct', orderling: 'construct', clockwork: 'construct',
   echoling: 'wisp', slime: 'slime', indexling: 'slime', construct: 'construct',
   bugling: 'hydra', wyrmling: 'dragon', mimic: 'mimic', riddler: 'wraith',
-  hoarder: 'golem', overlapper: 'slime',
+  hoarder: 'golem', overlapper: 'slime', runeling: 'golem',
   titan: 'golem', hydra: 'hydra', behemoth: 'golem', dragon: 'dragon',
   ent: 'dragon', necromancer: 'wraith', automaton: 'construct', lich: 'wraith',
   demon: 'hydra', interviewer: 'construct', wyrm: 'dragon',
@@ -533,6 +576,7 @@ const FAMILY_COLOUR = {
   DP: '#d6a84f', STRING: '#5fbf8f', ARRAY: '#6f8fbf', DESIGN: '#c88fd6',
   DEBUGGING: '#c43f4f', COMPLEXITY: '#3f6f9c', TESTING: '#d6c04f',
   RECOGNITION: '#8f9cd6', GREEDY: '#bf8f5f', INTERVALS: '#5f9fbf',
+  LANGUAGE: '#b9a86a',
 };
 
 export function enemySprite(spriteKey, pattern, frame = 0, override) {
@@ -648,8 +692,32 @@ export function icon(kind, colour = '#e8c37d') {
 }
 
 /* ---------- particles ---------- */
+
+/* Weather and ambient motes. Three screens run this every frame — the overworld,
+ * the battle stage and the title — so it is the hottest loop in this module, and
+ * both rules in the brief bite here: nothing in a draw path may call
+ * Math.random() or Date.now(), and nothing may allocate per frame.
+ *
+ * Each particle carries its own 32-bit state and advances it with a small LCG
+ * when it needs a number. That is deterministic from the list's seed, costs no
+ * allocation, and survives a reload: the same region produces the same weather
+ * twice, which is what makes a scene feel authored rather than sprayed.
+ */
+
+/** Advance one particle's own noise stream. Deterministic, allocation-free. */
+function nextRand(p) {
+  // A list built by hand rather than by makeParticles has no seed; give it one
+  // derived from where it currently is, so it still never reaches for entropy.
+  let s = p.seed;
+  if (!Number.isFinite(s)) s = (Math.imul((p.x | 0) + 1, 2654435761) ^ ((p.y | 0) * 40503)) >>> 0;
+  s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+  p.seed = s;
+  return s / 4294967296;
+}
+
 export function makeParticles(kind, width, height, count = 40) {
-  const rand = rng(hash(kind + width));
+  const base = hash(kind + width);
+  const rand = rng(base);
   const list = [];
   for (let i = 0; i < count; i++) {
     list.push({
@@ -658,18 +726,25 @@ export function makeParticles(kind, width, height, count = 40) {
       size: kind === 'snow' ? 2 : 1,
       life: rand(),
       drift: rand() * Math.PI * 2,
+      // Its own stream, so respawning one particle cannot shift another's.
+      seed: (base ^ Math.imul(i + 1, 2654435761)) >>> 0,
     });
   }
   return list;
 }
 
+/* `colour` is the near tone and `dim` the far one. Depth used to be expressed
+ * purely as alpha, which meant a particle's real colour depended on whatever it
+ * happened to be floating over — an unbounded set of blends, off every ramp in
+ * the game. Two authored tones, picked per particle, keep the drift readable and
+ * keep the emitted colour count finite. */
 export const PARTICLE_STYLE = {
-  ember:  { colour: '#ff9d4a', up: true },
-  snow:   { colour: '#e8f0ff', up: false },
-  rain:   { colour: '#8fb8e8', up: false, streak: true },
-  leaves: { colour: '#8fd07a', up: false },
-  motes:  { colour: '#c8a8ff', up: true },
-  ash:    { colour: '#b8b4c4', up: false },
+  ember:  { colour: '#ff9d4a', dim: '#a8502a', up: true },
+  snow:   { colour: '#e8f0ff', dim: '#8c9ab8', up: false },
+  rain:   { colour: '#8fb8e8', dim: '#4a6a96', up: false, streak: true },
+  leaves: { colour: '#8fd07a', dim: '#4e7a4a', up: false },
+  motes:  { colour: '#c8a8ff', dim: '#6f5aa8', up: true },
+  ash:    { colour: '#b8b4c4', dim: '#6e6a7c', up: false },
 };
 
 export function stepParticles(list, style, width, height, dt) {
@@ -677,8 +752,12 @@ export function stepParticles(list, style, width, height, dt) {
     p.drift += dt * 0.9;
     p.x += p.vx + Math.sin(p.drift) * 0.35;
     p.y += style.up ? -p.vy * (style.streak ? 3 : 1.4) : p.vy * (style.streak ? 4 : 1);
-    if (p.y > height + 4) { p.y = -4; p.x = Math.random() * width; }
-    if (p.y < -4) { p.y = height + 4; p.x = Math.random() * width; }
+    /* Respawn used to read Math.random(), which put a live entropy source in a
+     * draw path: the same region's weather differed run to run and nothing that
+     * depended on it could be reproduced. Same behaviour, from the particle's
+     * own deterministic stream. */
+    if (p.y > height + 4) { p.y = -4; p.x = nextRand(p) * width; }
+    if (p.y < -4) { p.y = height + 4; p.x = nextRand(p) * width; }
     if (p.x > width + 4) p.x = -4;
     if (p.x < -4) p.x = width + 4;
   }
@@ -686,17 +765,41 @@ export function stepParticles(list, style, width, height, dt) {
 
 export function drawParticles(ctx, list, style, alpha = 0.65) {
   ctx.save();
-  ctx.globalAlpha = alpha;
-  ctx.fillStyle = style.colour;
-  for (const p of list) {
-    if (style.streak) ctx.fillRect(p.x | 0, p.y | 0, 1, 4);
-    else ctx.fillRect(p.x | 0, p.y | 0, p.size, p.size);
+  /* Quantised to eighths. A free-floating alpha multiplies every particle colour
+   * into a continuum of blends; eight steps keeps the result a small, repeatable
+   * set that sits on the same grain as everything else. */
+  ctx.globalAlpha = Math.max(0, Math.min(1, Math.round(alpha * 8) / 8));
+  const near = style.colour;
+  const far = style.dim || style.colour;
+  /* Two passes so fillStyle is assigned twice per frame instead of once per
+   * particle, and so the near tone paints over the far one. */
+  for (let pass = 0; pass < 2; pass++) {
+    ctx.fillStyle = pass === 0 ? far : near;
+    for (const p of list) {
+      if ((p.life < 0.5) !== (pass === 0)) continue;
+      /* Math.floor, not `| 0`. Truncation rounds toward zero, so every particle
+       * drifting through x in (-1, 0) snapped to column 0 instead of to -1: a
+       * one-pixel stall at the seam, on the one grid the whole scene shares. */
+      const x = Math.floor(p.x), y = Math.floor(p.y);
+      if (style.streak) ctx.fillRect(x, y, 1, 4);
+      else ctx.fillRect(x, y, p.size, p.size);
+    }
   }
   ctx.restore();
 }
 
 /* ---------- tileset cache ---------- */
+
+/* A tileset is thirteen canvases, so an unbounded map of them is an unbounded
+ * amount of texture memory. Eleven regions times four tiers is the real working
+ * set; the cap is well above it and evicts oldest-first, so a long session
+ * cannot grow this without bound. */
+const TILESET_CACHE_MAX = 64;
 const cache = new Map();
+
+export function tilesetCacheStats() {
+  return { size: cache.size, cap: TILESET_CACHE_MAX };
+}
 
 export function tileset(regionId, palette, tier = 2) {
   const key = `${regionId}:${tier}`;
@@ -716,6 +819,7 @@ export function tileset(regionId, palette, tier = 2) {
     lava: [0, 1, 2, 3].map(f => lavaTile(seed + 37, f * 1.6)),
     palette: pal,
   };
+  if (cache.size >= TILESET_CACHE_MAX) cache.delete(cache.keys().next().value);
   cache.set(key, set);
   return set;
 }

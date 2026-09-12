@@ -13,7 +13,7 @@ import re
 import unittest
 from pathlib import Path
 
-from gauntlet import bestiary, incantation
+from gauntlet import arts, bestiary, incantation
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -124,7 +124,16 @@ class TestBestiaryAgreement(unittest.TestCase):
             self.assertEqual(bestiary.chapter_rank(row[0]), inc.chapter,
                              "%s chapter drifted" % inc_id)
             self.assertEqual(row[1], inc.skill, "%s skill drifted" % inc_id)
-        self.assertEqual(set(bestiary.EXPECTED_INCANTATIONS), set(incantation.BY_ID),
+        # MINUS THE SECRET ARTS, and this is the edit arts.handover() asked for
+        # by name. `incantation.BY_ID` is a REGISTRY and `bestiary`'s mirror is
+        # a contract about the ORDINARY catalogue: engine.py calls
+        # arts.register() at import, which puts ninety-six art lines into BY_ID
+        # and deliberately not into `incantation.CATALOGUE`, so nothing can ever
+        # hand one out as a clear reward. This assertion is still the drift
+        # guard it always was — it just names the one registry that is allowed
+        # to be wider than the catalogue.
+        self.assertEqual(set(bestiary.EXPECTED_INCANTATIONS),
+                         set(incantation.BY_ID) - arts.ART_IDS,
                          "the two catalogues do not hold the same ids")
 
     def test_every_enemy_name_is_a_python_identifier(self):

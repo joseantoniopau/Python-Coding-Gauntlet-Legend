@@ -159,7 +159,9 @@ DUNGEONS = (
         region="fields_of_syntax", chapter="fluency", tier=1,
         archetype="warren", rule="indent_depth", size=14, floor="GUIDED",
         floors=3,
-        patterns=("STRING", "ARRAY", "SIMULATION"),
+        # LANGUAGE first: this is the chapter-I dungeon, the shrine skill is read
+        # off patterns[0], and the thing this place teaches is Python itself.
+        patterns=("LANGUAGE", "STRING", "ARRAY", "SIMULATION"),
         blurb="A barrow dug by someone who stopped mid-sentence and never came back.",
         lesson="Rooms sit as deep as the block they belong to. Walking this place "
                "is reading an indented program with your feet.",
@@ -1989,7 +1991,11 @@ def resolve_encounter(request: dict, corpus: list, *, skills: dict | None = None
         if skills is None:
             return True
         state = skills.get(skillmod.PATTERN_TO_SKILL.get(problem.pattern, "PYTHON"))
-        return curriculum.is_permitted(problem, skills, skill_state=state)
+        # PYTHON goes along as `fluency` for the scaffold clause: the band at
+        # the bottom of the ramp is about the language, and a dungeon room is
+        # no place to ask a fluent player to re-prove it once per pattern.
+        return curriculum.is_permitted(problem, skills, skill_state=state,
+                                       fluency=skills.get("PYTHON"))
 
     def kind_ok(problem) -> bool:
         if puzzle_kind:
@@ -2233,6 +2239,11 @@ def clear_room(dungeon: Dungeon, state: dict, room_id: int | None = None, *,
                         "asking, and you can also simply walk out.",
                 "options": options(dungeon, state)}
 
+    # Was this room already down? A group clear takes its whole group with it,
+    # and a caller may replay a clear it has already recorded. Either way the
+    # purse below is paid ONCE per room, because the purse is a reward for
+    # beating the room and the room can only be beaten once.
+    already = room_id in state["cleared"]
     newly = []
     for target in dungeon.rooms:
         if target.id == room_id or (room.group and target.group == room.group):
@@ -2250,7 +2261,9 @@ def clear_room(dungeon: Dungeon, state: dict, room_id: int | None = None, *,
     if dungeon.rule == "rotating_grid" and len(state["cleared"]) % 4 == 0:
         state["turns"] = (state.get("turns", 0) + 1) % 4
 
-    reward = room_reward(dungeon, room)
+    reward = room_reward(dungeon, room) if not already else {
+        "xp": 0, "gold": 0, "depth": room.depth, "tier": dungeon.tier,
+        "drop_luck": 0.0, "already_cleared": True}
     state["xp"] += reward["xp"]
     state["gold"] += reward["gold"]
     return {"cleared": True, "rooms": newly, "reward": reward,

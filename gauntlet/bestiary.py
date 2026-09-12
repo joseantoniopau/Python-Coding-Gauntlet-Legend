@@ -2605,6 +2605,217 @@ def cast_budget(thing) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Vitals: hit points, focus, an element, and the specials focus buys
+# ---------------------------------------------------------------------------
+#
+# Everything above this line describes what an enemy IS. This section describes
+# what it can DO on the turns between yours, and it is deliberately the smallest
+# section in the file, because none of it is allowed to matter very much.
+#
+# THE RULE THAT SIZES EVERY NUMBER HERE
+# --------------------------------------
+# The Python typing is the attack. An enemy's turn cannot take a turn away from
+# the player (elements.STATUSES has no such kind and self_check proves it), it
+# cannot end the fight — stamina at zero routes to a training camp, never to a
+# loss — and it cannot be answered by anything except continuing to type. All
+# an enemy turn does is spend the player's health bar, which is what decides
+# how many potions get drunk, which is what decides how LONG the fight is.
+# Longer fight, more casts, more repetition. That is the entire pedagogical
+# function of an enemy having a turn at all.
+#
+# FOCUS IS DERIVED, NOT AUTHORED
+# -------------------------------
+# Forty-five enemies authored a second time is forty-five enemies that
+# eventually disagree with themselves. Focus comes off HP, because HP is already
+# the measure of how long a thing is meant to stand there: a bigger enemy gets
+# more turns, so it gets more specials. The ratio is the only free number, and
+# it is set so an ordinary enemy fires roughly one special per four turns, which
+# is often enough to be a pattern and rare enough to be an event.
+
+FOCUS_PER_HP = 0.5          # a 60 HP enemy carries 30 focus
+FOCUS_REGEN = 4             # gained at the start of each of its own turns
+BOSS_FOCUS_MULTIPLIER = 1.6  # bosses get more of all three, as asked
+BOSS_REGEN_BONUS = 2
+
+# The cheapest special costs this much, so an enemy cannot open a fight with
+# one: it has to stand there for a turn or two first, and the player gets to
+# see it charging.
+MIN_SPECIAL_COST = 8
+
+
+def focus_for(hp: int, *, is_boss: bool = False) -> int:
+    """The focus pool for something with this much health."""
+    pool = max(MIN_SPECIAL_COST, int(round(int(hp) * FOCUS_PER_HP)))
+    if is_boss:
+        pool = int(round(pool * BOSS_FOCUS_MULTIPLIER))
+    return pool
+
+
+def focus_regen(*, is_boss: bool = False) -> int:
+    return FOCUS_REGEN + (BOSS_REGEN_BONUS if is_boss else 0)
+
+
+@dataclass(frozen=True)
+class Special:
+    """One thing an enemy can do with its focus.
+
+    `power` is a MULTIPLIER on the enemy's ordinary blow, never a number of its
+    own. That is the same discipline elements.resolve_damage is built on: this
+    file does not generate damage, it scales damage somebody else decided on,
+    and a caller who passes zero gets zero.
+    """
+    id: str
+    name: str
+    element: str            # the element this special belongs to
+    cost: int               # focus spent
+    power: float            # multiplier on the enemy's basic blow
+    inflicts: str           # an elements.STATUSES id, or "" for none
+    line: str               # what the combat log says, "{who}" for the name
+    why: str                # for the codex, and for whoever tunes this
+
+
+# One special per element plus one for neutral ground, which is the same shape
+# as elements.HAZARD_BY_ELEMENT and for the same reason: derive the enemy's
+# repertoire from the ground it is standing on and there is nothing extra to
+# author per monster. A neutral region still gets one, because an enemy that
+# could never do anything would make five of the seventeen regions feel broken
+# rather than calm.
+#
+# Every `inflicts` is the status its own element already owns in
+# elements.STATUSES. A special that inflicted somebody else's status would be a
+# second, private opinion about what fire does.
+SPECIALS: tuple = (
+    Special("scorch", "Scorch", "FIRE", 10, 1.4, "BURNING",
+            "{who} opens its mouth and the air goes dry.",
+            "Fire is a burst. It hurts now and it is over."),
+    Special("rime", "Rime", "COLD", 9, 1.1, "CHILLED",
+            "{who} breathes, and the cold gets into your hands.",
+            "Cold makes the fight longer rather than more dangerous, which is "
+            "the trade this whole system is built to make."),
+    Special("spore_burst", "Spore Burst", "POISON", 10, 1.0, "POISONED",
+            "{who} splits something open and the air thickens.",
+            "The one status with a dedicated cure, so the one that makes the "
+            "antidote in the pouch worth carrying."),
+    Special("sunder", "Sunder", "BRUTE", 12, 1.5, "STAGGERED",
+            "{who} puts its whole weight behind one blow.",
+            "The counter to armour points is not a better element; it is "
+            "something heavy enough to make the plate irrelevant."),
+    Special("arc", "Arc", "LIGHTNING", 11, 1.2, "SHOCKED",
+            "{who} earths itself through you.",
+            "Lightning does not do the damage. It makes whatever comes next "
+            "do more."),
+    Special("unmake", "Unmake", "VOID", 12, 1.3, "VOIDED",
+            "{who} takes the light out of the room a piece at a time.",
+            "It stops focus coming back. It never stops focus being spent, "
+            "because a status that locked the hint tree could strand a learner."),
+    Special("press", "Press", "", 8, 1.35, "",
+            "{who} presses, and does not stop pressing.",
+            "Neutral ground has no weather, so its special is simply a harder "
+            "swing. Nothing to read and nothing to counter — which is what "
+            "makes the elemental regions feel like somewhere."),
+)
+
+SPECIAL_BY_ID: dict = {s.id: s for s in SPECIALS}
+SPECIAL_BY_ELEMENT: dict = {s.element: s.id for s in SPECIALS}
+NEUTRAL_SPECIAL = "press"
+
+
+def specials_for(element: str = "", *, is_boss: bool = False) -> list:
+    """What an enemy standing on this ground can do.
+
+    An ordinary enemy knows its region's special and nothing else. A boss knows
+    that one AND the plain one, which is the "bosses get more of all three"
+    clause: more health, more focus, and more than one thing to spend it on.
+    """
+    own = SPECIAL_BY_ELEMENT.get(str(element or ""), "")
+    out = [own] if own else []
+    if is_boss and NEUTRAL_SPECIAL not in out:
+        out.append(NEUTRAL_SPECIAL)
+    return out or [NEUTRAL_SPECIAL]
+
+
+def vitals(*, hp: int, element: str = "", is_boss: bool = False,
+           focus: int | None = None) -> dict:
+    """Everything the turn loop needs about one combatant, as plain JSON.
+
+    Plain JSON because it lives in the save file, and a save that cannot hold
+    a fight in progress is a save that loses a twenty-turn fight to a page
+    refresh. `element` is handed IN rather than derived here — the caller knows
+    which region this is, and this module does not form a second opinion about
+    the wheel any more than it forms one about the seal.
+    """
+    hp = max(1, int(hp))
+    # `focus` is an override for callers whose `hp` is not a health pool. The
+    # problem encounter's enemy carries one point of HP per hidden test, which
+    # is a count of edge cases wearing a health bar — deriving focus off it
+    # would give a three-test problem a monster that can never afford anything
+    # it knows how to do, which is worse than a monster with no specials at all.
+    pool = focus_for(hp, is_boss=is_boss) if focus is None else max(
+        MIN_SPECIAL_COST, int(focus))
+    return {
+        "hp": hp, "hp_max": hp,
+        "focus": 0, "focus_max": pool,
+        "regen": focus_regen(is_boss=is_boss),
+        "element": str(element or ""),
+        "specials": specials_for(element, is_boss=is_boss),
+        "statuses": [],
+        "antidotes": 0,
+        "boss": bool(is_boss),
+    }
+
+
+def affordable(vital: dict) -> list:
+    """The specials this enemy could pay for right now, dearest first.
+
+    Dearest first because an enemy that saved up should spend it on the thing it
+    saved up FOR. An enemy that always fired the cheapest thing available would
+    never show the player its expensive one.
+    """
+    focus = int((vital or {}).get("focus", 0) or 0)
+    rows = [SPECIAL_BY_ID[sid] for sid in (vital or {}).get("specials", ())
+            if sid in SPECIAL_BY_ID]
+    return sorted([s for s in rows if s.cost <= focus],
+                  key=lambda s: -s.cost)
+
+
+# Two turns in three, once it can afford anything at all. High enough that
+# saving up visibly pays off, low enough that the fight is not a drum machine.
+SPECIAL_CHANCE = 0.65
+
+
+def take_turn(vital: dict, *, roll: float = 1.0) -> dict | None:
+    """Spend focus on a special, or don't. Mutates `vital`'s focus.
+
+    Returns the Special as a dict, or None for an ordinary blow. `roll` comes in
+    rather than being drawn here for the same reason it does in
+    elements.resolve_damage: a pure function is one a test can pin down and a
+    preview can call twice.
+
+    An enemy that CAN fire does not always fire. Always-fire would make the
+    special a metronome, and a metronome is something the player stops reading.
+    """
+    options = affordable(vital)
+    if not options:
+        return None
+    if roll > SPECIAL_CHANCE:
+        return None
+    chosen = options[0]
+    vital["focus"] = max(0, int(vital.get("focus", 0)) - chosen.cost)
+    return {"id": chosen.id, "name": chosen.name, "element": chosen.element,
+            "cost": chosen.cost, "power": chosen.power,
+            "inflicts": chosen.inflicts, "line": chosen.line}
+
+
+
+def regenerate(vital: dict) -> int:
+    """Focus at the start of this enemy's turn. Returns what it gained."""
+    before = int(vital.get("focus", 0) or 0)
+    cap = int(vital.get("focus_max", 0) or 0)
+    after = min(cap, before + int(vital.get("regen", FOCUS_REGEN) or 0))
+    vital["focus"] = after
+    return after - before
+
+# ---------------------------------------------------------------------------
 # Self-check
 # ---------------------------------------------------------------------------
 # Four invariants, and every one of them is something that would reach the
@@ -2950,6 +3161,39 @@ def _check_context(problems: list) -> None:
                     f"boss {boss.id!r} phase {phase.key!r} context failed: {exc}")
 
 
+def _check_vitals(problems: list) -> None:
+    """The specials have to name real elements and real statuses.
+
+    Reconciled LAZILY against elements.py, exactly the way the incantation ids
+    are reconciled against incantation.py: this file keeps its own strings so it
+    still loads and verifies on its own, and the reconciliation is what stops
+    the two copies drifting apart in silence. A special that inflicted a status
+    the wheel had renamed would be an enemy turn that silently did nothing.
+    """
+    try:
+        from . import elements
+    except Exception:                      # pragma: no cover - standalone read
+        return
+    for special in SPECIALS:
+        if special.element and special.element not in elements.ELEMENTS:
+            problems.append(
+                f"special {special.id!r} claims element {special.element!r}, "
+                f"which is not on the wheel")
+        if special.inflicts and special.inflicts not in elements.STATUSES:
+            problems.append(
+                f"special {special.id!r} inflicts {special.inflicts!r}, which "
+                f"elements.STATUSES does not define")
+        if (special.inflicts and special.element
+                and elements.STATUSES[special.inflicts].element != special.element):
+            problems.append(
+                f"special {special.id!r} is {special.element} but inflicts "
+                f"{special.inflicts!r}, which belongs to another element")
+    for eid in elements.ELEMENT_IDS:
+        if eid not in SPECIAL_BY_ELEMENT:
+            problems.append(f"element {eid!r} has no special, so an enemy "
+                            f"standing there can never spend its focus")
+
+
 def verify() -> dict:
     """Run every invariant. Returns counts and a list of problems; never raises."""
     problems: list = []
@@ -2958,6 +3202,7 @@ def verify() -> dict:
     encounters = _check_encounters(problems)
     bosses = _check_bosses(problems)
     _check_context(problems)
+    _check_vitals(problems)
 
     if len(ENEMIES) < MIN_ENEMIES:
         problems.append(f"only {len(ENEMIES)} enemies; the design asks for "

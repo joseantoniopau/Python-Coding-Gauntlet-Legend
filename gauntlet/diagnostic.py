@@ -130,6 +130,11 @@ class Placement:
     verdict: str = ""
     detail: list = field(default_factory=list)
     score: int = 0
+    # Did the player write working code from a blank screen, here, in the real
+    # sandbox, against real tests? That single fact is what the whole scaffold
+    # band at the bottom of the ramp exists to establish, so it is recorded
+    # rather than re-derived — see seed_skills.
+    produced_code: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -208,6 +213,7 @@ def evaluate(answers: dict) -> Placement:
         verdict=verdict,
         detail=detail,
         score=score,
+        produced_code=wrote_code,
     )
 
 
@@ -250,11 +256,25 @@ def skip_placement() -> Placement:
 
 
 def seed_skills(skills: dict, placement: Placement) -> dict:
-    """Apply the placement's seed mastery.
+    """Apply the placement's seed mastery, and its one piece of hard evidence.
 
     This is the one place mastery moves without a graded attempt, and it is
     deliberately bounded: confidence stays low, so the readiness model continues
     to treat these numbers as weak evidence until real solves back them up.
+
+    THE WRITING TRIAL IS NOT IN THAT CATEGORY. Four of the five trials are
+    multiple choice and seed nothing but mastery, because picking the right
+    answer out of four is exactly as weak as it looks. `t2-write` is a different
+    animal: the player is handed `def count_positive(values): pass` and their
+    code is run in the same sandbox as every other encounter, against three
+    tests, with no hints available. That is an unaided clear on a blank screen —
+    a real one, of EASY shape — and it is recorded as precisely that and nothing
+    more. One clear, one attempt, one unaided clear, at one tier.
+
+    It matters because it is the single fact the scaffold band turns on
+    (curriculum.scaffold_target). Without it a fluent player is walked through
+    the beginner chain; with it inflated, a beginner is dropped on a blank
+    screen. One is what happened, so one is what gets written down.
     """
     for name, gain in placement.seed_mastery.items():
         state = skills.get(name)
@@ -262,4 +282,14 @@ def seed_skills(skills: dict, placement: Placement) -> dict:
             continue
         state.mastery = min(35.0, state.mastery + gain)
         state.confidence = min(state.confidence, 18.0)
+    if placement.produced_code:
+        state = skills.get("PYTHON")
+        if state is not None:
+            state.attempts += 1
+            state.clears += 1
+            state.unaided_clears += 1
+            tier = curriculum.PRODUCTION_TIER
+            state.tier_clears[tier] = state.tier_clears.get(tier, 0) + 1
+            state.tier_unaided[tier] = state.tier_unaided.get(tier, 0) + 1
+            state.confidence = min(state.confidence, 18.0)
     return skills

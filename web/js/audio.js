@@ -52,6 +52,63 @@ const up = (note, semis) => freq(note) * Math.pow(2, semis / 12);
  *
  * Every note of this was written for this project.
  */
+/* Recorded music.
+ *
+ * Five licence-clear tracks, one per situation. These SHADOW the synthesised
+ * tracks below rather than replacing them: if a file is missing, fails to load,
+ * or the browser refuses the codec, the rig falls straight back to synthesis and
+ * the game still has music. That ordering matters — audio files are the one part
+ * of this project that can be absent at runtime for reasons outside our control.
+ *
+ * Streamed through an <audio> element rather than decoded into an AudioBuffer:
+ * twenty-seven megabytes of MP3 becomes several hundred megabytes of PCM once
+ * decoded, and a game that teaches Python should not spend that to loop a riff.
+ *
+ * Licences and credits: web/audio/music/CREDITS.md
+ */
+const MUSIC = {
+  overworld: {
+    file: 'nickpanek-epic-symphonic-metal-instrumental-263322.mp3',
+    artist: 'nickpanek', title: 'Epic Symphonic Metal Instrumental',
+    licence: 'Pixabay Content License', source: 'https://pixabay.com/music/',
+  },
+  battle: {
+    file: 'alec_koff-melodic-metal-heavy-metal-music-484511.mp3',
+    artist: 'alec_koff', title: 'Melodic Metal / Heavy Metal Music',
+    licence: 'Pixabay Content License', source: 'https://pixabay.com/music/',
+  },
+  boss: {
+    file: 'alex-morgan-thrash-metal-591343.mp3',
+    artist: 'Alex Morgan', title: 'Thrash Metal',
+    licence: 'Pixabay Content License', source: 'https://pixabay.com/music/',
+  },
+  dungeon: {
+    file: 'myshoun-metal-guardian-391820.mp3',
+    artist: 'myshoun', title: 'Metal Guardian',
+    licence: 'Pixabay Content License', source: 'https://pixabay.com/music/',
+  },
+  newarea: {
+    file: 'myshoun-metal-queen-392333.mp3',
+    artist: 'myshoun', title: 'Metal Queen',
+    licence: 'Pixabay Content License', source: 'https://pixabay.com/music/',
+  },
+  title: {
+    file: 'nickpanek-80s-style-surf-thrash-instrumental-252511.mp3',
+    artist: 'nickpanek', title: '80s Style Surf Thrash Instrumental',
+    licence: 'Pixabay Content License', source: 'https://pixabay.com/music/',
+  },
+};
+
+/* Situations with no recording of their own borrow the nearest one, so the
+ * whole game is covered by five files instead of feeling half-scored. */
+const MUSIC_ALIAS = {
+  town: 'overworld', camp: 'overworld', shrine: 'dungeon',
+  tower: 'newarea', final: 'boss', victory: 'newarea',
+};
+
+const MUSIC_BASE = '/audio/music/';
+const CROSSFADE_SECONDS = 1.1;
+
 const TRACKS = {
   /* Mid-tempo gallop in E minor. The overworld of a 1987 record. */
   overworld: {
@@ -289,6 +346,16 @@ class MetalRig {
 
   resume() {
     if (this._build() && this.ctx.state === 'suspended') this.ctx.resume();
+    // A browser that blocked autoplay leaves the track pending; this is the
+    // gesture it was waiting for.
+    if (this._pendingTrack) {
+      const name = this._pendingTrack;
+      this._pendingTrack = null;
+      if (this.musicEl) { this.musicEl.play().catch(() => {}); this.current = name; }
+      else this.play(name);
+    } else if (this.musicEl && this.musicEl.paused) {
+      this.musicEl.play().catch(() => {});
+    }
   }
 
   /* ------------------------------------------------------- sample layer
@@ -387,7 +454,7 @@ class MetalRig {
 
   setEnabled(on) {
     this.enabled = on;
-    if (!on) this.stop();
+    if (!on) this.silence();   // turning music off must stop the recording too
   }
 
   setIntensity(v) { this.intensity = Math.max(0, Math.min(1, v)); }
@@ -651,9 +718,124 @@ class MetalRig {
    * window, and every event it finds due is scheduled against the SAMPLE CLOCK.
    * The result is a gallop that does not wobble, which is the whole point.
    */
+  /* ----------------------------------------------------- recorded music
+   *
+   * Returns true when a recording is playing, which is the caller's signal that
+   * the synthesised rig is not needed. Anything that goes wrong here returns
+   * false and the synth takes over, so a missing file is a quieter game rather
+   * than a broken one.
+   */
+  _musicKey(name) {
+    if (MUSIC[name]) return name;
+    const alias = MUSIC_ALIAS[name];
+    return MUSIC[alias] ? alias : null;
+  }
+
+  hasRecording(name) {
+    return this.useRecordings !== false && !!this._musicKey(name);
+  }
+
+  _playRecorded(name) {
+    const key = this._musicKey(name);
+    if (!key || this.useRecordings === false) return false;
+    if (typeof Audio === 'undefined') return false;
+
+    // Already on it: a region change that resolves to the same recording should
+    // not restart the track, or walking a border rewinds the music every step.
+    if (this.musicKey === key && this.musicEl && !this.musicEl.paused) {
+      this.current = name;
+      return true;
+    }
+
+    let el;
+    try {
+      el = new Audio(MUSIC_BASE + MUSIC[key].file);
+    } catch (err) {
+      return false;
+    }
+    el.loop = true;
+    el.preload = 'auto';
+    el.crossOrigin = 'anonymous';
+
+    let node;
+    try {
+      node = this.ctx.createMediaElementSource(el);
+    } catch (err) {
+      return false;   // some browsers refuse this for a file: origin
+    }
+    const gain = this.ctx.createGain();
+    gain.gain.value = 0;
+    node.connect(gain);
+    gain.connect(this.musicBus);
+
+    // If it cannot actually play — codec, autoplay policy, a 404 — undo the
+    // whole thing and let the synth rig have the track.
+    el.addEventListener('error', () => {
+      if (this.musicEl === el) this._dropRecording();
+      this.play(name);
+    }, { once: true });
+
+    const started = el.play();
+    if (started && typeof started.catch === 'function') {
+      started.catch(() => {
+        // Autoplay was blocked. The first real gesture calls resume(), which
+        // retries, so this is a pause rather than a failure.
+        this._pendingTrack = name;
+      });
+    }
+
+    this.stop();                       // silence the synthesised scheduler
+    this._fadeOutRecording();          // and crossfade out whatever was playing
+    const now = this.ctx.currentTime;
+    gain.gain.cancelScheduledValues(now);
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(1, now + CROSSFADE_SECONDS);
+
+    this.musicEl = el;
+    this.musicGain = gain;
+    this.musicKey = key;
+    this.current = name;
+    return true;
+  }
+
+  _fadeOutRecording() {
+    const el = this.musicEl;
+    const gain = this.musicGain;
+    if (!el || !gain) return;
+    const now = this.ctx.currentTime;
+    gain.gain.cancelScheduledValues(now);
+    gain.gain.setValueAtTime(gain.gain.value, now);
+    gain.gain.linearRampToValueAtTime(0, now + CROSSFADE_SECONDS);
+    // Let the ramp finish before tearing the element down, or the fade is a cut.
+    setTimeout(() => {
+      try { el.pause(); el.src = ''; } catch (e) { /* already gone */ }
+      try { gain.disconnect(); } catch (e) { /* already gone */ }
+    }, CROSSFADE_SECONDS * 1000 + 120);
+    this.musicEl = null;
+    this.musicGain = null;
+    this.musicKey = null;
+  }
+
+  _dropRecording() {
+    try { if (this.musicEl) { this.musicEl.pause(); this.musicEl.src = ''; } } catch (e) { /* */ }
+    try { if (this.musicGain) this.musicGain.disconnect(); } catch (e) { /* */ }
+    this.musicEl = null;
+    this.musicGain = null;
+    this.musicKey = null;
+  }
+
+  /** Credits for whatever is currently playing, for the settings screen. */
+  nowPlaying() {
+    const entry = this.musicKey && MUSIC[this.musicKey];
+    if (!entry) return null;
+    return { title: entry.title, artist: entry.artist,
+             licence: entry.licence, source: entry.source };
+  }
+
   play(name) {
     if (!this.enabled || !this._build()) return;
-    if (this.current === name && this.timer) return;
+    if (this.current === name && (this.timer || this.musicEl)) return;
+    if (this._playRecorded(name)) return;
     this.stop();
     const track = TRACKS[name] || TRACKS.overworld;
     this.current = name;
@@ -751,14 +933,184 @@ class MetalRig {
   }
 
   stop() {
+    // The synthesised rig only. _playRecorded() calls this while the outgoing
+    // recording is still fading, so tearing recordings down here would turn
+    // every crossfade into a cut.
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     this.current = null;
     this.track = null;
   }
 
+  /** Everything: the scheduler and any recording. Used when music is turned off. */
+  silence() {
+    this.stop();
+    this._pendingTrack = null;
+    this._fadeOutRecording();
+  }
+
   /* ---------------------------------------------------------- sound effects
    * All routed to the SFX bus so they balance against the music independently. */
+
+  /* ------------------------------------------------------- the heartbeat
+   *
+   * A low-health alarm, because a player reading a problem is not watching a
+   * bar. Two thumps and a rest, the way a real one goes — lub-DUB, pause — and
+   * it gets faster and louder as things get worse, so the player feels the
+   * change without having to look up and read a number.
+   *
+   * Driven by the client calling heartbeat() once per beat rather than run from
+   * a timer in here: the audio rig has no idea how much health anybody has, and
+   * giving it one would be the wrong thing in the wrong file.
+   */
+  heartbeat(severity = 1) {
+    if (!this.enabled || !this._build()) return false;
+    const t = this.ctx.currentTime + 0.005;
+    const G = this.sfxBus;
+    const sev = Math.max(0, Math.min(1, severity));
+    const gain = 0.16 + sev * 0.20;
+    const f = 58 - sev * 12;            // lower and heavier the worse it gets
+
+    // lub: the bigger, duller thump
+    this._tone(t, 0.16, gain, { from: f, to: f * 0.62, type: 'sine', lp: 240, dest: G });
+    // DUB: tighter, a beat behind, and it closes the pair
+    this._tone(t + 0.17, 0.13, gain * 0.82,
+               { from: f * 1.12, to: f * 0.66, type: 'sine', lp: 260, dest: G });
+    return true;
+  }
+
+  /** Milliseconds between beats for a given severity.
+   *
+   * These are gauntlet/upkeep.py's BPM_ONSET (72) and BPM_MAX (132), not a
+   * tempo invented here. That module asserts pulse_hz == bpm/60 so the red
+   * pulse on the sprite and the thump underneath it are the SAME rate — two
+   * warnings running at different speeds read as noise and get tuned out. If
+   * those constants move, move these with them.
+   */
+  heartbeatInterval(severity = 1) {
+    const sev = Math.max(0, Math.min(1, severity));
+    const bpm = 72 + sev * (132 - 72);
+    return Math.round(60000 / bpm);
+  }
+
+  /* ------------------------------------------------------ companion voices
+   *
+   * Every companion answers when you click it, and no two answer alike. These
+   * are synthesised rather than sampled, like the rest of the rig, which is not
+   * purity for its own sake: an animal voice is a pitch contour plus a noise
+   * texture, and both are things we can shape per-call, so a jaguar can growl
+   * lower when it is a legendary than when you first met it.
+   *
+   * Voiced through the SFX bus so the player's effects fader controls them, and
+   * throttled, because a clickable animal is a thing people will click.
+   */
+  _tone(when, dur, gain, { from, to, type = 'sawtooth', lp = 6000, q = 1,
+                           bp = 0, dest } = {}) {
+    const ctx = this.ctx;
+    const osc = ctx.createOscillator();
+    osc.type = type;
+    osc.frequency.setValueAtTime(Math.max(20, from), when);
+    // exponentialRamp refuses to touch zero, and a voice that slides to silence
+    // is the most common shape here, so the floor is 20Hz rather than 0.
+    osc.frequency.exponentialRampToValueAtTime(Math.max(20, to), when + dur);
+
+    const filt = ctx.createBiquadFilter();
+    if (bp) { filt.type = 'bandpass'; filt.frequency.value = bp; filt.Q.value = q; }
+    else { filt.type = 'lowpass'; filt.frequency.value = lp; filt.Q.value = q; }
+
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(0.0001, when);
+    env.gain.exponentialRampToValueAtTime(Math.max(0.0001, gain), when + dur * 0.18);
+    env.gain.exponentialRampToValueAtTime(0.0001, when + dur);
+
+    osc.connect(filt); filt.connect(env); env.connect(dest || this.sfxBus);
+    osc.start(when); osc.stop(when + dur + 0.02);
+  }
+
+  /** Click a companion and it answers. `tier` deepens and lengthens the voice,
+   *  so the returned starter sounds like what it grew into. */
+  petSound(animal, { tier = '', dead = false } = {}) {
+    if (!this.enabled || !this._build()) return false;
+    if (this._lastPet === undefined) this._lastPet = -Infinity;
+
+    // People click animals. Two hundred milliseconds is enough to stop a click
+    // storm turning into a wall of noise without making the pet feel unresponsive.
+    const now = this.ctx.currentTime;
+    // -Infinity rather than a falsy 0: a context whose clock is legitimately at
+    // zero would otherwise read as "never clicked" and let the throttle through
+    // on every call, which is exactly what it looks like before the first
+    // gesture resumes the context.
+    if (now - this._lastPet < 0.2) return false;
+    this._lastPet = now;
+
+    const t = now + 0.005;
+    const G = this.sfxBus;
+    const big = /LEGENDARY|MASTER|HIDDEN/i.test(String(tier));
+    const d = big ? 1.25 : 1;          // bigger animal, lower and longer
+    const p = big ? 0.72 : 1;
+
+    if (dead) {
+      // Not a voice. The absence of one.
+      this._noise(t, 0.5, 0.05, { hp: 200, lp: 900, dest: G });
+      return true;
+    }
+
+    switch (String(animal || '').toLowerCase()) {
+      case 'jaguar': case 'cat': case 'panther':
+        // a growl: low buzz under a body of filtered noise
+        this._tone(t, 0.42 * d, 0.22, { from: 90 * p, to: 62 * p, type: 'sawtooth', lp: 700, dest: G });
+        this._noise(t, 0.40 * d, 0.10, { hp: 120, lp: 1100, dest: G });
+        break;
+      case 'python': case 'snake': case 'serpent':
+        // a hiss has no pitch at all — it is band-limited noise that opens and closes
+        this._noise(t, 0.55 * d, 0.16, { hp: 3500, lp: 11000, dest: G });
+        this._noise(t + 0.06, 0.34 * d, 0.09, { hp: 5200, lp: 13000, dest: G });
+        break;
+      case 'llama': case 'alpaca':
+        // a nasal hum, flat and unbothered, with a small drop at the end
+        this._tone(t, 0.34 * d, 0.20, { from: 300 * p, to: 286 * p, type: 'square', bp: 900, q: 6, dest: G });
+        this._tone(t + 0.30 * d, 0.16 * d, 0.14, { from: 286 * p, to: 208 * p, type: 'square', bp: 780, q: 6, dest: G });
+        break;
+      case 'penguin': case 'auk':
+        // a bray: two hard barks, pitch up then down, with grit on the front
+        this._tone(t, 0.13, 0.24, { from: 380 * p, to: 620 * p, type: 'square', lp: 3200, dest: G });
+        this._noise(t, 0.05, 0.12, { hp: 1800, dest: G });
+        this._tone(t + 0.17, 0.15, 0.20, { from: 600 * p, to: 300 * p, type: 'square', lp: 2800, dest: G });
+        break;
+      case 'velociraptor': case 'raptor': case 'dinosaur':
+        // a shriek that rises fast and falls faster, which is why it alarms
+        this._tone(t, 0.10, 0.26, { from: 700 * p, to: 1500 * p, type: 'sawtooth', lp: 7000, dest: G });
+        this._tone(t + 0.10, 0.22, 0.22, { from: 1500 * p, to: 420 * p, type: 'sawtooth', lp: 6000, dest: G });
+        this._noise(t + 0.02, 0.16, 0.08, { hp: 2500, dest: G });
+        break;
+      case 'crow': case 'raven': case 'bird':
+        this._tone(t, 0.09, 0.22, { from: 820 * p, to: 560 * p, type: 'sawtooth', bp: 1600, q: 3, dest: G });
+        this._tone(t + 0.14, 0.09, 0.18, { from: 780 * p, to: 520 * p, type: 'sawtooth', bp: 1500, q: 3, dest: G });
+        break;
+      case 'tortoise': case 'turtle':
+        // almost nothing, slowly. The joke is the timing.
+        this._tone(t, 0.7 * d, 0.13, { from: 150 * p, to: 120 * p, type: 'triangle', lp: 520, dest: G });
+        break;
+      case 'axolotl': case 'nautilus': case 'fish':
+        // wet and small: a bubble, not a call
+        this._tone(t, 0.13, 0.16, { from: 420 * p, to: 900 * p, type: 'sine', lp: 2400, dest: G });
+        this._noise(t + 0.10, 0.08, 0.05, { hp: 900, lp: 3000, dest: G });
+        break;
+      case 'wolf': case 'dog': case 'fox':
+        this._tone(t, 0.5 * d, 0.20, { from: 260 * p, to: 340 * p, type: 'sawtooth', lp: 1800, dest: G });
+        this._tone(t + 0.45 * d, 0.35 * d, 0.14, { from: 330 * p, to: 210 * p, type: 'sawtooth', lp: 1500, dest: G });
+        break;
+      case 'moth': case 'beetle': case 'insect':
+        this._noise(t, 0.30, 0.07, { hp: 1400, lp: 5200, dest: G });
+        this._tone(t, 0.30, 0.09, { from: 62, to: 58, type: 'square', bp: 240, q: 9, dest: G });
+        break;
+      default:
+        // An animal the art and the audio have not met yet still answers.
+        this._tone(t, 0.24 * d, 0.18, { from: 340 * p, to: 240 * p, type: 'triangle', lp: 2200, dest: G });
+        this._noise(t, 0.12, 0.06, { hp: 900, dest: G });
+    }
+    return true;
+  }
 
   sfx(kind) {
     if (!this.enabled || !this._build()) return;

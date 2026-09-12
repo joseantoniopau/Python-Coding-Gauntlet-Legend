@@ -1,0 +1,266 @@
+{
+ "apexes": [
+  {
+   "id": "margin_walker",
+   "name": "The Margin-Walker",
+   "region": "python_village",
+   "element": "NEUTRAL",
+   "sprite": "margin_walker",
+   "sprite_fallback": "wraith",
+   "colour": "#c8c4d6",
+   "lesson": "Nothing to counter, nothing to ward. It examines whether you can still type when there is no advantage on the board, which is the state every interview is conducted in.",
+   "tell": "It stops and measures a rebuilt wall. While it measures, it is not walking, and you can see exactly how much time that buys you."
+  },
+  {
+   "id": "thresher",
+   "name": "The Thresher",
+   "region": "fields_of_syntax",
+   "element": "NEUTRAL",
+   "sprite": "thresher",
+   "sprite_fallback": "automaton",
+   "colour": "#b9a86a",
+   "lesson": "The first neutral fight in the game that is genuinely long. It tests the unglamorous half of a loadout \u2014 bar length, flat armour points, and whether you bothered to fill the pouch before leaving town.",
+   "tell": "The drum slows before it turns toward you. It cannot cut and pivot at the same time and it never learned to hide that."
+  },
+  {
+   "id": "storm_ordinal",
+   "name": "The Storm Ordinal",
+   "region": "hashmap_highlands",
+   "element": "LIGHTNING",
+   "sprite": "storm_ordinal",
+   "sprite_fallback": "titan",
+   "colour": "#f2dc6a",
+   "lesson": "Lightning, and the first area where hitting back with the local element is a real mistake \u2014 a lightning weapon here is shrugged off at 0.65x. The counter is void, which you cannot have yet, and that is deliberate: this apex teaches that NEUTRAL beats SAME, and that the answer to a bad matchup is sometimes to stop bringing an element.",
+   "tell": "The keys stop orbiting a full second before it discharges. Every key points at you at once, which is the only time it aims."
+  },
+  {
+   "id": "sporecrown",
+   "name": "The Sporecrown",
+   "region": "stringwood_labyrinth",
+   "element": "POISON",
+   "sprite": "sporecrown",
+   "sprite_fallback": "ent",
+   "colour": "#8fd07a",
+   "lesson": "Poison, which is the patient element: it does not care how the fight is going right now. The lesson is that a damage-over-time is answered by a LONGER BAR and an antidote, not by flat armour points \u2014 plate does nothing about a tick that is a percentage of your maximum.",
+   "tell": "It drops one shingle-feather before every spore cloud. The feather lands first and you have the length of its fall."
+  },
+  {
+   "id": "zeroth_weight",
+   "name": "The Zeroth Weight",
+   "region": "array_caverns",
+   "element": "BRUTE",
+   "sprite": "zeroth_weight",
+   "sprite_fallback": "golem",
+   "colour": "#bf8f4f",
+   "lesson": "Brute force, which is the element that makes plate stop mattering \u2014 `elements.BRUTE` arrives and flat points are exactly what it is for ignoring. The lesson is that against brute you want RESISTANCE, not points, and poison is the counter.",
+   "tell": "It sets down before it swings. Both feet, audibly, and the dust comes off the ceiling half a second before the arm does."
+  },
+  {
+   "id": "fenlight",
+   "name": "The Fenlight",
+   "region": "sliding_window_marsh",
+   "element": "POISON",
+   "sprite": "fenlight",
+   "sprite_fallback": "hydra",
+   "colour": "#7f9a5a",
+   "lesson": "Poison over standing water, with cold underneath at depth. The lesson is DUAL AFFINITY: no single weapon answers it, the counter to poison is brute and the counter to cold is fire, and you are going to have to pick which half to answer and ward the other.",
+   "tell": "The frame brightens on the side it is about to advance. It telegraphs its own window, which is the joke the region has been making all along."
+  },
+  {
+   "id": "rimewarden",
+   "name": "The Rimewarden",
+   "region": "twin_pointer_pass",
+   "element": "COLD",
+   "sprite": "rimewarden",
+   "sprite_fallback": "colossus",
+   "colour": "#7ec8ff",
+   "lesson": "Cold. This is the ice elemental and it is the cleanest ward lesson in the game: fire counters it at 1.50x, a warded chest at RESIST_CAP takes 60% off everything it throws, and CHILLED cuts YOUR outgoing damage, so the fight gets longer the worse you handle it.",
+   "tell": "Both lanterns dim together before it closes. The pass goes dark for a beat and that beat is your whole warning."
+  },
+  {
+   "id": "cinder_phoenix",
+   "name": "The Cinder Phoenix",
+   "region": "stack_queue_mines",
+   "element": "FIRE",
+   "sprite": "cinder_phoenix",
+   "sprite_fallback": "dragon",
+   "colour": "#e06a3c",
+   "lesson": "Fire, which leaves the wound still burning. The lesson is that BURNING is a percentage of your maximum bar, so the counter is cold, the ward is a fire resist, and the third road \u2014 a bigger bar \u2014 makes the tick hurt MORE, not less. This is the apex that teaches that a cloak is not always the answer.",
+   "tell": "It drops a plate before every pass. The plate lands where it is about to be, not where it is, so the ground tells you the route."
+  },
+  {
+   "id": "fourth_orientation",
+   "name": "The Fourth Orientation",
+   "region": "matrix_citadel",
+   "element": "BRUTE",
+   "sprite": "fourth_orientation",
+   "sprite_fallback": "knight",
+   "colour": "#8a8f9c",
+   "lesson": "Brute with lightning under it. The lesson is the ARMOUR half of a dual: its primary is what it hits you with, so ward BRUTE and counter with POISON, and notice that the obvious reading \u2014 counter the lightning, it is scarier \u2014 pays 1.167x against the primary's 1.50x.",
+   "tell": "It squares up by rotating its whole body in ninety-degree steps. You can count the steps and you know it needs all four."
+  },
+  {
+   "id": "unreturning",
+   "name": "The Unreturning",
+   "region": "recursive_forest",
+   "element": "VOID",
+   "sprite": "unreturning",
+   "sprite_fallback": "lich",
+   "colour": "#6a4f8f",
+   "lesson": "Void, the brief's shadow elemental at the size the Forest can hold. The lesson is that void is an ABSENCE arriving where a force was expected: lightning counters it, void is blunted by nothing, and its secondary edge over poison means the poison gear that carried you through the Stringwood is now the wrong bag.",
+   "tell": "The innermost copy takes its step first. The outer ones follow, smallest to largest, so the attack visibly unwinds outward before it reaches you."
+  },
+  {
+   "id": "bough_stalker",
+   "name": "The Bough Stalker",
+   "region": "binary_tree_canopy",
+   "element": "NEUTRAL",
+   "sprite": "bough_stalker",
+   "sprite_fallback": "wyrm",
+   "colour": "#6b8f3f",
+   "lesson": "Neutral air above the Forest's dark. No element to read, so the exam is entirely the other four: rung, points, companion depth, pouch. It is the last quiet lesson before the Wastes.",
+   "tell": "It picks a shadow. Whichever shadow moves first is the side it comes down on, and it cannot change its mind mid-fall."
+  },
+  {
+   "id": "lattice_stag",
+   "name": "The Lattice Stag",
+   "region": "graph_wastes",
+   "element": "LIGHTNING",
+   "sprite": "lattice_stag",
+   "sprite_fallback": "behemoth",
+   "colour": "#9a8220",
+   "lesson": "Lightning off the lattice, brute underneath. The lesson is TRAVERSAL: it is the one apex whose approach is a search rather than a scent, so distance in tiles and distance in road are different numbers, and the escape is to break the connectivity rather than to outrun it.",
+   "tell": "A tine brightens when it commits to a route. Follow the lit tine backwards and you know which way it is coming before it moves."
+  },
+  {
+   "id": "relighter",
+   "name": "The Relighter",
+   "region": "dp_ruins",
+   "element": "NEUTRAL",
+   "sprite": "relighter",
+   "sprite_fallback": "necromancer",
+   "colour": "#e0b44a",
+   "lesson": "Neutral, which in the Ruins is the joke: the region's whole gift is that work already done stays done, and its apex is the thing that takes that gift back. The exam is rung, points, companion, pouch, and an honest answer to whether you can afford to recompute.",
+   "tell": "The pole comes down before the stilt does. It always snuffs the tile it is about to step on, so its next square is the one that just went dark."
+  },
+  {
+   "id": "slagmother",
+   "name": "The Slagmother",
+   "region": "debugging_dungeon",
+   "element": "FIRE",
+   "sprite": "slagmother",
+   "sprite_fallback": "demon",
+   "colour": "#c43f4f",
+   "lesson": "Fire in a place that is already a forge, with brute in the hammers. The lesson is that a WARD IS NOT A COUNTER: a fire resist caps at 0.60 and is worth more here than anywhere, but you still need something that is not fire in your hand, because SAME is 0.65x and this fight is long enough for that to be the whole difference.",
+   "tell": "The belly brightens before a swing and dims before a charge. One creature, two tells, and they are opposites."
+  },
+  {
+   "id": "the_doubling",
+   "name": "The Doubling",
+   "region": "complexity_tower",
+   "element": "COLD",
+   "sprite": "the_doubling",
+   "sprite_fallback": "automaton",
+   "colour": "#7ec8ff",
+   "lesson": "Cold, void and brute \u2014 the only three-element chain in the game outside the Castle, which is exactly what a final-approach apex should be. The lesson is that at three affinities the wheel COMPRESSES: your best available counter pays about 1.33x instead of 1.50x, so the fight is decided by rung and by ward, and no single clever pick saves it.",
+   "tell": "It counts the stair aloud. The number it reaches is how many times its next attack lands, and it always says the number first."
+  },
+  {
+   "id": "sand_champion",
+   "name": "The Sand Champion",
+   "region": "coding_coliseum",
+   "element": "NEUTRAL",
+   "sprite": "sand_champion",
+   "sprite_fallback": "titan",
+   "colour": "#e8c37d",
+   "lesson": "Neutral, and the only apex that is neutral BY CHARTER rather than by biome \u2014 the Coliseum says in its own description that it gives no hints. It examines the pouch hardest of the five neutrals, because the Chronomancer's region turns knowledge into speed and a potion is the only thing here that buys time.",
+   "tell": "It salutes. The salute is not courtesy, it is a wind-up, and it takes exactly as long every time."
+  },
+  {
+   "id": "the_unnamed",
+   "name": "The Unnamed",
+   "region": "null_kings_castle",
+   "element": "VOID",
+   "sprite": "the_unnamed",
+   "sprite_fallback": "colossus",
+   "colour": "#4a4458",
+   "lesson": "Void, cold and brute: everything the Castle is. The final exam of the gear layer, and it is a three-part question \u2014 counter the void with lightning, ward the void because it strikes with its primary, and bring a rung that does not care. No signposts, no region labels, nothing tells you what is being tested. That is the region's promise and this keeps it.",
+   "tell": "The notch through its chest goes dark before it moves. That is the whole tell, it is the smallest tell in the game, and by here you should be reading tells that small."
+  }
+ ],
+ "states": [
+  "DORMANT",
+  "STIRRING",
+  "ROAMING",
+  "TRACKING",
+  "CLOSING",
+  "ENGAGED",
+  "FADING",
+  "SPENT"
+ ],
+ "speed": {
+  "DORMANT": 0.0,
+  "STIRRING": 0.0,
+  "ROAMING": 38.0,
+  "TRACKING": 52.0,
+  "CLOSING": 74.0,
+  "ENGAGED": 0.0,
+  "FADING": 22.0,
+  "SPENT": 0.0
+ },
+ "player_walk_speed": 112.0,
+ "tile": 16,
+ "telegraph": {
+  "STIRRING": {
+   "vignette": 0.0,
+   "map": "none",
+   "countdown": false
+  },
+  "ROAMING": {
+   "vignette": 0.06,
+   "map": "heading",
+   "countdown": false
+  },
+  "TRACKING": {
+   "vignette": 0.12,
+   "map": "stale",
+   "countdown": false
+  },
+  "CLOSING": {
+   "vignette": 0.22,
+   "map": "live",
+   "countdown": true
+  },
+  "ENGAGED": {
+   "vignette": 0.0,
+   "map": "live",
+   "countdown": false
+  },
+  "FADING": {
+   "vignette": 0.1,
+   "map": "stale",
+   "countdown": false
+  }
+ },
+ "distances": {
+  "spawn_min": 416,
+  "spawn_max": 640,
+  "notice": 384,
+  "close": 160,
+  "contact": 20,
+  "give_up": 480,
+  "sanctuary": 96,
+  "exit_safe": 128
+ },
+ "timings": {
+  "stir": 20.0,
+  "fade": 6.0,
+  "break": 8.0,
+  "patience": 90.0,
+  "dwell": 150.0,
+  "pressure": 90.0,
+  "region_cooldown": 600.0,
+  "global_cooldown": 240.0,
+  "scent_halflife": 45.0
+ }
+}

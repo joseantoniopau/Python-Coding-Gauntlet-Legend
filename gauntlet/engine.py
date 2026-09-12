@@ -6,6 +6,7 @@ or a coach.
 """
 from __future__ import annotations
 
+import json
 import random
 import time
 from dataclasses import dataclass, field, asdict
@@ -15,10 +16,35 @@ from . import curriculum, diagnostic, puzzles, story as storymod, tactics
 from . import skills as skillmod
 from . import srs as srsmod
 from . import world
-from . import bestiary, classes, dungeons, finalexam, incantation, legendaries
+from . import bestiary, classes, dungeons, elements, finalexam, forge
+from . import incantation, legendaries, potions
+from . import minirepo
 from . import pets, progression, quests, saves, worldgen
+from . import corpus as corpusmod
+from . import transfer as transfermod
+# The ten systems this file is the only door to. Each one was built in
+# isolation, proved itself against real numbers and wrote down a contract; none
+# of them imports this file and none of them writes progression. Everything
+# below is that contract being honoured at the call sites the contracts name.
+from . import arts, banter, captives, economy, finale, hunters, movesets
+from . import regalia, sages, sanctuary, upkeep
 from .corpus import ensure as ensure_corpus
 from .corpus.schema import Problem
+
+# THE NINETY-SIX SECRET ARTS ARE PUT INTO THE TWO CATALOGUES HERE, ONCE.
+#
+# `arts.py` deliberately registers nothing on import — it used to, and a package
+# whose test suite imports every module at discovery time then had ninety-six
+# extra lines in `incantation.BY_ID` as a side effect of an import statement.
+# So registration is something a caller asks for, and this is the caller: one
+# call, at the top of the one module that is the whole engine, where it can be
+# seen happening.
+#
+# It writes to `incantation.BY_ID` and `movesets.BY_ID` and to nothing else. In
+# particular it does NOT touch `incantation.CATALOGUE`, which is what keeps
+# `learn_from_clear()` from ever handing a secret art out as a clear reward. A
+# sage or nothing.
+arts.register()
 
 # Artifacts are ordinary items everywhere the engine looks one up — the equip
 # path, the loadout panel, the secret awards — through _item() below.
@@ -33,11 +59,105 @@ from .corpus.schema import Problem
 # items.EFFECT_LABELS, so items.describe renders them; no merge is needed.
 
 
+# ---------------------------------------------------------------------------
+# The forge, resolved into the catalogue (forge.WIRING §3)
+# ---------------------------------------------------------------------------
+#
+# Fifty-four rungs want to be ordinary items, because everything that already
+# works on an item — the equip path, the tooltip, the loadout screen, the
+# inventory — then works on a forged blade with no second code path.
+# forge.item_kwargs() returns exactly what items._i() takes, so the ladder is
+# one loop.
+#
+# They are NOT written into items.BY_ID. forge.validate() asserts that a rung id
+# never appears there, which is how that module proves a blade can never shadow
+# a catalogue item, and the registration would turn its own invariant into a
+# permanent failure. This is the same arrangement legendaries.py has, and the
+# same resolver below serves both: one lookup in this file, catalogue untouched.
+#
+# Staying out of the catalogue also settles the drop question by construction.
+# A forged blade is never FOUND — items.roll_drop only ever picks out of
+# items.CATALOGUE — and that is the honest statement of the design: the only
+# road to one of these is the smith.
+#
+# What DOES have to be merged is the restriction. classes.CLASS_RESTRICTED
+# knows only the six ids classes.GEAR_REQUESTS declared, which are rung SIX of
+# each line; without forge.FORGE_RESTRICTED a Berserker can equip the Analyst's
+# rung-seven Calipers, which is the kind of bug nobody reports and everybody
+# exploits.
+#
+# Nothing is granted here. The objects exist; owning one is
+# state["forge"]["tiers"], and that only ever moves through forge.upgrade().
+
+FORGE_ITEMS: dict = {}
+for _blade in forge.BLADES:
+    for _tier in range(forge.MIN_TIER, forge.MAX_TIER + 1):
+        _kwargs = forge.item_kwargs(_blade.id, _tier)
+        # The blade takes the element of the ground its heaviest metal came out
+        # of, which closes the loop the forge was built for: walk to the mines,
+        # carry ember-metal back to Vess, and the thing she hands you strikes
+        # with FIRE. Nobody authored that; items.py derives a weapon's element
+        # from its region the same way, and forge.METALS already knows which
+        # region each bar belongs to. Rung one cost no metal, so it takes the
+        # line's first field metal — the same fallback _forge_art() uses.
+        _rung = forge.rung(_blade.id, _tier)
+        _ore = (max(_rung.cost, key=lambda mid: forge.METAL_BY_ID[mid].rung)
+                if _rung.cost else _blade.metals.get("r1", ""))
+        _regions = forge.METAL_BY_ID[_ore].regions if _ore in forge.METAL_BY_ID else ()
+        _element = elements.affinity_for(_regions[0] if _regions else "")
+        FORGE_ITEMS[_kwargs["id"]] = items._i(
+            **_kwargs, hidden=True,
+            element=_element if _element in elements.ELEMENTS else "")
+        classes.CLASS_RESTRICTED.setdefault(_kwargs["id"], _blade.class_id)
+del _blade, _tier, _kwargs, _rung, _ore, _regions, _element
+
+
+def _forge_art(item_id: str) -> dict:
+    """The nested `forge` block web/js/lootart.js reads off an item dict.
+
+    lootart.forgeSpec() wants the line, the rung and the ore alongside
+    forge.art_at()'s own keys; art_at names the material the object is FINISHED
+    in ("steel") and the ore is what the player carried out of a region, and the
+    two are deliberately different words. The ore is the heaviest metal the rung
+    actually cost, because that is the one a player would name if you asked them
+    what the thing is made of. Rung one cost nothing, so it borrows the line's
+    first field metal.
+    """
+    pair = forge.RUNG_BY_ID.get(item_id)
+    if pair is None:
+        return {}
+    blade, rung = pair
+    ore = max(rung.cost, key=lambda mid: forge.METAL_BY_ID[mid].rung) \
+        if rung.cost else blade.metals.get("r1", "")
+    return {"blade": blade.id, "tier": rung.tier, "metal": ore,
+            **forge.art_at(blade.id, rung.tier)}
+
+
+def _forge_item_dict(item_id: str) -> dict | None:
+    """A rung as the client sees it: an ordinary item dict plus its forge
+    block, so one payload feeds both the tooltip and the art pipeline."""
+    item = FORGE_ITEMS.get(item_id)
+    if item is None:
+        return None
+    blade, rung = forge.RUNG_BY_ID[item_id]
+    return {**item.to_dict(), "forge": _forge_art(item_id),
+            "technique": {"name": blade.technique, "rank": rung.technique_rank,
+                          "text": rung.technique_text},
+            "look": rung.look, "line": blade.line}
+
+
 def _item(item_id: str):
-    """An item or an artifact, whichever owns this id. Artifacts never shadow."""
+    """An item, an artifact or a forged rung, whichever owns this id.
+
+    Neither of the latter two ever shadows the catalogue: both modules assert
+    their ids are absent from items.BY_ID, and both are checked after it.
+    """
     found = items.BY_ID.get(item_id)
     if found is not None:
         return found
+    rung = FORGE_ITEMS.get(item_id)
+    if rung is not None:
+        return rung
     artifact = legendaries.BY_ID.get(item_id)
     return artifact.to_item() if artifact is not None else None
 
@@ -57,6 +177,10 @@ class Encounter:
     is_retest: bool = False
     interval_days: float = 0.0
     declared_pattern: str = ""
+    # What the player said was WRONG, before the diagnosis rendered. Kept beside
+    # `declared_pattern` because it is the same kind of claim — a guess made
+    # before the answer — and it is graded the same way, which is not at all.
+    declared_cause: str = ""
     explanation: str = ""
     boss_id: str = ""
     boss_phase: int = 0
@@ -68,15 +192,66 @@ class Encounter:
     temp_effects: dict = field(default_factory=dict)  # consumables used this battle
     enemy: dict = field(default_factory=dict)
     free_recast_used: bool = False
+    # -- the turn, the pouch and the wheel ----------------------------------
+    # An encounter is turn-based: one graded submission is one turn, right or
+    # wrong, and a potion may be drunk ALONGSIDE that submission rather than
+    # instead of it. `potion_turn` is potions.TurnState and is what enforces
+    # "one draught per turn"; without it the optimal play is drink-instead-of-
+    # think, which would delete the only thing this game teaches.
+    potion_turn: dict = field(default_factory=dict)
+    poison: dict = field(default_factory=dict)        # potions.Poison, the player's
+    # elements.StatusInstance lists, as plain dicts. Both sides, because every
+    # status in elements.STATUSES applies to monsters exactly as it applies to
+    # the player and the functions that tick them do not ask whose they are.
+    statuses: list = field(default_factory=list)
+    enemy_statuses: list = field(default_factory=list)
+    # bestiary.vitals(): the enemy's focus pool, its element and the specials
+    # that pool buys. Carried on the encounter so a fight survives a reload.
+    enemy_vitals: dict = field(default_factory=dict)
+    enemy_poison: dict = field(default_factory=dict)  # potions.Poison, the enemy's
+    turn: int = 1
+    combat_log: list = field(default_factory=list)
     # Companion interventions live here rather than in temp_effects, which is
     # folded straight into items.total_effects and can only hold numbers.
     pet_spoke: bool = False
     pet_spoken: dict = field(default_factory=dict)   # pet id -> times spoken
+    # Companions that have already said "this is above me" in this encounter.
+    # A refusal is honest exactly once; after that the animal would just be
+    # apologising for the length of the problem.
+    pet_refused: list = field(default_factory=list)
     rank_ceiling: str = ""          # the best rank still earnable here
+    # HOW BADLY THIS FIGHT WENT, which is what the kit wears out on.
+    #
+    # `upkeep.wear_encounter` is driven by blows taken and blows landed and
+    # nothing was counting either. They are counted on the encounter rather than
+    # in `stats` because wear is billed ONCE, when the encounter settles, and a
+    # lifetime counter cannot answer "how much of that was this fight".
+    hits_taken: int = 0             # enemy turns that actually landed damage
+    blows_landed: int = 0           # graded submissions and casts that landed
+    # The region this fight is being fought in, frozen at start. `player.region`
+    # can move underneath a long encounter, and every region-scoped number this
+    # fight produces — what it pays, which vendor restocks, which sage's toll it
+    # counts against — has to be about where the fight actually happened.
+    region: str = ""
     dungeon_room: int = -1          # the room this fight belongs to, or -1
+    # Hold-out content: `corpus.sealed`, not `finalexam.sealed`. Carried on the
+    # encounter because it decides the seal, and the seal is what every hint,
+    # probe, companion and worked solution in this file already consults.
+    holdout: bool = False
+    # -- Mini-Repo Battles --------------------------------------------------
+    # A Mini-Repo encounter names a repo rather than a problem. `problem_id`
+    # still carries an id, because everything downstream of _apply_outcome
+    # stores one, but it is the synthetic id below and it is not in the corpus.
+    # `repo_files` is the player's working tree, kept so a reload mid-fight
+    # does not throw away twenty minutes of reading.
+    repo_id: str = ""
+    repo_files: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+_ENC_FIELDS = frozenset(Encounter.__dataclass_fields__)
 
 
 # Which learning failure a puzzle miss actually represents.
@@ -88,6 +263,152 @@ _PUZZLE_CAUSE = {
     "BREAK_IT": "TESTING",
     "COMPLEXITY_MATCH": "COMPLEXITY",
 }
+
+# ---------------------------------------------------------------------------
+# A Repo, wearing a Problem's coat
+# ---------------------------------------------------------------------------
+#
+# `_apply_outcome` is the one place progression changes, and it reads a Problem.
+# A Repo is not a Problem — no single entry point, no reference callable, no
+# derived tests — so it is not pushed into the corpus, not validated as one, and
+# not selected from. What it gets instead is this: exactly the fields
+# `_apply_outcome` and the world layer behind it consult, and nothing else.
+#
+# The id carries a prefix the corpus cannot produce, so a Mini-Repo in
+# `solved_ids`, `recent_ids` or the attempt log can never be mistaken for a
+# corpus problem by anything that looks one up — and everything that does look
+# one up already guards with `if i in self.by_id`.
+
+REPO_ID_PREFIX = "minirepo:"
+
+# One skill. Reading somebody else's code and repairing it without breaking a
+# caller is debugging, and the suite is the contract, which is testing.
+REPO_SKILL = "DEBUGGING"
+REPO_SECONDARY = "TESTING"
+
+_REPO_PROBLEMS: dict = {}
+
+
+def repo_problem(repo) -> Problem:
+    """The Problem-shaped view of a Repo. Cached: it is derived and frozen."""
+    found = _REPO_PROBLEMS.get(repo.id)
+    if found is not None:
+        return found
+    problem = Problem(
+        id=REPO_ID_PREFIX + repo.id,
+        title=repo.title,
+        realm=repo.realm,
+        pattern=REPO_SKILL,
+        difficulty=repo.difficulty,
+        problem_statement=repo.brief,
+        # No entry point on purpose. Everything that runs code checks this and
+        # a Mini-Repo is run by minirepo.run, through its own door.
+        entry={"kind": "project"},
+        canonical_solution="",          # the reference patch is the debrief's
+        encounter_kind=minirepo.ENCOUNTER_KIND,
+        secondary_patterns=[REPO_SECONDARY],
+        source_type="GENERAL_INTERVIEW",
+        provenance_note=("The reported practical: an existing codebase, its own "
+                         "tests, and a ticket."),
+        spaced_repetition_family="mini_repo_" + repo.id,
+        estimated_seconds=repo.clock,
+        target_seconds=repo.clock,
+        tags=["mini_repo", "realm:" + repo.realm] + ["tag:" + t for t in repo.tags],
+    )
+    _REPO_PROBLEMS[repo.id] = problem
+    return problem
+
+
+def repo_report(verdict) -> sandbox.ExecutionReport:
+    """The verdict's test rows as the ExecutionReport the rest of the engine
+    reads. Not a second grader: every field here comes off the verdict, which
+    minirepo produced from the sandbox."""
+    tests = [
+        sandbox.TestResult(
+            index=i, name=row["id"], hidden=False, kind="project",
+            status=row["status"], ms=float(row.get("ms") or 0.0),
+            message=row.get("message", ""))
+        for i, row in enumerate(verdict.tests)
+    ]
+    return sandbox.ExecutionReport(
+        ok=verdict.outcome != "BROKEN", phase="tests", tests=tests,
+        stdout=verdict.stdout, stderr=verdict.stderr, error=verdict.error,
+        wall_ms=verdict.wall_ms, hardened=verdict.hardened)
+
+
+# What the player's focus bar does between turns.
+#
+# Focus is what learning spells are bought with, so it has to come back or the
+# hint tree eventually closes and learning dead-ends — which is the one thing
+# this game is not allowed to do. Two a turn is slow enough that a hint is still
+# a decision and fast enough that a long fight is never a locked door.
+# elements.STATUSES["VOIDED"] suppresses this and nothing else: it stops focus
+# COMING BACK, never focus being SPENT, for exactly that reason.
+FOCUS_PER_TURN = 2
+
+# What an enemy's ordinary swing is worth before the wheel touches it. Deliberately
+# the same number the game already charged for a failed submission
+# (config.STAMINA_LOSS_FAILED_SUBMIT), because the enemy getting a turn is not
+# meant to make the game harder — it is meant to make the same cost READABLE, as
+# something that swung at you out of a region with weather rather than as a
+# silent subtraction. elements.resolve_damage then scales it between 0.25x and
+# 1.5x depending on what the player read and what they are wearing.
+ENEMY_BASE_DAMAGE = config.STAMINA_LOSS_FAILED_SUBMIT
+
+# WHAT A LANDED LINE GIVES BACK, AND WHY THERE HAS TO BE SOMETHING.
+#
+# FOCUS_PER_TURN above says focus has to come back "or the hint tree eventually
+# closes and learning dead-ends — which is the one thing this game is not
+# allowed to do". Health is the same sentence and the incantation loop did not
+# have it: `submit` refunds a point of stamina on a solved answer and ends the
+# fight on the same breath, while an incantation battle runs fifteen to forty
+# turns against a twenty-point bar and regenerated nothing at all.
+#
+# The measurement, taken over all thirty-seven authored fights at every element
+# a player can hold: incoming damage against a caster who never misses averages
+# 0.8 points a turn and peaks at 2.6, because a charged attack lands about seven
+# and the status it leaves ticks another four. Twenty-four of the thirty-seven
+# fights therefore routed a player who typed PERFECTLY and happened to have no
+# armour and nothing to drink — which is the dead end this game is not allowed
+# to have, and which `_incant_enemy_turn` already argues against in its own
+# docstring: a fight you can only win by shopping is not a fight about Python.
+#
+# A FRACTION OF THE BAR, not a flat number, because that is the discipline
+# potions.py already uses for restoration — a hefty flagon is still hefty after
+# VIGOR doubles your health — and because armour's bonus_health would otherwise
+# make the refund quietly weaker the better geared you were, which is backwards.
+#
+# TEN PERCENT, and the ceiling is what sets it: it has to stay BELOW the peak
+# incoming rate of 12.9% of the bar, or a perfect run through the worst matchup
+# in the game stops costing anything and the pouch becomes decoration. It sits
+# above the median instead, so the ordinary fight is comfortable, the worst one
+# is survivable and close, and missing a line still loses ground exactly as fast
+# as it always did.
+CAST_HEAL_SHARE = 0.10
+CAST_HEAL_FLOOR = 1
+
+# How much focus a problem-encounter enemy carries, by the depth of the problem.
+# Deeper problems take more submissions, so their enemy gets more turns, so it
+# has to be able to pay for more than one special across a fight — and the
+# cheapest in bestiary.SPECIALS costs eight, which is what the bottom of this
+# table is measured against. A TUTORIAL enemy can afford exactly one, late in a
+# bad run, which is the right amount of weather for a first lesson.
+ENEMY_FOCUS_BY_DIFFICULTY = {
+    "GUIDED": 8, "TUTORIAL": 10, "EASY": 14, "MEDIUM": 20,
+    "HARD": 28, "ELITE": 36, "BOSS": 48,
+}
+
+# The pouch's key is potions.py's to name, and DEFAULT_STATE spells it out as a
+# literal so the shape of a save is readable in one place. A literal that agrees
+# with reality by accident is worse than no literal at all, so it is checked
+# here, at import, where a rename shows up as an ImportError rather than as a
+# pouch that silently empties on every load.
+assert potions.POUCH_STATE_KEY == "potions", (
+    "potions.POUCH_STATE_KEY moved to %r; DEFAULT_STATE still says 'potions'"
+    % potions.POUCH_STATE_KEY)
+
+# See the note in DEFAULT_STATE: sages.py declares no state key of its own.
+SAGES_STATE_KEY = "sages"
 
 DEFAULT_STATE = {
     "player": {
@@ -116,6 +437,11 @@ DEFAULT_STATE = {
     "inventory": [],
     "equipped": {},
     "consumables": {},
+    # The pouch. potions.POUCH_STATE_KEY is the authority on this name; it is
+    # spelled out rather than interpolated so a reader of DEFAULT_STATE can see
+    # what is in a save without opening another file, and `_load_or_create`
+    # asserts the two agree.
+    "potions": {},
     "secrets_found": [],
     "perf_failed_ids": [],
     "crit_streak": 0,
@@ -141,13 +467,21 @@ DEFAULT_STATE = {
               "hidden_rooms_found": 0, "green_index_found": 0,
               "chapters_graduated": 0, "regions_retaken": 0,
               "interviews_passed": 0, "session_started_at": 0.0,
-              "forge_streak": 0},
+              "forge_streak": 0,
+              # Dungeon floors cleared with no companion in the field, nothing
+              # cast and nothing used. The hidden companion's whole gate.
+              "solo_floors": 0},
 
     # --- the eleven modules' own sub-states -------------------------------
     # Each blob is whatever its owning module says it is, asked for rather than
     # copied, so a module that grows a key does not need this file edited. They
     # are all plain JSON and round-trip through db.save_state untouched.
     "pets": pets.new_state(),
+    # The bag of metal, the rung each blade line stands at, and what is on the
+    # rack. Loot, never evidence: a save that loses this loses gear, not
+    # learning. It persists, because a bag that resets on load makes the ladder
+    # infinite.
+    "forge": forge.new_state(),
     "quests": quests.new_quest_state(),
     "world": progression.new_world_state(),
     dungeons.STATE_KEY: None,
@@ -160,9 +494,50 @@ DEFAULT_STATE = {
     "moveset": incantation.new_moveset(),
     "incantation": None,             # the live typed-Python battle, or None
     "exam": None,                    # the sealed practical, or None
+    # The barrow's scene, held until the client has played it. It lives here
+    # rather than inside the pets blob because pets.py owns the FACT and this
+    # file owns the DELIVERY, and because a scene that is lost to a page refresh
+    # is the one moment of this game that must not be.
+    "pet_fall": None,
     # What this sitting has already covered. The selector reads it to bring a
     # family back inside the session; the SRS schedule still owns tomorrow.
     "session": {"started_at": 0.0, "log": []},
+
+    # --- the ten systems' own sub-states ----------------------------------
+    # Same arrangement as the block above: each module is ASKED for its shape
+    # rather than having it copied here, so a module that grows a key does not
+    # need this file edited. `_merge` deep-copies DEFAULT_STATE and folds the
+    # save over the top, which means every one of these keys is back-filled on
+    # load — a player mid-run gains them and loses nothing. All plain JSON.
+    upkeep.UPKEEP_STATE_KEY: upkeep.new_state(),          # "upkeep"
+    economy.ECONOMY_STATE_KEY: economy.new_state(),       # "economy"
+    banter.STATE_KEY: banter.new_state(),                 # "banter"
+    regalia.REGALIA_STATE_KEY: regalia.new_state(),       # "regalia"
+    sanctuary.STATE_KEY: sanctuary.new_state(),           # "sanctuary"
+    captives.STATE_KEY: captives.new_captive_state(),     # "captives"
+    finale.STATE_KEY: finale.new_state(),                 # "finale"
+    # sages.py ships new_state() and never named the key it belongs under —
+    # the one module of the ten that did not. It is named here, once, so there
+    # is still exactly one spelling of it in the codebase.
+    SAGES_STATE_KEY: sages.new_state(),                   # "sages"
+    arts.STATE_KEY: arts.new_state(),                     # "arts"
+    # The movebook. `moveset` above is the book of LINES; this is the book of
+    # MOVES those lines are spelled out of, and they are different books with
+    # different limits — see movesets.new_book's note on why neither rations
+    # the other.
+    "movebook": movesets.new_book(),
+    # THE HUNT, which is this file's own bookkeeping and not a module's.
+    #
+    # hunters.py ships a `Hunt` dataclass per region and deliberately no state
+    # key: it declined to own the chase because `web/js/overworld.js` mirrors it
+    # frame by frame and two sources of truth for a creature's position is how
+    # the creature ends up in two places. So the engine holds the serialised
+    # Hunt rows, one per region, and hunters.hunt_step remains the only thing
+    # that advances one. `peak` is the readiness at the moment a fight STARTED,
+    # frozen there, because the bounty is priced on how prepared you were when
+    # you took the fight and not on what you put on afterwards.
+    "hunters": {"regions": {}, "global_cooldown": 0.0, "kills": {},
+                "trophies": [], "fight": None, "last_tick": 0.0},
 }
 
 
@@ -172,6 +547,14 @@ class Game:
         saves.ensure_schema(self.conn)          # named slots, autosave ring, undo
         self.corpus: list = ensure_corpus(corpus_path, rebuild=rebuild)
         self.by_id: dict = {p.id: p for p in self.corpus}
+        # THE WALL. Everything that teaches selects from `self.teachable` and
+        # never from `self.corpus`: Adventure selection, the SRS, dungeons,
+        # daily quests, remediation, boss ladders. Filtering the hold-out out at
+        # the end of a selection would work right up until the day somebody adds
+        # a selector and forgets, so the hold-out is not in the list the
+        # selectors are handed at all.
+        self.teachable: list = corpusmod.teachable(self.corpus)
+        self.holdout: list = corpusmod.sealed_pool(self.corpus)
         self.state = self._load_or_create()
         self._rng = random.Random()
         # The world is rebuilt from its seed rather than serialised: the spec is
@@ -259,6 +642,7 @@ class Game:
             state["player"]["created_at"] = time.time()
             state["skills"] = {k: v.to_dict() for k, v in skillmod.new_skills().items()}
             state["story"] = storymod.new_story_state()
+            self._migrate_pets(state, fresh=True)
             db.save_state(self.conn, state)
             return state
         # forward-compatible: fill in anything a newer build added
@@ -268,7 +652,57 @@ class Game:
             merged["skills"].setdefault(name, skillmod.SkillState(name=name).to_dict())
         if not merged.get("story"):
             merged["story"] = storymod.new_story_state()
+        self._migrate_pets(merged, fresh=False,
+                           legacy=("fallen" not in (raw.get("pets") or {})))
         return merged
+
+    def _migrate_pets(self, state: dict, *, fresh: bool,
+                      legacy: bool = False) -> None:
+        """The starter is not found, it is already there — and the barrow's debt
+        has to be honest about saves that predate it.
+
+        Two jobs, both of them once-only and both idempotent:
+
+        1. GRANT THE STARTER. It walks with the player from the first encounter,
+           so every save has it in `found`. Without this the map layer would
+           advertise the animal already under the porch as something hiding in
+           Python Village, and the tutorial would have no unasked help in it at
+           all.
+
+        2. SETTLE AN OLD DEBT. A save written before the fall existed can have
+           the Half-Written Barrow already cleared. The scene must not replay —
+           that player is not in that fight and has not been for weeks — but the
+           legendary return is gated on `starter_fallen`, so leaving the debt
+           unpaid would quietly make BARROW unreachable for everybody who played
+           the chapter early. So the fall is recorded, and the scene is parked in
+           `pet_fall` marked `retroactive` for the client to deliver once, as a
+           thing that happened rather than a thing happening.
+        """
+        pet_state = state.setdefault("pets", pets.new_state())
+        pet_state.setdefault("fallen", [])
+        pet_state.setdefault("dismissed_at", {})
+        pets.grant(pet_state, pets.STARTER_ID, at=time.time())
+        # ACTIVE_LIMIT used to be two. A save that still lists two would show as
+        # "in the field: one of one" while quietly contributing both animals'
+        # passives, so the list is brought down to the limit here, keeping the
+        # one the player chose first. Nothing is lost: `found` is untouched and
+        # `recall` puts the other one straight back.
+        active = [p for p in (pet_state.get("active") or [])
+                  if p in pet_state.get("found", [])]
+        if len(active) > pets.ACTIVE_LIMIT:
+            for benched in active[pets.ACTIVE_LIMIT:]:
+                pet_state.setdefault("dismissed_at", {})[benched] = 0.0
+        pet_state["active"] = active[:pets.ACTIVE_LIMIT]
+        if fresh or not legacy:
+            return
+        if pets.FALLS_AT_DUNGEON not in (state.get("dungeons_cleared") or []):
+            return
+        if pets.is_fallen(pet_state, pets.STARTER_ID):
+            return
+        scene = pets.fall(pet_state, at=time.time())
+        if scene.get("fell"):
+            scene["retroactive"] = True
+            state["pet_fall"] = scene
 
     def save(self) -> None:
         self._tick_playtime()
@@ -277,8 +711,18 @@ class Game:
     # -- typed views over the raw state ------------------------------------
     @property
     def skills(self) -> dict:
-        return {name: skillmod.SkillState(**data)
-                for name, data in self.state["skills"].items()}
+        """The skill book, carrying where the diagnostic PLACED this player.
+
+        The placement is a statement about the chapter ladder, not about
+        mastery, so it rides alongside the mastery rather than being faked into
+        it. Everything downstream — selection, the quest log, the world map —
+        reads this one object, which is why the floor lives on it.
+        """
+        book = skillmod.SkillBook(
+            {name: skillmod.SkillState(**data)
+             for name, data in self.state["skills"].items()})
+        placement = (self.state.get("diagnostic") or {}).get("placement") or {}
+        return book.with_floor(placement.get("chapter_index", 0))
 
     def _write_skills(self, skills: dict) -> None:
         self.state["skills"] = {k: v.to_dict() for k, v in skills.items()}
@@ -294,7 +738,15 @@ class Game:
     @property
     def encounter(self) -> Encounter | None:
         raw = self.state.get("encounter")
-        return Encounter(**raw) if raw else None
+        if not raw:
+            return None
+        # Filtered rather than splatted whole. A save written by a build that
+        # carried a field this one has dropped would otherwise raise on load,
+        # mid-fight, with no way back into the game — and losing a run to a
+        # field rename is the one thing a reload must never do. Missing fields
+        # take their defaults, which is how the two counters added above arrive
+        # in an encounter that was opened before they existed.
+        return Encounter(**{k: v for k, v in raw.items() if k in _ENC_FIELDS})
 
     def _write_encounter(self, enc: Encounter | None) -> None:
         self.state["encounter"] = enc.to_dict() if enc else None
@@ -350,6 +802,44 @@ class Game:
         enc = self.encounter
         temp = dict(enc.temp_effects) if (enc and include_temp) else {}
         base = items.total_effects(self.state["equipped"], self.state["attributes"], temp)
+        # A forged blade folds in exactly like gear and for the same reason
+        # artifacts do: forge.validate() keeps its fifty-four ids out of
+        # items.BY_ID, so items.total_effects cannot see them.
+        #
+        # forge.effects_in() is the only isolation question this feature asks.
+        # It is finalexam.sealed(enc, "BUILD") and nothing else, and it returns
+        # EMPTY rather than reduced when the seal is up — a half-working
+        # legendary is worse than an honest nothing. When the Editor Automaton
+        # takes BUILD at rung eight of the boss ladder, the blade goes with it.
+        # That is correct and is not special-cased here.
+        blade_id = (self.state["equipped"] or {}).get("weapon", "")
+        if blade_id in forge.RUNG_BY_ID:
+            blade, rung = forge.RUNG_BY_ID[blade_id]
+            for key, value in forge.effects_in(blade.id, rung.tier, enc).items():
+                if key not in items.EFFECT_LABELS:
+                    continue
+                base[key] = (max(base.get(key, 0), value)
+                             if key in items.SWITCH_KEYS
+                             else base.get(key, 0) + value)
+        # The temper, forge.WIRING §12. Tempered ARMOUR contributes resist_<el>
+        # keys, which are already in items.EFFECT_LABELS and which
+        # elements.armour_from_effects clamps at elements.RESIST_CAP — so they
+        # are summed here and clamped exactly once, there. A tempered WEAPON
+        # contributes nothing to this bag on purpose: its element is an argument
+        # to elements.resolve_damage, read in _player_element, and a number with
+        # two owners is a number that disagrees with itself.
+        #
+        # No seal test here. forge.effects_in() above already asked the one
+        # isolation question for this feature, and a BUILD-sealed run is wearing
+        # NO_ARMOUR anyway — elements.Defender.for_player drops the whole
+        # profile rather than reducing it.
+        if not finalexam.sealed(enc, "BUILD"):
+            for key, value in forge.loadout_temper_effects(
+                    self.state.get("forge") or {},
+                    self.state["equipped"]).items():
+                if key in items.EFFECT_LABELS:
+                    base[key] = base.get(key, 0) + value
+
         # An equipped artifact folds in exactly like gear, with the same
         # max-not-sum rule for switches. items.total_effects cannot do it itself
         # because artifacts deliberately stay out of items.BY_ID (see _item).
@@ -373,12 +863,28 @@ class Game:
         mode = enc.mode if enc else config.MODE_ADVENTURE
         region_id = self.state["player"].get("region", "")
         # Companions contribute the BEST of each passive rather than the sum, and
-        # contribute nothing at all in Interview Mode — party_effects self-guards,
-        # but the region gate is ours.
-        if pets.available_in(mode, region_id):
+        # they contribute through the same two gates every other kind of help
+        # passes through, handed in rather than re-derived here:
+        #
+        #   THE SEAL. finalexam.sealed(enc, "PET") is the one authority on
+        #   whether a companion exists in this encounter at all. Interview Mode
+        #   was already covered, because pets.available_in refuses that mode on
+        #   its own — but the boss that TAKES the companion is not Interview
+        #   Mode, and without the seal the animal went on quietly paying out its
+        #   probe charges and its rank grace for every rung after that one and
+        #   for the final trial, to a player who had been told it was outside.
+        #   A crutch the ladder has taken is taken, including the quiet half.
+        #
+        #   THE TIER. A passive that reads the room is help about this problem,
+        #   so it sits under the same ladder the spoken line sits under. Economy
+        #   passives are not gated: see pets.DEPTH_GATED_EFFECTS for which is
+        #   which, and why a moving stamina cap would be the worse bug.
+        if pets.available_in(mode, region_id,
+                             sealed=finalexam.sealed(enc, "PET")):
             for key, value in pets.party_effects(
                     self.state["pets"].get("active", []),
-                    self.state["pets"].get("bond", {}), mode=mode).items():
+                    self.state["pets"].get("bond", {}), mode=mode,
+                    difficulty=self._companion_depth(enc)).items():
                 if key in items.EFFECT_LABELS:
                     base[key] = max(base.get(key, 0), value)
 
@@ -397,6 +903,28 @@ class Game:
         # Caps run LAST, on the merged total: an always-refunded probe is an
         # unlimited probe and a 100%-graced clock is not a clock.
         return classes.clamp(base)
+
+    def _companion_depth(self, enc) -> str | None:
+        """The depth a companion's passives are measured against, or None.
+
+        None means "not inside an encounter", and outside an encounter nothing
+        is gated: there is no room to read, and clipping a passive on the
+        loadout screen would show the player a ceiling that is not the one they
+        will fight with.
+
+        The depth is the problem's OWN tier, with no boss lift — the same
+        measure `_asked_depth` uses, and for the same reason written out there.
+        A probe and a hint rung are both things the player goes and asks for, so
+        they are measured the same way; what a boss takes away is decided once,
+        in finalexam.BOSS_LADDER, and is already applied above.
+
+        A mini-repo has no single problem tier to read, and no probes or hint
+        tree to gate either, so it reads as ungated rather than as EASY.
+        """
+        if enc is None or getattr(enc, "repo_id", ""):
+            return None
+        problem = self.by_id.get(enc.problem_id)
+        return pets.effective_difficulty(problem.difficulty) if problem else None
 
     def _sync_caps(self) -> None:
         """Equipment and attributes change the ceilings, never the current values
@@ -446,6 +974,19 @@ class Game:
                 for s in items.SECRETS
             ],
             "rarities": items.RARITIES,
+            # The belt, outside a fight. A player has to be able to see what is
+            # in the pouch when deciding whether to walk into the marsh, not
+            # only once the marsh has already poisoned them.
+            "pouch": potions.pouch_view(self._pouch(),
+                                        player=self.state["player"]),
+            # The two jobs armour does, side by side and never blended into one
+            # "defence" number — choosing between them IS the decision this
+            # system exists to offer.
+            "armour": items.armour_view(fx),
+            # Through _player_element, not items.strike_element: the loadout
+            # screen must name the same element the swing will actually use, and
+            # a forged blade is invisible to the catalogue lookup.
+            "strike_element": self._player_element(),
         }
 
     def choose_build(self, build_id: str) -> dict:
@@ -563,6 +1104,359 @@ class Game:
                 "mana": player["mana"], "stamina": player["stamina"],
                 "probe_charges": self.probes_remaining()}
 
+    # ======================================================================
+    # The turn: elements, statuses, the pouch, and the enemy's half of it
+    # ======================================================================
+    #
+    # THE RULE THAT OUTRANKS EVERYTHING IN THIS SECTION. The Python typing is
+    # the attack. Every function below takes a number the typing already earned
+    # and scales it; not one of them can generate a hit, end a fight, or be
+    # substituted for a correct line. elements.resolve_damage takes `base` as an
+    # argument and returns zero for zero, and a potion cannot be drunk INSTEAD
+    # of casting — only alongside. What all of this decides is how LONG a fight
+    # runs, which decides how many times the idiom gets typed, which is the only
+    # pedagogical lever any of it has.
+
+    def _region_element(self, problem: Problem | None = None) -> str:
+        """The element of the ground this fight is standing on.
+
+        The problem's realm wins, because a fight is fought where the problem
+        lives rather than where the player's marker happens to be parked; the
+        marker is the fallback. A dungeon is IN a region and `_metal_region`
+        already reads its plan, so that is asked first of all.
+        """
+        run = self.state.get(dungeons.STATE_KEY)
+        if run:
+            plan = dungeons.DUNGEON_BY_ID.get(run.get("dungeon", ""))
+            if plan is not None:
+                return elements.affinity_for(plan.region)
+        if problem is not None and problem.realm:
+            return elements.affinity_for(problem.realm)
+        return elements.affinity_for(self.state["player"].get("region", ""))
+
+    def _player_element(self, enc: Encounter | None = None) -> str:
+        """What the player's blow is made of.
+
+        The weapon decides. A weapon out of a region with no weather leaves the
+        question to whatever is walking beside you, which is the companion —
+        elements.pet_element exists to answer exactly that and is the reason
+        every one of the twelve animals has an element while five of the
+        seventeen regions do not.
+
+        A FORGED BLADE IS A WEAPON TOO, AND items.strike_element CANNOT SEE ONE.
+        forge.validate() keeps the fifty-four rungs out of items.BY_ID on
+        purpose, so the catalogue lookup inside strike_element returns None for
+        every one of them and the blade struck NEUTRAL no matter what Vess made
+        it out of. That quietly cost the whole forge loop its point — the
+        element is stamped on the rung above precisely so that ember-metal
+        carried home comes back as a blade that strikes with FIRE — and it took
+        FIRE off the board entirely, because no catalogue weapon carries it and
+        a forged one was the only way to hold it. Resolved here rather than by
+        registering the rungs, which would break forge's own invariant.
+
+        Order, and it matters: a temper OVERRIDES the metal the rung was made
+        of, because tempering is the later and more deliberate act. That is
+        forge.WIRING §12 — the weapon's element is read at the swing and never
+        put in the effect bag, so there is one owner of the number.
+
+        BUILD is the seal. When a measured run takes the loadout it takes the
+        element with it, and the exam is fought on the typing and nothing else.
+        """
+        if finalexam.sealed(enc, "BUILD"):
+            return elements.NEUTRAL
+        companion = ""
+        active = (self.state["pets"].get("active") or [])
+        if active and not finalexam.sealed(enc, "PET"):
+            pet = pets.BY_ID.get(active[0])
+            companion = elements.pet_element(getattr(pet, "species", ""), active[0])
+        equipped = self.state["equipped"] or {}
+        weapon_id = equipped.get("weapon", "")
+        tempered = forge.tempered_element(self._forge_state(), weapon_id)
+        if tempered in elements.ELEMENTS:
+            return tempered
+        rung = FORGE_ITEMS.get(weapon_id)
+        if rung is not None and rung.element in elements.ELEMENTS:
+            return rung.element
+        return items.strike_element(equipped, fallback=companion)
+
+    # -- the pouch ---------------------------------------------------------
+    def _pouch(self) -> potions.Pouch:
+        return potions.Pouch.from_state(self.state)
+
+    def _write_pouch(self, pouch: potions.Pouch) -> None:
+        pouch.to_state(self.state)
+
+    # -- statuses, as objects rather than as dicts -------------------------
+    @staticmethod
+    def _load_statuses(rows) -> list:
+        """A saved status list, back as elements.StatusInstance.
+
+        Tolerant by design: a save written by a build with a status this one has
+        never heard of drops that entry rather than throwing. elements.tick_statuses
+        does the same thing for the same reason.
+        """
+        out = []
+        for row in rows or ():
+            if not isinstance(row, dict) or row.get("id") not in elements.STATUSES:
+                continue
+            out.append(elements.StatusInstance.from_dict(row))
+        return out
+
+    @staticmethod
+    def _dump_statuses(live) -> list:
+        return [s.to_dict() for s in live or ()]
+
+    def _player_defender(self, enc: Encounter | None,
+                         statuses: list | None = None) -> elements.Defender:
+        """The player, in the shape the damage function takes.
+
+        `build_sealed` is handed in rather than re-derived inside elements.py:
+        there is one isolation question in this game and it is finalexam.sealed.
+        """
+        sealed = finalexam.sealed(enc, "BUILD")
+        return elements.Defender.for_player(
+            self.state["player"], self.effects(),
+            element=self._player_element(enc),
+            statuses=statuses if statuses is not None else [],
+            build_sealed=sealed)
+
+    def _enemy_defender(self, enc: Encounter, statuses: list | None = None):
+        vitals = enc.enemy_vitals or {}
+        return elements.Defender(
+            element=vitals.get("element", elements.NEUTRAL),
+            armour=elements.NO_ARMOUR,
+            statuses=statuses if statuses is not None else [],
+            max_health=int(vitals.get("hp_max", 0) or 0))
+
+    def _log(self, enc: Encounter, *lines) -> None:
+        """One combat log, kept short. A battle that scrolls forever is a
+        battle nobody reads the important line of."""
+        for line in lines:
+            if line:
+                enc.combat_log.append(str(line))
+        enc.combat_log[:] = enc.combat_log[-40:]
+
+    # -- drinking ----------------------------------------------------------
+    def use_potion(self, key: str) -> dict:
+        """Drink one potion. THIS DOES NOT SPEND THE TURN.
+
+        That sentence is the whole feature. A draught rides alongside the cast,
+        so the player still has to type the line; if drinking were a turn, the
+        optimal play would be drink-instead-of-think and the tactical layer
+        would have eaten the lesson it exists to lengthen.
+
+        The turn counter moves in `_advance_turn`, after a submission is graded,
+        right or wrong. It does not move here, and nothing below writes it.
+        """
+        # The fight in progress owns the turn, the dose pool and the status
+        # list, and there are two kinds of fight. Rather than two drink paths —
+        # which is how two different rules about what a turn is end up in one
+        # binary — the record is looked up here and the single call below reads
+        # and writes whichever one it is.
+        enc = self.encounter
+        run = self.state.get(self.INCANT_STATE)
+        if run:
+            turn_state = potions.TurnState.from_dict(run.get("potion_turn"))
+            poison = potions.Poison.from_dict(run.get("poison"))
+            statuses = self._load_statuses(run.get("statuses"))
+        else:
+            turn_state = potions.TurnState.from_dict(enc.potion_turn if enc else None)
+            poison = potions.Poison.from_dict(enc.poison if enc else None)
+            statuses = self._load_statuses(enc.statuses if enc else [])
+        pouch = self._pouch()
+        result = potions.drink(
+            pouch, key, player=self.state["player"], turn_state=turn_state,
+            poison=poison, encounter=enc, statuses=statuses)
+        if not result.get("ok"):
+            return result
+        self._write_pouch(pouch)
+        if run:
+            run["potion_turn"] = turn_state.to_dict()
+            run["poison"] = poison.to_dict()
+            run["statuses"] = self._dump_statuses(statuses)
+            run["log"] = (list(run.get("log") or [])
+                          + list(result.get("applied") or ()))[-40:]
+        elif enc is not None:
+            enc.potion_turn = turn_state.to_dict()
+            enc.poison = poison.to_dict()
+            enc.statuses = self._dump_statuses(statuses)
+            self._log(enc, *(result.get("applied") or ()))
+            self._write_encounter(enc)
+        self.save()
+        result["pouch"] = potions.pouch_view(
+            pouch, player=self.state["player"], turn_state=turn_state,
+            poison=poison, encounter=enc, statuses=statuses)
+        result["statuses"] = self._dump_statuses(statuses)
+        return result
+
+    # -- the enemy's half --------------------------------------------------
+    def _enemy_turn(self, enc: Encounter, *, base: int) -> dict:
+        """The enemy acts once. Returns what the player should be shown.
+
+        Order, and it matters:
+          1. the enemy's own poison ticks, because a dose that would finish it
+             finishes it before it gets to do anything about it;
+          2. a monster carrying an antidote cures itself, AND THAT IS ITS TURN —
+             poisoning something that can cure itself is therefore never wasted,
+             it buys you a free turn, which is one more line of Python landed
+             for nothing;
+          3. otherwise it regenerates focus and may spend it on a special;
+          4. the blow resolves through elements.resolve_damage, same function
+             the player's blows go through, because two damage functions is how
+             two different games end up in one binary.
+        """
+        vitals = enc.enemy_vitals or {}
+        out: dict = {"acted": False, "damage": 0, "special": None,
+                     "cured": None, "lines": [], "inflicted": ""}
+        if not vitals:
+            # A fight from a save written before the enemy had vitals, or from a
+            # path that forgot to arm one. It still swings, for the plain amount
+            # and with no element — because the alternative is that being wrong
+            # silently becomes free, and a bug that makes the game easier is the
+            # kind nobody reports.
+            player = self.state["player"]
+            hit = max(0, int(base))
+            player["stamina"] = max(0, int(player["stamina"]) - hit)
+            if hit:
+                enc.hits_taken += 1
+            out.update({"acted": True, "damage": hit})
+            return out
+
+        # 1 + 2: the enemy's own poison, then the vial.
+        enemy_poison = potions.Poison.from_dict(enc.enemy_poison)
+        enemy_statuses = self._load_statuses(enc.enemy_statuses)
+        tick = elements.tick_statuses(enemy_statuses, int(vitals.get("hp_max", 1) or 1))
+        dot = potions.poison_tick(enemy_poison)
+        bleed = int(tick["damage"]) + int(dot["damage"])
+        if bleed:
+            vitals["hp"] = max(0, int(vitals.get("hp", 0)) - bleed)
+        out["lines"] += list(tick["lines"])
+        if dot["line"]:
+            out["lines"].append(dot["line"])
+
+        monster = {"hp": vitals.get("hp", 0), "hp_max": vitals.get("hp_max", 1),
+                   "name": (enc.enemy or {}).get("name", "It"),
+                   "antidotes": int(vitals.get("antidotes", 0) or 0)}
+        cured = potions.monster_cure(monster, enemy_poison, rng=self._rng)
+        vitals["antidotes"] = int(monster.get("antidotes", 0) or 0)
+        enc.enemy_poison = enemy_poison.to_dict()
+        enc.enemy_statuses = self._dump_statuses(enemy_statuses)
+        if cured is not None:
+            # It spent its turn drinking. It does not also get to swing.
+            out.update({"acted": True, "cured": cured})
+            out["lines"] += [cured["line"], cured["aside"]]
+            return out
+
+        # 3: focus, and what it buys.
+        bestiary.regenerate(vitals)
+        special = bestiary.take_turn(vitals, roll=self._rng.random())
+        power = float(special["power"]) if special else 1.0
+        if special:
+            out["special"] = special
+            out["lines"].append(
+                special["line"].format(who=(enc.enemy or {}).get("name", "It")))
+
+        # 4: the blow. `base` is what the enemy's ordinary swing is worth and it
+        # comes IN — this method does not decide how hard the game hits, it
+        # decides what the wheel does to a number somebody else set.
+        statuses = self._load_statuses(enc.statuses)
+        defender = self._player_defender(enc, statuses)
+        hit = elements.resolve_damage(
+            max(0, int(round(base * power))),
+            vitals.get("element", elements.NEUTRAL), defender,
+            attacker_statuses=enemy_statuses,
+            roll=self._rng.random(),
+            build_sealed=finalexam.sealed(enc, "BUILD"))
+        player = self.state["player"]
+        player["stamina"] = max(0, int(player["stamina"]) - hit.damage)
+        if hit.damage:
+            # A blow that the wheel reduced to nothing is not a blow the kit
+            # has to absorb, so it is not one the smith gets to bill for.
+            enc.hits_taken += 1
+        out["damage"] = hit.damage
+        out["acted"] = True
+        out["hit"] = hit.to_dict()
+        out["lines"].append(hit.line)
+
+        # The status the wheel says that hit carries, plus the one the special
+        # names. `inflict` is the only thing that applies a status, and it is
+        # called here rather than inside resolve_damage so a preview can ask
+        # what a swing would do without it happening.
+        #
+        # POISON IS RECORDED IN EXACTLY ONE PLACE PER COMBATANT, and which place
+        # depends on who has to read it. On the PLAYER it is the wheel —
+        # elements.STATUSES["POISONED"] — because that is what ticks the status
+        # bar and what potions.drink's `statuses` argument exists to clear. On a
+        # MONSTER it is the dose pool, because potions.monster_cure is the
+        # function that makes a monster drink and it takes a potions.Poison.
+        # Writing both on the same combatant reads as one poisoning and bites
+        # twice, which is what an earlier draft of this method did: three points
+        # a turn off a twenty-point bar for a single hit, from two modules that
+        # each believed they were the only one counting.
+        # A CHARGED ATTACK STILL OBEYS THE WHEEL. elements.marks() is the one
+        # owner of "hitting fire with fire does not set anything alight";
+        # resolve_damage gets it out of INFLICT_CHANCE["SAME"] being zero, and
+        # this path — which reads the status straight off the special — used to
+        # be exempt. A fire monster in a fire region therefore burned a player
+        # holding fire, for a tenth of the bar a tick, which is precisely the
+        # consolation the shrug was supposed to be.
+        for status_id in (hit.inflicted, (special or {}).get("inflicts", "")):
+            if not status_id or not elements.marks(hit.kind):
+                continue
+            landed = elements.inflict(statuses, status_id)
+            if landed.get("applied"):
+                out["inflicted"] = status_id
+                out["lines"].append(landed["line"])
+        enc.statuses = self._dump_statuses(statuses)
+        return out
+
+    def _open_player_turn(self, enc: Encounter) -> dict:
+        """Start the player's turn: statuses tick, poison bites, focus returns.
+
+        Called at the END of resolving the previous turn, which is the start of
+        this one. That ordering is the whole reason a poisoned player finds out
+        they are about to die while they still have a turn in which to drink
+        something — and it is also why a dose cannot be rewound by a potion:
+        the tick has already landed by the time the belt is drawn.
+        """
+        player = self.state["player"]
+        statuses = self._load_statuses(enc.statuses)
+        tick = elements.tick_statuses(statuses, int(player.get("stamina_max", 1) or 1))
+        poison = potions.Poison.from_dict(enc.poison)
+        dot = potions.poison_tick(poison)
+        damage = int(tick["damage"]) + int(dot["damage"])
+        if damage:
+            player["stamina"] = max(0, int(player["stamina"]) - damage)
+        # VOIDED stops focus COMING BACK. It never stops focus being SPENT,
+        # because learning spells cost focus and a status that locked the hint
+        # tree would be a status that could strand a learner.
+        regained = 0
+        if not tick["regen_blocked"]:
+            before = int(player["mana"])
+            player["mana"] = min(int(player["mana_max"]), before + FOCUS_PER_TURN)
+            regained = int(player["mana"]) - before
+        enc.statuses = self._dump_statuses(statuses)
+        enc.poison = poison.to_dict()
+        lines = list(tick["lines"]) + ([dot["line"]] if dot["line"] else [])
+        self._log(enc, *lines)
+        return {"damage": damage, "focus_regained": regained,
+                "regen_blocked": bool(tick["regen_blocked"]),
+                "statuses": enc.statuses, "poison": enc.poison, "lines": lines}
+
+    def _advance_turn(self, enc: Encounter, *, correct: bool) -> dict:
+        """A graded submission is a turn, right or wrong.
+
+        A wrong cast costing the turn is already the rule everywhere else in
+        this game — it is the Blitz rule bestiary.py names — and the pouch does
+        not get to disagree with it. Without this call `drunk_this_turn` never
+        clears and the second potion of a fight is refused forever.
+        """
+        turn_state = potions.TurnState.from_dict(enc.potion_turn)
+        potions.cast_resolved(turn_state, correct=bool(correct))
+        enc.potion_turn = turn_state.to_dict()
+        enc.turn = int(turn_state.turn)
+        return turn_state.to_dict()
+
     def probes_remaining(self) -> int:
         enc = self.encounter
         if not enc:
@@ -581,6 +1475,13 @@ class Game:
             return {"error": "no active encounter"}
         if finalexam.sealed(enc, "PROBES"):
             return finalexam.refuse("PROBES")
+        if enc.repo_id:
+            # Not a seal: there is no single entry point to assert an answer
+            # about. The suite is the probe, and it is free.
+            return {"error": "a mini-repo cannot be probed",
+                    "message": "There is no one function here to assert about. "
+                               "Run the suite; it answers the same question and "
+                               "costs nothing."}
         if self.probes_remaining() <= 0:
             return {"error": "no charges",
                     "message": "Out of probe charges. Raise LOGIC, wear Testsmith "
@@ -621,6 +1522,298 @@ class Game:
         }
 
     # -- dashboard ---------------------------------------------------------
+    # ======================================================================
+    # The forge: metals, the blade, and Vess (forge.WIRING §4, §6, §7)
+    # ======================================================================
+
+    def _forge_state(self) -> dict:
+        """The bag and the rungs. setdefault so a save written before the forge
+        existed grows one rather than throwing on first read."""
+        blob = self.state.get("forge")
+        if not isinstance(blob, dict):
+            blob = forge.new_state()
+            self.state["forge"] = blob
+        for key, default in forge.new_state().items():
+            blob.setdefault(key, default)
+        return blob
+
+    def _blade_id(self) -> str:
+        """The line this player's class owns, or empty for an unchosen class."""
+        class_id = (self.state.get("class") or {}).get("class", "")
+        blade = forge.blade_for_class(class_id)
+        return blade.id if blade else ""
+
+    def _hero_look(self) -> dict:
+        """items.hero_look(), with the forged blade's own tint over the top.
+
+        forge.WIRING §8: the catalogue derives a weapon's metal ramp from its
+        rarity, which is right for found weapons and wrong for a blade whose
+        whole point is that it changes colour nine times. sprites.js needs no
+        edit either way — weaponRung() already honours `rung`.
+        """
+        look = items.hero_look(self.state["armor"], self.state["equipped"])
+        equipped = self.state["equipped"] or {}
+        weapon_id = equipped.get("weapon", "")
+        if weapon_id in forge.RUNG_BY_ID:
+            blade, rung = forge.RUNG_BY_ID[weapon_id]
+            look["_weapon"] = forge.hero_weapon_look(blade.id, rung.tier)
+            look["metal"] = look["_weapon"]["metal"]
+            look["weapon"] = look["_weapon"]["key"]
+            # The art pipeline wants the item, not the tint. lootart's
+            # equippedHeroSprites(gear) draws the real rung in the hand; this is
+            # the one slot that has anything to say.
+            look["_gear"] = {"weapon": _forge_item_dict(weapon_id)}
+        return look
+
+    def forge_card(self) -> dict:
+        """The at-a-glance panel: the blade, its rung, its technique, the bag,
+        and what the next rung costs. This is the motivational point of the
+        whole system, so it rides on /api/state rather than behind a click."""
+        state = self._forge_state()
+        blade_id = self._blade_id()
+        bag = [{"metal": m.id, "name": m.name, "rung": m.rung,
+                "colour": m.colour, "held": forge.held(state, m.id)}
+               for m in forge.METALS]
+        card = {
+            "blade": blade_id,
+            "tier": forge.owned_tier(state, blade_id) if blade_id else 0,
+            "held_total": sum(row["held"] for row in bag),
+            "bag": [row for row in bag if row["held"] > 0],
+            "racked": state.get("racked", ""),
+            "forged": int(state.get("forged", 0)),
+            "smith": dict(forge.SMITH),
+        }
+        if not blade_id or not card["tier"]:
+            return card
+        blade = forge.BLADE_BY_ID[blade_id]
+        rung = blade.rung(card["tier"])
+        card["line"] = blade.line
+        card["item"] = _forge_item_dict(rung.id)
+        card["equipped"] = self.state["equipped"].get("weapon") == rung.id
+        card["technique"] = {"name": blade.technique, "rank": rung.technique_rank,
+                             "text": rung.technique_text,
+                             "blurb": blade.technique_blurb}
+        quote = forge.quote(state, blade_id, gold=int(self.state["player"]["gold"]))
+        card["quote"] = quote
+        card["ready"] = bool(quote.get("ready"))
+        return card
+
+    def smith(self, blade_id: str = "") -> dict:
+        """Everything Vess's counter draws. She is not a mentor and is not in
+        world.MENTORS: a mentor is a sealed capability and a blacksmith is not.
+        """
+        state = self._forge_state()
+        class_id = (self.state.get("class") or {}).get("class", "")
+        view = forge.smith_view(state, blade_id or self._blade_id(),
+                                gold=int(self.state["player"]["gold"]),
+                                class_id=class_id)
+        chosen = view.get("blade", "")
+        # Vess appends "The metal is fine" whenever gold is short, which is a
+        # true sentence in the case she wrote it for and a flat contradiction
+        # when the bag is short as well. The counter is composed here, so the
+        # line is dropped rather than argued with; her own module is left alone.
+        quote = view.get("quote") or {}
+        if quote.get("short") and quote.get("gold_short"):
+            view["lines"] = [line for line in view["lines"]
+                             if line not in forge.SMITH_LINES["no_gold"]]
+        view["gold"] = int(self.state["player"]["gold"])
+        view["at_the_bench"] = (self.state["player"].get("region", "")
+                                == forge.SMITH["region"])
+        view["bench_region"] = forge.SMITH["region"]
+        view["bench_region_name"] = world.REGION_BY_ID.get(
+            forge.SMITH["region"], {}).get("name", "")
+        view["route"] = forge.route_ahead(state, chosen) if chosen else []
+        view["grind"] = forge.grind_estimate(chosen) if chosen else {}
+        if chosen:
+            tier = forge.owned_tier(state, chosen)
+            view["tier"] = tier
+            if tier:
+                rung_id = forge.rung(chosen, tier).id
+                view["item"] = _forge_item_dict(rung_id)
+                view["equipped"] = self.state["equipped"].get("weapon") == rung_id
+                nxt = forge.rung(chosen, tier + 1) if tier < forge.MAX_TIER else None
+                view["next_item"] = _forge_item_dict(nxt.id) if nxt else None
+            # Where the shortfall lives, per metal, so a refusal is a route
+            # rather than a wall.
+            view["counsel"] = [forge.counsel(mid) for mid in
+                               (view.get("quote") or {}).get("short", {})]
+        return view
+
+    def forge_upgrade(self, blade_id: str = "") -> dict:
+        """Take the metal, move the rung, pay the smith.
+
+        forge.upgrade() does not touch the purse — it reports `gold_spent` and
+        this is the one place that deducts it. Two owners of one number is how a
+        purse goes negative.
+        """
+        sealed = self._sealed_in_interview()
+        if sealed:
+            return sealed
+        state = self._forge_state()
+        blade_id = blade_id or self._blade_id()
+        if not blade_id:
+            return {"error": "no blade", **self.smith(blade_id)}
+        # She works in one place. That is the loop the whole feature exists for:
+        # walk out to where the metal is, carry it back to somebody who knows
+        # what to do with it. Without this the town is decoration and the map is
+        # a menu again. Reading the bench stays open from anywhere — knowing
+        # what you are short of is the thing that gets a player walking.
+        here = self.state["player"].get("region", "")
+        if here != forge.SMITH["region"]:
+            where = world.REGION_BY_ID.get(forge.SMITH["region"], {})
+            return {"error": "away",
+                    "message": f"{forge.SMITH['name'].title()} and her bench are "
+                               f"in {where.get('name', 'the village')}. The metal "
+                               f"does not work itself.",
+                    "region": forge.SMITH["region"],
+                    "region_name": where.get("name", ""),
+                    "smith": self.smith(blade_id)}
+        player = self.state["player"]
+        result = forge.upgrade(state, blade_id, gold=int(player["gold"]))
+        if result.get("error"):
+            # Nothing was spent. forge.upgrade() checks the quote before it
+            # touches the bag, so a refusal cannot have taken anything — but the
+            # smith's screen is redrawn from the same state either way, so the
+            # player can see that for themselves.
+            return {**result, "smith": self.smith(blade_id)}
+        # The quote already refused if the purse was short, so the subtraction
+        # cannot go under. The floor is here anyway: "a purse never goes
+        # negative" should be a property of the line that moves it, not of a
+        # check somebody could later move or delete upstream.
+        player["gold"] = max(0, int(player["gold"]) - int(result["gold_spent"]))
+
+        # The object in the inventory becomes the object it was upgraded into.
+        # The old rung is not kept: unlike items.UPGRADE_PATHS, which grants a
+        # second object and leaves the first as a keepsake, a forged rung IS the
+        # same blade — Vess worked the metal into it. There is nothing left to
+        # keep.
+        old_id = forge.rung(blade_id, result["tier"] - 1).id
+        new_id = result["rung"]["id"]
+        inventory = self.state["inventory"]
+        if old_id in inventory:
+            inventory[inventory.index(old_id)] = new_id
+        elif new_id not in inventory:
+            inventory.append(new_id)
+        if self.state["equipped"].get("weapon") == old_id:
+            self.state["equipped"]["weapon"] = new_id
+        self._sync_caps()
+        self.save()
+        # `hero` is forge.upgrade()'s own key — the blade's _weapon dict — and
+        # is left alone. The whole-sprite look goes under its own name.
+        return {**result, "item": _forge_item_dict(new_id),
+                "gold": int(player["gold"]),
+                "hero_look": self._hero_look(),
+                "technique_ladder": forge.technique_view(blade_id, result["tier"]),
+                "smith": self.smith(blade_id)}
+
+    def forge_rack(self, blade_id: str = "") -> dict:
+        """Hang the blade on Vess's wall. The rung is kept — a forge does not
+        un-forge anything — so trying a found weapon costs nothing but the rungs
+        you did not forge while you were away."""
+        # Asked at the door, like forge_upgrade and like every other overworld
+        # action. Racking and unracking are BUILD changes — unrack equips the
+        # blade and re-syncs the bars off it — so a measured run must not reach
+        # either of them. server.py seals the route as well; that is a second
+        # lock on the same door, not a second answer to the question, because
+        # both of them are finalexam.sealed(enc, "BUILD") underneath.
+        sealed = self._sealed_in_interview()
+        if sealed:
+            return sealed
+        state = self._forge_state()
+        blade_id = blade_id or self._blade_id()
+        here = self.state["player"].get("region", "")
+        if here != forge.SMITH["region"]:
+            where = world.REGION_BY_ID.get(forge.SMITH["region"], {})
+            return {"error": "away",
+                    "message": f"The wall she would hang it on is in "
+                               f"{where.get('name', 'the village')}.",
+                    "smith": self.smith(blade_id)}
+        result = forge.rack(state, blade_id)
+        if result.get("error"):
+            return result
+        tier = forge.owned_tier(state, blade_id)
+        if tier:
+            rung_id = forge.rung(blade_id, tier).id
+            if self.state["equipped"].get("weapon") == rung_id:
+                self.state["equipped"].pop("weapon", None)
+        self._sync_caps()
+        self.save()
+        return {**result, "smith": self.smith(blade_id)}
+
+    def forge_unrack(self) -> dict:
+        sealed = self._sealed_in_interview()
+        if sealed:
+            return sealed
+        state = self._forge_state()
+        result = forge.unrack(state)
+        blade_id = result.get("blade", "")
+        tier = forge.owned_tier(state, blade_id) if blade_id else 0
+        if tier:
+            rung_id = forge.rung(blade_id, tier).id
+            if rung_id not in self.state["inventory"]:
+                self.state["inventory"].append(rung_id)
+            self.state["equipped"]["weapon"] = rung_id
+        self._sync_caps()
+        self.save()
+        return {**result, "smith": self.smith(blade_id)}
+
+    def forge_technique(self, blade_id: str = "") -> dict:
+        state = self._forge_state()
+        blade_id = blade_id or self._blade_id()
+        if not blade_id:
+            return {"error": "no blade"}
+        return forge.technique_view(blade_id, forge.owned_tier(state, blade_id))
+
+    def forge_swap(self, blade_id: str = "") -> dict:
+        state = self._forge_state()
+        blade_id = blade_id or self._blade_id()
+        tier = max(forge.MIN_TIER, forge.owned_tier(state, blade_id))
+        return forge.swap_view(blade_id, tier) if blade_id else {}
+
+    def _grant_blade(self) -> dict | None:
+        """Rung one, handed over when the class is chosen. Idempotent, because a
+        class quest finished twice by a save-file accident must not reset
+        anybody's blade."""
+        blade_id = self._blade_id()
+        if not blade_id:
+            return None
+        state = self._forge_state()
+        if forge.owned_tier(state, blade_id):
+            return None
+        forge.grant_blade(state, blade_id)
+        rung_id = forge.rung(blade_id, forge.MIN_TIER).id
+        if rung_id not in self.state["inventory"]:
+            self.state["inventory"].append(rung_id)
+        # The starting kit hands out a Rusty Blade before a class is chosen, so
+        # the slot is normally full. A blade with the player's name on it takes
+        # the slot from the starter and from nothing else — anything the player
+        # went and found stays where they put it.
+        held_weapon = self.state["equipped"].get("weapon", "")
+        if not held_weapon or held_weapon == "rusty_blade":
+            self.state["equipped"]["weapon"] = rung_id
+        self._sync_caps()
+        blade = forge.BLADE_BY_ID[blade_id]
+        return {"blade": blade_id, "line": blade.line,
+                "item": _forge_item_dict(rung_id),
+                "technique": blade.technique,
+                "lines": [forge.SMITH["greeting"],
+                          f"That is a {blade.line}. Rung one of nine.",
+                          blade.flavour]}
+
+    def _metal_region(self) -> str:
+        """Which region's metal this fight pays out.
+
+        A dungeon is IN a region and the player's marker is normally standing in
+        it, but the dungeon knows for certain and the marker is a cache. Read
+        the plan when there is one.
+        """
+        run = self.state.get(dungeons.STATE_KEY)
+        if run:
+            plan = dungeons.DUNGEON_BY_ID.get(run.get("dungeon", ""))
+            if plan is not None:
+                return plan.region
+        return self.state["player"].get("region", "")
+
     def dashboard(self) -> dict:
         skills = self.skills
         now = time.time()
@@ -647,6 +1840,11 @@ class Game:
         self._refresh_daily(skills, schedule)
         self._sync_caps()
         self._sync_class_points()
+        # Idempotent, and here rather than only at class choice so a save that
+        # predates the forge — or one whose class was chosen by an older build —
+        # still has a blade to bring to Vess. It returns immediately once the
+        # line is owned.
+        self._grant_blade()
 
         ctx = quests.context(self.story_context(readiness=ready), self.state)
         run = self.state.get(dungeons.STATE_KEY)
@@ -692,9 +1890,21 @@ class Game:
             "stats": {**self.state["stats"], **stats},
             "settings": self.state["settings"],
             "corpus_size": len(self.corpus),
+            "teachable_size": len(self.teachable),
+            # The second number, beside the first and never folded into it.
+            # readiness above is the RPG's measure of familiarity; this is the
+            # measure of whether any of it transfers, and the UI is handed them
+            # separately because they are separate claims.
+            "transfer": self.transfer_report(),
             "grimoire": self.state["grimoire"],
-            "active_encounter": self.state.get("encounter"),
-            "interview": self.state.get("interview"),
+            # Without the working tree. A Mini-Repo carries the player's files
+            # on the encounter so a reload does not lose them, and echoing
+            # several kilobytes of source on every state refresh is not what
+            # this payload is for. `minirepo_view` is the door for the tree.
+            "active_encounter": ({**self.state["encounter"], "repo_files": {}}
+                                 if (self.state.get("encounter") or {}).get("repo_id")
+                                 else self.state.get("encounter")),
+            "interview": self.run_view(self.state.get("interview")),
             "loadout": self.loadout(),
             "unspent_points": self.state["unspent_points"],
             "build": self.state["build"],
@@ -722,6 +1932,9 @@ class Game:
             "dungeon": dungeon_view,
             "dungeons": [self._dungeon_card(d) for d in
                          dungeons.dungeons_for_region(player.get("region", ""))],
+            # Mini-Repo Battles: somebody else's codebase, on the same board as
+            # everything else the player can choose to walk into.
+            "mini_repos": self.minirepo_board(),
             "class": (classes.tree_view(self.state["class"],
                                         level=int(player["level"]))
                       if (self.state.get("class") or {}).get("class") else None),
@@ -740,7 +1953,12 @@ class Game:
             "moveset": self.state["moveset"],
             # Cracked armour used to be a number nothing read. hero_look turns
             # integrity into what the player actually looks like on the map.
-            "hero": items.hero_look(self.state["armor"], self.state["equipped"]),
+            "hero": self._hero_look(),
+            # The blade, its rung, its technique, the metals held and what the
+            # next rung costs. On /api/state rather than behind a click because
+            # "it should be obvious at a glance what you are working toward" is
+            # the entire motivational point of the system.
+            "forge": self.forge_card(),
             "playtime": saves.format_playtime(
                 float(player.get("playtime_seconds") or 0.0)),
         }
@@ -769,6 +1987,20 @@ class Game:
         return quests.context(self.story_context(readiness=self._readiness()),
                               self.state)
 
+    # -- the one question every one of the ten systems asks ----------------
+    def _pays_into_the_world(self, enc: Encounter | None) -> bool:
+        """May this encounter move gold, tack, trials, sanctuaries or sages.
+
+        A measured run pays nothing into the world — that is the whole point of
+        a measured run — and it is asked as a MODE question rather than as a
+        capability question on purpose. `finalexam.sealed(enc, "BUILD")` is the
+        right gate for the loadout (upkeep asks it, and so does elements), but
+        it is also true of a hold-out problem served in Adventure Mode, and a
+        hold-out clear is ordinary play that happens to be measured. Paying it
+        nothing would make the transfer ladder a pay cut for taking it.
+        """
+        return getattr(enc, "mode", config.MODE_ADVENTURE) != config.MODE_INTERVIEW
+
     def _sealed_in_interview(self) -> dict | None:
         """One refusal for every overworld action. The modules refuse too, but
         the guarantee belongs at the door, not three rooms in."""
@@ -794,10 +2026,20 @@ class Game:
         if classes.get(class_id) is None:
             return {"error": "unknown class"}
         self.state["class"] = classes.new_state(class_id)
+        # The movebook is stamped with the class it belongs to. It is a
+        # DIFFERENT book from state["moveset"]: `moveset` rations LINES (four
+        # slots at level one, eight at the ceiling) and the movebook rations
+        # nothing, because a move you paid a skill point for is a move you own
+        # and rationing the same thing twice would let a tree teach you
+        # something you may not cast.
+        self.state["movebook"] = movesets.new_book(class_id)
         self._sync_class_points()
+        # The order issues you something with your name on it. Rung one of nine,
+        # unequipped-slot-only, and Vess does the other eight.
+        blade = self._grant_blade()
         self._sync_caps()
         self.save()
-        return {"ok": True, "class": class_id,
+        return {"ok": True, "class": class_id, "blade": blade,
                 "tree": classes.tree_view(self.state["class"],
                                           level=int(self.state["player"]["level"]))}
 
@@ -818,6 +2060,21 @@ class Game:
         self._sync_class_points()
         result = classes.spend(cls, node_id, level=int(self.state["player"]["level"]))
         if "ok" in result:
+            # THE ONLY WAY AN ORDINARY MOVE IS EVER ACQUIRED, and learning one
+            # teaches the incantations it is spelled out of. One acquisition
+            # path, not two, which is what quietly makes a class's tree decide
+            # which idioms this playthrough is fluent in.
+            #
+            # `classes.moveset_for_node` — the integration note in movesets.py
+            # calls it `moves_for_node`, which is not the name it shipped under.
+            book = self.state.setdefault(
+                "movebook", movesets.new_book(cls.get("class", "")))
+            learned = []
+            for move_id in classes.moveset_for_node(node_id):
+                taught = movesets.learn(book, move_id, self.state["moveset"])
+                if taught.get("learned"):
+                    learned.append(taught)
+            result["moves_learned"] = learned
             self._sync_caps()
             self.save()
             result["tree"] = classes.tree_view(
@@ -880,6 +2137,125 @@ class Game:
         self.save()
         return {"ok": True}
 
+    # -- ONE SETTLER FOR EVERY REWARD SHAPE IN THE GAME --------------------
+    def _settle_pay(self, pay: dict, *, story: dict | None = None,
+                    source: str = "quest", region_id: str = "",
+                    tier: int = 0) -> dict:
+        """Bank a reward bundle. Quests and rescues both come through here.
+
+        captives.py's whole CONTRACT is that it emits nothing quests.py does not
+        already emit, with identical shapes, precisely so that this method can be
+        the only one that knows the vocabulary. Before this existed, the quest
+        turn-in settled five of the nine keys and silently dropped the other
+        four: `metal`, `potion`, `gear` and `vendor_credit` were authored, priced
+        and summarised in the turn-in panel, and never actually given. That is
+        the kind of bug a second settler guarantees and a single one cannot hide.
+
+        Returns what was actually banked, so a caller has something to show.
+        """
+        player = self.state["player"]
+        out: dict = {"xp": 0, "gold": 0, "items": [], "consumables": [],
+                     "metal": None, "potion": None, "gear": "",
+                     "vendor_credit": None, "rarity_floor":
+                     pay.get("rarity_floor", "")}
+
+        out["xp"] = int(pay.get("xp", 0))
+        player["xp"] += out["xp"]
+
+        # Gold goes through economy for the same reason the encounter does: the
+        # rate has one owner. `quest_award` reads quests.REWARD_TIERS, so the
+        # number is still the quest designer's; what economy adds is the ledger
+        # entry, which is what the codex's lifetime earnings are read from.
+        # THE PAY DICT IS THE AUTHORITY ON THE AMOUNT, not the tier. It is what
+        # the turn-in panel already showed the player and what captives.py's
+        # rescue lines were written against; economy is asked for the SOURCE and
+        # the ledger entry, which is where the codex's lifetime figures come
+        # from. A number the player has already been shown must not change on
+        # its way into the purse.
+        gold = int(pay.get("gold", 0))
+        if gold:
+            priced = (economy.quest_award(tier=tier, region_id=region_id)
+                      if tier else economy.NOTHING)
+            award = economy.Award(
+                gold=gold, source=priced.source or "quest", base=priced.base,
+                region_id=region_id, multipliers=dict(priced.multipliers),
+                detail={**priced.detail, "settled_as": source})
+            out["gold"] = economy.record(self.state, award)["gold"]
+            player["gold"] += out["gold"]
+            upkeep.record_income(self.state, out["gold"])
+        player["level"] = world.level_for(player["xp"])
+        player["title"] = world.title_for(player["level"])
+
+        item_id = pay.get("set_item") or ""
+        if item_id and _item(item_id) and item_id not in self.state["inventory"]:
+            self.state["inventory"].append(item_id)
+            self.state["stats"]["items_found"] += 1
+            out["items"].append(item_id)
+
+        consumable = pay.get("consumable")
+        if consumable:
+            key = consumable if isinstance(consumable, str) else consumable.get("id")
+            count = 1 if isinstance(consumable, str) else int(
+                consumable.get("count", 1))
+            if key:
+                self.state["consumables"][key] = \
+                    self.state["consumables"].get(key, 0) + count
+                out["consumables"].append({"id": key, "count": count})
+
+        # -- the material layer, which nothing was paying ------------------
+        metal = pay.get("metal")
+        if metal and metal.get("id") in forge.METAL_BY_ID:
+            forge.add_metal(self._forge_state(), metal["id"],
+                            int(metal.get("count", 1)))
+            out["metal"] = {"id": metal["id"], "count": int(metal.get("count", 1)),
+                            "held": forge.held(self._forge_state(), metal["id"])}
+
+        potion = pay.get("potion")
+        if potion and potion.get("id") in potions.BY_ID:
+            got = potions.grant(self.state, {"id": potion["id"],
+                                             "count": int(potion.get("count", 1))})
+            out["potion"] = {"id": potion["id"],
+                             "count": int(potion.get("count", 1)), **got}
+
+        gear = pay.get("gear") or ""
+        if gear and _item(gear) and gear not in self.state["inventory"]:
+            self.state["inventory"].append(gear)
+            self.state["stats"]["items_found"] += 1
+            out["gear"] = gear
+
+        credit = pay.get("vendor_credit")
+        if credit and credit.get("region"):
+            # quests.py grants this and left the resolution open. It is
+            # economy.grant_credit, and credit is spent before gold at that
+            # region's vendor and nowhere else.
+            banked = economy.grant_credit(self.state,
+                                          credit["region"],
+                                          int(credit.get("amount", 0)))
+            out["vendor_credit"] = banked
+
+        # -- the story bucket ----------------------------------------------
+        reward_story = story or {}
+        card = reward_story.get("card")
+        if card and card not in self.state["grimoire"]:
+            self.state["grimoire"].append(card)
+        note = reward_story.get("codex")
+        if note and note not in self.state["codex"]:
+            self.state["codex"].append(note)
+        if reward_story.get("title"):
+            player["title"] = reward_story["title"]
+        favor = reward_story.get("favor")
+        if favor and favor.get("mentor"):
+            # story.apply takes a whole BEAT, not a reward bucket, and a beat it
+            # has already fired is a beat it refuses. The favour ledger is one
+            # dict and this is the same arithmetic story.apply does to it —
+            # written out rather than faked through a synthetic beat, because a
+            # synthetic beat would end up in `fired` and suppress the real one.
+            ledger = self.state["story"].setdefault("favor", {})
+            ledger[favor["mentor"]] = int(
+                ledger.get(favor["mentor"], 0)) + int(favor.get("amount", 0))
+            out["favor"] = dict(favor)
+        return out
+
     def turn_in_quest(self, quest_id: str) -> dict:
         sealed = self._sealed_in_interview()
         if sealed:
@@ -891,50 +2267,594 @@ class Game:
         done = quests.complete(self.state, quest_id)
         if not done:
             return {"error": "already turned in"}
-        pay = done.get("pay") or {}
+        quest = quests.QUEST_BY_ID[quest_id]
+        # The number is still quests.REWARD_TIERS'. economy.quest_award passes it
+        # through untouched for a one-shot quest — which is every quest in this
+        # game today — and the only thing routing it through buys is that when a
+        # repeatable one is authored, the taper is already in the path rather
+        # than needing to be remembered.
+        settled = self._settle_pay(
+            done.get("pay") or {}, story=done.get("story") or {},
+            source="quest", region_id=quest.region,
+            tier=int(done.get("tier", 0) or 0))
         player = self.state["player"]
-        player["xp"] += int(pay.get("xp", 0))
-        player["gold"] += int(pay.get("gold", 0))
-        player["level"] = world.level_for(player["xp"])
-        player["title"] = world.title_for(player["level"])
-        if pay.get("set_item"):
-            item_id = pay["set_item"]
-            if _item(item_id) and item_id not in self.state["inventory"]:
-                self.state["inventory"].append(item_id)
-                self.state["stats"]["items_found"] += 1
-        consumable = pay.get("consumable")
-        if consumable:
-            key = consumable if isinstance(consumable, str) else consumable.get("id")
-            count = 1 if isinstance(consumable, str) else int(
-                consumable.get("count", 1))
-            if key:
-                self.state["consumables"][key] = \
-                    self.state["consumables"].get(key, 0) + count
-        story_reward = done.get("story") or {}
-        for card in ([story_reward["card"]] if story_reward.get("card") else []):
-            if card not in self.state["grimoire"]:
-                self.state["grimoire"].append(card)
-        for note in ([story_reward["codex"]] if story_reward.get("codex") else []):
-            if note not in self.state["codex"]:
-                self.state["codex"].append(note)
-        if story_reward.get("title"):
-            player["title"] = story_reward["title"]
         if done.get("chain_complete"):
             self.state["stats"]["chains_completed"] = int(
                 self.state["stats"].get("chains_completed", 0)) + 1
         self._sync_caps()
         self.save()
         saves.autosave(self.conn, self.state, "quest_turned_in")
-        return {"ok": True, **done,
+        return {"ok": True, **done, "settled": settled,
                 "world": progression.advance(self.state, self.skills,
                                              readiness=self._readiness())}
 
+    # ======================================================================
+    # THE TOWN: the healer, the smith, and the honest shape of the loop
+    # ======================================================================
+    #
+    # Health is free. Affliction removal is free. Reviving a fainted companion
+    # is free. That is the most load-bearing decision in upkeep.py and it is not
+    # a generosity: health gates ATTEMPTS, attempts are the entire mechanism by
+    # which anybody gets better at this, and charging gold for healing builds a
+    # difficulty curve that steepens exactly where it should flatten — on the
+    # players who fail more, lose more stamina and earn less gold.
+    #
+    # The smith is where gold goes. Two poles, opposite sides of the square.
+
+    def town(self) -> dict:
+        """Everything the town square draws, in one call."""
+        enc = self.encounter
+        sealed = finalexam.sealed(enc, upkeep.UPKEEP_CAPABILITY)
+        gold = int(self.state["player"]["gold"])
+        return {
+            "visit": upkeep.town_visit(self.state, gold=gold, sealed=sealed),
+            "loop": upkeep.loop_report(self.state),
+            "condition": upkeep.condition(self.state),
+            "alarm": upkeep.alarm(self.state),
+            "quote": upkeep.repair_quote(self.state, gold=gold, sealed=sealed),
+            "healer": {"id": upkeep.DEFAULT_HEALER,
+                       **{k: v for k, v in vars(upkeep.MENDER).items()
+                          if k != "lines"}},
+            "gold": gold,
+        }
+
+    def heal(self) -> dict:
+        """The Mender. Free, and she says so before you ask."""
+        enc = self.encounter
+        sealed = finalexam.sealed(enc, upkeep.UPKEEP_CAPABILITY)
+        if sealed:
+            return finalexam.refuse(upkeep.UPKEEP_CAPABILITY)
+        statuses = list(enc.statuses) if enc else []
+        out = upkeep.heal(self.state, statuses=statuses, sealed=False,
+                          rng=self._rng)
+        if enc is not None:
+            enc.statuses = statuses
+            self._write_encounter(enc)
+        self.save()
+        return out
+
+    def repair_quote(self, piece: str = "") -> dict:
+        enc = self.encounter
+        return upkeep.repair_quote(
+            self.state, piece, gold=int(self.state["player"]["gold"]),
+            sealed=finalexam.sealed(enc, upkeep.UPKEEP_CAPABILITY))
+
+    def repair(self, piece: str = "") -> dict:
+        """Ferro. The purse is this file's, as always: upkeep REPORTS a spend."""
+        enc = self.encounter
+        if finalexam.sealed(enc, upkeep.UPKEEP_CAPABILITY):
+            return finalexam.refuse(upkeep.UPKEEP_CAPABILITY)
+        player = self.state["player"]
+        out = upkeep.repair(self.state, piece, gold=int(player["gold"]),
+                            sealed=False)
+        spent = int(out.get("gold_spent", 0))
+        if spent:
+            # upkeep REPORTS the spend; the purse is this file's, same as
+            # forge.upgrade(). economy.spend is the audit trail the codex's
+            # lifetime figures are read from — it does not touch gold either.
+            player["gold"] = max(0, int(player["gold"]) - spent)
+            economy.spend(self.state, "repair", spent)
+            self.state["stats"]["armor_repairs"] = int(
+                self.state["stats"].get("armor_repairs", 0)) + 1
+        self.save()
+        return {**out, "gold": player["gold"]}
+
+    # ======================================================================
+    # THE SHOP AND THE BROKER
+    # ======================================================================
+
+    def shop(self, region_id: str = "") -> dict:
+        """Seventeen vendors, one per region, each with its own shelf."""
+        region_id = region_id or self.state["player"].get("region", "")
+        return economy.vendor_view(self.state,
+                                   region_id,
+                                   gold=int(self.state["player"]["gold"]))
+
+    def buy_potion(self, potion_id: str, *, region_id: str = "",
+                   quantity: int = 1) -> dict:
+        """The pouch is already filled when this returns. Subtract gold_spent
+        only — `credit_spent` was banked by a quest and is already deducted."""
+        sealed = self._sealed_in_interview()
+        if sealed:
+            return sealed
+        region_id = region_id or self.state["player"].get("region", "")
+        player = self.state["player"]
+        out = economy.buy_potion(self.state, region_id,
+                                 potion_id, gold=int(player["gold"]),
+                                 quantity=int(quantity))
+        if out.get("error"):
+            return out
+        # `buy_potion` fills the pouch through potions.grant, which needs the
+        # WHOLE save and not the economy block — see the call it makes.
+        player["gold"] = max(0, int(player["gold"]) - int(out.get("gold_spent", 0)))
+        self.save()
+        return {**out, "gold": player["gold"]}
+
+    def broker(self, region_id: str = "") -> dict:
+        """The challenge broker's board. One trial open at a time, ever."""
+        region_id = region_id or self.state["player"].get("region", "")
+        econ = self.state
+        return {**economy.broker_board(econ, region_id),
+                "trial": economy.trial_state(econ),
+                "gold": int(self.state["player"]["gold"])}
+
+    def open_trial(self, form_id: str, *, region_id: str = "") -> dict:
+        sealed = self._sealed_in_interview()
+        if sealed:
+            return sealed
+        region_id = region_id or self.state["player"].get("region", "")
+        out = economy.open_trial(self.state, region_id,
+                                 form_id, now=time.time())
+        self.save()
+        return out
+
+    def close_trial(self, *, abandon: bool = False) -> dict:
+        """Settle the broker's contract exactly like any other award."""
+        econ = self.state
+        award = economy.close_trial(econ, abandon=bool(abandon))
+        paid = economy.record(econ, award)["gold"]
+        self.state["player"]["gold"] += paid
+        if paid:
+            upkeep.record_income(self.state, paid)
+        self.save()
+        return {"gold": paid, "award": award.to_dict(),
+                "purse": int(self.state["player"]["gold"])}
+
+    # ======================================================================
+    # THE HIDDEN HEALERS
+    # ======================================================================
+
+    def sanctuary_view(self) -> dict:
+        """The log page, plus whether one is urgent right now."""
+        run = self.state.get(dungeons.STATE_KEY)
+        built = self._dungeon_for(run["dungeon"], run.get("seed")) if run else None
+        return {
+            "journal": sanctuary.journal(self.state),
+            "needed": sanctuary.needed_by(self.state),
+            "marks": sanctuary.map_marks(self.state, built, run) if run else [],
+        }
+
+    def sanctuary_rest(self, sanctuary_id: str) -> dict:
+        """Sit down. Free, for the same reason the Mender is free.
+
+        Two deliberate side effects ride along and both are correct: the toll
+        calls upkeep.wear_encounter, because a rest is another thing that
+        happened away from town and the loop report should say so; and
+        upkeep.heal revives a fainted companion, which is the whole point of a
+        healer hidden where a fainted companion happens.
+        """
+        enc = self.encounter
+        sealed = finalexam.sealed(enc, upkeep.UPKEEP_CAPABILITY)
+        if sealed:
+            return finalexam.refuse(upkeep.UPKEEP_CAPABILITY)
+        statuses = list(enc.statuses) if enc else []
+        out = sanctuary.rest(self.state, sanctuary_id,
+                             run=self.state.get(dungeons.STATE_KEY),
+                             statuses=statuses, sealed=False, rng=self._rng)
+        if enc is not None:
+            enc.statuses = statuses
+            self._write_encounter(enc)
+        self.save()
+        return out
+
+    # ======================================================================
+    # THE TOWN'S FORTY-SEVEN VOICES
+    # ======================================================================
+
+    def town_talk(self, region_id: str = "") -> dict:
+        """banter.view: everyone standing here, reading the room and your kit.
+
+        A read plus a small write — the rotation advances so the same person
+        does not open with the same sentence twice — so the save is written
+        afterwards. The identity line stays quests.npc_line's; banter returns it
+        under `identity` and it is rendered FIRST, then the composed lines.
+        """
+        payload = banter.view(self.state, region_id=region_id,
+                              effects=self.effects(), encounter=self.encounter,
+                              rng=self._rng)
+        self.save()
+        return payload
+
+    def speak_to(self, npc_id: str) -> dict:
+        """One speaker. Build the Ctx once per screen or the town disagrees with
+        itself about the weather — which is why `town_talk` exists and this is
+        for a second remark from somebody already on screen."""
+        ctx = banter.context(self.state, effects=self.effects(),
+                             encounter=self.encounter)
+        said = banter.speak(npc_id, ctx,
+                            state=self.state[banter.STATE_KEY], rng=self._rng)
+        self.save()
+        return {**said, "identity": banter.identity_line(npc_id, self.state)}
+
+    # ======================================================================
+    # REGALIA: twenty-four objects that buy MORE help, never DEEPER help
+    # ======================================================================
+
+    def regalia_view(self) -> dict:
+        """The codex screen. Reads state; writes nothing about progression.
+
+        The `also_` pair is the bridge described at `pet_intervention`: this
+        screen shows the numbers that are ACTUALLY in force, which means it has
+        to see quests.REGALIA's contribution too, through the same single floor
+        and single ceiling.
+        """
+        pet_state = self.state["pets"]
+        active = (pet_state.get("active") or [])
+        pet_id = active[0] if active else ""
+        gear = quests.regalia_effect(self.state["quests"])
+        return regalia.view(
+            self.state[regalia.REGALIA_STATE_KEY], pet_id=pet_id,
+            bond=int((pet_state.get("bond") or {}).get(pet_id, 0)),
+            region_id=self.state["player"].get("region", ""),
+            pets_found=list(pet_state.get("found", [])),
+            also_scale=gear["scale"], also_interventions=gear["interventions"])
+
+    def wear_regalia(self, regalia_id: str) -> dict:
+        """One object per companion. Passing "" takes it off, always allowed."""
+        out = regalia.wear(self.state[regalia.REGALIA_STATE_KEY], regalia_id) \
+            if regalia_id else regalia.take_off(
+                self.state[regalia.REGALIA_STATE_KEY],
+                (self.state["pets"].get("active") or [""])[0])
+        self.save()
+        return out
+
+    # ======================================================================
+    # THE SIXTEEN HIDDEN SAGES AND THE NINETY-SIX SECRET ARTS
+    # ======================================================================
+    #
+    # THE OVERLAP, SETTLED. Both sages.py and arts.py authored ninety-six arts.
+    # sages.py's own docstring settles it in arts.py's favour ON MEASUREMENT:
+    # sixty-nine of its lines demand less Python than `sift`, an ordinary
+    # chapter-two line the player already has, while arts.py's ninety-six clear
+    # that same bar by 1.11x to 3.90x because they were authored against
+    # `incantation.measure_complexity` — the function the damage actually calls.
+    # arts.py's are also real Incantation and Move objects, so they are cast,
+    # tiered, faded, grooved, drawn and recorded by machinery that already
+    # exists rather than needing a second damage spine kept in step with the
+    # first.
+    #
+    # So: sages.py owns WHO, WHERE and WHAT THE TRIAL IS. arts.py owns THE LINE.
+    # `arts.taught_here(region, class_id)` is the bridge and `arts.sage_bridge()`
+    # proves all ninety-six rooms map with nothing unmatched in either
+    # direction. sages.moveset_requests() is NOT called from anywhere, which is
+    # the one-line retirement its own docstring asks for.
+
+    def _region_clears(self, region_id: str) -> int:
+        return int((db.evidence_counters(self.conn).get("region_clears") or {})
+                   .get(region_id, 0))
+
+    def _class_id(self) -> str:
+        return (self.state.get("class") or {}).get("class", "") or "analyst"
+
+    def sage_board(self, region_id: str = "") -> dict:
+        """Who is here, whether they will see you, and what is still owed.
+
+        Shows a sage the player has not found as a SILHOUETTE with the deed
+        spelled out, never as a grey wall: learning never dead-ends, and a
+        condition you can read is a thing to go and do.
+        """
+        region_id = region_id or self.state["player"].get("region", "")
+        enc = self.encounter
+        sealed = finalexam.sealed(enc, sages.CAPABILITY)
+        mode = getattr(enc, "mode", config.MODE_ADVENTURE)
+        if not sages.available_in(mode, region_id, sealed=sealed):
+            return {"sage": None, "region": region_id,
+                    "available": False,
+                    "reason": "sealed" if sealed else "nobody sits here"}
+        sage = sages.for_region(region_id)
+        state = self.state[SAGES_STATE_KEY]
+        class_id = self._class_id()
+        clears = self._region_clears(region_id)
+        ok, why = sages.may_attempt(state, sage.id, clears)
+        art = arts.taught_here(region_id, class_id)
+        return {
+            "region": region_id, "available": True,
+            "sage": sage.id,
+            "met": sages.has_met(state, sage.id),
+            "progress": sages.discovery_progress(sage.id, self._pet_evidence()),
+            "greeting": sages.greeting(sage.id, class_id, state),
+            "may_attempt": ok, "why": why,
+            "region_clears": clears,
+            "gauntlet": sages.gauntlet(sage.id, class_id,
+                                       attempt=int((state.get("attempts") or {})
+                                                   .get(sage.id, 0))),
+            # What is behind it, named but not given. `arts.taught_here` is the
+            # bridge; the line itself is not rendered until it is taught.
+            "art": ({"id": art.id, "name": art.name, "rung": art.rung,
+                     "shape": art.shape, "known": arts.knows(
+                         self.state[arts.STATE_KEY], art.id,
+                         self.state["movebook"])}
+                    if art is not None else None),
+            "ladder": arts.ladder_view(self.state[arts.STATE_KEY], class_id,
+                                       self.state["movebook"]),
+        }
+
+    def begin_gauntlet(self, region_id: str = "") -> dict:
+        """Start or restart a trial, with its five problems BOUND to real ones.
+
+        `sages.gauntlet()` returns SPECIFICATIONS — a pattern, a realm and a
+        difficulty per rung — and `sages.resolve_gauntlet()` turns them into
+        problem ids out of a corpus it is handed. The binding is banked here,
+        because the rung is only cleared by clearing THAT problem and the engine
+        is the only thing that can say whether that happened.
+
+        A second attempt draws DIFFERENT problems from the same specifications,
+        which is what stops a failed trial being farmed into a memorised
+        sequence. `attempt` is what carries that, and it comes from the sage's
+        own counter rather than from the caller.
+        """
+        region_id = region_id or self.state["player"].get("region", "")
+        enc = self.encounter
+        if finalexam.sealed(enc, sages.CAPABILITY):
+            return finalexam.refuse(sages.CAPABILITY)
+        sage = sages.for_region(region_id)
+        if sage is None:
+            return {"error": "nobody sits here"}
+        state = self.state[SAGES_STATE_KEY]
+        if not sages.has_met(state, sage.id):
+            return {"error": "you have not found them yet"}
+        class_id = self._class_id()
+        plan = sages.begin(state, sage.id, class_id,
+                           self._region_clears(region_id))
+        if not plan.get("started"):
+            self.save()
+            return plan
+        attempt = max(0, int((state.get("attempts") or {}).get(sage.id, 1)) - 1)
+        resolved = sages.resolve_gauntlet(
+            sage.id, class_id, problems=self.teachable, attempt=attempt,
+            # Nothing the player has already cleared. A trial made of solved
+            # problems is a trial that measures memory of this save file.
+            exclude=set(self.state["solved_ids"]))
+        bound = {row["key"]: row.get("problem", "")
+                 for row in resolved.get("stages", []) if row.get("problem")}
+        state["run"] = {"sage": sage.id, "class": class_id, "attempt": attempt,
+                        "bound": bound, "at": time.time()}
+        plan["stages"] = resolved.get("stages", plan.get("stages", []))
+        plan["bound"] = bound
+        # THE PRIZE, NAMED ONCE. `sages.begin` announces the art out of sages'
+        # own RETIRED catalogue (`art_<region>_<class>`), and the art the
+        # player is actually handed at the last rung is arts.py's
+        # (`art_<class>_<region>`) — different id, different name. Unbridged,
+        # the trial promised THE COUNTED WORD and paid out THE AVERAGE ALREADY
+        # GUARDED. `gauntlet_stage` already corrects this on the way out; the
+        # door has to say the same word as the till.
+        taught = arts.taught_here(region_id, class_id)
+        if taught is not None:
+            plan["art"] = {
+                "id": taught.id, "name": taught.name, "rung": taught.rung,
+                "shape": taught.shape,
+                "known": arts.knows(self.state[arts.STATE_KEY], taught.id,
+                                    self.state["movebook"]),
+            }
+        self.save()
+        return plan
+
+    def gauntlet_encounter(self, stage_key: str) -> dict:
+        """Open the rung's own problem, through the ordinary encounter door.
+
+        It is an ordinary encounter in every respect — same sandbox, same
+        grader, same mastery, same loot — because a trial that graded its own
+        problems would be a second grading path, and there is one.
+        """
+        state = self.state[SAGES_STATE_KEY]
+        run = state.get("run") or {}
+        problem_id = (run.get("bound") or {}).get(stage_key, "")
+        if not problem_id:
+            return {"error": "no such rung in the open trial"}
+        return self.start_encounter(problem_id, reason="SAGE")
+
+    def gauntlet_stage(self, stage_key: str) -> dict:
+        """One rung, resolved AGAINST THE RECORD rather than against a claim.
+
+        This used to take `passed` as an argument, which meant a caller could
+        hand itself a secret art by asserting it five times. Whether the rung
+        was cleared is a fact the attempts table already holds: the rung's bound
+        problem, solved, since this attempt began. Mastery moves only on graded
+        evidence, and so does this.
+
+        Failing costs THE TOLL and never a door. `sages.fail()` takes no
+        mastery, no gold, no gear and no progress — three more encounters in
+        this region before the sage will see you again, and the knowledge that
+        they now know which rung you die on.
+        """
+        state = self.state[SAGES_STATE_KEY]
+        run = state.get("run") or {}
+        sage_id = run.get("sage", "")
+        problem_id = (run.get("bound") or {}).get(stage_key, "")
+        if not sage_id or not problem_id:
+            return {"error": "no trial is open"}
+        sage = sages.SAGE_BY_ID.get(sage_id)
+        if sage is None:
+            return {"error": "no trial is open"}
+        since = float(run.get("at", 0.0))
+        attempts = [row for row in db.attempts_for(self.conn, problem_id)
+                    if float(row.get("created_at", 0.0)) >= since]
+        if not attempts:
+            return {"error": "that rung has not been attempted yet",
+                    "problem": problem_id}
+        passed = any(row["solved"] for row in attempts)
+        class_id = run.get("class") or self._class_id()
+        step = sages.record_stage(state, sage_id, stage_key, passed)
+        if not step.get("ok"):
+            return step
+        if step.get("fail"):
+            out = sages.fail(state, sage_id, stage_key,
+                             self._region_clears(sage.region))
+            state["run"] = None
+            self.save()
+            return {**step, **out}
+        if step.get("cleared"):
+            granted = sages.complete(state, sage_id, class_id, at=time.time())
+            taught = self._teach_art(sage.region, class_id)
+            state["run"] = None
+            self.save()
+            out = {**step, **granted, "art": taught}
+            # sages.complete() reports an id out of its OWN retired catalogue
+            # (`art_<region>_<class>`). The art the player actually walks away
+            # with is arts.py's (`art_<class>_<region>`), because that is the
+            # one that ships — see the note above `_region_clears`. Overwrite it
+            # rather than send a client two ids for one thing.
+            if taught.get("art"):
+                out["art_id"] = taught["art"]
+                out["art_name"] = taught.get("name", "")
+            # `learn` is sages' handover kwargs for its own retired line. It
+            # would construct, and constructing it would put a second, weaker
+            # spelling of this art into the catalogue. Dropped here.
+            out.pop("learn", None)
+            return out
+        self.save()
+        return step
+
+    def _teach_art(self, region_id: str, class_id: str) -> dict:
+        """The one road into an art, and it runs through arts.grant.
+
+        `grant` calls movesets.learn, which puts the ART MOVE in the movebook
+        AND teaches the incantations its spine is spelled out of — the art's own
+        line plus, for the wider shapes, the ordinary lines it is cast beside.
+        One acquisition path, not two. Idempotent, because a re-attemptable
+        gauntlet must be safe to re-clear.
+        """
+        art = arts.taught_here(region_id, class_id)
+        if art is None:
+            return {"taught": False, "reason": "no art is taught here"}
+        return arts.grant(self.state[arts.STATE_KEY], self.state["movebook"],
+                          art.id, moveset=self.state["moveset"], at=time.time())
+
+    def art_book(self) -> dict:
+        """What this playthrough knows, and how far the ladder still runs."""
+        class_id = self._class_id()
+        book = self.state["movebook"]
+        return {
+            "class": class_id,
+            "ladder": arts.ladder_view(self.state[arts.STATE_KEY], class_id, book),
+            "known": [a.id for a in arts.ARTS
+                      if arts.knows(self.state[arts.STATE_KEY], a.id, book)],
+            "sanctums": [s.to_dict() for s in
+                         arts.cleared_sanctums(self.state[arts.STATE_KEY])],
+            "moves": [m.id for m in movesets.known(book)],
+        }
+
+    # ======================================================================
+    # THE PEOPLE THE BOSSES TOOK
+    # ======================================================================
+
+    def roll_call(self) -> dict:
+        """A list that grows, with faces and trades on it, and watching it grow
+        is most of the point. `still_held` is handed over with it deliberately:
+        the ending is a eucatastrophe and not a restoration, and a roll call
+        that quietly rounded up would be this game telling a lie about itself."""
+        return {
+            "freed": captives.roll_call(self.state),
+            "by_region": captives.roll_call_by_region(self.state),
+            # `still_held` hands back Captive DATACLASSES, where `roll_call`
+            # hands back rows — so this payload used to be un-serialisable and
+            # /api/rollcall answered 500. Rendered through captives' own
+            # row-builder rather than a second spelling of it here: `_view` is
+            # `asdict` plus `held_in` and `home_name`, it trims nothing, and
+            # the two halves of the list now have the same shape, which is what
+            # a client that draws both of them needs.
+            "still_held": [captives._view(person)
+                           for person in captives.still_held(self.state)],
+            "boons": captives.boons(self.state),
+            "routes": captives.open_routes(self.state),
+            "changes": captives.village_changes(self.state),
+            "total": len(captives.CAPTIVES),
+        }
+
+    # ======================================================================
+    # THE LAST SCENE
+    # ======================================================================
+
+    def finale_scene(self, *, exam_report: dict | None = None) -> dict:
+        """Staged AFTER the practical is scored, and never before.
+
+        The direction of the gate, said once: the practical gates the finale and
+        the finale does not gate the practical. A player who freed nobody sits
+        the same sealed, timed, unassisted exam and can pass it.
+        """
+        enc = self.encounter
+        ready = self._readiness()
+        scene = finale.view(
+            self.state,
+            freed=captives.freed(self.state),
+            exam_report=exam_report,
+            readiness=ready,
+            transfer_summary=self.transfer_report(),
+            cleared_bosses=list(self.state["cleared_bosses"]),
+            names=self._identifiers_named(),
+            total_captives=len(captives.CAPTIVES),
+            encounter=enc)
+        self.save()
+        return scene
+
+    def _identifiers_named(self) -> list:
+        """The player's own variable names, newest first, for the name rail.
+
+        THREE RULES and the second is this method's job: identifiers only
+        (finale.clean_names enforces it with a regex, so no code fragment can
+        reach the screen by accident); NOTHING FROM A HOLD-OUT PROBLEM, because
+        the rail is decoration and the hold-out is a measurement; and names the
+        player did not choose are dropped by finale itself.
+        """
+        import re as _re
+        sealed_ids = {row["problem_id"] for row in
+                      self.conn.execute("SELECT problem_id FROM "
+                                        "transfer_encounters").fetchall()}
+        names: list = []
+        for row in db.recent_attempts(self.conn, limit=60):
+            if not row["solved"] or row["problem_id"] in sealed_ids:
+                continue
+            for token in _re.findall(r"\b[A-Za-z_][A-Za-z0-9_]*\b",
+                                     row["submitted_code"] or ""):
+                if token not in names:
+                    names.append(token)
+        return names[:40]
+
+    def mark_coda_seen(self) -> dict:
+        """On `the_prompt_stays`, not on the freeze frame. The two halves of
+        this ending are separate and a player who walked out at the title card
+        has seen half of it."""
+        out = finale.mark_coda_seen(self.state)
+        self.save()
+        return out
+
     # -- companions --------------------------------------------------------
     def pet_catalogue(self) -> dict:
-        return {"pets": pets.catalogue(self.state["pets"]),
+        """The companion screen: the roster, the ladder it is ranked against,
+        and whichever depth the player currently has no answer for."""
+        pet_state = self.state["pets"]
+        return {"pets": pets.catalogue(pet_state),
                 "hints": pets.undiscovered_hints(self._pet_evidence(),
-                                                 self.state["pets"]["found"]),
-                "limit": pets.ACTIVE_LIMIT}
+                                                 pet_state["found"]),
+                "limit": pets.ACTIVE_LIMIT,
+                "tiers": pets.tier_table(),
+                "active": pets.active_id(pet_state),
+                "fallen": list(pet_state.get("fallen") or []),
+                "keepsake": pets.KEEPSAKE,
+                # The scene, if the client has not played it yet. Handed back
+                # here as well as on the clear that caused it, so a reload
+                # between the two does not swallow the one moment that matters.
+                "fall": self.state.get("pet_fall")}
 
     def set_active_pets(self, pet_ids: list) -> dict:
         sealed = self._sealed_in_interview()
@@ -946,26 +2866,77 @@ class Game:
 
     def pet_intervention(self, signals: dict | None = None) -> dict | None:
         """Called as the player works. On a hit the engine charges it exactly the
-        way use_hint charges — one hint used, and the rank clamped."""
+        way use_hint charges — one hint used, and the rank clamped.
+
+        Two shapes come back and they are told apart by `refused`. A HINT is
+        charged. A REFUSAL — the companion is below the depth of this encounter —
+        costs nothing, clamps nothing, and carries the route out instead, which
+        is the whole of the no-dead-end guarantee arriving at the moment the
+        player learns their animal is the wrong animal.
+        """
         enc = self.encounter
         if not enc:
             return None
         region_id = self.state["player"].get("region", "")
-        if not pets.available_in(enc.mode, region_id):
+        # ONE isolation path. finalexam.sealed is the authority and pets takes
+        # its verdict as an argument rather than forming a second opinion.
+        sealed = finalexam.sealed(enc, "PET")
+        if not pets.available_in(enc.mode, region_id, sealed=sealed):
             return None
-        if finalexam.sealed(enc, "PET"):
-            return None
-        problem = self.by_id[enc.problem_id]
+        repo = self._repo_of(enc)
+        problem = repo_problem(repo) if repo else self.by_id[enc.problem_id]
         spoken = dict(enc.pet_spoken or {})
-        event = pets.party_intervention(
+        # -- THE REGALIA COLLISION, RESOLVED IN ONE PLACE -------------------
+        #
+        # There are two bodies of tack in this codebase and they are different
+        # objects with the same name. `quests.REGALIA` is seven REGION-keyed
+        # pieces, quest-awarded and priced by economy.py. `regalia.REGALIA` is
+        # twenty-four COMPANION-keyed objects — the jade collar, the mystic
+        # scarf — earned by a deed and deliberately unpriced. Both were authored
+        # independently, both chose the SAME two levers (how soon the companion
+        # speaks and how often), and by coincidence both chose the same floor
+        # (0.40) and the same ceiling (4).
+        #
+        # DECISION: KEEP BOTH, BRIDGE THEM, CLAMP ONCE. They are not duplicates
+        # — one is a reward for a region and one is a reward for an animal — and
+        # deleting either would delete authored content to solve an arithmetic
+        # problem. What cannot survive is applying them SIDE BY SIDE: two systems
+        # that each clamp their own contribution do not add up to a clamped
+        # total, and a Storied companion in a lantern harness and a jade collar
+        # reaches 0.3075 and five interventions, past what BOTH files declare
+        # legal. regalia.self_check()["bounds"]["stacked_with_quests_regalia"] is
+        # that exact case, measured.
+        #
+        # So quests' contribution is folded in through `also_scale` /
+        # `also_interventions`, regalia._clamp sees the TOTAL, and there is
+        # exactly one floor and exactly one ceiling in the game. This is the only
+        # call site either system reaches combat through, which is what makes
+        # that claim checkable rather than hopeful.
+        gear = quests.regalia_effect(self.state["quests"])
+        event = regalia.party_intervention(
             self.state["pets"].get("active", []),
             bonds=self.state["pets"].get("bond", {}),
             mode=enc.mode, region_id=region_id, signals=signals or {},
-            context={"pattern": problem.pattern,
-                     "family": problem.spaced_repetition_family},
-            spoken=spoken)
+            context=self._pet_context(problem, signals),
+            spoken=spoken,
+            difficulty=problem.difficulty, boss=bool(enc.boss_id),
+            final=finalexam.encounter_seal(enc).final,
+            sealed=sealed, state=self.state["pets"],
+            refused=list(enc.pet_refused or []),
+            regalia_state=self.state[regalia.REGALIA_STATE_KEY],
+            also_scale=gear["scale"], also_interventions=gear["interventions"])
         if not event:
             return None
+        if event.get("refused"):
+            # Admitting it cannot read the room is not help and must never be
+            # billed as help. In particular `pet_spoke` stays False: it feeds
+            # `intervened=True` into bond_gain, and paying the assisted bonus to
+            # an animal that said nothing useful would reward the apology.
+            enc.pet_refused = sorted(set((enc.pet_refused or [])
+                                         + [event["pet"]]))
+            self._write_encounter(enc)
+            self.save()
+            return event
         # The caller contract, honoured here so no client can skip it.
         enc.hints_used += event["hint_weight"]
         enc.pet_spoke = True
@@ -979,6 +2950,123 @@ class Game:
         self._write_encounter(enc)
         self.save()
         return event
+
+    def _pet_context(self, problem, signals: dict | None = None) -> dict:
+        """The REDACTED view a companion is allowed to read.
+
+        Four fields, all of them vocabulary the game already shows the player
+        somewhere else: the pattern, the edge-case class this problem guards,
+        the category of their last graded failure, and one family they have
+        already closed unaided that shares this pattern. There is no field here
+        for a test or a worked solution, so a caller cannot hand one over by
+        accident.
+
+        "Already shows the player somewhere else" is a claim with a shelf life,
+        because the boss ladder spends the whole game withdrawing those places.
+        WEAKNESS_MAP goes two rungs before PET does, so for two fights the
+        enemy's weaknesses are stripped out of the payload and the tactical
+        brief is gone — and an EDGE_CLASS companion, or the hidden one wearing
+        one, would have read the same class straight back out. That is the
+        tactical read arriving through a side door with fur on it.
+
+        So each field is redacted by the SAME seal that redacts the payload it
+        came from. A companion whose key is gone falls through to its own
+        generic line, which is the correct behaviour: it still speaks, it still
+        costs a hint, and it no longer knows the thing the boss took.
+        """
+        signals = signals or {}
+        enc = self.encounter
+        weakness = str(signals.get("weakness") or "")
+        if not weakness:
+            keys = tactics.problem_weakness_keys(problem)
+            weakness = keys[0]["key"] if keys else ""
+        if finalexam.sealed(enc, "WEAKNESS_MAP"):
+            weakness = ""
+        category = ""
+        recent = [c for c in (signals.get("last_categories") or []) if c]
+        if recent:
+            category = str(recent[-1])
+        else:
+            rows = db.attempts_for(self.conn, problem.id)
+            if rows:
+                category = str(rows[-1]["root_cause"] or "")
+        context = {
+            # PATTERN goes at a later rung than PET, so today this can only ever
+            # be the pattern. It is written as a redaction anyway: the rule is
+            # that a companion reads what the payload reads, and a rule that
+            # happens to hold because of the order of two constants is not a
+            # rule, it is a coincidence waiting for somebody to reorder them.
+            "pattern": "" if finalexam.sealed(enc, "PATTERN") else problem.pattern,
+            "family": problem.spaced_repetition_family,
+            "weakness": weakness,
+            "category": category,
+        }
+        # PRIOR_WORK is the only kind that reads this, and finding it is a scan
+        # of the attempt log. It is computed for the animal that can use it and
+        # for nobody else, because this runs on the client's timer.
+        active = pets.BY_ID.get(pets.active_id(self.state["pets"]))
+        if active is not None and active.hint_kind == "PRIOR_WORK":
+            context["prior_family"] = self._prior_family(problem)
+        return context
+
+    def _prior_family(self, problem) -> str:
+        """A family this player has already cleared unaided that shares this
+        problem's pattern. BARROW's entire licence is to name one, and it can
+        only ever name somewhere they have already been.
+        """
+        row = self.conn.execute(
+            "SELECT family FROM attempts WHERE solved = 1 AND hints_used = 0"
+            " AND pattern = ? AND family != ? AND problem_id != ?"
+            " ORDER BY created_at DESC LIMIT 1",
+            (problem.pattern, problem.spaced_repetition_family, problem.id),
+        ).fetchone()
+        return str(row["family"]) if row else ""
+
+    def dismiss_pet(self) -> dict:
+        """Send the companion in the field home. Reversible, always."""
+        sealed = self._sealed_in_interview()
+        if sealed:
+            return finalexam.refuse("PET")
+        out = pets.dismiss(self.state["pets"], at=time.time())
+        self.save()
+        return {"ok": True, **out}
+
+    def recall_pet(self, pet_id: str) -> dict:
+        """Bring a dismissed companion back. Whoever was out steps down."""
+        sealed = self._sealed_in_interview()
+        if sealed:
+            return finalexam.refuse("PET")
+        out = pets.recall(self.state["pets"], pet_id, at=time.time())
+        self.save()
+        return {"ok": bool(out.get("active")), **out}
+
+    def hint_route(self) -> dict:
+        """Every road out of the encounter the player is standing in, whatever
+        is or is not walking with them.
+
+        This exists so the refusal is never the last word. It is pure — it
+        spends no focus, costs no rank and grants nothing — and it answers the
+        same way for a player with the wrong companion, no companion, and a dead
+        one, which is the proof that the tier ladder is not what stands between
+        anybody and getting unstuck.
+        """
+        enc = self.encounter
+        if not enc:
+            return {"error": "no active encounter"}
+        if finalexam.sealed(enc, "PET") and finalexam.sealed(enc, "HINTS"):
+            # Nothing is open here and saying so is the honest answer. The exam
+            # does not get a map out; that is what an exam is.
+            return finalexam.refuse("HINTS")
+        repo = self._repo_of(enc)
+        problem = repo_problem(repo) if repo else self.by_id[enc.problem_id]
+        depth = self._asked_depth(problem)
+        route = pets.fallback_route(pets.active_id(self.state["pets"]),
+                                    difficulty=depth, state=self.state["pets"])
+        route["attempts"] = len(db.attempts_for(self.conn, problem.id))
+        route["solution_free_now"] = route["attempts"] >= pets.FREE_SOLUTION_AFTER
+        route["hint_count"] = 0 if finalexam.sealed(enc, "HINTS") \
+            else len(problem.hint_tree)
+        return route
 
     # -- dungeons ----------------------------------------------------------
     def dungeon_list(self, region_id: str = "") -> dict:
@@ -1001,7 +3089,7 @@ class Game:
         # The room->problem map is stored so a returning player meets the same
         # problem in the same room; the building itself is never serialised.
         self.state["dungeon_map"][dungeon_id] = dungeons.populate(
-            built, self.corpus, skills=self.skills,
+            built, self.teachable, skills=self.skills,
             solved_ids=set(self.state["solved_ids"]), rng=self._rng)
         self.state[dungeons.STATE_KEY] = run
         self.save()
@@ -1048,8 +3136,17 @@ class Game:
             quests.note_depth(self.state, run["dungeon"],
                               self._dungeon_depth(built, run))
         self.state[dungeons.STATE_KEY] = run
+        # THE DUNGEON HOOK, first of two. A hidden healer is found by being HURT
+        # in the right room rather than by searching for one, so this is called
+        # on every move and answers with a blank row almost every time. It never
+        # writes to `run`, never raises, and writes to `state` only to record a
+        # first find.
+        found = sanctuary.dungeon_look(self.state, built, run,
+                                       sealed=bool(sealed))
         self.save()
-        return {**result, "state": self.dungeon_state()}
+        return {**result, "state": self.dungeon_state(),
+                "sanctuary": found if found.get("tell") or found.get("here")
+                else None}
 
     def dungeon_engage(self) -> dict:
         """Fight what is standing in this room. The room holds an encounter
@@ -1070,17 +3167,30 @@ class Game:
         room = next((r for r in built.rooms if r.id == run["at"]), None)
         if room is None or not room.demands_solving:
             return {"error": "nothing here asks anything of you"}
+        # A CLEARED ROOM IS SHUT. Without this the room stays openable forever:
+        # `dungeon_map` binds the room to one problem so a relented retry asks
+        # the same idea, which means re-engaging served the SAME problem again
+        # and `clear_room` paid its purse again, every time, for as long as the
+        # player pressed the key. That is unbounded gold and XP for no new
+        # Python, and it is the one thing the economy may not offer. Failure
+        # still reopens the room, because a failed room is not in `cleared`.
+        if room.id in run.get("cleared", []):
+            return {"error": "you have already cleared this room",
+                    "message": "Whatever was in here, you beat it. The room "
+                               "has nothing else to ask."}
         bound = (self.state["dungeon_map"].get(built.id) or {}).get(str(room.id))
         problem = self.by_id.get(bound)
         if problem is None:
             problem = dungeons.resolve_encounter(
-                room.encounter, self.corpus, skills=self.skills,
+                room.encounter, self.teachable, skills=self.skills,
                 solved_ids=set(self.state["solved_ids"]),
                 recent_ids=self.state["recent_ids"], rng=self._rng,
                 attempts=int(run.get("attempts", {}).get(str(room.id), 0)))
         if problem is None:
             return {"error": "this room is empty"}
         payload = self.start_encounter(problem.id, reason="DUNGEON")
+        if payload.get("error"):
+            return payload            # a refusal is not an encounter to decorate
         enc = self.encounter
         enc.dungeon_room = room.id
         self._write_encounter(enc)
@@ -1118,13 +3228,34 @@ class Game:
 
     # -- the overworld -----------------------------------------------------
     def world_map(self) -> dict:
-        return progression.world_map(self.state, self.skills,
-                                     readiness=self._readiness())
+        # The wheel, on the map screen. elements.region_affinities() reads
+        # world.REGIONS in world order and derives each region's element from
+        # its BIOME, so a new region arrives with weather already attached and
+        # nobody has to remember to author it twice.
+        return {**progression.world_map(self.state, self.skills,
+                                        readiness=self._readiness()),
+                "affinities": elements.region_affinities()}
 
     def region_view(self, region_id: str) -> dict:
         prog = progression.snapshot(self.state, self.skills,
                                     readiness=self._readiness())
-        return progression.region_view(region_id, prog)
+        view = progression.region_view(region_id, prog)
+        hazard = elements.hazard_for(region_id)
+        boots = items.boots_id(self.state["equipped"])
+        # What one step across this region costs in the boots actually on the
+        # player's feet. `roll` is pinned at 1.0 so this is the PREVIEW — it
+        # reports the speed and the risk without ever inflicting anything, which
+        # is the same discipline elements.resolve_damage uses for a swing.
+        view["element"] = {
+            "id": elements.affinity_for(region_id),
+            "view": elements.element_view(elements.affinity_for(region_id)),
+            "hazard": ({"id": hazard.id, "name": hazard.name,
+                        "blurb": hazard.blurb, "element": hazard.element}
+                       if hazard else {}),
+            "step": elements.hazard_step(region_id, boots, roll=1.0),
+            "boots": boots,
+        }
+        return view
 
     def things_to_do(self) -> list:
         due = srsmod.due(self.schedule, now=time.time(), limit=25)
@@ -1201,6 +3332,7 @@ class Game:
         self.state = merged
         self._reseed_world(self.state.get("world_seed") or 0)
         self._sync_class_points()
+        self._grant_blade()
         self._sync_caps()
         self.save()
 
@@ -1229,6 +3361,14 @@ class Game:
             return {"error": "you are not wearing it"}
         if finalexam.sealed(enc, "OBLIGING_HAND"):
             return finalexam.refuse("OBLIGING_HAND")
+        if enc.repo_id:
+            # The Hand solves an encounter by knowing the answer. There is no
+            # single answer to a repository, and the one thing it could do —
+            # write the reference patch into your editor — is the one thing
+            # nothing in this game is allowed to do.
+            return {"error": "the hand cannot read for you",
+                    "message": "It has no idea which file this is in either. "
+                               "Nothing is charged; nothing is lowered."}
         problem = self.by_id[enc.problem_id]
         skill_name = skillmod.PATTERN_TO_SKILL.get(problem.pattern, "PYTHON")
         skills = self.skills
@@ -1291,9 +3431,133 @@ class Game:
         self.state["daily"] = {
             "date": today, "completed": [],
             "quests": adaptive.daily_quests(
-                skills=skills, schedule=schedule, corpus=self.corpus,
+                skills=skills, schedule=schedule, corpus=self.teachable,
                 profile=self.state["player"]["profile"]),
         }
+
+    # ======================================================================
+    # The hold-out, and the second number it exists to produce
+    # ======================================================================
+    #
+    # Ordinary mastery measures familiarity and is untouched by everything
+    # below. This is a SECOND number, from evidence the teaching side of the
+    # game is not allowed to produce, and the two never mix: nothing here reads
+    # mastery, nothing in skills.py reads this, neither gates the other, and
+    # there is nothing the player can spend to move it.
+
+    def _seen_problem_ids(self) -> set:
+        """Every problem this player has ever met, as ids.
+
+        Ids, not lineages — lineages are derived from them against whatever
+        corpus is current, so a rebuild cannot leave a stale lineage string in a
+        save. Three records, because each one knows something the others do not:
+        the attempt log is the complete graded history, the hold-out ledger
+        knows about sealed problems that were served and walked away from, and
+        solved_ids/recent_ids cover the live session.
+        """
+        ids = set(self.state.get("solved_ids") or ())
+        ids |= set(self.state.get("recent_ids") or ())
+        ids |= db.attempted_problem_ids(self.conn)
+        ids |= db.transfer_problem_ids(self.conn)
+        return ids
+
+    def transfer_pool(self) -> list:
+        """Sealed problems from a lineage this player has never met. What is
+        left that can still be asked of them exactly once."""
+        return corpusmod.transfer_pool(self.corpus, self._seen_problem_ids())
+
+    def _open_transfer(self, problem: Problem, mode: str) -> bool:
+        """Spend one hold-out problem, and record whether it was met cold.
+
+        Called at SERVE time and not at grading time, which is what makes the
+        hold-out unfarmable: seeing a sealed problem consumes its lineage
+        whether the player solves it, fails it, or closes the tab. That is the
+        entire reason the hold-out is finite.
+        """
+        first = corpusmod.is_unfamiliar(self.corpus, problem,
+                                        self._seen_problem_ids())
+        return db.open_transfer(
+            self.conn, problem_id=problem.id,
+            lineage_id=corpusmod.lineage_of(problem),
+            pattern=problem.pattern,
+            skill=skillmod.PATTERN_TO_SKILL.get(problem.pattern, "PYTHON"),
+            difficulty=problem.difficulty, mode=mode,
+            first_encounter=first)
+
+    def _record_transfer(self, problem: Problem, enc: Encounter, *, solved: bool,
+                         seconds: float, rank: str) -> dict | None:
+        """Fold a graded hold-out outcome into the ledger.
+
+        `unaided` is spelled out rather than assumed. Every one of these is
+        already sealed off by HOLDOUT_SEAL before the encounter starts, so each
+        clause should be unreachable — which is exactly why it is written down.
+        The day one of them stops being unreachable, the number stops counting
+        that encounter instead of quietly counting a hinted clear as transfer.
+        """
+        unaided = (enc.hints_used == 0 and not enc.used_phoenix
+                   and enc.probes_used == 0 and not enc.pet_spoke
+                   and not enc.temp_effects)
+        # Was the measurement taken by THIS submission, or was it already taken?
+        # db.resolve_transfer is write-once, so a second submission against the
+        # same sealed problem returns the standing row untouched. Knowing which
+        # happened is the difference between telling the player their clear
+        # counted and telling them the truth, so it is read before the write
+        # rather than guessed at afterwards.
+        standing = db.transfer_row(self.conn, problem.id)
+        already = bool(standing and standing["resolved"])
+        row = db.resolve_transfer(
+            self.conn, problem.id, solved=solved, unaided=unaided,
+            hints_used=enc.hints_used, seconds=seconds, rank=rank)
+        if row is not None:
+            # Not a column; it describes this submission rather than the ledger.
+            row["regrade"] = already
+        return row
+
+    def transfer_report(self) -> dict:
+        """TRANSFER READINESS, its sample size and its confidence band.
+
+        Deliberately not folded into adaptive.readiness(): that number is the
+        RPG's own, built from taught material, and blending the two would give
+        the player one number that means neither thing.
+        """
+        pool = self.transfer_pool()
+        return transfermod.summarise(
+            db.transfer_ledger(self.conn),
+            remaining=len({p.lineage_id for p in pool}),
+            holdout_total=len(self.holdout),
+            lineages_total=len({p.lineage_id for p in self.holdout}))
+
+    # -- what a measured run is allowed to say about itself ----------------
+
+    @staticmethod
+    def run_view(run: dict | None) -> dict | None:
+        """A measured run, as the client may see it: how far in, how many left,
+        how long. NOT which problems.
+
+        The roster is the leak nobody looks for, because it is not a selector
+        and it is not an encounter — it is a table of contents. Interview Mode
+        reaches for the hold-out first, so `problem_ids` is a list of sealed ids
+        the player has not been served yet, and it was being handed over twice:
+        once in the payload that starts a run, and again on every poll of
+        /api/state for as long as the run stayed open.
+
+        Nothing was spent by reading it. A sealed problem is spent when it is
+        SERVED — that is the rule that makes the hold-out finite — so the
+        roster was a way to collect sealed ids and titles for free, abandon the
+        run, go and read about them, and come back to be measured on problems
+        chosen precisely because they had never been seen. The cheapest version
+        of that costs one click and reveals the ids the selector likes best,
+        which are the ones that would have been asked anyway.
+
+        So a run discloses one question at a time, which is the pace at which it
+        spends them. `total` replaces `problem_ids` because a progress counter
+        is all the count was ever used for.
+        """
+        if not run:
+            return None
+        view = {k: v for k, v in run.items() if k != "problem_ids"}
+        view["total"] = len(run.get("problem_ids") or ())
+        return view
 
     # -- encounter selection ----------------------------------------------
     def next_encounter(self, *, region: str | None = None,
@@ -1305,7 +3569,9 @@ class Game:
         # the repair went to whichever piece the served problem happened to be
         # tagged for. Naming the piece filters the candidates by that tag.
         tag = "armor:%s" % armor_piece if armor_piece else ""
-        pool = [p for p in self.corpus
+        # self.teachable, not self.corpus. Adventure Mode teaches, so it does
+        # not get handed the hold-out to filter back out again.
+        pool = [p for p in self.teachable
                 # parenthesised deliberately: the previous form parsed as
                 # `(matches_kind and not_boss) or matches_kind`, which let an
                 # explicit kind smuggle boss encounters into ordinary selection
@@ -1313,7 +3579,7 @@ class Game:
                 and p.difficulty != "BOSS"
                 and (not tag or tag in p.tags)]
         if tag and not pool:
-            pool = [p for p in self.corpus
+            pool = [p for p in self.teachable
                     if (kind is None or p.encounter_kind == kind)
                     and p.difficulty != "BOSS"]
         selection = adaptive.select_next(
@@ -1344,9 +3610,31 @@ class Game:
         problem = self.by_id.get(problem_id)
         if problem is None:
             raise KeyError(problem_id)
+        holdout = corpusmod.is_sealed(problem)
+        if holdout and mode != config.MODE_INTERVIEW:
+            # The last door. Every selector above already draws from
+            # self.teachable, so nothing should ever arrive here with hold-out
+            # content — and a guarantee that depends on every caller getting it
+            # right is not a guarantee. A quest, a dungeon room, a shrine, a
+            # boss or a hand-typed problem id all end up in this method.
+            return finalexam.refuse(finalexam.HOLDOUT)
         enc = Encounter(problem_id=problem_id, mode=mode, started_at=time.time(),
                         is_retest=is_retest, interval_days=interval_days,
-                        boss_id=boss_id, interview_id=interview_id)
+                        boss_id=boss_id, interview_id=interview_id,
+                        holdout=holdout,
+                        region=self.state["player"].get("region", ""))
+        # Turn one. The pouch's falloff, the dose pool and both status lists are
+        # per-FIGHT, so they are born here and die with the encounter: a player
+        # who walks away from a fight does not carry its poison to the next one,
+        # and does not carry its sip discount either.
+        enc.potion_turn = potions.new_fight().to_dict()
+        enc.poison = {}
+        enc.turn = 1
+        self._arm_enemy(problem, enc)
+        if holdout:
+            # Spent on sight, before the payload is built. If this player never
+            # submits, the lineage is still gone.
+            self._open_transfer(problem, mode)
         self._write_encounter(enc)
         self.state["stats"]["encounters"] += 1
         self.save()
@@ -1409,12 +3697,85 @@ class Game:
             "best_time": db.best_time(self.conn, problem.id),
             "hint_count": 0 if seal.blocks("HINTS") else len(problem.hint_tree),
             "clock_seconds": finalexam.clock_for(problem, seal),
+            # The seal is decided in one place and handed in, rather than
+            # guessed at again here. From the rung that takes PET onward, the
+            # field is empty in the payload as well as in the refusal, so the
+            # client is never drawing an animal that cannot speak.
             "companions": ([] if not pets.available_in(
-                enc.mode, self.state["player"].get("region", ""))
+                enc.mode, self.state["player"].get("region", ""),
+                sealed=finalexam.sealed(enc, "PET"))
                 else list(self.state["pets"].get("active", []))),
             "mana": self.state["player"]["mana"],
             "stamina": self.state["player"]["stamina"],
+            # THE LOW-HEALTH ALARM, AT THE DOOR OF THE FIGHT.
+            #
+            # `upkeep.alarm` is a pure function of two numbers that are already
+            # on the two lines above this one, and the graded-submission result
+            # has shipped it since upkeep landed. It was missing HERE, which
+            # left a client exactly two ways to draw the red pulse on somebody
+            # who walked INTO a fight already hurt: call `Game.town()`, which is
+            # a VISIT and heals them, or keep its own copy of ALARM_BANDS. The
+            # first is a cosmetic fetch with a game-changing side effect; the
+            # second puts the threshold that decides when things got bad into
+            # two files, which is how a sprite and a bar end up disagreeing.
+            #
+            # Not sealed, and it does not need to be: it is a reading of the
+            # player's own health bar, which is on screen either way, and it
+            # says nothing at all about the problem in front of them.
+            "alarm": upkeep.alarm(self.state),
         }
+        # -- the tactical layer, as the battle HUD draws it -------------------
+        #
+        # The belt carries its own `sealed` flag and a per-potion `reason`, so
+        # no extra seal check belongs here: a greyed-out potion with no reason
+        # is how a player concludes a mechanic is broken, and potions.pouch_view
+        # is the one place that sentence is written.
+        #
+        # The enemy's element is behind the WEAKNESS_MAP seal, same as its
+        # weaknesses, because "it is made of cold" is a reading of the room and
+        # a measured run is not given readings. Its HEALTH AND FOCUS are not
+        # sealed: those are what the fight looks like, not what the answer is.
+        statuses = self._load_statuses(enc.statuses)
+        turn_state = potions.TurnState.from_dict(enc.potion_turn)
+        payload["pouch"] = potions.pouch_view(
+            self._pouch(), player=self.state["player"], turn_state=turn_state,
+            poison=potions.Poison.from_dict(enc.poison), encounter=enc,
+            statuses=statuses)
+        payload["turn"] = int(enc.turn)
+        payload["statuses"] = list(enc.statuses)
+        payload["enemy_statuses"] = list(enc.enemy_statuses)
+        payload["poison"] = dict(enc.poison)
+        payload["combat_log"] = list(enc.combat_log)
+        vitals = dict(enc.enemy_vitals or {})
+        revealed = not seal.blocks("WEAKNESS_MAP")
+        player_element = self._player_element(enc)
+        if not revealed:
+            vitals = {**vitals, "element": "", "specials": []}
+        payload["enemy_vitals"] = vitals
+        payload["element"] = {
+            "region": "" if not revealed else self._region_element(problem),
+            "player": player_element,
+            "enemy": vitals.get("element", ""),
+            "view": elements.element_view(
+                (enc.enemy_vitals or {}).get("element", elements.NEUTRAL),
+                revealed=revealed),
+            "armour": items.armour_view(
+                {} if seal.blocks("BUILD") else self.effects()),
+            "hazard": (lambda h: {"id": h.id, "name": h.name, "blurb": h.blurb}
+                       if h else {})(elements.hazard_for(problem.realm)),
+        }
+        if enc.holdout:
+            # The client cannot work this out for itself: `player_view` ships
+            # neither `sealed` nor `lineage_id`, because a player who can read
+            # the hold-out can study it. So the engine says it, in the only two
+            # facts the interface needs — this is measured, and it counts once.
+            row = db.transfer_row(self.conn, problem.id) or {}
+            payload["transfer"] = {
+                "holdout": True,
+                "first_encounter": bool(row.get("first_encounter")),
+                "note": ("A sealed problem, served cold. Nothing here will help "
+                         "you and nothing here is a lesson."),
+            }
         if interview:
             # Refuse to ship rather than hope. A bare `assert` would vanish under
             # python -O, and this is the one guarantee the whole mode rests on.
@@ -1424,6 +3785,7 @@ class Game:
         return payload
 
     ENEMY_SPRITES = {
+        "LANGUAGE": "runeling",
         "HASH_MAP": "vaultling", "SET": "wisp", "SLIDING_WINDOW": "marshling",
         "TWO_POINTER": "twinblade", "STACK": "cartgoblin", "QUEUE": "linewraith",
         "BFS": "lightwave", "DFS": "deepcrawler", "TREE": "branchling",
@@ -1434,6 +3796,45 @@ class Game:
         "DEBUGGING": "bugling", "COMPLEXITY": "wyrmling", "TESTING": "mimic",
         "RECOGNITION": "riddler", "GREEDY": "hoarder", "INTERVALS": "overlapper",
     }
+
+    def _arm_enemy(self, problem: Problem, enc: Encounter) -> dict:
+        """Give this fight's enemy its vitals: focus, an element, and specials.
+
+        The element comes off the GROUND, which is the whole of the brief's
+        "every area has an affinity from its surroundings" pushed one step down
+        into the things that live there. The bestiary does not carry an element
+        and does not need to — elements.enemy_element lets a future entry
+        override it — and a boss gets more health, more focus and more to spend
+        it on, which is all three of the things bosses were asked to get more of.
+
+        Antidotes are rolled here too, once, so a monster that can cure itself
+        is decided before the fight rather than every time it is asked.
+        """
+        enemy = self._enemy_for(problem, enc.exposed)
+        enc.enemy = enemy
+        element = elements.enemy_element(enemy, problem.realm) \
+            if not finalexam.sealed(enc, "BUILD") else elements.NEUTRAL
+        if element == elements.NEUTRAL and not finalexam.sealed(enc, "BUILD"):
+            element = self._region_element(problem)
+        is_boss = bool(enc.boss_id or enemy.get("boss"))
+        # The focus pool is sized by DIFFICULTY rather than off this enemy's HP,
+        # because a problem-encounter enemy's HP is tactics.derive_enemy's count
+        # of hidden tests and not a health bar at all. Left to derive itself, a
+        # three-test problem would field a monster carrying eight focus and a
+        # cheapest special costing ten — a creature that stands there saving up
+        # for something it can never buy.
+        enc.enemy_vitals = bestiary.vitals(
+            hp=int(enemy.get("hp_max") or enemy.get("hp") or 1),
+            element=element if element in elements.ELEMENTS else "",
+            is_boss=is_boss,
+            focus=ENEMY_FOCUS_BY_DIFFICULTY.get(problem.difficulty, 12))
+        enc.enemy_vitals["antidotes"] = potions.carries_antidote(
+            difficulty=problem.difficulty,
+            affinity=str(element or "").lower(),
+            is_boss=is_boss,
+            is_elite=problem.difficulty in ("HARD", "ELITE"),
+            rng=self._rng)
+        return enc.enemy_vitals
 
     def _enemy_for(self, problem: Problem, exposed: list | None = None) -> dict:
         """An enemy is a reading of the problem: its weaknesses are the edge cases
@@ -1488,6 +3889,9 @@ class Game:
         enc = self.encounter
         if not enc:
             return {"error": "no active encounter"}
+        if enc.repo_id:
+            return {"error": "this is a mini-repo",
+                    "message": "A repository runs its own suite. Use RUN TESTS."}
         problem = self.by_id[enc.problem_id]
         enc.runs += 1
         if not enc.first_code_at and code.strip():
@@ -1502,13 +3906,26 @@ class Game:
         return {**report.to_dict(), "graded": False}
 
     def submit(self, code: str, *, declared_pattern: str = "",
-               explanation: str = "") -> dict:
+               declared_cause: str = "", explanation: str = "") -> dict:
+        """`declared_cause` is the player NAMING THE BUG before the grader says.
+
+        It is a grading.ROOT_CAUSES key, it is optional, it changes no grade and
+        it costs nothing to get wrong. What it does is put a number under the
+        Debugging Dungeon's sage, whose whole condition is "six failures named
+        before the diagnosis rendered" — a condition nothing in this engine
+        could answer, because nothing was asking the question.
+        """
         enc = self.encounter
         if not enc:
             return {"error": "no active encounter"}
+        if enc.repo_id:
+            return {"error": "this is a mini-repo",
+                    "message": "A repository is handed back whole, not as one "
+                               "function. Use HAND IT BACK."}
         problem = self.by_id[enc.problem_id]
         enc.submits += 1
         enc.declared_pattern = declared_pattern or enc.declared_pattern
+        enc.declared_cause = declared_cause or enc.declared_cause
         enc.explanation = explanation or enc.explanation
         if not enc.first_code_at and code.strip():
             enc.first_code_at = time.time()
@@ -1642,6 +4059,8 @@ class Game:
         enc = self.encounter
         if not enc:
             return {"error": "no active encounter"}
+        if enc.repo_id:
+            return {"error": "this encounter is not a puzzle"}
         problem = self.by_id[enc.problem_id]
         if problem.encounter_kind not in puzzles.PUZZLE_KINDS:
             return {"error": "this encounter is not a puzzle"}
@@ -1688,6 +4107,400 @@ class Game:
             if key in outcome:
                 result[key] = outcome[key]
         return result
+
+    # ======================================================================
+    # MINI-REPO BATTLES
+    #
+    # Somebody else's codebase, a suite that mostly passes, and a clock. Every
+    # rule lives in minirepo.py and none of them is re-implemented here; this is
+    # the six calls of its contract, in the order an encounter uses them, plus
+    # the one thing this file owns and that module does not — resolving the
+    # outcome through _apply_outcome, so a Mini-Repo pays XP, loot, skills,
+    # quests, artifacts and the rest exactly like any other encounter.
+    # ======================================================================
+
+    def _repo_of(self, enc: Encounter | None):
+        """The Repo this encounter is fighting, or None if it is not one."""
+        if enc is None or not enc.repo_id:
+            return None
+        return minirepo.get(enc.repo_id)
+
+    def _repo_sealed(self, enc: Encounter) -> set:
+        """What is switched off for this Mini-Repo.
+
+        One line per capability, and every one of them asked of
+        `finalexam.sealed`, which stays the only thing in this codebase that
+        answers whether a capability is available. minirepo.player_view forces
+        the same set again in Interview Mode; that is belt and braces, not a
+        second opinion.
+        """
+        return {cap for cap in minirepo.SEALED_CAPABILITIES
+                if finalexam.sealed(enc, cap)}
+
+    def minirepo_board(self, *, difficulty: str = "", tag: str = "") -> dict:
+        """The index cards, and which of them this player has already beaten."""
+        cleared = {c[len(REPO_ID_PREFIX):] for c in self.state["solved_ids"]
+                   if c.startswith(REPO_ID_PREFIX)}
+        cards = minirepo.catalogue(difficulty=difficulty, tag=tag)
+        return {
+            "repos": [{**card, "cleared": card["id"] in cleared} for card in cards],
+            "cleared": sorted(cleared),
+            "blurb": ("Three to eight files somebody else wrote, a suite that "
+                      "mostly passes, and a ticket. Navigate it, change it, and "
+                      "hand it back with everything that was green still green."),
+        }
+
+    def start_minirepo(self, repo_id: str = "", *,
+                       mode: str = config.MODE_ADVENTURE,
+                       difficulty: str = "", reason: str = "MANUAL") -> dict:
+        """Spawn one. CHOOSE, then OPEN — steps 1 and 2 of the contract."""
+        open_repo = self._repo_of(self.encounter)
+        if open_repo is not None:
+            # There is a working tree on the encounter, and starting a second
+            # repository would throw it away without being asked. Asking for
+            # the one already open is a resume, not a refusal.
+            if not repo_id or repo_id == open_repo.id:
+                return self._repo_payload(open_repo, self.encounter,
+                                          reason="RESUME")
+            return {"error": "a mini-repo is already open",
+                    "repo_id": open_repo.id,
+                    "message": ("You are part-way through %s. Finish it or put "
+                                "it down; your edits are still there."
+                                % open_repo.title)}
+        if self.state.get("interview"):
+            # A measured run is open. Everything else in the overworld is
+            # refused while one is, and a side fight would be the loudest
+            # possible way to walk around it.
+            return finalexam.refuse("BUILD")
+        repo = minirepo.get(repo_id) if repo_id else None
+        if repo_id and repo is None:
+            return {"error": "unknown mini-repo", "repo_id": repo_id}
+        if repo is None:
+            cleared = {c[len(REPO_ID_PREFIX):] for c in self.state["solved_ids"]
+                       if c.startswith(REPO_ID_PREFIX)}
+            # `pick` widens the tier rather than returning None. It does NOT
+            # widen the exclusion list, so a player who has beaten all sixteen
+            # gets nothing back — and "you have finished everything, here is a
+            # blank screen" is the one answer this game never gives. A repo
+            # already beaten is still a fight, and a month later it is a good
+            # one, so the second call is made here rather than left to chance.
+            repo = (minirepo.pick(difficulty=difficulty, exclude=cleared)
+                    or minirepo.pick(difficulty=difficulty))
+        if repo is None:
+            return {"error": "no mini-repo is available"}
+        enc = Encounter(problem_id=REPO_ID_PREFIX + repo.id, mode=mode,
+                        started_at=time.time(), repo_id=repo.id)
+        # A Mini-Repo is a fight, and every fight gets a turn, a belt and
+        # something to fight. Without these two lines a repo encounter reaches
+        # _apply_outcome with no vitals and no turn state, the enemy half of the
+        # turn finds nothing to act with, and a handed-back repo that fails its
+        # suite costs nothing at all — which is not mercy, it is the one
+        # encounter kind in the game where being wrong is free.
+        enc.potion_turn = potions.new_fight().to_dict()
+        self._arm_enemy(repo_problem(repo), enc)
+        self._write_encounter(enc)
+        self.state["stats"]["encounters"] += 1
+        self.save()
+        return self._repo_payload(repo, enc, reason=reason)
+
+    def minirepo_view(self) -> dict:
+        """The fight as it stands. A reload mid-repo comes back here."""
+        enc = self.encounter
+        repo = self._repo_of(enc)
+        if repo is None:
+            return {"error": "no mini-repo is open"}
+        return self._repo_payload(repo, enc, reason="RESUME")
+
+    def _repo_payload(self, repo, enc: Encounter, *, reason: str = "") -> dict:
+        seal = finalexam.encounter_seal(enc)
+        sealed_caps = self._repo_sealed(enc)
+        problem = repo_problem(repo)
+        view = minirepo.player_view(repo, mode=enc.mode, sealed=sealed_caps)
+        # The player's own edits, laid back over the pristine bodies. The suite
+        # is never overlaid: enc.repo_files only ever holds project paths.
+        for row in view["files"]:
+            saved = enc.repo_files.get(row["path"])
+            if isinstance(saved, str):
+                row["body"] = saved
+                row["edited"] = True
+        skills = self.skills
+        skill_name = REPO_SKILL
+        history = db.attempts_for(self.conn, problem.id)
+        payload = {
+            "repo": view,
+            # Without the working tree: the files are in `repo.files` above,
+            # already laid over with the player's edits, and sending them twice
+            # only doubles the payload.
+            "encounter": {**enc.to_dict(), "repo_files": {}},
+            "reason": reason,
+            "mode": enc.mode,
+            "interview_locked": enc.mode == config.MODE_INTERVIEW,
+            "seal": seal.to_dict(),
+            "sealed": sorted(sealed_caps),
+            # The repo's own number, through the same function every other
+            # encounter's clock goes through. No BUILD grace: a Mini-Repo is
+            # read time, and gear does not read faster.
+            "clock_seconds": finalexam.clock_for(problem, seal),
+            "target_seconds": repo.clock,
+            "elapsed_seconds": max(0.0, time.time() - enc.started_at),
+            "region": world.REGION_BY_ID.get(repo.realm, world.REGIONS[0]),
+            "mentor": (None if seal.blocks("MENTOR") else world.MENTORS.get(
+                world.REGION_BY_ID.get(repo.realm, {}).get("mentor", "byte"))),
+            "skill": "" if seal.blocks("SKILL_STATE") else skill_name,
+            "skill_state": (None if seal.blocks("SKILL_STATE")
+                            or skill_name not in skills
+                            else skills[skill_name].to_dict()),
+            "attempts_before": len(history),
+            "best_time": db.best_time(self.conn, problem.id),
+            # A Mini-Repo has no hint tree and cannot be probed, in any mode.
+            # Said out loud so the client hides both rather than offering a
+            # button that always refuses.
+            "hint_count": 0,
+            "probe_charges": 0,
+            # The seal is decided in one place and handed in, rather than
+            # guessed at again here. From the rung that takes PET onward, the
+            # field is empty in the payload as well as in the refusal, so the
+            # client is never drawing an animal that cannot speak.
+            "companions": ([] if not pets.available_in(
+                enc.mode, self.state["player"].get("region", ""),
+                sealed=finalexam.sealed(enc, "PET"))
+                else list(self.state["pets"].get("active", []))),
+            "mana": self.state["player"]["mana"],
+            "stamina": self.state["player"]["stamina"],
+        }
+        if enc.mode == config.MODE_INTERVIEW:
+            # The same refusal-to-ship the exam payload gets. A bare assert
+            # would vanish under python -O and this is the guarantee the mode
+            # rests on.
+            leaks = self._repo_leaks(repo, payload)
+            if leaks:
+                raise RuntimeError("mini-repo payload leaks: %s" % "; ".join(leaks))
+        return payload
+
+    @staticmethod
+    def _repo_leaks(repo, payload: dict) -> list:
+        """Anything in a sealed Mini-Repo payload that should not be there.
+
+        The patch is the one that matters, and it is checked by searching the
+        serialised payload for the literal text of every replacement — the same
+        thing minirepo's own self-check does, for the same reason: a leak that
+        only a structural check would catch is a leak that arrives the day
+        somebody adds a field.
+        """
+        leaks = []
+        view = payload.get("repo") or {}
+        if view.get("start_file") or view.get("start_note"):
+            leaks.append("the starting-file pointer survived the seal")
+        if view.get("shapes"):
+            leaks.append("the task shapes survived the seal")
+        if view.get("targets"):
+            leaks.append("the target tests survived the seal")
+        if payload.get("hint_count") or payload.get("probe_charges"):
+            leaks.append("a crutch is offered")
+        if payload.get("mentor"):
+            leaks.append("a mentor is attached to the encounter")
+        if payload.get("skill") or payload.get("skill_state"):
+            leaks.append("the player's own skill numbers are attached")
+        blob = json.dumps(payload)
+        for fix in repo.patch:
+            if fix.new and fix.new in blob:
+                leaks.append("the reference patch is in the payload")
+                break
+        return leaks
+
+    # -- the working tree ---------------------------------------------------
+
+    def _repo_tree(self, repo, files) -> tuple:
+        """The player's working tree, or a refusal. Returns (tree, refusal).
+
+        Three checks, and this is the only door the browser can reach them
+        through: the shape (a dict of text), the paths (the files this repo
+        handed out and no others), and the size. `sandbox.write_project` refuses
+        a dangerous filename too and that guard is not routed around — but a
+        path this repo never handed out is not a sandbox question, it is a "that
+        is not what you were given" question, and answering it here is the
+        difference between being told and watching the suite come back BROKEN.
+        """
+        if files is None:
+            return {}, None
+        if not isinstance(files, dict):
+            return None, {"error": "the working tree must be an object of "
+                                   "{path: source}"}
+        known = set(repo.files) | set(repo.tests)
+        tree, unknown, total = {}, [], 0
+        for path, body in files.items():
+            if not isinstance(path, str) or not isinstance(body, str):
+                return None, {"error": "every file in the working tree must be "
+                                       "text, keyed by its path"}
+            if path not in known:
+                unknown.append(path)
+                continue
+            total += len(body)
+            tree[path] = body
+        if unknown:
+            return None, {
+                "error": "not a file in this repository",
+                "paths": sorted(unknown)[:8],
+                "message": ("This fight is the files you were given. "
+                            + ", ".join(sorted(unknown)[:3])
+                            + " is not one of them."),
+            }
+        if total > sandbox.MAX_PROJECT_BYTES:
+            return None, {
+                "error": "working tree is too large",
+                "message": ("A repository this size is %d bytes; you sent %d. "
+                            "Nothing here needs that much text."
+                            % (repo.byte_count, total)),
+            }
+        return tree, None
+
+    @staticmethod
+    def _repo_edits(repo, tree: dict) -> dict:
+        """What the player actually changed.
+
+        Only the files whose body differs from the one they were handed. Keeping
+        the whole tree here would work and would be wrong twice: the save would
+        carry several kilobytes of text the repo already owns, and every file
+        would come back from a reload marked as edited — a dot beside a file
+        nobody has touched is a lie about where the work is.
+        """
+        return {path: body for path, body in tree.items()
+                if path in repo.files and body != repo.files[path]}
+
+    def minirepo_run(self, files=None) -> dict:
+        """RUN TESTS, mid-fight. Ungraded, and it changes nothing but the clock.
+
+        Step 4 of the contract. `assemble` lays the suite down last, from the
+        repo and never from the submission, so this cannot be used to find out
+        what a weakened test would say.
+        """
+        enc = self.encounter
+        repo = self._repo_of(enc)
+        if repo is None:
+            return {"error": "no mini-repo is open"}
+        tree, refusal = self._repo_tree(repo, files)
+        if refusal:
+            return refusal
+        enc.runs += 1
+        edits = self._repo_edits(repo, tree)
+        # Time to first code, the same measure every other encounter records:
+        # running the suite to see what it says is reading, not writing.
+        if edits and not enc.first_code_at:
+            enc.first_code_at = time.time()
+        enc.repo_files = edits
+        self._write_encounter(enc)
+        self.save()
+        report = minirepo.run(repo, minirepo.assemble(repo, tree))
+        sealed_caps = self._repo_sealed(enc)
+        out = report.to_dict()
+        # Which rows are the acceptance criteria, unless PATTERN is sealed — in
+        # which case working out what the ticket is asking for is the exercise.
+        show_targets = "PATTERN" not in sealed_caps
+        for row in out["tests"]:
+            row["target"] = show_targets and row["name"] in repo.targets
+        out["targets"] = [] if not show_targets else list(repo.targets)
+        out["graded"] = False
+        return out
+
+    def minirepo_submit(self, files=None, *, full_tree: bool = True) -> dict:
+        """HAND IT BACK. Steps 5 and 6: the verdict, the rank, and the debrief.
+
+        `files` is the player's WHOLE working tree, which is what the editor
+        sends — every project file and every test file, as they stand. That is
+        why `full_tree` defaults to True. A caller saving a single tab must pass
+        `full_tree=False`, or every test file it did not send reads as a
+        deletion and an honest player is accused of cheating. This is the one
+        sharp edge in minirepo's API and it is documented at both ends.
+        """
+        enc = self.encounter
+        repo = self._repo_of(enc)
+        if repo is None:
+            return {"error": "no mini-repo is open"}
+        tree, refusal = self._repo_tree(repo, files)
+        if refusal:
+            return refusal
+        enc.submits += 1
+        if not enc.first_code_at:
+            enc.first_code_at = time.time()
+        enc.repo_files = self._repo_edits(repo, tree)
+        seconds = max(1.0, time.time() - enc.started_at)
+
+        verdict = minirepo.grade(repo, tree, seconds=seconds, full_tree=full_tree)
+        solved = verdict.solved
+        first_try = solved and enc.submits == 1
+        rank = minirepo.rank_for(repo, verdict, seconds=seconds,
+                                 hints_used=enc.hints_used, first_try=first_try)
+        problem = repo_problem(repo)
+        report = repo_report(verdict)
+        feedback = self._repo_feedback(verdict)
+        sealed_caps = self._repo_sealed(enc)
+        analysis = grading.Analysis(
+            root_cause="" if solved else self._REPO_CAUSE.get(verdict.outcome,
+                                                              "DEBUGGING"),
+            categories=[] if solved else [verdict.outcome],
+            narrative="" if solved else verdict.message)
+        self._write_encounter(enc)
+        result = self._apply_outcome(
+            problem, enc, report, analysis, feedback,
+            solved=solved, rank=rank, seconds=seconds, first_try=first_try,
+            code="", extra={
+                "mini_repo": {
+                    "id": repo.id,
+                    "title": repo.title,
+                    "verdict": verdict.to_dict(),
+                    # Always. A tampered attempt is still owed the lesson and
+                    # the file the cause lived in; the reference patch is the
+                    # part that follows the SOLUTION seal.
+                    "debrief": minirepo.debrief(repo, verdict,
+                                                sealed=sealed_caps),
+                    "clock_seconds": repo.clock,
+                    "in_time": verdict.in_time,
+                },
+            })
+        return result
+
+    # Outcome -> the learning failure it represents, in the vocabulary the
+    # coach, the training camps and the armour already speak. TAMPERED is not a
+    # skill failure at all; it is filed under the suite, because the suite is
+    # what was disrespected, and the debrief says the rest out loud.
+    _REPO_CAUSE = {
+        "TAMPERED": "TESTING",
+        "BROKEN": "SYNTAX",
+        "REGRESSED": "STATE_MANAGEMENT",
+        "INCOMPLETE": "DEBUGGING",
+    }
+
+    @staticmethod
+    def _repo_feedback(verdict) -> dict:
+        """The verdict in the shape every other encounter reports damage in."""
+        lines = [{"name": row["id"], "status": row["status"], "hidden": False,
+                  "ms": row.get("ms", 0.0), "message": row.get("message", ""),
+                  "target": bool(row.get("target"))}
+                 for row in verdict.tests]
+        if not lines:
+            # BROKEN or TAMPERED: nothing ran, and a silent panel reads as a bug.
+            lines = [{"name": verdict.outcome.title(), "status": "fail",
+                      "hidden": False, "ms": 0.0, "message": verdict.message,
+                      "target": False}]
+        total = len(lines)
+        passed = sum(1 for row in lines if row["status"] == "pass")
+        return {"damage": passed, "enemy_hp_total": total, "passed": passed,
+                "total": total, "cleared": verdict.solved, "lines": lines,
+                "slowest_ms": max((row.get("ms") or 0.0) for row in lines)}
+
+    def leave_minirepo(self) -> dict:
+        """Walk out. Nothing is earned and nothing is lost; the repo is still
+        there, with the same files, the next time it is opened."""
+        enc = self.encounter
+        repo = self._repo_of(enc)
+        if repo is None:
+            return {"error": "no mini-repo is open"}
+        self._write_encounter(None)
+        self.save()
+        return {"ok": True, "repo_id": repo.id,
+                "message": ("You put it down. Nothing was graded, so nothing "
+                            "was earned — the repository is exactly as you "
+                            "found it.")}
 
     # -- the opening diagnostic --------------------------------------------
     def diagnostic_trials(self) -> dict:
@@ -1747,6 +4560,8 @@ class Game:
         enc = self.encounter
         if not enc:
             return {"error": "no active encounter"}
+        if enc.repo_id:
+            return {"error": "this encounter has no choices to pick from"}
         problem = self.by_id[enc.problem_id]
         enc.submits += 1
         correct = choice == problem.mcq.get("answer")
@@ -1852,18 +4667,40 @@ class Game:
         classes.after_encounter(self.state.get("class") or {})
 
         # -- spaced repetition
+        #
+        # Not for hold-out content. The SRS is a teaching mechanism: it schedules
+        # a family to come back in a disguise, which is the single most effective
+        # way to make an unfamiliar problem familiar. It may not schedule a
+        # sealed problem and it may not schedule FROM one — a sealed clear that
+        # advanced its family's stage would be the hold-out quietly teaching
+        # through the back door, on its own way out.
         schedule = self.schedule
         family = problem.spaced_repetition_family or problem.pattern.lower()
         entry = schedule.get(family) or srsmod.ScheduleEntry(family=family)
-        if problem.id not in entry.seen_problem_ids:
-            entry.seen_problem_ids.append(problem.id)
-            entry.seen_problem_ids = entry.seen_problem_ids[-30:]
-        srsmod.schedule_after(entry, solved=solved, hints_used=enc.hints_used)
-        schedule[family] = entry
-        self._write_schedule(schedule)
+        if not enc.holdout:
+            if problem.id not in entry.seen_problem_ids:
+                entry.seen_problem_ids.append(problem.id)
+                entry.seen_problem_ids = entry.seen_problem_ids[-30:]
+            srsmod.schedule_after(entry, solved=solved, hints_used=enc.hints_used)
+            schedule[family] = entry
+            self._write_schedule(schedule)
+
+        # -- transfer readiness
+        #
+        # The graded half of the measurement. The other half was taken when the
+        # problem was served; this one only fills in what happened. Mastery above
+        # is untouched by it and it is untouched by mastery: a sealed clear moves
+        # both numbers, for completely separate reasons, out of the same evidence.
+        transfer_row = (self._record_transfer(problem, enc, solved=solved,
+                                              seconds=seconds, rank=rank)
+                        if enc.holdout else None)
 
         # -- tactical resolution: weaknesses struck, resistances hit
         fx = self.effects()
+        # The ground this fight was fought on. Read once: it decides the enemy's
+        # element, which potions the region is generous with, and what the
+        # player's own gear was or was not the right answer to.
+        region_element = self._region_element(problem)
         enemy_dict = self._enemy_for(problem, enc.exposed)
         enemy_obj = tactics.Enemy(**{k: v for k, v in enemy_dict.items()
                                      if k in ("name", "sprite", "hp", "hp_max", "boss",
@@ -1898,7 +4735,53 @@ class Game:
             multiplier *= combat["xp_multiplier"]
         xp = int(round(base_xp * multiplier))
         player["xp"] += xp
-        player["gold"] += (xp // 3 + len(combat["crits"]) * 5) if solved else 0
+
+        # -- gold, which is now a receipt for correct Python ----------------
+        #
+        # `player["gold"] += xp // 3 + crits * 5` used to live here and it paid
+        # for two things it should not have. It paid for TIME, because xp rises
+        # with a combo a player can hold by grinding one family; and it paid for
+        # COMBAT ROLLS, because five gold a crit made a purse swing on the
+        # wheel rather than on correctness. economy.py owns the rate now, and
+        # the crit term is gone deliberately: crits already feed xp through
+        # tactics.resolve_combat's multiplier, and paying them twice is paying
+        # for the dice.
+        #
+        # THE PURSE STAYS HERE. Every earner in economy.py REPORTS a number and
+        # mutates nothing of the player's, exactly as forge.upgrade() does, so
+        # this line is still the only place gold is added for an encounter.
+        #
+        # `blows_landed` is counted on the same branch, because the only blow a
+        # graded submission lands is the one that solved it.
+        if solved:
+            enc.blows_landed += 1
+        econ = self.state
+        now = time.time()
+        award = None
+        purse = None
+        if self._pays_into_the_world(enc):
+            if problem.encounter_kind in puzzles.PUZZLE_KINDS:
+                award = economy.puzzle_award(
+                    econ, region_id=enc.region, difficulty=problem.difficulty,
+                    kind=problem.encounter_kind, problem_id=problem.id,
+                    solved=solved, rank=rank, now=now)
+            else:
+                award = economy.encounter_award(
+                    econ, region_id=enc.region, difficulty=problem.difficulty,
+                    rank=rank, problem_id=problem.id, solved=solved,
+                    is_retest=enc.is_retest, now=now)
+            player["gold"] += economy.record(econ, award, now=now)["gold"]
+            if solved:
+                purse = economy.roll_purse(
+                    region_id=enc.region, difficulty=problem.difficulty,
+                    rank=rank, luck=fx.get("loot_luck", 0.0),
+                    is_boss=bool(enc.boss_id), solved=solved,
+                    # READ BEFORE _resolve_boss increments it, which is why this
+                    # sits above the boss block rather than below it.
+                    times_defeated=self.state["boss_rematch"].get(enc.boss_id, 0),
+                    rng=self._rng)
+                player["gold"] += economy.record(econ, purse)["gold"]
+                economy.restock(econ, enc.region, clears=1)
         previous_level = player["level"]
         player["level"] = world.level_for(player["xp"])
         player["title"] = world.title_for(player["level"])
@@ -1909,15 +4792,43 @@ class Game:
             player["mana"] = min(player["mana_max"],
                                  player["mana"] + int(fx["mana_regen"]))
 
+        # -- the turn ------------------------------------------------------
+        #
+        # One graded submission is one turn, right or wrong. That is the rule a
+        # potion is measured against — a draught rides alongside the cast and
+        # never instead of it — so `_advance_turn` runs on BOTH branches below
+        # or the pouch quietly stops refusing a second drink.
+        #
+        # A landed line ends the fight; a missed one gives the enemy its turn.
+        # That asymmetry is the point: the reward for typing the right thing is
+        # that nothing hits you, and the cost of typing the wrong thing is a
+        # blow whose size the wheel decides. The enemy cannot end the fight
+        # either way — stamina at zero routes to a training camp below, never to
+        # a loss — so the only thing its turn buys is length.
+        turn_state = self._advance_turn(enc, correct=solved)
         damage_taken = 0
+        enemy_turn = None
+        turn_open = None
         if not solved:
-            damage_taken = (config.STAMINA_LOSS_SYNTAX
-                            if analysis.root_cause == "SYNTAX"
-                            else config.STAMINA_LOSS_FAILED_SUBMIT)
-            player["stamina"] = max(0, player["stamina"] - damage_taken)
+            base = (config.STAMINA_LOSS_SYNTAX
+                    if analysis.root_cause == "SYNTAX"
+                    else ENEMY_BASE_DAMAGE)
+            enemy_turn = self._enemy_turn(enc, base=base)
+            damage_taken = int(enemy_turn["damage"])
+            self._log(enc, *(enemy_turn["lines"] or ()))
+            # The player's next turn opens here, which is what lets a poisoned
+            # player see the tick BEFORE they choose what to drink.
+            turn_open = self._open_player_turn(enc)
+            damage_taken += int(turn_open["damage"])
         else:
             player["stamina"] = min(player["stamina_max"], player["stamina"] + 1)
             player["mana"] = min(player["mana_max"], player["mana"] + 2)
+        # `self.encounter` rebuilds an Encounter from the save on every read, so
+        # everything the turn just moved — the pouch's lock, the dose pool, both
+        # status lists, the enemy's focus — is in this object and nowhere else
+        # until it is written. A fight that forgot its own poison between two
+        # submissions is the bug this single line exists to prevent.
+        self._write_encounter(enc)
 
         # -- armor: failures crack it, debugging repairs it
         armor_event = None
@@ -1941,6 +4852,51 @@ class Game:
             self.state["armor"][piece] = max(0, before - 12)
             armor_event = {"piece": piece, "before": before,
                            "after": self.state["armor"][piece], "repaired": False}
+
+        # -- upkeep: what it cost to keep showing up ------------------------
+        #
+        # THE ONE CALL SITE THE CEILING DEPENDS ON. `upkeep.wear_encounter`
+        # writes to state["armor"] — the same integers the hero sprite is drawn
+        # from, so integrity IS durability and there is no second bar — and the
+        # two keywords below are what turn its "repair stays under a third of
+        # income" claim from a tuning hope into arithmetic:
+        #
+        #   pay_scale    the taper economy just applied. A grinder's wear falls
+        #                in step with a grinder's income instead of outrunning it.
+        #   gold_earned  what this fight actually paid. A struggling player's
+        #                bill is clamped against a struggling player's purse.
+        #
+        # upkeep.self_check()["worst_player_wired"] sweeps every difficulty
+        # against every rank against a player taking twelve hits and comes back
+        # at exactly a third in the worst square. The same sweep with these two
+        # keywords left off comes back at 83%. That gap is the cost of not
+        # passing two arguments, which is why they are passed here and not
+        # defaulted somewhere convenient.
+        #
+        # Sealed, none of it happens: a measured run does not read the loadout,
+        # so there is nothing to wear out and nothing to mend. An exam that
+        # quietly billed you afterwards would be an exam that punished you for
+        # sitting it.
+        upkeep_sealed = finalexam.sealed(enc, upkeep.UPKEEP_CAPABILITY)
+        wear = upkeep.wear_encounter(
+            self.state, difficulty=problem.difficulty,
+            hits_taken=enc.hits_taken, blows_landed=enc.blows_landed,
+            pay_scale=float((award.multipliers or {}).get("taper", 1.0))
+            if award is not None else 1.0,
+            gold_earned=(int(award.gold) + int(purse.gold if purse else 0))
+            if award is not None else None,
+            sealed=upkeep_sealed)
+        if award is not None:
+            # What the town's loop report divides the repair bill by. Income is
+            # banked as it is earned so `loop_report` can answer "what share of
+            # what you made since you were last here" without guessing a rate.
+            upkeep.record_income(self.state,
+                                 int(award.gold) + int(purse.gold if purse else 0))
+        # The refill, the afflictions that expire with the fight, and the
+        # low-focus floor that guarantees the map spells are always castable.
+        # Only on a resolved fight, which is what this method is.
+        battle_end = upkeep.after_battle(self.state, statuses=enc.statuses,
+                                         sealed=upkeep_sealed)
 
         # -- inventory / progression
         if solved:
@@ -1978,7 +4934,7 @@ class Game:
         remediation = None
         if not solved:
             camp = adaptive.training_camp(analysis.root_cause, skills, skill_name)
-            remediation = adaptive.remediation_plan(self.corpus, analysis.root_cause,
+            remediation = adaptive.remediation_plan(self.teachable, analysis.root_cause,
                                                     problem, skills)
         stamina_zero = player["stamina"] <= 0
         if stamina_zero:
@@ -2001,6 +4957,51 @@ class Game:
                 critical=bool(combat["crits"]))
             if drop:
                 self._take_drop(drop)
+
+        # -- potions
+        # The same loot path, the same knobs, one more roll. Gear and potions
+        # are INDEPENDENT and a fight may pay both: gear is the reward loop and
+        # a potion is ammunition, and ammunition that arrives only when a trophy
+        # does would stop being a decision. The region's affinity biases WHICH
+        # kind — the marsh hands out antidotes because the marsh is full of
+        # poison — which is aesthetics and tactics agreeing for once.
+        potion_drop = None
+        if solved:
+            potion_drop = potions.roll_monster_drop(
+                difficulty=problem.difficulty, rank=rank,
+                luck=fx.get("loot_luck", 0.0),
+                is_boss=bool(enc.boss_id),
+                affinity=str(region_element or "").lower(),
+                rng=self._rng)
+            if potion_drop:
+                got = potions.grant(self.state, potion_drop)
+                potion_drop["held"] = got.get("held", 0)
+                # Overflow is surfaced rather than swallowed. A pouch that
+                # silently eats loot is a pouch the player stops trusting.
+                potion_drop["overflow"] = got.get("overflow", 0)
+
+        # -- metal
+        # One call site, weighted the way loot already is: the region decides
+        # WHICH metal, the difficulty and the rank decide HOW MUCH, and a boss
+        # always pays. forge.roll_metal returns None in town, on a miss and in a
+        # sealed run — a metal is gear progress and gear does not accrue in a
+        # measured run — so it is called unconditionally and the mode question
+        # is asked once, inside forge.active(). This covers every graded fight
+        # the game has: encounters, elites, dungeon rooms and bosses all resolve
+        # through here.
+        metal = None
+        if solved:
+            metal = forge.roll_metal(
+                region_id=self._metal_region(),
+                difficulty=problem.difficulty, rank=rank,
+                luck=fx.get("loot_luck", 0.0),
+                is_boss=bool(enc.boss_id), encounter=enc, rng=self._rng)
+            if metal:
+                forge.add_metal(self._forge_state(), metal["metal"],
+                                metal["units"])
+                metal["held"] = forge.held(self._forge_state(), metal["metal"])
+                metal["blurb"] = forge.METAL_BY_ID[metal["metal"]].blurb
+                metal["tell"] = forge.METAL_BY_ID[metal["metal"]].tell
 
         # -- secrets: hidden rewards with real discovery conditions
         secrets = self._check_secrets(problem, enc, solved, rank, combat, report,
@@ -2025,6 +5026,11 @@ class Game:
             tests_passed=feedback["passed"], tests_total=feedback["total"],
             first_try=int(first_try), is_retest=int(enc.is_retest),
             root_cause=analysis.root_cause, declared_pattern=enc.declared_pattern,
+            # Two counting questions the hidden sages ask that nothing was
+            # recording: WHERE a fight happened, and whether the player named
+            # the bug before being told. Both default to '' in the schema, so
+            # every row written before they existed reads as "not recorded".
+            region=enc.region, declared_cause=enc.declared_cause,
             time_to_first_code=(enc.first_code_at - enc.started_at)
             if enc.first_code_at else 0.0,
             submitted_code=code[:20000])
@@ -2047,6 +5053,10 @@ class Game:
             events.append("level_gained")
         if drop:
             events.append("loot_taken")
+        if metal:
+            events.append("metal_taken")
+        if potion_drop:
+            events.append("potion_taken")
         if enc.probes_used and any(l for l in enc.probe_log if l.get("correct")):
             events.append("probe_correct")
         if player["combo"] >= 5:
@@ -2059,6 +5069,11 @@ class Game:
             events.append("quest_completed")
         if world_result["world_events"]:
             events.append("world_event")
+        if world_result.get("companion_fell"):
+            events.append("companion_fell")
+        if any(row.get("pet") == pets.RETURN_ID
+               for row in world_result.get("found_pets") or ()):
+            events.append("companion_returned")
 
         history = db.attempts_for(self.conn, problem.id)
         seal = finalexam.encounter_seal(enc)
@@ -2092,7 +5107,8 @@ class Game:
             "stamina": player["stamina"], "mana": player["mana"],
             "stamina_triggered_camp": stamina_zero,
             "damage_taken": damage_taken,
-            "next_retest_days": round(interval, 1) if solved else 0.5,
+            "next_retest_days": (0.0 if enc.holdout
+                                 else round(interval, 1) if solved else 0.5),
             "skill": "" if seal.blocks("SKILL_STATE") else skill_name,
             "skill_state": (None if seal.blocks("SKILL_STATE")
                             else skills[skill_name].to_dict()),
@@ -2112,14 +5128,88 @@ class Game:
                 "exposed": enc.exposed,
             },
             "loot": drop,
+            "potion": potion_drop,
+            "metal": metal,
+            # -- the turn, as the battle HUD needs to draw it ----------------
+            "turn": int(enc.turn),
+            "turn_state": turn_state,
+            "enemy_turn": enemy_turn,
+            "turn_open": turn_open,
+            "statuses": list(enc.statuses),
+            "enemy_statuses": list(enc.enemy_statuses),
+            "poison": dict(enc.poison),
+            "enemy_vitals": dict(enc.enemy_vitals),
+            "element": {
+                # Sealed the same way `_encounter_payload` seals it. The
+                # region's weather is public map information, but WHICH weather
+                # this fight was fought in is a reading of the room, and a
+                # measured run is not given readings — not on the way in, and
+                # not on the way out either.
+                "region": "" if seal.blocks("WEAKNESS_MAP") else region_element,
+                "player": self._player_element(enc),
+                "enemy": (enc.enemy_vitals or {}).get("element", ""),
+                "matchup": elements.matchup(
+                    self._player_element(enc),
+                    (enc.enemy_vitals or {}).get("element", elements.NEUTRAL))[1],
+            },
+            "pouch": potions.pouch_view(
+                self._pouch(), player=player,
+                turn_state=potions.TurnState.from_dict(enc.potion_turn),
+                poison=potions.Poison.from_dict(enc.poison), encounter=enc,
+                statuses=self._load_statuses(enc.statuses)),
+            "combat_log": list(enc.combat_log),
             "secrets": secrets,
             "levels_gained": levels_gained,
             "unspent_points": self.state["unspent_points"],
             "combo_saved": combo_saved,
             "gold": player["gold"],
+            # What the fight paid and what it cost to keep showing up. Both are
+            # here rather than in a second round trip, because the two numbers
+            # only mean anything beside each other: the whole of upkeep's claim
+            # is that the second is a small share of the first.
+            "award": award.to_dict() if award is not None else None,
+            "purse_drop": purse.to_dict() if purse is not None else None,
+            "wear": wear,
+            "after_battle": battle_end,
+            "upkeep": upkeep.condition(self.state),
+            "alarm": upkeep.alarm(self.state),
             "enemy": enemy_dict,
         }
         result.update(world_result)
+        if transfer_row is not None:
+            # What this one encounter did to the second number, said by the
+            # engine rather than inferred by the client. `counted` is the whole
+            # story: sealed, unaided, and the first of its lineage.
+            regrade = bool(transfer_row.get("regrade"))
+            if regrade:
+                # A second run at a sealed problem that was already graded. It
+                # is allowed — nothing here dead-ends, and the practice is worth
+                # having — but it is practice, and saying "it counts" under a
+                # green tick when the ledger did not move is how a player ends
+                # up trusting a number that was never measured.
+                note = ("You have already been measured on this one, and that "
+                        "measurement stands. Running it again is practice: it "
+                        "moves mastery like any other attempt and it cannot "
+                        "move transfer readiness in either direction.")
+            elif transfer_row["counted"]:
+                note = ("This was a sealed problem you had never met in any "
+                        "form. It counts toward transfer readiness, and it "
+                        "cannot be asked of you again.")
+            else:
+                note = ("This was a sealed problem, but not the first time you "
+                        "have met this exercise. It moves mastery like any "
+                        "other clear and it does not move transfer readiness.")
+            result["transfer"] = {
+                "holdout": True,
+                "first_encounter": bool(transfer_row["first_encounter"]),
+                # `counted` describes what THIS submission did to the number, so
+                # a re-run of an already-graded problem reports False: the row it
+                # would have counted for was written by somebody else's keystroke.
+                "counted": bool(transfer_row["counted"]) and not regrade,
+                "measurement_stands": regrade,
+                "note": note,
+                "readiness": self.transfer_report(),
+            }
         if seal.blocks("PET"):
             result["pet"] = None
             result["companion_line"] = ""
@@ -2152,6 +5242,17 @@ class Game:
             key = drop["id"]
             self.state["consumables"][key] = self.state["consumables"].get(key, 0) + 1
             return
+        if drop.get("kind") == "potion":
+            # potions.WIRING §7. Today nothing reaches here carrying a potion —
+            # the two roll sites grant directly, because both of them want the
+            # overflow report and this method has nowhere to put one — but this
+            # is the drop handler, and a drop envelope that fell through it into
+            # the inventory would appear as an unequippable item with no slot.
+            # Cheaper as a named arm than as a bug report.
+            report = potions.grant(self.state, drop)
+            drop["held"] = report.get("held", 0)
+            drop["overflow"] = report.get("overflow", 0)
+            return
         item_id = drop["id"]
         if item_id not in self.state["inventory"]:
             self.state["inventory"].append(item_id)
@@ -2170,6 +5271,7 @@ class Game:
     def _pet_evidence(self) -> dict:
         """The flat snapshot pets.newly_found reads. Assembled once per clear."""
         skills = self.skills
+        counters = self._sage_counters()
         rows = self.conn.execute(
             "SELECT family, COUNT(DISTINCT problem_id) AS n FROM attempts"
             " WHERE solved = 1 AND hints_used = 0 GROUP BY family").fetchall()
@@ -2202,8 +5304,91 @@ class Game:
             "no_hint_streak": streak,
             "perf_cleared": len(self.state["perf_failed_ids"]),
             "probes_correct": self.state["stats"].get("probes_correct", 0),
+            # The barrow's debt, which is what the legendary return is gated on.
+            # A return that could happen before the loss would not be a return.
+            "starter_fallen": pets.STARTER_ID in (
+                self.state["pets"].get("fallen") or []),
+            # Dungeon floors walked with no companion, no spell and no item.
+            # MIMIC's condition, and it is not a place — it is a way of arriving.
+            "solo_floors": int(self.state["stats"].get("solo_floors", 0)),
             "stats": {**self.state["stats"], **db.attempt_stats(self.conn)},
+
+            # -- what regalia.py, sages.py and nothing else read ------------
+            #
+            # ONE SNAPSHOT, three readers. pets.py owns the evidence vocabulary
+            # and its evaluator; regalia.py and sages.py reach for the same
+            # `pets._discovery_row`, so a second opinion about what an unaided
+            # clear is cannot exist. All this method does is answer more of the
+            # questions that evaluator knows how to ask.
+            #
+            # `pets_found` is regalia's one addition and its whole gate.
+            "pets_found": list(self.state["pets"].get("found", [])),
+            # `arts` is what the last four sages gate on: the ladder is a
+            # ladder, and the Coliseum will not see somebody who has not already
+            # been taught three times.
+            **sages.evidence_patch(self.state[SAGES_STATE_KEY]),
+            # Casting, as opposed to submitting. Both are folded by
+            # incantation.record_cast into the movebook they belong to.
+            "clean_cast_streak": int(
+                self.state["moveset"].get("best_clean_streak", 0)),
+            "recalled_casts": int(
+                self.state["moveset"].get("recalled_casts", 0)),
+            # The counting questions, answered in SQL over `attempts` rather
+            # than by a counter banked in the save. A banked counter can
+            # disagree with the history it was counting; a query cannot.
+            #
+            # SPELLED OUT, NOT SPLATTED. `sages.self_check()["wiring"]` reads
+            # THIS FUNCTION'S SOURCE for `"key":` literals to decide which
+            # sages are findable, so a `**counters` here would leave it
+            # reporting nine sages as unreachable while they were being reached.
+            # A report that lies in the safe direction is still a report that
+            # lies.
+            "region_clears": counters["region_clears"],
+            "regions_touched": counters["regions_touched"],
+            "first_try": counters["first_try"],
+            "lineage_pairs": counters["lineage_pairs"],
+            "beat_own_time": counters["beat_own_time"],
+            "root_cause_correct": counters["root_cause_correct"],
+            # `lifo_clears` IS DELIBERATELY ABSENT. See `_sage_counters`.
         }
+
+    def _sage_counters(self) -> dict:
+        """db.evidence_counters, with patterns mapped through to skills.
+
+        The mapping lives in `skills.PATTERN_TO_SKILL` and nowhere else, which
+        is why db.py returns raw patterns and this method does the translation.
+        """
+        raw = db.evidence_counters(self.conn)
+        first_try: dict = {}
+        for pattern, count in (raw.get("first_try_by_pattern") or {}).items():
+            name = skillmod.PATTERN_TO_SKILL.get(pattern, "PYTHON")
+            first_try[name] = first_try.get(name, 0) + int(count)
+        first_try[""] = sum(first_try.values())
+        return {
+            "region_clears": dict(raw.get("region_clears") or {}),
+            "regions_touched": int(raw.get("regions_touched", 0)),
+            "first_try": first_try,
+            "lineage_pairs": int(raw.get("lineage_pairs", 0)),
+            "beat_own_time": int(raw.get("beat_own_time", 0)),
+            "root_cause_correct": int(raw.get("root_cause_correct", 0)),
+        }
+
+    # NOT MEASURED, AND SAID SO RATHER THAN FAKED.
+    #
+    # sages.DISCOVERY's `lifo_clears` clause wants "encounters cleared in the
+    # reverse of the order offered", and nothing in this engine ever OFFERS a
+    # list of encounters: `next_encounter` serves exactly one problem, chosen by
+    # the selector. There is no order to reverse, so there is no honest number
+    # to report — and `_pet_evidence` therefore does not emit the key at all,
+    # rather than emitting a zero that would read as a measurement.
+    #
+    # The consequence is one sage. `mines` has a single discovery clause and it
+    # is this one, so the Stack & Queue Mines sage is in the world and cannot be
+    # found. That is named by `sages.self_check()["wiring"]`, which reads this
+    # file's source to work it out, and it is shown at the board rather than
+    # hidden: `sage_board()` renders the clause at zero next to a silhouette.
+    # Whoever makes selection offer a CHOICE of encounters closes it by
+    # recording which of the offered ids was taken; nothing else has to change.
 
     def _artifact_conditions(self, enc: Encounter, *, solved: bool,
                              seconds: float, problem: Problem) -> set:
@@ -2264,7 +5449,12 @@ class Game:
         out = {"quests_ready": [], "quests_completed": [], "pet": None,
                "found_pets": [], "world_events": [], "artifacts": [],
                "upgrades": [], "daily_completed": [], "dungeon": None,
-               "incantations_learned": [], "companion_line": ""}
+               "incantations_learned": [], "companion_line": "",
+               # The barrow's scene, when this clear was the one that closed it.
+               "companion_fell": None,
+               # The ten systems' own returns, so a client reads one payload.
+               "found_regalia": [], "found_sages": [], "trial": None,
+               "sanctuary": None, "hunt": None}
         if enc.mode == config.MODE_INTERVIEW:
             # A measured run pays nothing into the world. That is the point.
             return out
@@ -2285,6 +5475,32 @@ class Game:
                 under_target=(seconds <= problem.target_seconds))
             if problem.encounter_kind in puzzles.PUZZLE_KINDS:
                 quests.note_puzzle(self.state, problem.encounter_kind)
+            # THE SANCTUARY COOLDOWN CLOCK, and it is one line next to the quest
+            # clock on purpose. It counts PROBLEMS SOLVED rather than minutes
+            # elapsed, so a player who puts the game down for a week does not
+            # come back to a hidden healer who has been resting without them.
+            sanctuary.note_clear(self.state)
+
+        # -- the broker's open contract, if there is one
+        #
+        # Every submission, right or wrong, graded or not: a trial that only saw
+        # the clears would be a trial you could fail for free. `submit_to_trial`
+        # returns {} when nothing is open, so there is no `if` to write.
+        trial = economy.submit_to_trial(
+            self.state,
+            problem_id=problem.id, solved=solved, rank=rank,
+            hints_used=enc.hints_used, seconds=seconds,
+            target_seconds=problem.target_seconds, first_try=first_try,
+            is_retest=enc.is_retest, difficulty=problem.difficulty,
+            skill=problem.pattern,
+            puzzle_kind=(problem.encounter_kind
+                         if problem.encounter_kind in puzzles.PUZZLE_KINDS else ""),
+            # The two regions that take the reading away. A trial that asked for
+            # a declared pattern in a place where nothing tells you the pattern
+            # would be asking for a guess.
+            pattern_shown=enc.region not in ("null_kings_castle", "coding_coliseum"),
+            companion_spoke=bool(enc.pet_spoke))
+        out["trial"] = trial or None
 
         # -- companions: bond on evidence, discovery on the same pass
         pet_state = self.state["pets"]
@@ -2302,6 +5518,29 @@ class Game:
                 # discovery_progress keys the pet as "pet", not "id"
                 if pets.grant(pet_state, row["pet"], at=time.time()):
                     out["found_pets"].append(row)
+
+            # -- regalia: earned by a deed, never bought, never dropped ----
+            #
+            # The same evidence snapshot, one pass later, because the snapshot
+            # already carries `pets_found` and an object for an animal you have
+            # never met is a spoiler with a progress bar. `newly_found` is the
+            # only reader; `grant` is the only writer.
+            gear_state = self.state[regalia.REGALIA_STATE_KEY]
+            for row in regalia.newly_found(evidence, gear_state.get("found", [])):
+                got = regalia.grant(gear_state, row["regalia"])
+                if got.get("found"):
+                    out["found_regalia"].append({**row, **got})
+
+            # -- the sages: found by having done the area's work ------------
+            #
+            # Discovery only. Meeting one costs nothing, opens nothing and
+            # grants nothing: the gauntlet is still five problems and the art is
+            # still behind them. This is the same division pets draws — evidence
+            # is evaluated in one place and acted on in another.
+            sage_state = self.state[SAGES_STATE_KEY]
+            for row in sages.newly_found(evidence, sage_state.get("found", [])):
+                if sages.meet(sage_state, row["sage"], at=time.time()):
+                    out["found_sages"].append(row)
         if out["found_pets"] or pet_state.get("active"):
             speaker = (out["found_pets"][0]["pet"] if out["found_pets"]
                        else pet_state["active"][0])
@@ -2323,6 +5562,12 @@ class Game:
         #    to see the room that was just cleared.
         out["dungeon"] = self._advance_dungeon(enc, solved=solved, rank=rank,
                                                fx=fx)
+        # The Unclosed Bracket closes inside _advance_dungeon, because that is
+        # the boss rather than a scene attached to it. It is lifted here so the
+        # result payload carries it at the top level and the client does not
+        # have to go looking inside a dungeon report for the most important
+        # thing that has happened all chapter.
+        out["companion_fell"] = (out["dungeon"] or {}).get("companion_fell")
 
         # -- earned upgrades: 18 items, every LEGENDARY weapon among them, were
         #    unreachable because nothing ever called items.upgrades_for.
@@ -2339,9 +5584,380 @@ class Game:
             incantation.grow_slots(self.state["moveset"],
                                    int(self.state["player"]["level"]))
 
+        # -- THE OVERWORLD SANCTUARY HOOK ----------------------------------
+        #
+        # Two regions have no dungeon to hide a healer in — the Wastes and the
+        # castle — and a tell nobody can follow to a room is a tease rather than
+        # a puzzle, so out here a hurt traveller simply finds the tent. Every
+        # other region returns the blank row, which is why this is called
+        # unconditionally rather than behind a list of two ids.
+        if enc.dungeon_room < 0:
+            look = sanctuary.region_look(self.state, enc.region,
+                                         last_difficulty=problem.difficulty,
+                                         sealed=finalexam.sealed(enc, "BUILD"))
+            if look.get("tell"):
+                out["sanctuary"] = look
+
+        # -- THE HUNT TICKS ON WHAT THE PLAYER DID, NOT ON A CLOCK ----------
+        #
+        # An encounter is the unit of time this engine actually has. hunters.py
+        # is written in seconds because `web/js/overworld.js` mirrors it frame by
+        # frame, so a headless session converts: one resolved encounter is one
+        # ENCOUNTER_SECONDS of dwell, pressure and cooldown. The client's ticks
+        # and these agree because they advance the same `Hunt` through the same
+        # `hunt_step`; nothing here is a second chase.
+        out["hunt"] = self._tick_hunt(enc, seconds=seconds, solved=solved)
+
         if solved:
             self._autosave("encounter_cleared", readiness=ready)
         return out
+
+    # ======================================================================
+    # THE APEX HUNTERS
+    # ======================================================================
+    #
+    # hunters.py ships the creature, the readiness exam, the scaling and the
+    # chase, and deliberately did NOT wire the chase into web/js/overworld.js —
+    # "the contract between them is client_payload() and nothing else" — because
+    # a creature whose position is decided in two places ends up in two places.
+    # This engine holds the serialised `Hunt` rows and calls `hunt_step`; the
+    # client mirrors the same rows through the same function. Neither invents a
+    # second chase.
+    #
+    # ONE RESOLVED ENCOUNTER IS ONE TICK OF THIS MANY SECONDS.
+    #
+    # The alternative was wall-clock, and wall-clock means a player who leaves
+    # the game open over lunch comes back to a creature that has been hunting an
+    # empty room. hunters.MIN_REGION_DWELL_S is 150s, so at this rate an apex
+    # needs roughly two encounters of dwell before it is even eligible, which is
+    # the "meet the area first" rule arriving for free.
+    ENCOUNTER_SECONDS = 90.0
+
+    # AND IT IS SLICED, because `hunt_step` is written for a frame. Its
+    # arithmetic is linear in dt and its thresholds are crossings — TRACKING
+    # begins at scent 0.35, CLOSING wants 0.5, and scent only grows while the
+    # player is MOVING and only in ROAMING. One ninety-second step jumps clean
+    # over the window where both are true and the hunt gives up every time; the
+    # first version of this did exactly that. hunters' own `_full_lifecycle`
+    # proof runs at 1/30s. Two seconds is coarse enough to be cheap and fine
+    # enough to take the same path through the machine.
+    HUNT_SLICE_S = 2.0
+
+    def _hunt_state(self) -> dict:
+        block = self.state.setdefault(
+            "hunters", {"regions": {}, "global_cooldown": 0.0, "kills": {},
+                        "trophies": [], "fight": None, "last_tick": 0.0})
+        block.setdefault("regions", {})
+        block.setdefault("kills", {})
+        block.setdefault("trophies", [])
+        block.setdefault("global_cooldown", 0.0)
+        block.setdefault("fight", None)
+        return block
+
+    def _hunt_for(self, region_id: str) -> hunters.Hunt:
+        """The live Hunt row for one region, rebuilt from the save."""
+        block = self._hunt_state()
+        raw = (block["regions"].get(region_id) or {})
+        row = hunters.new_hunt(region_id)
+        for key, value in raw.items():
+            if hasattr(row, key):
+                setattr(row, key, value)
+        row.region = region_id
+        return row
+
+    def _write_hunt(self, row: hunters.Hunt) -> None:
+        self._hunt_state()["regions"][row.region] = row.to_dict()
+
+    def _readiness_for(self, region_id: str, *, sealed: bool = False):
+        """hunters.readiness_from_game, with the two things it cannot reach.
+
+        The companion's TIER and the pouch are held in two other modules'
+        states, so they are handed in rather than guessed at. Nothing here reads
+        xp, level or mastery — that is the whole argument of hunters.py, and
+        `hunters.self_check()["reads_no_progression"]` greps its own source to
+        prove it stays true on that side of the wall.
+        """
+        active = (self.state["pets"].get("active") or [])
+        tier = ""
+        if active:
+            pet = pets.BY_ID.get(active[0])
+            tier = getattr(pet, "tier", "") if pet is not None else ""
+        pouch = dict(self.state.get(potions.POUCH_STATE_KEY) or {})
+        return hunters.readiness_from_game(
+            self.state, self.effects(), region_id,
+            companion_tier=tier, potions=pouch, build_sealed=sealed)
+
+    def _moment(self, enc: Encounter | None, region_id: str, *,
+                moving: bool = True) -> hunters.Moment:
+        """What `hunt_step` is allowed to know about right now. Nothing else."""
+        player = self.state["player"]
+        maximum = max(1, int(player.get("stamina_max", 1) or 1))
+        block = self._hunt_state()
+        counters = db.evidence_counters(self.conn)
+        return hunters.Moment(
+            player_x=float(player.get("x", 0)), player_y=float(player.get("y", 0)),
+            moving=bool(moving),
+            health_fraction=max(0.0, min(1.0, player.get("stamina", 0) / maximum)),
+            in_dungeon=bool(self.state.get(dungeons.STATE_KEY)),
+            # A town is a sanctuary in the plain sense the module means: the
+            # creature does not come into the square.
+            in_sanctuary=(region_id == "python_village"),
+            near_exit=False,
+            clears=int((counters.get("region_clears") or {}).get(region_id, 0)),
+            sealed=not self._pays_into_the_world(enc),
+            in_battle=bool(block.get("fight")),
+            global_cooldown=float(block.get("global_cooldown", 0.0)),
+            # DETERMINISTIC, deliberately. `hash()` of a str is salted per
+            # process, so a replay of the same save would jitter differently
+            # every launch — and hunters.py's whole jitter design says a
+            # deterministic replay is worth more than a surprise. The world seed
+            # and the submission count are both in the save.
+            seed=(int(self.state.get("world_seed", 0) or 0)
+                  + int(self.state["stats"].get("submissions", 0))) & 0xFFFFFFFF,
+        )
+
+    def _tick_hunt(self, enc: Encounter | None, *, seconds: float = 0.0,
+                   solved: bool = True) -> dict | None:
+        """Advance this region's hunt by one encounter's worth of time."""
+        region_id = getattr(enc, "region", "") or self.state["player"].get("region", "")
+        if not hunters.apex_for(region_id):
+            return None
+        block = self._hunt_state()
+        block["global_cooldown"] = max(
+            0.0, float(block["global_cooldown"]) - self.ENCOUNTER_SECONDS)
+        row = self._hunt_for(region_id)
+        was = row.state
+        events: list = []
+        # WHETHER THE PLAYER IS MOVING IS DECIDED BY WHAT THE APEX IS DOING,
+        # and this is the same reading hunters' own `_full_lifecycle` proof
+        # takes: you walk the overworld until something is on your trail, and
+        # then you are standing at a terminal typing Python, which is the only
+        # posture in which anything in this game ever catches you.
+        #
+        # It is not a cheat for the creature. `moving` is what makes a player
+        # gain (112 - 52) px/s, so a player who keeps walking keeps the gap, and
+        # that is G1 — walking away is subtraction, not a skill check. What this
+        # models is a player who stopped, because an encounter resolving IS a
+        # player who stopped.
+        remaining = self.ENCOUNTER_SECONDS
+        while remaining > 0:
+            slice_s = min(self.HUNT_SLICE_S, remaining)
+            moving = row.state in ("DORMANT", "STIRRING", "ROAMING")
+            row, half = hunters.hunt_step(
+                row, self._moment(enc, region_id, moving=moving), slice_s)
+            events.extend(half)
+            remaining -= slice_s
+        self._write_hunt(row)
+        # THE LEDGER. `hunt_engage` allocates `fight["casts"]` and nothing ever
+        # filled it, which left `hunt_resolve` taking the client's word for a
+        # kill — a bounty in gold, metal, a draught and a trophy, for a POST.
+        # A cast that lands on an apex is the same thing as a cast that lands
+        # anywhere else in this game: a line of the player's own Python that
+        # was graded and passed. So a solved encounter, fought while the fight
+        # is open, is one cast. Nothing else moves this number.
+        fight = block.get("fight")
+        if (fight and solved
+                # THE SAME THREE CONDITIONS web/js/huntui.js castLanded() uses,
+                # because two counters that disagree are worse than one that is
+                # wrong. In this region, because the pool belongs to the thing
+                # standing in front of you; and only when the encounter pays
+                # into the world at all, since a measured run advances nothing
+                # and must not drain an apex either.
+                and fight.get("region") == region_id
+                and self._pays_into_the_world(enc)):
+            fight["casts"] = int(fight.get("casts", 0)) + 1
+        if row.state == "SPENT" or (was != "DORMANT" and row.state == "DORMANT"):
+            block["global_cooldown"] = float(hunters.GLOBAL_COOLDOWN_S)
+        if was == row.state and not events:
+            return None
+        return {**row.to_dict(), "events": list(events), "was": was,
+                "telegraph": dict(hunters.TELEGRAPH.get(row.state, {}))}
+
+    # -- the four doors the client actually presses ------------------------
+    def hunt_view(self, region_id: str = "") -> dict:
+        """Everything the overworld needs about this region's apex, in one call.
+
+        `client_payload` is static and shipped once at load; the Hunt row and
+        the readiness reading are per-region and per-moment. The READOUT is the
+        point of the feature: it is a list of the things you have not done in
+        this area yet, and it is legible before the fight rather than after it.
+        """
+        region_id = region_id or self.state["player"].get("region", "")
+        apex = hunters.apex_for(region_id)
+        if apex is None:
+            return {"apex": None, "region": region_id,
+                    "line": "Nothing hunts here."}
+        ready = self._readiness_for(region_id)
+        row = self._hunt_for(region_id)
+        block = self._hunt_state()
+        return {
+            "region": region_id,
+            "apex": apex.to_dict(),
+            "hunt": row.to_dict(),
+            "readiness": ready.to_dict(),
+            "lesson": hunters.lesson_for(region_id),
+            "scaling": (hunters.scale_for(region_id, ready=ready) or
+                        hunters.Scaling(apex.id, region_id, 0, "", 0, 0, 1.0,
+                                        1.0, "", (), "")).to_dict(),
+            "telegraph": dict(hunters.TELEGRAPH.get(row.state, {})),
+            "kills": int(block["kills"].get(apex.id, 0)),
+            "guarantees": hunters.escape_guarantees(),
+            "client": hunters.client_payload(),
+            # The open fight and how much of it is done, so the bar the client
+            # draws is the bar the engine will be paid against. Without this
+            # the client is guessing at the number `hunt_resolve` checks.
+            "fight": (dict(block["fight"], remaining=max(
+                0, int((block["fight"].get("scaling") or {}).get(
+                    "target_casts", 0)) - int(block["fight"].get("casts", 0))))
+                if block.get("fight") else None),
+        }
+
+    def hunt_engage(self, region_id: str = "") -> dict:
+        """Turn and face it. The scaling is frozen HERE and nowhere else.
+
+        Freezing is not an optimisation. It is what stops a player stripping
+        their gear mid-fight to shrink the pool, and what stops the pool growing
+        under somebody who upgrades between rounds.
+        """
+        sealed = self._sealed_in_interview()
+        if sealed:
+            return sealed
+        region_id = region_id or self.state["player"].get("region", "")
+        row = self._hunt_for(region_id)
+        if row.state not in ("TRACKING", "CLOSING", "ENGAGED"):
+            return {"error": "nothing is hunting you here", "state": row.state}
+        ready = self._readiness_for(region_id)
+        scaling = hunters.scale_for(region_id, ready=ready)
+        if scaling is None:
+            return {"error": "no apex here"}
+        row.state = "ENGAGED"
+        row.elapsed = 0.0
+        self._write_hunt(row)
+        block = self._hunt_state()
+        block["fight"] = {"region": region_id, "apex": scaling.apex,
+                          "peak": ready.score, "scaling": scaling.to_dict(),
+                          "hp": scaling.hp, "casts": 0,
+                          "started_at": time.time()}
+        self.save()
+        return {"engaged": True, "scaling": scaling.to_dict(),
+                "readiness": ready.to_dict(),
+                "flee": hunters.can_flee(row, turn=1),
+                "lesson": hunters.lesson_for(region_id),
+                # Said at the door, not after the loss. At readiness zero this
+                # is fifty-two casts and is not a fight the design expects you
+                # to win; it expects you to look at it and leave.
+                "line": scaling.blurb}
+
+    def hunt_flee(self) -> dict:
+        """Always succeeds. No roll, turn one included. See G2."""
+        block = self._hunt_state()
+        fight = block.get("fight")
+        if not fight:
+            return {"error": "you are not fighting anything"}
+        row = self._hunt_for(fight["region"])
+        row = hunters.flee(row)
+        self._write_hunt(row)
+        block["fight"] = None
+        block["global_cooldown"] = float(hunters.GLOBAL_COOLDOWN_S)
+        self.save()
+        return {"fled": True, "state": row.state,
+                "line": "You walk. It does not get to decide whether that works."}
+
+    def hunt_resolve(self, *, casts: int = 0, killed: bool = False) -> dict:
+        """The fight is over. Pay it, or do not.
+
+        THE TYPING IS STILL THE ATTACK: `casts` is how many lines actually
+        landed, counted by whatever ran the fight, and this method neither
+        grades nor grants mastery — the casting already happened, one line at a
+        time, and was already paid for where casting is paid for.
+        """
+        block = self._hunt_state()
+        fight = block.get("fight")
+        if not fight:
+            return {"error": "you are not fighting anything"}
+        row = self._hunt_for(fight["region"])
+        # WHAT THE CLIENT SAYS IS NOT WHAT HAPPENED. `casts` and `killed` both
+        # arrive off the wire; the ledger below is what the engine watched the
+        # player do. The frozen scaling says how many landed lines this apex is
+        # long, and the fight block says how many landed. A claim beyond that is
+        # refused and the fight is LEFT OPEN, because a player who is genuinely
+        # mid-fight and whose client miscounted must not lose the fight to an
+        # accounting error — they walk away with `hunt_flee`, which is free.
+        landed = int(fight.get("casts", 0))
+        needed = int((fight.get("scaling") or {}).get("target_casts", 0))
+        if killed and landed < needed:
+            self.save()
+            return {"error": "it is still standing",
+                    "killed": False, "casts": landed, "needed": needed,
+                    "remaining": needed - landed,
+                    "message": "That is not dead yet. It is %d landed lines "
+                               "long and you have put %d into it. Keep typing, "
+                               "or walk — walking always works."
+                               % (needed, landed)}
+        block["fight"] = None
+        block["global_cooldown"] = float(hunters.GLOBAL_COOLDOWN_S)
+        if not killed:
+            row = hunters.flee(row)
+            self._write_hunt(row)
+            self.save()
+            return {"killed": False, "state": row.state, "bounty": None}
+
+        row.state = "SPENT"
+        row.kills += 1
+        row.cooldown = float(hunters.REGION_COOLDOWN_S)
+        self._write_hunt(row)
+        apex_id = fight["apex"]
+        first = apex_id not in block["kills"]
+        block["kills"][apex_id] = int(block["kills"].get(apex_id, 0)) + 1
+
+        # The bounty is priced on READINESS AT THE MOMENT THE FIGHT STARTED —
+        # frozen in `fight["peak"]` — so somebody who had no business winning is
+        # paid for having had no business winning, and somebody who came
+        # prepared is paid less and already knows why.
+        prize = hunters.bounty(fight["region"], int(fight["peak"]),
+                               first_kill=first)
+        paid: dict = {"gold": 0, "metal": None, "potion": None, "trophy": ""}
+        if prize is not None:
+            econ = self.state
+            award = economy.Award(gold=int(prize.gold), source="purse",
+                                  region_id=fight["region"],
+                                  detail={"apex": apex_id})
+            paid["gold"] = economy.record(econ, award)["gold"]
+            self.state["player"]["gold"] += paid["gold"]
+            upkeep.record_income(self.state, paid["gold"])
+            if prize.metal and prize.metal_units:
+                forge.add_metal(self._forge_state(), prize.metal,
+                                int(prize.metal_units))
+                paid["metal"] = {"id": prize.metal, "count": prize.metal_units}
+            got = potions.grant(self.state, {
+                "id": self._apex_potion(prize), "count": int(prize.potion_doses)})
+            paid["potion"] = {**got, "count": int(prize.potion_doses)}
+            # `trophy_chance` is RETURNED rather than rolled, so the roll is
+            # ours and uses our rng, exactly the way forge.roll_metal and
+            # items.roll_drop already work.
+            if prize.trophy_guaranteed or self._rng.random() < prize.trophy_chance:
+                if prize.trophy in items.BY_ID and \
+                        prize.trophy not in self.state["inventory"]:
+                    self.state["inventory"].append(prize.trophy)
+                    self.state["stats"]["items_found"] += 1
+                    block["trophies"].append(prize.trophy)
+                    paid["trophy"] = prize.trophy
+        self.save()
+        return {"killed": True, "first_kill": first, "casts": landed,
+                "claimed_casts": int(casts), "needed": needed,
+                "bounty": prize.to_dict() if hasattr(prize, "to_dict") else
+                (asdict(prize) if prize is not None else None),
+                "paid": paid, "state": row.state,
+                "line": prize.line if prize is not None else ""}
+
+    def _apex_potion(self, prize) -> str:
+        """The apex's draught, in the band the bounty names. hunters.py names a
+        BAND and leaves the id to whoever owns the pouch, which is potions.py."""
+        band = str(getattr(prize, "potion_band", "") or "small")
+        health = [p for p in potions.CATALOGUE if p.kind == "HEALTH"]
+        exact = [p for p in health if p.strength == band]
+        pick = exact or health
+        return pick[0].id if pick else ""
 
     def _count_world_stats(self) -> None:
         """Two acquisition counters that were declared in DEFAULT_STATE and
@@ -2499,12 +6115,33 @@ class Game:
         if not run or enc.dungeon_room < 0:
             return None
         dungeon = self._dungeon_for(run["dungeon"], run.get("seed"))
+        # CAPTURED BEFORE THE CLEAR. After it, the relent chain has moved and
+        # the room no longer remembers what it demanded — and what the hidden
+        # healer's reveal reads is the difficulty the room ACTUALLY ASKED FOR.
+        asked = ("BOSS" if enc.dungeon_room == dungeon.boss_room
+                 else self.by_id[enc.problem_id].difficulty
+                 if enc.problem_id in self.by_id else "")
         result = dungeons.clear_room(dungeon, run, enc.dungeon_room, solved=solved)
         self._resolved_dungeon = (dungeon, run)
         if solved:
             reward = result.get("reward") or {}
             self.state["player"]["xp"] += int(reward.get("xp", 0))
-            self.state["player"]["gold"] += int(reward.get("gold", 0))
+            # The room's purse is economy.py's now. A ROOM PAYS ONLY IF IT ASKED
+            # FOR SOMETHING: dungeon_room_award returns zero for ENTRANCE,
+            # JUNCTION, STORY and TREASURE, so walking stops being paid for
+            # while the chest still holds what roll_room_treasure puts in it.
+            room_now = next((r for r in dungeon.rooms
+                             if r.id == enc.dungeon_room), None)
+            if self._pays_into_the_world(enc):
+                award = economy.dungeon_room_award(
+                    region_id=dungeon.region,
+                    room_kind=getattr(room_now, "kind", "ENCOUNTER"),
+                    depth=self._dungeon_depth(dungeon, run), solved=True)
+                paid = economy.record(
+                    self.state, award)["gold"]
+                self.state["player"]["gold"] += paid
+                upkeep.record_income(self.state, paid)
+                result["gold"] = paid
             quests.note_depth(self.state, run["dungeon"],
                               self._dungeon_depth(dungeon, run))
             room = next((r for r in dungeon.rooms
@@ -2516,12 +6153,100 @@ class Game:
                 if treasure:
                     self._take_drop(treasure)
                     result["treasure"] = treasure
+                # A chest holds potions as well as gear, and holds them far more
+                # reliably than a monster drops them: chests are the dependable
+                # half of the economy and monsters are the lottery half, so a
+                # player who explores is never out of thimbles and a player who
+                # only fights occasionally is out of everything. Exploring is
+                # the behaviour worth paying for, since the map is where the
+                # problems are.
+                if room.kind in ("TREASURE", "VAULT"):
+                    found = potions.roll_chest(
+                        # `dungeon.floor` rather than the private ladder
+                        # roll_room_treasure runs on gear. The chest's SIZE is
+                        # its own module's business; what a potion needs is how
+                        # deep the player has walked, and the floor says that in
+                        # one public word.
+                        difficulty=dungeon.floor,
+                        luck=fx.get("loot_luck", 0.0),
+                        affinity=str(elements.affinity_for(dungeon.region)).lower(),
+                        rng=self._rng)
+                    if found:
+                        result["chest_potions"] = [
+                            {**row, **potions.grant(self.state, row)}
+                            for row in found]
+            self._count_solo_floor(enc)
+            # THE DUNGEON HOOK, second of two, and it is the one that matters:
+            # the room that just demanded something is the room a hidden healer
+            # is revealed by. `asked` was captured above the clear.
+            look = sanctuary.dungeon_look(self.state, dungeon, run,
+                                          last_difficulty=asked,
+                                          sealed=finalexam.sealed(enc, "BUILD"))
+            if look.get("tell") or look.get("here"):
+                result["sanctuary"] = look
             if enc.dungeon_room == dungeon.boss_room:
                 result["dungeon_cleared"] = self._close_dungeon(dungeon, run,
                                                                 rank=rank, fx=fx)
+                fell = self._companion_falls(dungeon)
+                if fell:
+                    result["companion_fell"] = fell
                 return result
         self.state[dungeons.STATE_KEY] = run
         return result
+
+    def _count_solo_floor(self, enc: Encounter) -> None:
+        """A floor walked with nothing helping. MIMIC's whole gate, and nothing
+        else reads it.
+
+        "Alone and unarmed" is checked against what the encounter actually
+        records rather than what the player says about themselves: no companion
+        in the field, no rung of the hint tree cast and nothing said unasked,
+        and no consumable burned. A probe is a question you paid focus to ask,
+        so it counts as help too.
+        """
+        if pets.active_id(self.state["pets"]):
+            return
+        if enc.hints_used or enc.pet_spoke or enc.temp_effects or enc.probes_used:
+            return
+        stats = self.state["stats"]
+        stats["solo_floors"] = int(stats.get("solo_floors", 0)) + 1
+
+    def _companion_falls(self, dungeon) -> dict | None:
+        """The Unclosed Bracket closes, and the pig is on the inside of it.
+
+        Fired from the dungeon's own boss rather than from a story trigger,
+        because this is not a cutscene bolted onto a fight — it is what that
+        boss IS. A thing that opens and never closes, met by an animal whose
+        entire repertoire is supplying the mark that is missing.
+
+        pets.fall is idempotent and the fact is persisted in the save, so this
+        fires exactly once per run and survives a reload mid-scene. A player who
+        cleared this dungeon before the fall existed settled the debt at load
+        time; `is_fallen` is already true for them and this returns None.
+        """
+        if dungeon.id != pets.FALLS_AT_DUNGEON:
+            return None
+        pet_state = self.state["pets"]
+        if pets.is_fallen(pet_state, pets.STARTER_ID):
+            return None
+        scene = pets.fall(pet_state, at=time.time())
+        if not scene.get("fell"):
+            return None
+        self.state["pet_fall"] = scene
+        self.save()
+        saves.autosave(self.conn, self.state, "companion_fell")
+        return scene
+
+    def acknowledge_fall(self) -> dict:
+        """The client has played the scene. Put the keepsake away.
+
+        The fact stays in the save forever — `fallen` is what the legendary
+        return is gated on — and only the undelivered scene is cleared.
+        """
+        scene = self.state.get("pet_fall")
+        self.state["pet_fall"] = None
+        self.save()
+        return {"ok": True, "played": bool(scene)}
 
     def _close_dungeon(self, dungeon, run: dict, *, rank: str, fx: dict) -> dict:
         """The thing at the bottom falls and the descent is over.
@@ -2791,11 +6516,30 @@ class Game:
         if self.effects().get("sealed_hints"):
             # An artifact the player chose to wear. Its own tooltip says so.
             return finalexam.refuse("HINTS")
+        if enc.repo_id:
+            # Not a refusal either: a Mini-Repo has no hint tree to climb, in
+            # any mode. What it has instead is the suite, which can be run as
+            # often as you like, and a debrief that always names the lesson and
+            # the file the cause lived in — including after a failure.
+            return {"error": "a mini-repo has no spells",
+                    "message": "Nothing here is hidden from you. Read the "
+                               "tests: they are the specification, and running "
+                               "them costs nothing."}
         problem = self.by_id[enc.problem_id]
         rungs = problem.hint_tree
         if not 1 <= level <= len(rungs):
             return {"error": "no such spell"}
         rung = rungs[level - 1]
+
+        # THE COMPANION IS THE HINT SYSTEM. Everything between the open rung and
+        # the worked solution is read out by the animal walking with you, and an
+        # animal below the depth of this encounter cannot read it. What it hands
+        # over instead is the map: see _hint_gate, which is also where the
+        # no-dead-end rule is enforced rather than promised.
+        stuck = len(db.attempts_for(self.conn, problem.id)) >= pets.FREE_SOLUTION_AFTER
+        blocked = self._hint_gate(enc, problem, level, rung, stuck=stuck)
+        if blocked:
+            return blocked
 
         player = self.state["player"]
         fx = self.effects()
@@ -2808,7 +6552,6 @@ class Game:
         # and could not reach the floor the whole design rests on. Once the coach
         # would reveal the solution anyway (three attempts on this problem), the
         # rung that reveals it is free. It still costs the entire rank.
-        stuck = len(db.attempts_for(self.conn, problem.id)) >= 3
         if rung["spell"] == "PHOENIX" and stuck:
             cost = 0
         if player["mana"] < cost:
@@ -2830,7 +6573,123 @@ class Game:
             "hints_used": enc.hints_used,
             "rank_ceiling": rung["rank_cost"],
             "visualization": problem.visualization if level >= 2 else {},
+            # Who read it out. The rung's words are the rung's words — a
+            # companion is a voice around the hint tree, never a second one —
+            # but the player should be able to see whose depth paid for it.
+            "read_by": self._hint_voice(enc, problem, level, rung, stuck=stuck),
         }
+
+    # -- who is allowed to say it ------------------------------------------
+    #
+    # The ladder in pets.py gates the middle of the hint tree and nothing else.
+    # Three rungs out of the tree are permanently companion-free, and they are
+    # the same three roads pets.PETLESS_ROADS names, so the module and the
+    # engine cannot drift apart about what a stuck player is owed:
+    #
+    #   OPEN_RUNG   the first rung, always, in every mode where hints exist
+    #   SOLUTION    PHOENIX, always — the worked solution was never a crutch you
+    #               lean on during the fight, it is what you are owed afterwards
+    #   COACH       not in this file at all; it has never asked who walks with you
+    #
+    # and a fourth, which is the sharpest edge of the whole design: after
+    # FREE_SOLUTION_AFTER attempts the entire tree opens regardless of tier.
+    # A player who has failed three times is stuck by measurement rather than by
+    # assertion, and gating the CHEAP rungs of a tree whose most expensive rung
+    # is already free would be a rule that only ever made things worse.
+
+    def _asked_depth(self, problem) -> str:
+        """The depth a DELIBERATELY ASKED rung is measured against.
+
+        Note what is NOT in here: `boss=` and `final=`. pets.effective_difficulty
+        raises a boss room to at least ELITE, and that is right for the help
+        that arrives unasked — a boss is the encounter that exists to find out
+        whether you needed it. Applying the same lift to the hint tree would
+        mean nothing below LEGENDARY could read rungs 2 to 4 at any of the
+        fourteen bosses, which is a large silent difficulty change and, worse,
+        a second opinion about what a boss takes away. What a boss takes away is
+        already decided in one place: finalexam.BOSS_LADDER removes the whole
+        hint tree at rung 3 and never gives it back. So an asked rung is
+        measured against the problem's own tier and nothing else.
+        """
+        return pets.effective_difficulty(problem.difficulty)
+
+    def _hint_gate(self, enc: Encounter, problem, level: int, rung: dict, *,
+                   stuck: bool) -> dict | None:
+        """None if this rung may be cast, or the refusal that says why not.
+
+        The refusal is deliberately NOT `{"error": "sealed"}`. A seal means the
+        capability does not exist here; this means the animal in the field
+        cannot read this depth, which is a different sentence with a different
+        answer, and the client must not be able to confuse the two.
+        """
+        if level <= pets.OPEN_RUNG or rung["spell"] == "PHOENIX" or stuck:
+            return None
+        depth = self._asked_depth(problem)
+        active = pets.active_id(self.state["pets"])
+        if active and pets.covers(active, depth):
+            return None
+        route = pets.fallback_route(active, difficulty=depth,
+                                    state=self.state["pets"])
+        route["attempts"] = len(db.attempts_for(self.conn, problem.id))
+        route["solution_free_after"] = pets.FREE_SOLUTION_AFTER
+        pet = pets.BY_ID.get(active)
+        return {
+            "error": "above_tier",
+            "capability": "HINTS",
+            "level": level,
+            "difficulty": depth,
+            "companion": active,
+            "companion_name": pet.name if pet else "",
+            "companion_tier": pets.tier_of(active).key if active else "",
+            "helps_through": pets.tier_of(active).depth if active else "",
+            "opening": pet.above_tier if pet else "",
+            # Said in the engine's own voice rather than an animal's, because
+            # the player needs to hear the distinction out loud: the help still
+            # exists, it is this companion that cannot reach it.
+            "message": (
+                f"{pet.name} cannot read this one. It is not that there is no "
+                f"help here — the first rung is open, the coach speaks after a "
+                f"failed submission, and the worked solution comes free after "
+                f"{pets.FREE_SOLUTION_AFTER} attempts. It is that the animal "
+                f"you brought covers {pets.tier_of(active).depth} and this room "
+                f"is {depth}."
+                if pet else
+                "Nothing is walking with you, so the middle of the tree has "
+                "nobody to read it out. The first rung is open, the coach speaks "
+                "after a failed submission, and the worked solution comes free "
+                f"after {pets.FREE_SOLUTION_AFTER} attempts."),
+            "open_rung": pets.OPEN_RUNG,
+            "route": route,
+        }
+
+    def _hint_voice(self, enc: Encounter, problem, level: int, rung: dict, *,
+                    stuck: bool) -> dict:
+        """Whose mouth this rung came out of, for the client to draw.
+
+        A rung the ladder would have gated and which is open anyway — the first
+        one, the worked solution, or anything at all once the player is three
+        attempts deep — is marked `open: True` and carries no animal. That is
+        the game telling the truth about its own floor rather than dressing the
+        floor up as a favour.
+        """
+        active = pets.active_id(self.state["pets"])
+        depth = self._asked_depth(problem)
+        pet = pets.BY_ID.get(active)
+        covered = bool(active) and pets.covers(active, depth)
+        if not covered:
+            return {"pet": "", "name": "", "open": True,
+                    "why": ("the first rung is never gated" if level <= pets.OPEN_RUNG
+                            else "the worked solution is never gated"
+                            if rung["spell"] == "PHOENIX" else
+                            f"{pets.FREE_SOLUTION_AFTER} attempts deep: the tree "
+                            "is open")}
+        bond = int(self.state["pets"].get("bond", {}).get(active, 0))
+        return {"pet": pet.id, "name": pet.name, "species": pet.species,
+                "sprite": pet.sprite, "colour": pet.colour, "open": False,
+                "tier": pets.tier_of(active).key,
+                "helps_through": pets.tier_of(active).depth,
+                "bond_rank": pets.bond_rank(bond).key,
+                "line": pet.on_intervene}
 
     # -- memory shrines ----------------------------------------------------
     def shrine(self) -> dict:
@@ -2924,6 +6783,15 @@ class Game:
             "herald": seal.herald,
             "ladder": self.boss_ladder(boss_id)["ladder"],
         }
+        # THE CAGE, BEFORE THE FIGHT, and this is the whole reason captives.py
+        # has any weight. A cage the player WALKED PAST is a different fight
+        # from a cage they hear about afterwards; the names and trades are on
+        # the wall before the first line of Python is typed. It returns {} for a
+        # boss holding nobody and carries freed=True on a rematch, so the cages
+        # can be drawn empty the second time.
+        room = captives.chamber(boss_id, self.state)
+        if room:
+            payload["chamber"] = room
         return payload
 
     def _rematch_problem(self, boss: dict, rematch: int) -> str:
@@ -2933,7 +6801,7 @@ class Game:
         problem = self.by_id.get(authored)
         if problem is None:
             return authored
-        family = [p for p in self.corpus
+        family = [p for p in self.teachable
                   if p.spaced_repetition_family == problem.spaced_repetition_family
                   and p.id != authored]
         if not family:
@@ -2949,17 +6817,55 @@ class Game:
         if solved:
             if enc.boss_id not in self.state["cleared_bosses"]:
                 self.state["cleared_bosses"].append(enc.boss_id)
-            self.state["boss_rematch"][enc.boss_id] = \
-                self.state["boss_rematch"].get(enc.boss_id, 0) + 1
+            times_defeated = self.state["boss_rematch"].get(enc.boss_id, 0)
+            self.state["boss_rematch"][enc.boss_id] = times_defeated + 1
             run = self.state.get(dungeons.STATE_KEY)
-            if run and run.get("boss", {}).get("id") == enc.boss_id:
+            in_dungeon = bool(run and run.get("boss", {}).get("id") == enc.boss_id)
+            if in_dungeon:
                 if run["dungeon"] not in self.state["dungeons_cleared"]:
                     self.state["dungeons_cleared"].append(run["dungeon"])
                 self.state[dungeons.STATE_KEY] = None
+
+            # -- THE CAGES, OPENED ------------------------------------------
+            #
+            # Directly after the cleared_bosses append, which is where the
+            # contract puts it and where it belongs: the people this thing took
+            # are freed by the same fact that records it as beaten. `free()`
+            # returns {} on a rematch and {} for a boss holding nobody, so there
+            # is no `if` to write and no way to pay twice.
+            #
+            # The reward is settled through the SAME handler a quest turn-in
+            # uses, because captives.py deliberately emits nothing quests.py
+            # does not already emit. One settler, one set of shapes; a second
+            # would eventually disagree with the first about what a metal is.
+            rescue = captives.free(self.state, enc.boss_id) \
+                if self._pays_into_the_world(enc) else {}
+            if rescue:
+                rescue["settled"] = self._settle_pay(rescue.get("pay") or {},
+                                                     story=rescue.get("story") or {},
+                                                     source="rescue")
+
+            # The boss's own purse, which is economy.py's number and not a flat
+            # one. `times_defeated` is read BEFORE the increment above, which is
+            # what turns a memorised rematch from 1.54x the plain rate into
+            # 0.46x — less than walking next door and fighting something.
+            boss_gold = 0
+            if self._pays_into_the_world(enc):
+                award = economy.boss_award(
+                    region_id=(enc.region or boss.get("region", "")),
+                    boss_id=enc.boss_id, solved=True, dungeon=in_dungeon,
+                    times_defeated=times_defeated)
+                boss_gold = economy.record(
+                    self.state, award)["gold"]
+                self.state["player"]["gold"] += boss_gold
+                upkeep.record_income(self.state, boss_gold)
+
             saves.autosave(self.conn, self.state, "boss_defeated")
             return {"id": enc.boss_id, "name": boss.get("name", ""),
                     "defeated": True, "rank": rank, "seconds": round(seconds, 1),
                     "rematch_tier": self.state["boss_rematch"][enc.boss_id],
+                    "gold": boss_gold,
+                    "rescue": rescue or None,
                     "history": db.boss_history(self.conn, enc.boss_id)}
         # A boss is never a dead end: it enters its teaching phase, and the
         # ladder comes WITH the refusal rather than behind a route nothing calls.
@@ -2985,7 +6891,7 @@ class Game:
             return {"error": "unknown problem"}
         family = problem.spaced_repetition_family
         ladder = sorted(
-            [p for p in self.corpus if p.spaced_repetition_family == family],
+            [p for p in self.teachable if p.spaced_repetition_family == family],
             key=lambda p: adaptive.DIFF_ORDER.index(p.difficulty))
         return {
             "boss": boss,
@@ -3018,20 +6924,43 @@ class Game:
             profile, adaptive.PROFILE_PATTERN_WEIGHT["GENERAL_SWE"])
         recent = set(self.state["recent_ids"][:15])
 
+        # Interview Mode measures, so it reaches for the hold-out FIRST. A
+        # sealed problem from a lineage this player has never met is the only
+        # content in the corpus that can answer the question they actually
+        # asked. The hold-out is finite and spends as it is used, so when it has
+        # nothing that fits the rung the set falls back to teachable material —
+        # still a measured run, still unaided, just not evidence of transfer.
+        # transfer_report() says which it was by counting only the first.
+        holdout_first = self.transfer_pool()
+        picked: set = set()
+        lineages: set = set()
+
+        def draw(want: str, pool: list):
+            candidates = [p for p in pool
+                          if p.difficulty == want
+                          and p.entry.get("kind") in ("function", "class_ops")
+                          and p.encounter_kind in ("CODE_BATTLE",)
+                          and p.id not in recent
+                          and p.id not in picked
+                          # One per lineage per sitting: two siblings in one set
+                          # is one exercise asked twice, and only the first of
+                          # them could ever have counted for anything.
+                          and p.lineage_id not in lineages]
+            if not candidates:
+                return None
+            candidates.sort(key=lambda p: (weights.get(p.pattern, 1.0)
+                                           * p.profile_weight.get(profile, 1.0)
+                                           + self._rng.random()), reverse=True)
+            return candidates[0]
+
         chosen = []
         for want in spec["ladder"]:
-            pool = [p for p in self.corpus
-                    if p.difficulty == want
-                    and p.entry.get("kind") in ("function", "class_ops")
-                    and p.encounter_kind in ("CODE_BATTLE",)
-                    and p.id not in recent
-                    and p.id not in {c.id for c in chosen}]
-            if not pool:
+            problem = draw(want, holdout_first) or draw(want, self.teachable)
+            if problem is None:
                 continue
-            pool.sort(key=lambda p: (weights.get(p.pattern, 1.0)
-                                     * p.profile_weight.get(profile, 1.0)
-                                     + self._rng.random()), reverse=True)
-            chosen.append(pool[0])
+            picked.add(problem.id)
+            lineages.add(problem.lineage_id)
+            chosen.append(problem)
 
         run = {
             "id": f"iv-{int(time.time())}", "format": fmt, "profile": profile,
@@ -3042,7 +6971,7 @@ class Game:
         self.state["interview"] = run
         self.save()
         return {
-            "run": run, "label": spec["label"],
+            "run": self.run_view(run), "label": spec["label"],
             "rules": [
                 "No spells. No mentor. No pattern cards. No coach.",
                 "The algorithm family is never named.",
@@ -3050,8 +6979,10 @@ class Game:
                 "State your approach before you write, in the box provided.",
                 "Everything is recorded and analysed the moment it ends.",
             ],
-            "problems": [{"id": p.id, "title": p.title, "difficulty": p.difficulty}
-                         for p in chosen],
+            # The ladder, without the names on it. The client renders "five
+            # problems, rising in difficulty"; it has never needed to know which
+            # five, and the hold-out cannot afford for it to.
+            "problems": [{"difficulty": p.difficulty} for p in chosen],
         }
 
     def _start_exam(self, profile: str) -> dict:
@@ -3075,11 +7006,20 @@ class Game:
         self.save()
         fmt = finalexam.interview_format()
         return {
-            "run": run, "label": fmt["label"], "exam": payload,
+            "run": self.run_view(run), "label": fmt["label"],
+            # `player_view`, not the `to_dict` that is kept in the save. Exam
+            # already drew this line for itself — "how long, how many, and in
+            # what order. Not what they are about" — and the engine was sending
+            # the other one, which carries every question's problem_id and title.
+            "exam": exam.player_view(),
             "rules": list(fmt["rules"]),
             "ladder": finalexam.ladder_view(),
-            "problems": [{"id": pid, "title": self.by_id[pid].title,
-                          "difficulty": self.by_id[pid].difficulty}
+            # The last thing in the game, given a face. Static module data: it
+            # has never seen a question and there is no field on it that could
+            # carry one, so it ships inside a sealed run without widening the
+            # seal. The herald fires the beat; the beat pays nothing.
+            "examiner": finalexam.examiner_view(),
+            "problems": [{"difficulty": self.by_id[pid].difficulty}
                          for pid in run["problem_ids"] if pid in self.by_id],
         }
 
@@ -3108,7 +7048,11 @@ class Game:
         return finalexam.debrief(
             exam, results, skills=self.skills,
             seconds_by_segment=seconds_by_segment or {},
-            readiness=self._readiness(), corpus_index=self.by_id)
+            readiness=self._readiness(), corpus_index=self.by_id,
+            # Which of these the player was actually shown. A sealed question
+            # the run composed but never served is still unspent hold-out, and
+            # a debrief that names it hands it over for free.
+            served=db.transfer_problem_ids(self.conn))
 
     def _recover_exam(self, payload: dict):
         """The composed Exam, from memory or rebuilt from its own seed.
@@ -3198,6 +7142,7 @@ class Game:
                 if award:
                     secrets.append(award)
 
+        was_exam = run["format"] == "FINAL_EXAM"
         self.state["interview"] = None
         self.state["exam"] = None
         self._exam = None
@@ -3205,9 +7150,18 @@ class Game:
         self.save()
         saves.autosave(self.conn, self.state, "session_end")
 
-        return {
+        # The beat about the last trial fires HERE rather than at the door,
+        # after `interview` has been cleared. collect_story pays beat rewards,
+        # and a measured run pays nothing into the world — that invariant is
+        # worth more than firing the line thirty seconds earlier. The herald at
+        # the door is the examiner's own arrival, which is static prose and
+        # costs nothing.
+        story = (self.collect_story(events=("last_trial_entered",))
+                 if was_exam else [])
+
+        out = {
             "finished": True, "score": score, "solved": solved, "total": total,
-            "debrief": debrief,
+            "debrief": debrief, "story": story,
             "seconds": round(seconds), "within_time": within,
             "results": results,
             "breakdown": {"knowledge_failures": knowledge,
@@ -3218,6 +7172,17 @@ class Game:
             "secrets": secrets,
             "history": db.interview_history(self.conn, limit=10),
         }
+        # THE LAST SCENE, AFTER THE PRACTICAL IS SCORED AND NOT BEFORE.
+        #
+        # `self.state["interview"]` has already been cleared above, so the
+        # encounter this is handed is None and the MENTOR seal is open: a
+        # cutscene is a named voice speaking to you, which is exactly the mentor
+        # crutch, and staging it one line earlier would be staging it inside a
+        # measured run. Only for the FINAL_EXAM — an ordinary interview practice
+        # run does not end the game.
+        if was_exam:
+            out["finale"] = self.finale_scene(exam_report=debrief)
+        return out
 
     @staticmethod
     def _interview_verdict(score, knowledge, implementation, timing) -> str:
@@ -3252,6 +7217,43 @@ class Game:
                                 "chapter": e.chapter, "lesson": e.lesson,
                                 "enemies": list(e.enemies)} for e in rows]}
 
+    # ======================================================================
+    # The incantation battle: the turn-based fight, in full
+    # ======================================================================
+    #
+    # This is the fight the tactical layer was built for. The enemies have hit
+    # points and stand there for eight to twenty casts (bestiary.MIN_CASTS /
+    # MAX_CASTS), which means there is room for turns, for focus, for a status
+    # to run its course and for a potion to matter. The problem encounter is
+    # turn-aware too — one graded submission is one turn there as well — but it
+    # ends the moment the line lands, so it is a one-exchange duel by nature.
+    #
+    # THE ORDER OF A TURN, and every part of it is somebody else's function:
+    #
+    #   1. the player types Python. incantation.cast decides whether it was
+    #      correct. Wrong is a wasted turn and zero damage, and nothing below
+    #      can change either of those.
+    #   2. a correct cast's damage goes through elements.resolve_damage, which
+    #      scales it and cannot generate it: feed it zero and zero comes out.
+    #   3. the turn advances — potions.cast_resolved — right or wrong, which is
+    #      what stops the pouch being emptied by typing nonsense.
+    #   4. the enemy acts: its poison ticks, it may drink, it may spend focus on
+    #      a special, and its blow resolves through the same damage function.
+    #   5. the player's next turn opens: elements.tick_statuses on them, poison
+    #      bites, focus returns unless something has VOIDED it.
+    #
+    # A potion is drunk between 5 and 1, through use_potion, and drinking is not
+    # a turn. That is the entire argument of the feature.
+
+    INCANT_STATE = "incantation"
+
+    def _incantation_region(self, encounter_id: str) -> str:
+        fight = bestiary.ENCOUNTER_BY_ID.get(encounter_id)
+        if fight is not None:
+            return fight.region
+        boss = bestiary.BOSS_BY_ID.get(encounter_id)
+        return boss.region if boss is not None else ""
+
     def start_incantation(self, encounter_id: str) -> dict:
         sealed = self._sealed_in_interview()
         if sealed:
@@ -3266,16 +7268,54 @@ class Game:
                                           mode=config.MODE_ADVENTURE)
         except (KeyError, TypeError):
             return {"error": "unknown incantation encounter"}
-        self.state["incantation"] = {
+        region = self._incantation_region(encounter_id)
+        element = elements.affinity_for(region)
+        difficulty = self._incantation_difficulty(encounter_id)
+        vitals = {}
+        for enemy in ctx.enemies:
+            row = bestiary.vitals(hp=enemy.hp_max, element=(
+                element if element in elements.ELEMENTS else ""))
+            row["antidotes"] = potions.carries_antidote(
+                difficulty=difficulty, affinity=str(element or "").lower(),
+                rng=self._rng)
+            vitals[enemy.name] = row
+        self.state[self.INCANT_STATE] = {
             "encounter": encounter_id,
+            "region": region,
+            "difficulty": difficulty,
             "hp": {e.name: e.hp for e in ctx.enemies},
+            "vitals": vitals,
             "turn": 0, "casts": 0, "started_at": time.time(),
+            # The fight's own tactical record. All plain JSON, so a twenty-turn
+            # battle survives a page refresh — which it has to, because twenty
+            # turns is twenty lines of Python and losing those to a reload is
+            # the one thing that would stop a player using the feature.
+            "potion_turn": potions.new_fight().to_dict(),
+            "poison": {},
+            "statuses": [],
+            "enemy_poison": {},
+            "attacker": 0,
+            "log": [],
         }
         self.save()
         return self.incantation_view(ctx)
 
+    def _incantation_difficulty(self, encounter_id: str) -> str:
+        """What tier of potion this fight pays out and how likely a monster is
+        to be carrying a vial. Read off the chapter the fight belongs to rather
+        than invented, so a fight deeper in the curriculum is deeper here too."""
+        fight = (bestiary.ENCOUNTER_BY_ID.get(encounter_id)
+                 or bestiary.BOSS_BY_ID.get(encounter_id))
+        if fight is None:
+            return "EASY"
+        rank = bestiary.chapter_rank(getattr(fight, "chapter", ""))
+        if encounter_id in bestiary.BOSS_BY_ID:
+            return "BOSS"
+        return ("TUTORIAL", "EASY", "MEDIUM", "HARD", "ELITE")[
+            min(4, max(0, rank))]
+
     def _incantation_context(self):
-        run = self.state.get("incantation")
+        run = self.state.get(self.INCANT_STATE)
         if not run:
             return None
         ctx = bestiary.battle_context(run["encounter"],
@@ -3284,8 +7324,16 @@ class Game:
         ctx.turn = int(run.get("turn", 0))
         return ctx
 
+    def _incant_pouch_view(self, run: dict) -> dict:
+        return potions.pouch_view(
+            self._pouch(), player=self.state["player"],
+            turn_state=potions.TurnState.from_dict(run.get("potion_turn")),
+            poison=potions.Poison.from_dict(run.get("poison")),
+            encounter=None,
+            statuses=self._load_statuses(run.get("statuses")))
+
     def incantation_view(self, ctx=None) -> dict:
-        run = self.state.get("incantation")
+        run = self.state.get(self.INCANT_STATE)
         if not run:
             return {"incantation": None}
         ctx = ctx or self._incantation_context()
@@ -3300,32 +7348,69 @@ class Game:
             rendered = incantation.render_template(move, tier, context=ctx)
             moves.append({**rendered, "id": move.id, "tier": tier,
                           "teach": move.note, "skill": move.skill})
+        vitals = run.get("vitals") or {}
+        player = self.state["player"]
+        player_element = self._player_element(None)
         return {
             "incantation": {
                 "encounter": run["encounter"],
+                "region": run.get("region", ""),
                 "turn": ctx.turn,
                 "timer_seconds": 0,       # adventure teaches; only exams are timed
-                "enemies": [e.to_dict() for e in ctx.enemies],
+                "enemies": [{**e.to_dict(), "vitals": vitals.get(e.name, {})}
+                            for e in ctx.enemies],
                 "bindings": ctx.bindings(),
                 "demand": demand,
                 "casts": run.get("casts", 0),
                 "cleared": not ctx.living(),
+                # -- the tactical layer -------------------------------------
+                "statuses": list(run.get("statuses") or []),
+                "poison": potions.Poison.from_dict(run.get("poison")).to_dict(),
+                "log": list(run.get("log") or []),
+                "element": {
+                    "region": elements.affinity_for(run.get("region", "")),
+                    "player": player_element,
+                    "armour": items.armour_view(self.effects()),
+                },
+                # The two sentences that teach the whole turn. A mechanic the
+                # player cannot see is a mechanic they conclude is broken.
+                "rule": "Land the line and nothing reaches you but what it "
+                        "saved up for. Miss, and it swings.",
+                "potion_rule": "A draught rides with your cast. It is never "
+                               "instead of one.",
+                "health": {"value": player["stamina"],
+                           "max": player["stamina_max"]},
+                "focus": {"value": player["mana"], "max": player["mana_max"]},
             },
+            "pouch": self._incant_pouch_view(run),
             "moveset": moves,
         }
 
     def incantation_cast(self, move_id: str, answers: dict) -> dict:
-        run = self.state.get("incantation")
+        # Asked at the door, like every other overworld action. start_incantation
+        # already refuses, but a battle OPENED before an exam began would
+        # otherwise keep running through it with the whole loadout attached —
+        # the gear, the wheel and the pouch — which is a second isolation path
+        # in a codebase that has spent a whole module having exactly one.
+        sealed = self._sealed_in_interview()
+        if sealed:
+            return sealed
+        run = self.state.get(self.INCANT_STATE)
         if not run:
             return {"error": "no incantation battle running"}
         ctx = self._incantation_context()
         skills = self.skills
         tier = incantation.tier_for_move(self.state["moveset"], move_id, skills)
+        # apply=False, and this is the one substantive change to how a cast
+        # lands. incantation.cast still decides ALONE whether the line was
+        # correct and what it is worth; what it no longer does is subtract,
+        # because between "what the typing earned" and "what the monster loses"
+        # sits the wheel, and the wheel is elements.resolve_damage.
         result = incantation.cast(move_id, answers, ctx, tier=tier,
                                   seconds=time.time() - run["started_at"],
                                   streak=int(self.state["player"]["combo"]),
-                                  timed=False)
-        incantation.record_cast(self.state["moveset"], result)
+                                  timed=False, apply=False)
+        incantation.record_cast(self.state["moveset"], result, tier=tier)
         # skill_deltas are graded evidence — the cast either ran the player's own
         # Python or it did not — so they fold in the way _apply_outcome does.
         for name, delta in (result.skill_deltas or {}).items():
@@ -3336,21 +7421,324 @@ class Game:
             legendaries.clamp_to_ceiling(state, self.state["hand"])
             state.stage = skillmod.derive_stage(state)
         self._write_skills(skills)
+
+        lines: list = []
+        strike = self._incant_strike(run, ctx, result, lines)
+
+        # A LANDED LINE RETURNS A POINT OF HEALTH, AND THIS IS NOT A BONUS.
+        #
+        # `submit` has always refunded stamina on a solved answer, and it ends
+        # the fight in the same breath. This loop refunded nothing and runs
+        # fifteen to forty turns, which made it the only fight in the game a
+        # player could be routed out of while typing PERFECTLY: twenty-four of
+        # the thirty-seven authored encounters, with no armour and nothing to
+        # drink. The arithmetic and the choice of number are in CAST_HEAL_SHARE.
+        #
+        # It cannot be farmed: it is capped at the bar, a cast that did not land
+        # gets nothing, and a cast is a turn — which is the same pair of
+        # conditions `submit` uses and the same rule the pouch is held to.
+        if result.correct:
+            player = self.state["player"]
+            back = max(CAST_HEAL_FLOOR,
+                       int(round(CAST_HEAL_SHARE * int(player["stamina_max"]))))
+            player["stamina"] = min(int(player["stamina_max"]),
+                                    int(player["stamina"]) + back)
+
+        # The turn moves, right or wrong. A wasted turn is still a turn: that is
+        # the Blitz rule this file inherits, and the pouch does not get a
+        # separate opinion about it.
+        turn_state = potions.TurnState.from_dict(run.get("potion_turn"))
+        potions.cast_resolved(turn_state, correct=result.correct)
+        run["potion_turn"] = turn_state.to_dict()
+
+        cleared = not ctx.living()
+        enemy_turn = None
+        turn_open = None
+        routed = False
+        if not cleared:
+            enemy_turn = self._incant_enemy_turn(run, ctx, lines,
+                                                 correct=bool(result.correct))
+            turn_open = self._incant_open_turn(run, lines)
+            routed = int(self.state["player"]["stamina"]) <= 0
+            # ASKED AGAIN, BECAUSE THE ENEMY'S TURN CAN END THE FIGHT. The
+            # first thing `_incant_enemy_turn` does is tick the acting monster's
+            # own poison, and a dose that finishes it finishes it there — which
+            # is the whole reason poisoning something is worth a turn. Asking
+            # only before that left a player standing in a field of corpses with
+            # the battle still officially running, having to swing at nothing to
+            # be told they had won; and the swing at nothing reads in the log as
+            # a cast that landed on no one, which is worse than the wait.
+            cleared = not ctx.living()
+            if cleared:
+                routed = False       # you do not get routed out of a win
+
         run["hp"] = {e.name: e.hp for e in ctx.enemies}
         run["turn"] = int(ctx.turn) + 1
         run["casts"] = int(run.get("casts", 0)) + 1
-        cleared = not ctx.living()
+        # The same ledger _tick_hunt keeps. A line typed here was graded by
+        # incantation.cast, so if an apex fight is open in THIS region it counts
+        # against it, on the same terms an ordinary clear does.
+        if result.correct:
+            block = self._hunt_state()
+            open_fight = block.get("fight")
+            if open_fight and open_fight.get("region") == run.get("region"):
+                open_fight["casts"] = int(open_fight.get("casts", 0)) + 1
+        run["log"] = (list(run.get("log") or []) + lines)[-40:]
+
         payload = {**result.to_dict(), "ok": result.correct,
+                   "strike": strike, "enemy_turn": enemy_turn,
+                   "turn_open": turn_open, "lines": lines,
                    **self.incantation_view(ctx)}
         if cleared:
             self.state["player"]["xp"] += 40 + 10 * len(ctx.enemies)
-            self.state["incantation"] = None
+            potion = self._incant_reward(run)
+            if potion:
+                payload["potion"] = potion
+            self.state[self.INCANT_STATE] = None
             payload["cleared"] = True
+        elif routed:
+            payload["routed"] = self._incant_rout()
         self.save()
         return payload
 
+    def _incant_strike(self, run: dict, ctx, result, lines: list) -> dict | None:
+        """The player's blow, through the wheel, applied to one monster.
+
+        `result.damage` is what the typed line earned and is the `base`
+        argument; a wrong cast brings zero here and zero is what comes out.
+        Nothing in this method can manufacture a hit.
+        """
+        if not result.correct or not result.damage:
+            return None
+        enemy = ctx.enemy(result.target) or (ctx.living() or [None])[0]
+        if enemy is None:
+            return None
+        vitals = (run.get("vitals") or {}).setdefault(
+            enemy.name, bestiary.vitals(hp=enemy.hp_max))
+        enemy_statuses = self._load_statuses(vitals.get("statuses"))
+        player_statuses = self._load_statuses(run.get("statuses"))
+        hit = elements.resolve_damage(
+            int(result.damage), self._player_element(None),
+            elements.Defender(element=vitals.get("element", elements.NEUTRAL),
+                              armour=elements.NO_ARMOUR,
+                              statuses=enemy_statuses,
+                              max_health=int(vitals.get("hp_max", enemy.hp_max))),
+            attacker_statuses=player_statuses,
+            roll=self._rng.random())
+        enemy.hp = max(0, enemy.hp - hit.damage)
+        vitals["hp"] = enemy.hp
+        lines.append(f"{enemy.display}: {hit.line}")
+        if hit.inflicted == "POISONED":
+            # A MONSTER's poison lives in the dose pool rather than on the
+            # wheel, because potions.monster_cure is the function that makes a
+            # monster drink and it takes a potions.Poison. The player's lives on
+            # the wheel, for the mirror-image reason: potions.drink's `statuses`
+            # argument is what clears it. One record per combatant, chosen by
+            # who has to read it — write both and a single poisoning bites
+            # twice, from two modules that each think they are the only one
+            # counting.
+            pool = potions.Poison.from_dict(
+                (run.setdefault("enemy_poison", {})).get(enemy.name))
+            landed = potions.poison_apply(pool, damage=2, turns=3,
+                                          source="player")
+            run["enemy_poison"][enemy.name] = pool.to_dict()
+            lines.append(f"{enemy.display}: {landed.get('line') or 'venom takes.'}")
+        elif hit.inflicted:
+            landed = elements.inflict(enemy_statuses, hit.inflicted)
+            if landed.get("applied"):
+                lines.append(f"{enemy.display}: {landed['line']}")
+        vitals["statuses"] = self._dump_statuses(enemy_statuses)
+        return {**hit.to_dict(), "target": enemy.name,
+                "defeated": not enemy.alive}
+
+    def _incant_enemy_turn(self, run: dict, ctx, lines: list, *,
+                           correct: bool = False) -> dict | None:
+        """One enemy acts. ONE, not all of them, and not on every turn.
+
+        TWO RULES, AND THE ARITHMETIC THAT FORCES BOTH.
+
+        ONE ENEMY. A field of four monsters all swinging every turn would
+        quadruple the incoming damage without quadrupling anything the player
+        learns. They take it in turns, round-robin, which keeps the pressure
+        flat across a two-monster fight and a four-monster one.
+
+        AND IT SWINGS ON A WASTED TURN, OR WHEN IT HAS SAVED UP FOR SOMETHING.
+        elements.MIN_DAMAGE is one, so an enemy that swings every turn of a
+        twenty-cast fight takes twenty points off a twenty-point bar whatever
+        the player is wearing — which would make every authored fight in
+        bestiary.py unwinnable without a pouch full of potions, and a fight you
+        can only win by shopping is not a fight about Python.
+
+        So the rule is the one bestiary.py already wrote down as the Blitz rule:
+        a wrong cast wastes the turn AND THE ENEMY GETS TO ACT. Land the line
+        and the only thing that reaches you is whatever it has been saving its
+        focus for — which is why focus exists, and why an enemy standing there
+        charging is worth watching rather than worth ignoring.
+
+        Its own clock runs either way: poison bites it, its statuses count down,
+        it drinks if it needs to and it banks focus. A correct cast buys you the
+        blow, not the turn.
+        """
+        living = ctx.living()
+        if not living:
+            return None
+        index = int(run.get("attacker", 0)) % len(living)
+        run["attacker"] = index + 1
+        enemy = living[index]
+        vitals = (run.get("vitals") or {}).setdefault(
+            enemy.name, bestiary.vitals(hp=enemy.hp_max))
+        out: dict = {"who": enemy.name, "display": enemy.display,
+                     "damage": 0, "special": None, "cured": None}
+
+        # 1. its own poison, and its own statuses, before it gets to act.
+        enemy_statuses = self._load_statuses(vitals.get("statuses"))
+        tick = elements.tick_statuses(enemy_statuses,
+                                      int(vitals.get("hp_max", enemy.hp_max)))
+        pool = potions.Poison.from_dict(
+            (run.get("enemy_poison") or {}).get(enemy.name))
+        dot = potions.poison_tick(pool)
+        bleed = int(tick["damage"]) + int(dot["damage"])
+        if bleed:
+            enemy.hp = max(0, enemy.hp - bleed)
+            vitals["hp"] = enemy.hp
+            lines.append(f"{enemy.display}: {bleed} from what is in it.")
+        lines += [f"{enemy.display}: {l}" for l in tick["lines"]]
+        vitals["statuses"] = self._dump_statuses(enemy_statuses)
+        if not enemy.alive:
+            run.setdefault("enemy_poison", {})[enemy.name] = pool.to_dict()
+            out["defeated"] = True
+            return out
+
+        # 2. the vial. Drinking IS its turn, which is why poisoning something
+        #    that can cure itself is never wasted: the cure buys you a free
+        #    turn, and a free turn is one more line of Python landed for
+        #    nothing.
+        monster = {"hp": enemy.hp, "hp_max": enemy.hp_max,
+                   "display": enemy.display,
+                   "antidotes": int(vitals.get("antidotes", 0) or 0)}
+        cured = potions.monster_cure(monster, pool, rng=self._rng)
+        vitals["antidotes"] = int(monster.get("antidotes", 0) or 0)
+        run.setdefault("enemy_poison", {})[enemy.name] = pool.to_dict()
+        if cured is not None:
+            lines += [cured["line"], cured["aside"]]
+            out["cured"] = cured
+            return out
+
+        # 3. focus, and what it buys.
+        gained = bestiary.regenerate(vitals)
+        special = bestiary.take_turn(vitals, roll=self._rng.random())
+        out["focus"] = vitals.get("focus", 0)
+        out["focus_gained"] = gained
+        power = 1.0
+        if special:
+            power = float(special["power"])
+            out["special"] = special
+            lines.append(special["line"].format(who=enemy.display))
+
+        # 4. the blow — if it has earned one. See the docstring: a landed line
+        #    means nothing reaches you except what it saved up for.
+        if not special and correct:
+            out["held"] = True
+            lines.append(f"{enemy.display} holds, and banks what it has.")
+            return out
+        player_statuses = self._load_statuses(run.get("statuses"))
+        hit = elements.resolve_damage(
+            max(0, int(round(ENEMY_BASE_DAMAGE * power))),
+            vitals.get("element", elements.NEUTRAL),
+            self._player_defender(None, player_statuses),
+            attacker_statuses=enemy_statuses,
+            roll=self._rng.random())
+        player = self.state["player"]
+        player["stamina"] = max(0, int(player["stamina"]) - hit.damage)
+        out["damage"] = hit.damage
+        out["hit"] = hit.to_dict()
+        lines.append(f"You: {hit.line}")
+        # The player's poison lives on the WHEEL and only there — see the note
+        # in `_enemy_turn`. potions.drink clears it through its `statuses`
+        # argument, so the antidote in the belt still works on it; what it must
+        # not also do is land a dose, because then one poisoning ticks twice.
+        # Same rule as `_enemy_turn`, same owner: a charged attack cannot leave a
+        # mark a plain hit of that matchup was not allowed to leave.
+        for status_id in (hit.inflicted, (special or {}).get("inflicts", "")):
+            if not status_id or not elements.marks(hit.kind):
+                continue
+            landed = elements.inflict(player_statuses, status_id)
+            if landed.get("applied"):
+                lines.append(landed["line"])
+                out["inflicted"] = status_id
+        run["statuses"] = self._dump_statuses(player_statuses)
+        return out
+
+    def _incant_open_turn(self, run: dict, lines: list) -> dict:
+        """The player's next turn begins: statuses tick, poison bites, focus
+        returns unless something has VOIDED it.
+
+        Here rather than at the top of the next cast, so the player reads the
+        tick BEFORE they choose what to drink — and so a dose that has already
+        landed cannot be rewound by a potion, which is the rule potions.py
+        states and this is the call site that keeps it.
+        """
+        player = self.state["player"]
+        statuses = self._load_statuses(run.get("statuses"))
+        tick = elements.tick_statuses(statuses,
+                                      int(player.get("stamina_max", 1) or 1))
+        venom = potions.Poison.from_dict(run.get("poison"))
+        dot = potions.poison_tick(venom)
+        damage = int(tick["damage"]) + int(dot["damage"])
+        if damage:
+            player["stamina"] = max(0, int(player["stamina"]) - damage)
+        regained = 0
+        if not tick["regen_blocked"]:
+            before = int(player["mana"])
+            player["mana"] = min(int(player["mana_max"]), before + FOCUS_PER_TURN)
+            regained = int(player["mana"]) - before
+        run["statuses"] = self._dump_statuses(statuses)
+        run["poison"] = venom.to_dict()
+        lines += list(tick["lines"])
+        if dot["line"]:
+            lines.append(dot["line"])
+        return {"damage": damage, "focus_regained": regained,
+                "regen_blocked": bool(tick["regen_blocked"])}
+
+    def _incant_reward(self, run: dict) -> dict | None:
+        """A potion off the field, on the same table the rest of the game
+        rolls. Gear does not drop here — a forged blade is never found and an
+        incantation fight is not a loot run — but ammunition does, because the
+        next fight in this chapter is the one it is for."""
+        element = elements.affinity_for(run.get("region", ""))
+        drop = potions.roll_monster_drop(
+            difficulty=run.get("difficulty", "EASY"), rank="B",
+            luck=self.effects().get("loot_luck", 0.0),
+            affinity=str(element or "").lower(), rng=self._rng)
+        if not drop:
+            return None
+        got = potions.grant(self.state, drop)
+        return {**drop, "held": got.get("held", 0),
+                "overflow": got.get("overflow", 0)}
+
+    def _incant_rout(self) -> dict:
+        """Health at zero is never a loss and never a wall.
+
+        The fight ends, the player is put back on their feet at a third of the
+        bar — the same restoration a failed encounter already gets — and the
+        door they walked in through is still open. Nothing is taken: the casts
+        that landed already moved mastery on their own evidence, one line at a
+        time, and no part of that is refunded because none of it was a loan.
+        """
+        player = self.state["player"]
+        player["stamina"] = max(4, player["stamina_max"] // 3)
+        self.state[self.INCANT_STATE] = None
+        return {
+            "routed": True,
+            "message": ("You are on one knee and the field is still standing. "
+                        "Nothing you landed is lost — every line you got right "
+                        "is already in your hands. Go back in when you are "
+                        "ready, and take something to drink."),
+            "stamina": player["stamina"],
+        }
+
     def leave_incantation(self) -> dict:
-        self.state["incantation"] = None
+        self.state[self.INCANT_STATE] = None
         self.save()
         return {"ok": True}
 
@@ -3442,8 +7830,14 @@ class Game:
         return {"ok": True}
 
     def problem(self, problem_id: str, *, mode: str = config.MODE_ADVENTURE) -> dict:
+        """Look one problem up by id. The browsable door, so it is also the
+        obvious way to read the hold-out one id at a time; it refuses."""
         p = self.by_id.get(problem_id)
-        return p.player_view(mode=mode) if p else {"error": "unknown problem"}
+        if p is None:
+            return {"error": "unknown problem"}
+        if corpusmod.is_sealed(p):
+            return finalexam.refuse(finalexam.HOLDOUT)
+        return p.player_view(mode=mode)
 
     def performance_history(self, problem_id: str | None = None) -> dict:
         return {

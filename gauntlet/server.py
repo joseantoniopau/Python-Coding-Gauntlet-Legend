@@ -17,9 +17,16 @@ from dataclasses import asdict
 from pathlib import Path
 
 from . import config, sandbox, world
-from . import bestiary, classes, dungeons, finalexam, incantation
-from . import pets, progression
+from . import bestiary, classes, dungeons, elements, finalexam, forge
+from . import incantation
+from . import minirepo
+from . import pets, potions, progression
 from . import quests, saves, worldgen
+# The ten systems that had no door until now. Imported for their ID TABLES and
+# their CAPABILITY NAMES only — every rule in them is reached through a Game
+# method, because a second copy of a rule in the HTTP layer is how the two
+# start disagreeing.
+from . import banter, economy, finale, hunters, regalia, sages, sanctuary, upkeep
 from .engine import Game
 
 TOKEN = secrets.token_urlsafe(24)
@@ -196,6 +203,41 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return None
         return raw
 
+    def _need_files(self, body: dict, key: str = "files"):
+        """A Mini-Repo working tree: {path: source}, and nothing exotic.
+
+        The engine checks the paths against the repo that handed them out and
+        the sandbox refuses a dangerous filename on top of that. This is the
+        cheap shape check at the door, so a list of integers becomes a sentence
+        rather than a stack trace, and so a tree far larger than any repository
+        is turned away before it is copied anywhere.
+        """
+        raw = body.get(key)
+        if raw is None:
+            return {}
+        if not isinstance(raw, dict):
+            self._fail(f"'{key}' must be an object of {{path: source}}.")
+            return None
+        if len(raw) > sandbox.MAX_PROJECT_FILES:
+            self._fail(f"a repository holds at most "
+                       f"{sandbox.MAX_PROJECT_FILES} files.")
+            return None
+        total = 0
+        for path, value in raw.items():
+            if not isinstance(path, str) or not isinstance(value, str):
+                self._fail(f"every entry in '{key}' must be text, keyed by "
+                           "its path.")
+                return None
+            if len(path) > 200:
+                self._fail("that is not a path in any repository.")
+                return None
+            total += len(value)
+        if total > sandbox.MAX_PROJECT_BYTES:
+            self._fail(f"that working tree is {total} bytes; the ceiling is "
+                       f"{sandbox.MAX_PROJECT_BYTES}.")
+            return None
+        return raw
+
     def _need_dict(self, body: dict, key: str):
         raw = body.get(key)
         if raw is None:
@@ -272,8 +314,62 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not target.is_file():
             return self._send(404, b"not found", "text/plain")
         ctype, _ = mimetypes.guess_type(str(target))
-        return self._send(200, target.read_bytes(),
-                          ctype or "application/octet-stream", cache=True)
+        ctype = ctype or "application/octet-stream"
+        if ctype.startswith(("audio/", "video/")):
+            return self._send_range(target, ctype)
+        return self._send(200, target.read_bytes(), ctype, cache=True)
+
+    def _send_range(self, target, ctype: str):
+        """Serve media with Range support.
+
+        An <audio> element asks for `Range: bytes=0-` and expects a 206 back. A
+        plain 200 with the whole file does technically play in Chrome, but it
+        buffers the entire track before it starts and cannot seek or loop
+        cleanly — which for a seven-megabyte music bed is the difference between
+        instant and a stall every time the region changes.
+        """
+        size = target.stat().st_size
+        rng = self.headers.get("Range", "")
+        start, end = 0, size - 1
+        partial = False
+
+        if rng.startswith("bytes="):
+            spec = rng[6:].split(",")[0].strip()
+            try:
+                first, _, last = spec.partition("-")
+                if first:
+                    start = int(first)
+                    end = int(last) if last else size - 1
+                elif last:                      # a suffix range: last N bytes
+                    start = max(0, size - int(last))
+                partial = True
+            except ValueError:
+                partial = False                 # a malformed range is not fatal
+            if partial and (start >= size or start > end):
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            end = min(end, size - 1)
+
+        length = end - start + 1
+        with open(target, "rb") as fh:
+            fh.seek(start)
+            body = fh.read(length)
+
+        self.send_response(206 if partial else 200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Accept-Ranges", "bytes")
+        if partial:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Cache-Control", "public, max-age=86400")
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
 
     # -- api ---------------------------------------------------------------
     def _api_get(self, path: str, query: dict):
@@ -344,8 +440,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
             })
         if path == "/api/loadout":
             return self._json(g.loadout())
+        if path == "/api/transfer":
+            # The second number, on its own door. Deliberately not folded into
+            # /api/state's `readiness`: one of those is a measure of familiarity
+            # with taught material and the other is a measure of whether any of
+            # it transfers, and a screen that renders them as one number is
+            # telling the player something neither of them says.
+            return self._json(g.transfer_report())
         if path == "/api/probes":
             return self._json({"charges": g.probes_remaining()})
+        # -- Mini-Repo Battles ---------------------------------------------
+        if path == "/api/repos":
+            return self._json(g.minirepo_board(
+                difficulty=(query.get("difficulty") or [""])[0].strip().upper()[:12],
+                tag=(query.get("tag") or [""])[0].strip()[:40]))
+        if path == "/api/repo":
+            # The fight as it stands, including the player's own edits. A
+            # reload mid-repo comes back through here.
+            return self._reply(g.minirepo_view())
         if path == "/api/ping":
             return self._json({"ok": True, "version": config.VERSION,
                                "corpus": len(g.corpus)})
@@ -423,6 +535,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     return self._json(g.respec())
                 if path == "/api/consumable":
                     return self._reply(g.use_consumable(body.get("id", "")))
+                # The belt. Deliberately its own door rather than a branch of
+                # /api/consumable: a consumable is a scroll that changes what
+                # the encounter GIVES you, and a potion is a draught that
+                # changes what you can survive. They share a verb and nothing
+                # else, and folding them together would put the one rule this
+                # feature rests on — drinking is not a turn — behind a route
+                # whose other half legitimately ends turns.
+                #
+                # `_reply` maps the sealed refusal to 409, which is what
+                # potions.drink returns in a measured run. Nothing here forms a
+                # second opinion about the seal; there is exactly one.
+                if path == "/api/potion":
+                    return self._reply(g.use_potion(body.get("id", "")))
                 if path == "/api/search":
                     return self._json(g.find_secret_location(
                         body.get("region", ""), int(body.get("x", 0)),
@@ -448,6 +573,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     # There is one way to ask whether a capability is open.
                     if finalexam.sealed(enc, "COACH"):
                         return self._reply(finalexam.refuse("COACH"))
+                    if enc.repo_id:
+                        return self._json({"error": "this is a mini-repo",
+                                           "message": "The explanation this "
+                                           "encounter wants is a diff."})
                     return self._json(explanation_score(body.get("text", ""),
                                                         g.by_id[enc.problem_id]))
                 if self._world_post(g, path, body):
@@ -473,14 +602,59 @@ class Handler(http.server.BaseHTTPRequestHandler):
     # ======================================================================
     # The world layer.
     #
-    # Eleven modules were written, self-checked and unreachable from a browser.
-    # Everything below is a thin door onto an engine method that already holds
-    # the rules. The server's own two jobs here are input validation — nobody
-    # gets a stack trace — and the seal: Interview Mode is refused at the door
-    # as well as inside, because a guarantee that only lives three rooms in is
-    # one somebody can walk around.
+    # Twenty-one modules were written, self-checked and unreachable from a
+    # browser — eleven in an earlier pass, and the ten below it that between
+    # them are the town, the shelf, the voices, the regalia, the sanctuaries,
+    # the captives, the finale, the hunt, the sages and their arts.
+    #
+    # Everything here is a thin door onto an engine method that already holds
+    # the rules. The server's own two jobs are input validation — nobody gets a
+    # stack trace — and the seal: Interview Mode is refused at the door as well
+    # as inside, because a guarantee that only lives three rooms in is one
+    # somebody can walk around. For several of the doors below that is not
+    # belt-and-braces; see the note on _sealed above.
     # ======================================================================
     REGION_IDS = frozenset(r["id"] for r in world.REGIONS)
+    # The id tables the new doors check against. Frozen at class-definition
+    # time off the modules' own catalogues, so a new potion, a new trial form
+    # or a new rung is reachable the moment it is authored and an id that was
+    # never authored is a 404 with the name in it rather than a stack trace.
+    POTION_IDS = frozenset(potions.BY_ID)
+    TRIAL_FORM_IDS = frozenset(form.id for form in economy.TRIAL_FORMS)
+    STAGE_KEYS = frozenset(stage.key for sage in sages.SAGES
+                           for stage in sage.stages)
+
+    # ------------------------------------------------------------------
+    # WHY SO MANY OF THE DOORS BELOW SEAL AT THE DOOR AND NOT ONLY INSIDE.
+    #
+    # `finalexam.sealed(encounter, capability)` asks about an ENCOUNTER. The
+    # engine's town, healer, smith, sanctuary, sage board and finale all ask it
+    # that way — and `self.encounter` is None in a measured run whenever the
+    # player is between problems, which includes the whole stretch between
+    # `start_interview()` and the first `interview_current()`. `sealed(None, X)`
+    # is False, so those methods answer normally in that window.
+    #
+    # `_sealed` here asks the other half of the same question — is a measured
+    # run OPEN — which is what `Game._sealed_in_interview` asks internally. It
+    # is the one capability check either way: `finalexam.sealed` and
+    # `finalexam.refuse`, no second isolation path. This is not a second
+    # opinion; it is the same opinion, asked where the encounter is not the
+    # only evidence available.
+    # ------------------------------------------------------------------
+
+    def _region(self, value: str, *, what: str = "region"):
+        """A region id or the empty string. False means a reply has been sent."""
+        if value and value not in self.REGION_IDS:
+            self._fail(f"no {what} called {value!r}.", 404)
+            return False
+        return value
+
+    def _need_bool(self, body: dict, key: str, default: bool = False):
+        raw = body.get(key, default)
+        if not isinstance(raw, bool):
+            self._fail(f"'{key}' must be true or false.")
+            return None
+        return raw
 
     def _world_get(self, g, path: str, query: dict) -> bool:
         def one(key: str, default: str = "") -> str:
@@ -521,7 +695,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "progress": [pets.discovery_progress(p, evidence)
                              for p in pets.PET_IDS],
                 "found": list(g.state["pets"]["found"]),
+                "fallen": list(g.state["pets"].get("fallen") or []),
             })
+        if path == "/api/pets/tiers":
+            # The ladder, with the roster under each rung, so a player can see
+            # the depth they currently have no answer for before they walk into
+            # it rather than afterwards.
+            return self._reply({"tiers": pets.tier_table(),
+                                "limit": pets.ACTIVE_LIMIT,
+                                "open_rung": pets.OPEN_RUNG,
+                                "free_solution_after": pets.FREE_SOLUTION_AFTER})
+        if path == "/api/hint/route":
+            # Every road out of the encounter the player is standing in. Pure:
+            # it spends nothing, grants nothing, and answers the same for a
+            # player with the wrong companion, no companion and a dead one.
+            return self._reply(g.hint_route())
 
         # -- dungeons ------------------------------------------------------
         if path == "/api/dungeons":
@@ -583,6 +771,86 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == "/api/hand":
             return self._reply(g.hand_offer())
 
+        # -- the forge -----------------------------------------------------
+        # Read-only and NOT sealed. Looking at the bench during a measured run
+        # tells the player nothing about the problem in front of them, and a
+        # screen that refuses to show you what you own is a refusal with no
+        # rule behind it. What is sealed is the blade's NUMBERS, which
+        # forge.active() removes inside the engine, and the upgrade itself.
+        if path == "/api/forge":
+            blade_id = one("blade")
+            if blade_id and blade_id not in forge.BLADE_BY_ID:
+                return self._fail(f"no blade called {blade_id!r}.", 404)
+            return self._reply(g.smith(blade_id))
+        if path == "/api/forge/technique":
+            blade_id = one("blade")
+            if blade_id and blade_id not in forge.BLADE_BY_ID:
+                return self._fail(f"no blade called {blade_id!r}.", 404)
+            return self._reply(g.forge_technique(blade_id))
+        if path == "/api/forge/swap":
+            blade_id = one("blade")
+            if blade_id and blade_id not in forge.BLADE_BY_ID:
+                return self._fail(f"no blade called {blade_id!r}.", 404)
+            return self._reply(g.forge_swap(blade_id))
+        if path == "/api/forge/metals":
+            # Where every metal drops, how hard it hits there and roughly how
+            # many fights a bar is. This is the panel that stops a player
+            # giving up, so it is one call and it is always available.
+            return self._reply({
+                "metals": [{**m.to_dict(), **forge.counsel(m.id)}
+                           for m in forge.METALS],
+                "bag": (g.forge_card() or {}).get("bag", []),
+            })
+
+        # -- the wheel -----------------------------------------------------
+        # Six elements, six statuses, six hazards, eight boots, seventeen
+        # regions and the twelve potions, straight off elements.py's and
+        # potions.py's own tables.
+        #
+        # ONE CALL, CACHED BY THE CLIENT, AND NOT SEALED. None of it is a
+        # reading of any particular fight: it is the rulebook, and a rulebook
+        # the player cannot read is a mechanic they conclude is broken. What IS
+        # sealed is which element the thing in front of them is made of, and
+        # that lives on the encounter payload behind WEAKNESS_MAP where it
+        # belongs.
+        #
+        # It exists so no table in this file has a second copy in JavaScript.
+        # A status's name, its duration and what cures it are elements.py's to
+        # say; the client draws what it is told and owns none of it.
+        if path == "/api/wheel":
+            return self._reply({
+                "elements": [elements.element_view(eid)
+                             for eid in elements.ELEMENT_IDS],
+                "neutral": elements.element_view(elements.NEUTRAL),
+                "opposed": dict(elements.OPPOSED),
+                "secondary": dict(elements.SECONDARY),
+                "matchups": {kind: {"multiplier": mult,
+                                    "label": elements.MATCHUP_LABEL[kind]}
+                             for kind, mult in elements.MATCHUP_MULT.items()},
+                "statuses": [asdict(st) for st in elements.STATUSES.values()],
+                # What a monster can spend its focus on, one per element plus
+                # the neutral one. Shipped so the focus bar can be drawn with
+                # the line it is filling toward: a gauge creeping up to nothing
+                # in particular teaches a player nothing, and a gauge creeping
+                # up to SUNDER · 12 teaches them to watch it.
+                "specials": [asdict(sp) for sp in bestiary.SPECIALS],
+                "cures": {k: list(v) for k, v in elements.CURES.items()},
+                "hazards": [asdict(h) for h in elements.HAZARDS.values()],
+                "boots": [asdict(b) for b in elements.BOOTS],
+                "affinities": elements.region_affinities(),
+                "potions": [p.to_dict() for p in potions.CATALOGUE],
+                # The two sentences that are the whole feature, said by the
+                # modules that enforce them rather than retyped in the client.
+                "potion_rule": "A draught is free. A second draught costs a cast.",
+                "turn_rule": "One graded submission is one turn, right or wrong.",
+                "limits": {
+                    "worst_case_multiplier": elements.WORST_CASE_MULTIPLIER,
+                    "max_fight_stretch": elements.MAX_FIGHT_STRETCH,
+                    "resist_cap": elements.RESIST_CAP,
+                    "armour_point_cap": elements.ARMOUR_POINT_CAP,
+                },
+            })
+
         # -- the final exam ------------------------------------------------
         if path == "/api/exam/ladder":
             return self._reply(g.exam_ladder())
@@ -599,6 +867,96 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self._reply(g.incantation_encounters(region))
         if path == "/api/incantation/state":
             return self._reply(g.incantation_view())
+
+        # -- the town ------------------------------------------------------
+        # Reading the square is never sealed. Health is free, the Mender says
+        # so before she is asked, and a screen that refuses to show a player
+        # what their own armour looks like is a refusal with no rule behind it.
+        # What IS sealed is the healing, the mending and the purchase, below.
+        if path == "/api/town":
+            return self._reply(g.town())
+        if path == "/api/town/quote":
+            piece = one("piece")
+            if piece and piece not in upkeep.PIECES:
+                return self._fail(f"nobody wears a {piece!r}.", 404)
+            return self._reply(g.repair_quote(piece))
+
+        # -- the shelf and the board ---------------------------------------
+        # Prices are not a hint. Seventeen vendors and the broker's board are
+        # read freely; spending is a POST and is sealed there.
+        if path == "/api/shop":
+            region = self._region(one("region"))
+            if region is False:
+                return True
+            return self._reply(g.shop(region))
+        if path == "/api/broker":
+            region = self._region(one("region"))
+            if region is False:
+                return True
+            return self._reply(g.broker(region))
+
+        # -- the hidden healers --------------------------------------------
+        # A log of people who were found by being hurt in the right place.
+        # Nothing here is about the problem in front of the player.
+        if path == "/api/sanctuaries":
+            return self._reply(g.sanctuary_view())
+
+        # -- the people the bosses took ------------------------------------
+        # Large and static-ish: seventeen villages' worth of faces and trades.
+        # Fetch it when the roll call opens, not on every frame.
+        if path == "/api/rollcall":
+            return self._reply(g.roll_call())
+
+        # -- the secret arts this playthrough knows ------------------------
+        # What you own, like the forge. The arts a player has NOT been taught
+        # are named on the sage board and their lines are not rendered until
+        # they are earned, so this leaks nothing.
+        if path == "/api/arts":
+            return self._reply(g.art_book())
+
+        # -- regalia -------------------------------------------------------
+        # SEALED, and this one is not belt-and-braces. `regalia.view` takes
+        # `mode=` and `sealed=` and zeroes the schedule when either says so;
+        # `Game.regalia_view()` passes neither, so inside a measured run this
+        # screen would report a threshold scale and an intervention count that
+        # are NOT in force. Reporting numbers that are not in force is the
+        # SKILL_STATE leak wearing a different hat. The capability is PET,
+        # which is what regalia.py's own WIRING names.
+        if path == "/api/regalia":
+            if self._sealed(g, "PET"):
+                return True
+            return self._reply(g.regalia_view())
+
+        # -- the sages -----------------------------------------------------
+        # SEALED. `sages.available_in` already refuses a sealed run — the
+        # module decided a sage does not speak during a measurement — but it
+        # decides it from the encounter, and between problems there is not one.
+        # Refused here with the capability named, which is what a screen needs
+        # to say WHICH thing was taken rather than "409".
+        if path == "/api/sage":
+            if self._sealed(g, sages.CAPABILITY):
+                return True
+            region = self._region(one("region"))
+            if region is False:
+                return True
+            return self._reply(g.sage_board(region))
+
+        # -- the hunt ------------------------------------------------------
+        # SEALED for the same reason as regalia: `hunt_view` computes readiness
+        # through `_readiness_for(region)` with `sealed` left at its default, so
+        # a measured run would be handed a preparation score that counts class
+        # bonuses it no longer has. A wrong number is worse than no number.
+        #
+        # The payload carries `client`, which is hunters.client_payload() —
+        # static for the life of the process and the bulk of the response.
+        # Cache it; see api.js.
+        if path == "/api/hunt":
+            if self._sealed(g):
+                return True
+            region = self._region(one("region"))
+            if region is False:
+                return True
+            return self._reply(g.hunt_view(region))
         return False
 
     def _world_post(self, g, path: str, body: dict) -> bool:
@@ -683,6 +1041,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return True
             event = g.pet_intervention(signals)
             return self._reply({"pet": event})
+        if path == "/api/pet/dismiss":
+            if self._sealed(g, "PET"):
+                return True
+            return self._reply(g.dismiss_pet())
+        if path == "/api/pet/recall":
+            if self._sealed(g, "PET"):
+                return True
+            pet_id = (body or {}).get("pet_id")
+            if pet_id not in pets.BY_ID:
+                return self._fail(f"no companion called {pet_id!r}.", 404)
+            return self._reply(g.recall_pet(pet_id))
+        if path == "/api/pet/fall/ack":
+            # The client has played the barrow scene. The FACT stays in the save
+            # forever — the legendary return is gated on it — and only the
+            # undelivered scene is cleared.
+            return self._reply(g.acknowledge_fall())
 
         # -- dungeons ------------------------------------------------------
         if path == "/api/dungeon/enter":
@@ -807,6 +1181,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return True
             return self._reply(g.use_hand())
 
+        # -- the forge -----------------------------------------------------
+        # An upgrade is BUILD, and BUILD is what the Editor Automaton takes and
+        # what the practical takes entirely. Sealed at the door as well as in
+        # the engine, because a guarantee that only lives three rooms in is one
+        # somebody can walk around.
+        if path in ("/api/forge/upgrade", "/api/forge/rack",
+                    "/api/forge/unrack"):
+            if self._sealed(g, forge.FORGE_CAPABILITY):
+                return True
+            blade_id = self._opt_str(body, "blade", "", limit=60)
+            if blade_id is None:
+                return True
+            if blade_id and blade_id not in forge.BLADE_BY_ID:
+                return self._fail(f"no blade called {blade_id!r}.", 404)
+            if path == "/api/forge/upgrade":
+                return self._reply(g.forge_upgrade(blade_id))
+            if path == "/api/forge/rack":
+                return self._reply(g.forge_rack(blade_id))
+            return self._reply(g.forge_unrack())
+
         # -- the final exam ------------------------------------------------
         # NOT sealed: this is how a player enters the thing that seals them.
         if path == "/api/exam/start":
@@ -842,6 +1236,60 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self._fail(f"that is not a world code: {exc}")
             return self._reply(g.new_world(seed))
 
+        # -- Mini-Repo Battles ---------------------------------------------
+        #
+        # Three doors. `start` is an overworld action and is sealed during a
+        # measured run like every other one; `run` and `submit` are the fight
+        # itself, and sealing those would make a Mini-Repo unplayable in the
+        # one mode it most belongs in. What Interview Mode takes off a
+        # Mini-Repo is decided by finalexam.sealed() inside the engine, and
+        # nowhere else.
+        if path == "/api/repo/start":
+            repo_id = self._opt_str(body, "repo_id", limit=60)
+            if repo_id is None:
+                return True
+            if repo_id and repo_id not in minirepo.REPOS:
+                return self._fail(f"no mini-repo called {repo_id!r}.", 404)
+            enc = g.encounter
+            if enc is not None and enc.repo_id:
+                # Answered before the generic seal, which would otherwise say
+                # "class bonuses do not work here" at a player whose actual
+                # problem is that they already have a repository open — and
+                # whose edits are sitting on that encounter. The engine either
+                # hands that fight back or refuses to throw it away.
+                return self._reply(g.start_minirepo(repo_id))
+            if self._sealed(g):
+                return True
+            mode = self._opt_str(body, "mode", config.MODE_ADVENTURE, limit=20)
+            if mode is None:
+                return True
+            if mode not in (config.MODE_ADVENTURE, config.MODE_INTERVIEW):
+                return self._fail(f"{mode!r} is not a mode.")
+            difficulty = self._opt_str(body, "difficulty", limit=12)
+            if difficulty is None:
+                return True
+            return self._reply(g.start_minirepo(
+                repo_id, mode=mode, difficulty=difficulty.upper()))
+        if path == "/api/repo/run":
+            files = self._need_files(body)
+            if files is None:
+                return True
+            return self._reply(g.minirepo_run(files))
+        if path == "/api/repo/submit":
+            files = self._need_files(body)
+            if files is None:
+                return True
+            # `full_tree` says whether what arrived is the player's WHOLE
+            # working tree. The editor sends everything, so it is; a partial
+            # save must say so, or every test file it did not send reads as a
+            # deletion and an honest player is accused of cheating.
+            full_tree = body.get("full_tree", True)
+            if not isinstance(full_tree, bool):
+                return self._fail("'full_tree' must be true or false.")
+            return self._reply(g.minirepo_submit(files, full_tree=full_tree))
+        if path == "/api/repo/leave":
+            return self._reply(g.leave_minirepo())
+
         # -- incantation combat --------------------------------------------
         if path == "/api/incant/start":
             if self._sealed(g):
@@ -870,6 +1318,213 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if self._sealed(g):
                 return True
             return self._reply(g.leave_incantation())
+
+        # -- the healer and the smith --------------------------------------
+        # Both sealed as BUILD, which is what upkeep.UPKEEP_CAPABILITY is and
+        # what the engine returns when it catches this itself. Healing is free
+        # and the refusal is not about the money: whatever you break in an exam,
+        # you break in the exam only.
+        if path == "/api/town/heal":
+            if self._sealed(g, upkeep.UPKEEP_CAPABILITY):
+                return True
+            return self._reply(g.heal())
+        if path == "/api/town/repair":
+            if self._sealed(g, upkeep.UPKEEP_CAPABILITY):
+                return True
+            piece = self._opt_str(body, "piece", "", limit=40)
+            if piece is None:
+                return True
+            # "" is every piece, cheapest-first until the gold runs out, which
+            # is the normal case for a poor player and deliberately not an
+            # error. A piece nobody wears is.
+            if piece and piece not in upkeep.PIECES:
+                return self._fail(f"nobody wears a {piece!r}.", 404)
+            return self._reply(g.repair(piece))
+
+        # -- the shelf -----------------------------------------------------
+        # A purchase during a measured run is a consumable acquired mid-exam.
+        # The engine refuses it through `_sealed_in_interview` and names BUILD;
+        # the door says the same thing at the same capability.
+        if path == "/api/shop/buy":
+            if self._sealed(g):
+                return True
+            potion_id = self._need_str(body, "potion_id", limit=60)
+            if potion_id is None:
+                return True
+            if potion_id not in self.POTION_IDS:
+                return self._fail(f"no potion called {potion_id!r}.", 404)
+            region = self._opt_str(body, "region", "", limit=60)
+            if region is None:
+                return True
+            if self._region(region) is False:
+                return True
+            quantity = 1
+            if body.get("quantity") is not None:
+                # A hundred doses is not a shopping trip, it is a typo or a
+                # fuzzer. Either way the answer is a sentence.
+                quantity = self._need_int(body, "quantity", low=1, high=99)
+                if quantity is None:
+                    return True
+            return self._reply(g.buy_potion(potion_id, region_id=region,
+                                            quantity=quantity))
+
+        # -- the challenge broker ------------------------------------------
+        # `open` is sealed by the engine. `close` is NOT — and it pays gold,
+        # records income and settles a contract, which is the world advancing
+        # under a player who is supposed to be sealed off from it. Refused here
+        # at the same capability the opening refusal names. Nothing is lost by
+        # it: a trial that could not be opened during the run cannot need
+        # settling during the run either.
+        if path == "/api/broker/open":
+            if self._sealed(g):
+                return True
+            form_id = self._need_str(body, "form_id", limit=60)
+            if form_id is None:
+                return True
+            if form_id not in self.TRIAL_FORM_IDS:
+                return self._fail(f"no trial called {form_id!r}.", 404)
+            region = self._opt_str(body, "region", "", limit=60)
+            if region is None or self._region(region) is False:
+                return True
+            return self._reply(g.open_trial(form_id, region_id=region))
+        if path == "/api/broker/close":
+            if self._sealed(g):
+                return True
+            abandon = self._need_bool(body, "abandon", False)
+            if abandon is None:
+                return True
+            return self._reply(g.close_trial(abandon=abandon))
+
+        # -- the hidden healers --------------------------------------------
+        # Sitting down is free, for the same reason the Mender is free, and
+        # sealed for the same reason the Mender is sealed.
+        if path == "/api/sanctuary/rest":
+            if self._sealed(g, sanctuary.SANCTUARY_CAPABILITY):
+                return True
+            sanctuary_id = self._need_str(body, "sanctuary_id", limit=60)
+            if sanctuary_id is None:
+                return True
+            if sanctuary_id not in sanctuary.BY_ID:
+                return self._fail(f"no sanctuary called {sanctuary_id!r}.", 404)
+            return self._reply(g.sanctuary_rest(sanctuary_id))
+
+        # -- the town's forty-seven voices ---------------------------------
+        # POST rather than GET because both of these WRITE: the rotation
+        # advances so the same person does not open with the same sentence
+        # twice, and the save is written afterwards.
+        #
+        # Sealed at WEAKNESS_MAP, which is what banter.BEAT_CAPABILITY maps its
+        # AREA and GEAR beats to and what `banter.refusal()` already names — a
+        # townsperson reading the local element and your boots at you during a
+        # measured run is the tactical read arriving through a friendlier face.
+        if path == "/api/town/talk":
+            if self._sealed(g, banter.BEAT_CAPABILITY[banter.AREA]):
+                return True
+            region = self._opt_str(body, "region", "", limit=60)
+            if region is None or self._region(region) is False:
+                return True
+            return self._reply(g.town_talk(region))
+        if path == "/api/npc/speak":
+            if self._sealed(g, banter.BEAT_CAPABILITY[banter.AREA]):
+                return True
+            npc_id = self._need_str(body, "npc_id", limit=60)
+            if npc_id is None:
+                return True
+            if npc_id not in banter.SPEAKERS:
+                return self._fail(f"nobody here is called {npc_id!r}.", 404)
+            return self._reply(g.speak_to(npc_id))
+
+        # -- regalia -------------------------------------------------------
+        # Putting an object on a companion changes how OFTEN it may speak and
+        # how EARLY. That is loadout, so it is sealed, and at PET because that
+        # is the crutch the object is attached to. Passing "" takes the worn
+        # object off and is the one gesture that is always allowed outside a
+        # run — a player must never be stuck wearing something.
+        if path == "/api/regalia/wear":
+            if self._sealed(g, "PET"):
+                return True
+            regalia_id = self._opt_str(body, "regalia_id", "", limit=60)
+            if regalia_id is None:
+                return True
+            if regalia_id and regalia_id not in regalia.BY_ID:
+                return self._fail(f"no regalia called {regalia_id!r}.", 404)
+            return self._reply(g.wear_regalia(regalia_id))
+
+        # -- the sixteen hidden sages --------------------------------------
+        # All three sealed at sages.CAPABILITY ("MENTOR"). `begin_gauntlet`
+        # refuses on its own when an encounter is open; `gauntlet_encounter`
+        # and `gauntlet_stage` never do — the first would open an ordinary
+        # adventure encounter in the middle of a measured run and the second
+        # would hand over a secret art. Both are refused here.
+        if path in ("/api/sage/begin", "/api/sage/encounter", "/api/sage/stage"):
+            if self._sealed(g, sages.CAPABILITY):
+                return True
+            if path == "/api/sage/begin":
+                region = self._opt_str(body, "region", "", limit=60)
+                if region is None or self._region(region) is False:
+                    return True
+                return self._reply(g.begin_gauntlet(region))
+            stage_key = self._need_str(body, "stage_key", limit=40)
+            if stage_key is None:
+                return True
+            if stage_key not in self.STAGE_KEYS:
+                return self._fail(f"no rung called {stage_key!r}.", 404)
+            if path == "/api/sage/encounter":
+                return self._reply(g.gauntlet_encounter(stage_key))
+            # Note what is NOT in this body: whether the rung was passed. The
+            # engine reads that off the attempts table. A client cannot assert
+            # its way to a secret art.
+            return self._reply(g.gauntlet_stage(stage_key))
+
+        # -- the last scene ------------------------------------------------
+        # The practical gates the finale and the finale does not gate the
+        # practical, so this is staged AFTER the exam is scored and refused
+        # during it. finale.view refuses too, at the same capability, when
+        # there is an encounter to refuse from.
+        if path == "/api/finale":
+            if self._sealed(g, finale.FINALE_CAPABILITY):
+                return True
+            report = self._need_dict(body, "exam_report")
+            if report is None:
+                return True
+            return self._reply(g.finale_scene(exam_report=report or None))
+        if path == "/api/finale/coda":
+            # Bookkeeping: the player watched the second half. Hands over
+            # nothing, so it is not sealed.
+            return self._reply(g.mark_coda_seen())
+
+        # -- the hunt ------------------------------------------------------
+        # Engage and resolve are sealed; FLEE IS NOT, and that asymmetry is the
+        # whole of hunters.FLEE_ALWAYS_SUCCEEDS. Walking away costs no gold, no
+        # items, no mastery and no roll, turn one included, and a door that
+        # could refuse it would be a door that traps a player in a fight they
+        # were told they could always leave.
+        #
+        # `resolve` pays a bounty — gold, metal, a draught and possibly a
+        # trophy. The engine does not seal it. Paying a player for a fight
+        # during a measured run is the world advancing under the seal, so the
+        # door does.
+        if path == "/api/hunt/engage":
+            if self._sealed(g):
+                return True
+            region = self._opt_str(body, "region", "", limit=60)
+            if region is None or self._region(region) is False:
+                return True
+            return self._reply(g.hunt_engage(region))
+        if path == "/api/hunt/flee":
+            return self._reply(g.hunt_flee())
+        if path == "/api/hunt/resolve":
+            if self._sealed(g):
+                return True
+            casts = 0
+            if body.get("casts") is not None:
+                casts = self._need_int(body, "casts", low=0, high=10000)
+                if casts is None:
+                    return True
+            killed = self._need_bool(body, "killed", False)
+            if killed is None:
+                return True
+            return self._reply(g.hunt_resolve(casts=casts, killed=killed))
         return False
 
 
@@ -891,6 +1546,20 @@ def free_port(preferred: int = 8731) -> int:
 
 def serve(port: int | None = None, *, open_browser: bool = False) -> tuple:
     port = port or free_port()
+    # WARM BEFORE THE DOOR OPENS. `game()` builds the Game — and on a cold data
+    # directory the whole corpus — on the FIRST REQUEST, which made the first
+    # request arbitrarily slow and made `serve()` return a URL that could not
+    # be answered for half a minute. launcher.main() already does this in the
+    # right order for the shipped app; anything else calling serve() deserves
+    # the same order. A caller that has already handed us a Game through
+    # set_game() pays nothing here, which is every caller but one.
+    #
+    # A failure is not fatal: the old lazy path still runs on the first request
+    # and reports the error there, which is where it was reported before.
+    try:
+        game()
+    except Exception:                      # noqa: BLE001 - see above
+        pass
     httpd = Server(("127.0.0.1", port), Handler)
     url = f"http://127.0.0.1:{httpd.server_address[1]}/?t={TOKEN}"
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)

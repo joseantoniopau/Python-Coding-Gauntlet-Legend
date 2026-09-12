@@ -42,11 +42,28 @@ class TestAcceptance(GameTest):
         self.assertTrue(check["timeout_enforced"])
 
     def test_04_problems_can_be_solved(self):
+        """Take the first twelve problems that are actually code and solve them.
+
+        This used to filter `corpus[:12]` down to the code problems in it, which
+        made the assertion depend on the order `corpus._FAMILIES` happens to
+        build in — a positional slice standing in for "some code problems".
+        When the first_steps family was added at the front of that tuple, the
+        first twelve problems in the corpus became twelve reading questions and
+        multiple-choice traces, the filter skipped every one of them, and a test
+        about whether code problems can be solved failed without a single code
+        problem having been tried.
+
+        Collecting twelve code problems instead of hoping twelve happen to be
+        first is strictly more work for the test, not less: it now always
+        submits twelve canonical solutions rather than however many the slice
+        happened to contain.
+        """
         g = self.game()
+        code_problems = [p for p in self.corpus
+                         if p.entry.get("kind") in ("function", "class_ops")][:12]
+        self.assertEqual(len(code_problems), 12)
         cleared = 0
-        for p in self.corpus[:12]:
-            if p.entry.get("kind") not in ("function", "class_ops"):
-                continue
+        for p in code_problems:
             g.start_encounter(p.id)
             if g.submit(p.canonical_solution)["solved"]:
                 cleared += 1

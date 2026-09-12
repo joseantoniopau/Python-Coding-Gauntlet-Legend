@@ -71,7 +71,7 @@ from __future__ import annotations
 import inspect
 from dataclasses import dataclass
 
-from . import curriculum, items
+from . import curriculum, items, movesets
 
 # ---------------------------------------------------------------------------
 # Effect vocabulary
@@ -1448,6 +1448,152 @@ MOVE_BY_ID = {m.id: m for m in MOVES}
 
 
 # ===========================================================================
+# Movesets: which node teaches which line of Python
+# ===========================================================================
+# Two different things in this file are called a move and they are not related,
+# so they are named apart everywhere below:
+#
+#   classes.Move      the SIGNATURE move. One per class, free, a wager on
+#                     something you believe. Declared above.
+#   movesets.Move     a COMBAT move. Seven per class, learned here, cast by
+#                     typing the incantations it is spelled out of.
+#
+# The tree is the only place a combat move is ever acquired. That is the whole
+# of the wiring, and it has two consequences worth stating out loud:
+#
+#   1. LEARNING A MOVE TEACHES ITS LINES. `movesets.learn` forwards every
+#      incantation in the move's spine into the player's incantation book. One
+#      acquisition path, not two — which means the branch you invested in
+#      quietly decided which Python idioms this playthrough is fluent in. That
+#      is the replay value, and it arrived without a single new system.
+#   2. ONE POINT IS ENOUGH. A move is granted at the FIRST rank of its node.
+#      The remaining nine ranks sharpen what that node was already doing. A
+#      player who has to sink ten points before a move appears is a player who
+#      spends ten levels unable to answer the fight in front of them, and this
+#      file does not ship that.
+#
+# The slots are positional and identical for all six classes, so "which class
+# gets its area attack earliest" is never a question. Node index 0 and 1 are
+# tier 1, 2 and 3 are tier 2, 4 and 5 are tier 3, 6 is the capstone:
+#
+#   rung 1-3   one tier-1 node in each of the three branches. Three points,
+#              spent anywhere, and you have three moves.
+#   rung 4-5   tier 2, in two different branches: the first real commitment.
+#   rung 6     tier 3.
+#   rung 7     the capstone. Twenty-two branch points and level twenty, which
+#              is the same gate every capstone already had.
+
+MOVE_GRANT_SLOTS = ((0, 0), (1, 0), (2, 0), (0, 2), (1, 3), (2, 4), (0, 6))
+MOVE_GRANT_RANK = 1
+
+
+def _build_moveset_grants() -> dict:
+    grants: dict = {}
+    for spec in CLASSES:
+        for rung, (branch_index, node_index) in enumerate(MOVE_GRANT_SLOTS,
+                                                          start=1):
+            move = movesets.at_rung(spec.id, rung)
+            if move is None:
+                continue
+            node = spec.branches[branch_index].nodes[node_index]
+            grants.setdefault(node.id, []).append(move.id)
+    return {node_id: tuple(ids) for node_id, ids in grants.items()}
+
+
+MOVESET_GRANTS = _build_moveset_grants()
+MOVESET_NODE = {move_id: node_id
+                for node_id, move_ids in MOVESET_GRANTS.items()
+                for move_id in move_ids}
+
+
+def moveset_for_node(node_id: str) -> tuple:
+    """The combat moves one point in this node teaches."""
+    return MOVESET_GRANTS.get(node_id, ())
+
+
+def node_for_moveset(move_id: str) -> str:
+    """Where a combat move comes from, for a UI that wants to point at it."""
+    return MOVESET_NODE.get(move_id, "")
+
+
+def movesets_granted(state: dict) -> list:
+    """Every combat move this spend dict has paid for, in rung order.
+
+    A borrowed discipline grants its tier-1 moves too — rungs one to three —
+    because `DUAL_CLASS_MAX_RANK` already lets a foreign tier-1 node be taken.
+    `movesets.scale_for` prices them at DUAL_SCALE, which is the seasoning the
+    dual rules describe, expressed as damage instead of as prose.
+    """
+    out = []
+    for node_id, rank in (state.get("spent") or {}).items():
+        if int(rank) < MOVE_GRANT_RANK:
+            continue
+        for move_id in MOVESET_GRANTS.get(node_id, ()):
+            if move_id not in out:
+                out.append(move_id)
+    return sorted(out, key=lambda m: (movesets.BY_ID[m].rung, m))
+
+
+def moveset_reach(state: dict) -> int:
+    """The highest rung this character has been granted.
+
+    This is the number `movesets.fade` measures an old move against, and it is
+    deliberately read off the TREE rather than off the character level: a player
+    who never invested has not outgrown anything, and their rung-one move should
+    still hit like a rung-one move.
+    """
+    granted = movesets_granted(state)
+    return max([movesets.BY_ID[m].rung for m in granted] or [0])
+
+
+def movebook(state: dict, moveset: dict | None = None,
+             book: dict | None = None) -> dict:
+    """Build or refresh the player's movebook from the tree.
+
+    Idempotent, and safe to call after every spend, every respec and every load.
+    A respec that removes the node a move came from does NOT unlearn the move:
+    `known` is append-only here for the same reason `pets.found` is. Un-teaching
+    somebody Python because they moved a skill point is a punishment for
+    experimenting, and the one thing this game may never punish is that.
+    """
+    book = book if book is not None else movesets.new_book(state.get("class", ""))
+    book["class"] = state.get("class", "") or book.get("class", "")
+    for move_id in movesets_granted(state):
+        movesets.learn(book, move_id, moveset)
+    return book
+
+
+def moveset_rows(state: dict, *, level: int = 1) -> list:
+    """The movebook as the tree screen wants to draw it: what you have, what is
+    next, and what it currently costs you to reach."""
+    reach = moveset_reach(state)
+    have = set(movesets_granted(state))
+    rows = []
+    for class_id in (state.get("class", ""), state.get("dual", "")):
+        if not class_id:
+            continue
+        for move in movesets.for_class(class_id):
+            node = NODE_BY_ID.get(node_for_moveset(move.id))
+            if node is None:
+                continue
+            owned = move.id in have
+            ok, reason = can_spend(state, node.id, level=level)
+            rows.append({
+                **move.to_dict(reach=reach),
+                "owned": owned,
+                "borrowed": class_id != state.get("class", ""),
+                "node": node.id, "node_name": node.name,
+                "branch": node.branch_id, "tier": node.tier,
+                "available": owned or ok,
+                "refusal": "" if (owned or ok)
+                           else SPEND_REFUSALS.get(reason, reason),
+            })
+    return rows
+
+
+
+
+# ===========================================================================
 # Class gear
 # ===========================================================================
 # Two tiers of honesty here.
@@ -1851,9 +1997,17 @@ def spend(state: dict, node_id: str, *, level: int) -> dict:
     spent = state.setdefault("spent", {})
     spent[node_id] = _rank(state, node_id) + 1
     state["points"] = state.get("points", 0) - _cost(state, node)
+    # The first point in a granting node is where a combat move is acquired.
+    # Returned rather than applied: this function owns `spent` and nothing else,
+    # and the movebook lives in the save beside it. The caller does
+    # classes.movebook(state, state["moveset"], state["movebook"]).
+    taught = [movesets.BY_ID[m].to_dict()
+              for m in (moveset_for_node(node_id)
+                        if spent[node_id] == MOVE_GRANT_RANK else ())]
     return {"ok": True, "node": node.to_dict(spent[node_id]),
             "rank": spent[node_id], "points": state["points"],
-            "effects": tree_effects(state)}
+            "effects": tree_effects(state),
+            "learned_moves": taught}
 
 
 SPEND_REFUSALS = {
@@ -1999,6 +2153,10 @@ def node_view(state: dict, node: Node, *, level: int) -> dict:
         "refusal": "" if ok else SPEND_REFUSALS.get(reason, reason),
         "refusal_key": "" if ok else reason,
         "locked": not ok and reason in ("parent", "branch_points", "level"),
+        # What one point here teaches. Shown on the node, because a player
+        # choosing between two nodes should not have to open a second screen to
+        # find out that one of them hands them an area attack.
+        "grants_moves": [movesets.BY_ID[m].to_dict() for m in moveset_for_node(node.id)],
     }
 
 
@@ -2026,6 +2184,8 @@ def tree_view(state: dict, *, level: int) -> dict:
         "grip": state.get("grip", 0),
         "dual": state.get("dual", ""),
         "dual_open": level >= DUAL_CLASS_LEVEL,
+        "movesets": moveset_rows(state, level=level),
+        "moveset_reach": moveset_reach(state),
     }
     if state.get("dual"):
         other = CLASS_BY_ID[state["dual"]]
@@ -2396,6 +2556,64 @@ def self_check() -> dict:
         for label, state in (("spread", spread), ("rush", rush), ("pair", pair)):
             if points_spent(state) + state["points"] != max_points:
                 problems.append(f"{spec.id}/{label}: points do not balance")
+
+    # -- movesets: the tree is the only door in --------------------------
+    # Three proofs, because three different mistakes are possible here and each
+    # of them would ship a class that cannot fight.
+    grant_tiers: dict = {}
+    for spec in CLASSES:
+        granted = []
+        for node in spec.nodes:
+            granted += list(moveset_for_node(node.id))
+        rungs = sorted(movesets.BY_ID[m].rung for m in granted)
+        if rungs != list(range(1, movesets.MAX_RUNG + 1)):
+            problems.append(f"{spec.id}: grants rungs {rungs}")
+        for move_id in granted:
+            node = NODE_BY_ID[node_for_moveset(move_id)]
+            move = movesets.BY_ID[move_id]
+            grant_tiers.setdefault(move.rung, set()).add(node.tier)
+            if move.class_id != spec.id:
+                problems.append(f"{node.id}: grants {spec.id} another class's move")
+        # 1. Three points, one in each branch's first node, buy three moves.
+        starter = _fresh(spec.id, 3)
+        for branch in spec.branches:
+            spend(starter, branch.nodes[0].id, level=1)
+        if len(movesets_granted(starter)) != 3:
+            problems.append(f"{spec.id}: three points do not buy three moves")
+        if moveset_reach(starter) != 3:
+            problems.append(f"{spec.id}: three points do not reach rung three")
+        # 2. The WHOLE moveset fits inside one character's point budget, with
+        #    room left over. If it did not, the capstone move would be a thing
+        #    the player reads about and never casts.
+        full = _fresh(spec.id, max_points)
+        for node_id in dict.fromkeys(node_for_moveset(m.id)
+                                     for m in movesets.for_class(spec.id)):
+            _spend_toward(full, node_id, MOVE_GRANT_RANK, MAX_LEVEL)
+        if len(movesets_granted(full)) != movesets.MAX_RUNG:
+            problems.append(f"{spec.id}: the full moveset does not fit in "
+                            f"{max_points} points")
+        moveset_cost = points_spent(full)
+        if moveset_cost > max_points * 0.75:
+            problems.append(f"{spec.id}: the moveset eats {moveset_cost} of "
+                            f"{max_points} points and leaves no build")
+        # 3. The book the tree builds teaches the lines those moves are made of.
+        book = movebook(full, incantation_book := {"known": [], "equipped": [],
+                                                   "slots": 99, "stats": {}})
+        wanted = {i for m in movesets_granted(full)
+                  for i in movesets.BY_ID[m].spine}
+        if not wanted <= set(incantation_book["known"]):
+            problems.append(f"{spec.id}: movebook did not teach its own lines")
+        if movesets.reach_of(book) != movesets.MAX_RUNG:
+            problems.append(f"{spec.id}: full tree does not reach the top rung")
+    # Every class grants the same rung from the same tier of node, or "which
+    # class gets its area attack first" becomes a real question.
+    uneven = {rung: sorted(tiers) for rung, tiers in grant_tiers.items()
+              if len(tiers) != 1}
+    if uneven:
+        problems.append(f"grant tiers differ between classes: {uneven}")
+    moveset_problems = movesets.self_check()["problems"]
+    if moveset_problems:
+        problems.append(f"movesets.self_check: {moveset_problems}")
 
     # -- capstones open only when they should -----------------------------
     early = _fresh(CLASSES[0].id, max_points)

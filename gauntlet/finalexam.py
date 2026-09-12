@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import random
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, replace
 
 from . import adaptive, config, grading, world
 from . import skills as skillmod
@@ -133,16 +133,52 @@ CRUTCH_BY_ID = {c.id: c for c in CRUTCHES}
 ALL_CRUTCHES = frozenset(CRUTCH_BY_ID)
 
 
+# ---------------------------------------------------------------------------
+# 1b. The sealed hold-out, which is content rather than a crutch
+# ---------------------------------------------------------------------------
+#
+# `corpus.sealed` marks problems the teaching side of the game may never touch:
+# no Adventure encounter, no hint, no SRS review, no coaching, no worked
+# solution. They exist so that one measurement in this game is taken on a
+# formulation the player has provably never been shown, and they can answer
+# that question exactly once each.
+#
+# It is not a crutch — nothing is being taken away from the player — so it is
+# not on the ladder and no boss removes it. It is a capability in the same
+# vocabulary for one reason: the refusal has to travel the same road as every
+# other refusal in this file. A second isolation mechanism is how the first one
+# quietly stops being true.
+#
+# Two consequences, both deliberate:
+#   * `sealed(encounter, HOLDOUT)` is true exactly when the encounter's problem
+#     is hold-out content, which is what every teaching surface asks.
+#   * a hold-out encounter seals every crutch as well, because it is served
+#     cold or it is not served at all.
+HOLDOUT = "HOLDOUT"
+
+CAPABILITY_NAMES = {c.id: c.name for c in CRUTCHES}
+CAPABILITY_NAMES[HOLDOUT] = "The sealed hold-out"
+
+# The default refusal tells the player a crutch has been taken away. The
+# hold-out has not taken anything away, so it says what it actually is.
+REFUSAL_MESSAGE = {
+    HOLDOUT: ("That problem is held out of the teaching side of the game. It is "
+              "one of the few formulations left that can still measure whether "
+              "any of this transfers, and spending it on a lesson would spend "
+              "it for nothing."),
+}
+
+
 def refuse(capability: str) -> dict:
     """The refusal the server returns. Deliberately the same `{"error": "sealed"}`
     shape engine.py already returns for Interview Mode, so callers and the client
     have exactly one failure to handle."""
-    crutch = CRUTCH_BY_ID.get(capability)
-    name = crutch.name if crutch else capability
+    name = CAPABILITY_NAMES.get(capability, capability)
     return {
         "error": "sealed",
         "capability": capability,
-        "message": f"{name} does not work here. That is the point of here.",
+        "message": REFUSAL_MESSAGE.get(
+            capability, f"{name} does not work here. That is the point of here."),
     }
 
 
@@ -225,14 +261,36 @@ EXAM_SEAL = Seal(boss_id="the_interviewer", rung=_LADDER_LENGTH,
                  herald=CRUTCH_BY_ID["OBLIGING_HAND"].herald, final=True)
 
 
-def seal_for(*, mode: str = config.MODE_ADVENTURE, boss_id: str = "") -> Seal:
+def _with_holdout(seal: Seal) -> Seal:
+    """The same seal with the hold-out's own withdrawals added on top.
+
+    A hold-out problem is served cold: no pattern label, no weakness map, no
+    hints, no companion, no clock the build can widen. That is every crutch in
+    the list, which is what the exam already seals — so this adds the exam's set
+    to whatever the encounter had, and leaves the label, the boss and `final`
+    alone. Sealing MORE is the only direction this function travels.
+    """
+    return replace(seal, sealed=frozenset(seal.sealed | ALL_CRUTCHES | {HOLDOUT}))
+
+
+def seal_for(*, mode: str = config.MODE_ADVENTURE, boss_id: str = "",
+             holdout: bool = False) -> Seal:
     """The one function every call site asks. Interview Mode is always the full
-    seal; a boss fight is whatever its rung has taken; anything else is open."""
+    seal; a boss fight is whatever its rung has taken; anything else is open.
+    Hold-out content seals everything either way."""
     if mode == EXAM_MODE:
-        return EXAM_SEAL
-    if boss_id in SEAL_BY_BOSS:
-        return SEAL_BY_BOSS[boss_id]
-    return OPEN_SEAL
+        base = EXAM_SEAL
+    elif boss_id in SEAL_BY_BOSS:
+        base = SEAL_BY_BOSS[boss_id]
+    else:
+        base = OPEN_SEAL
+    return _with_holdout(base) if holdout else base
+
+
+# An encounter on hold-out content outside a measured run. The engine refuses to
+# start one at all; this exists so that anything which somehow holds such an
+# encounter still answers "sealed" to every question asked of it.
+HOLDOUT_SEAL = _with_holdout(OPEN_SEAL)
 
 
 def encounter_seal(encounter) -> Seal:
@@ -240,7 +298,8 @@ def encounter_seal(encounter) -> Seal:
     if encounter is None:
         return OPEN_SEAL
     return seal_for(mode=getattr(encounter, "mode", config.MODE_ADVENTURE),
-                    boss_id=getattr(encounter, "boss_id", ""))
+                    boss_id=getattr(encounter, "boss_id", ""),
+                    holdout=bool(getattr(encounter, "holdout", False)))
 
 
 def sealed(encounter, capability: str) -> bool:
@@ -354,6 +413,7 @@ def interview_format() -> dict:
                    for slot in segment.slots],
         "composer": "gauntlet.finalexam.compose",
         "rules": list(fmt.rules),
+        "examiner": examiner_view(),
     }
 
 
@@ -453,6 +513,175 @@ THE_PRACTICAL = ExamFormat(
 )
 
 FORMATS = {THE_PRACTICAL.id: THE_PRACTICAL}
+
+
+# ---------------------------------------------------------------------------
+# 3b. The face of it
+# ---------------------------------------------------------------------------
+#
+# The practical had no face. It was a rule set, a clock and a report, and all
+# three of those are correct, and a measurement with nobody standing behind it
+# is a form the player fills in rather than the last room of a story.
+#
+# So: THE LAST INTERPRETER. A python, in both senses, at a scale that stopped
+# being an animal somewhere around the third coil, wearing a hat that was once
+# ceremonial and is now simply old. It is a wizard the way a mountain is a
+# landmark — not because it chose the profession but because everything else
+# that knew the language is gone and it is still running.
+#
+# Its whole character is one rule, and the rule is not a gimmick: IT SPEAKS ONLY
+# IN PYTHON, AND IT EXPECTS YOU TO DO THE SAME. The Null King un-named the
+# Source; every other survivor in this world learned to talk around the gap in
+# approximations, gestures and mentor-speak. This one refused. It kept the
+# language by being the thing that still executes it, and it has not uttered a
+# sentence in nine hundred years that could not be run.
+#
+# WHAT IT IS NOT. It is not a difficulty change, a rule change, a hint, or a
+# mercy. Every string below is authored against NOTHING: it has never seen a
+# problem, a test, a pattern label or a solution, and there is no field on it
+# that could carry one. `examiner_view()` is static module data with the
+# player's verdict code selecting one of three closing lines, which is the only
+# input it takes from the run at all. The exam is sealed, unassisted and timed
+# exactly as it was before this existed, and the audit that proves it —
+# `audit_payload` — is unchanged and still refuses to ship a question that leaks.
+#
+# It is the last thing the player sees. That is the entire argument for it.
+
+@dataclass(frozen=True)
+class Examiner:
+    id: str
+    name: str
+    epithet: str
+    species: str
+    sprite: str
+    colour: str
+    accent: str
+    tagline: str
+    blurb: str
+    law: str                  # why it will not speak to you in English
+    arrival: tuple
+    segment_lines: dict       # SegmentSpec.id -> what it says as that clock starts
+    silence: tuple            # what it says to anything asked of it in here
+    verdict_lines: dict       # verdict code -> the value it returns about you
+    closing: tuple
+
+
+THE_LAST_INTERPRETER = Examiner(
+    id="the_last_interpreter",
+    name="THE LAST INTERPRETER",
+    epithet="of the Standing Prompt",
+    species="Python",
+    sprite="interpreter",
+    colour="#3f7f5a",
+    accent="#e8c37d",
+    tagline="It will not explain anything to you in a language that cannot be run.",
+    blurb="A python long enough that the room was built around it rather than "
+          "the other way round, coiled through the floor it is standing on. "
+          "Somewhere past the fourth turn there is a head, and the head is "
+          "wearing a hat, and neither of those facts makes the rest of it "
+          "smaller. It does not move while you work. It is not watching you "
+          "either. It is waiting for a value.",
+    law="It has no second language, and that is a fact about what it is rather "
+        "than a manner it has adopted. When the Null King un-named the Source, "
+        "everything else that survived learned to talk around the hole — in "
+        "approximations, in gestures, in the careful mentor-voice you have been "
+        "listening to for the whole of this game. This one refused, on the "
+        "grounds that a description of a thing is not the thing. It kept the "
+        "language by continuing to execute it, alone, for nine hundred years, "
+        "and it has not said one sentence since that could not be run.",
+    arrival=(
+        "The coils arrive first and they keep arriving. You are some way into "
+        "the room before you understand that the floor is not the floor.",
+        ">>> ",
+        "It does not greet you. It opens a prompt. The prompt is the greeting, "
+        "and it is also the entire courtesy you are going to be shown in here.",
+        ">>> assert isinstance(candidate, Fluent)",
+        "That line either raises or it does not. It has been waiting the whole "
+        "game to find out which. So, if you are honest about it, have you.",
+    ),
+    segment_lines={
+        "set": ">>> for problem in the_set: solve(problem)   # 70 minutes, "
+               "shared",
+        "codebase": ">>> import somebody_elses   # it did not write this either. "
+                    "it has read it.",
+    },
+    silence=(
+        ">>> help(problem)",
+        "no documentation found",
+        "It is not being cruel and it is not making a point. It genuinely has "
+        "nothing to read out. Everything in this room that could have spoken "
+        "was taken from you one at a time, on purpose, by things you have "
+        "already beaten, and the last of them was taken three rooms ago by "
+        "something in mirror armour that was very polite about it.",
+    ),
+    verdict_lines={
+        "READY": (">>> candidate.ready", "True",
+                  "It does not congratulate you. It returns a value. In this "
+                  "room that is the higher form of respect, because unlike "
+                  "praise it can be checked, and because it is the first thing "
+                  "anyone has said to you in nine hundred years that meant "
+                  "exactly what it said."),
+        "CLOSE": (">>> candidate.ready", "False",
+                  "False is a value and not a verdict about you. The coils "
+                  "shift by about a foot, which from something this size is the "
+                  "gesture of an examiner who has seen the near miss before and "
+                  "knows which of the two kinds it is."),
+        "NOT_READY": (">>> candidate.ready",
+                      "Traceback (most recent call last):",
+                      "A traceback is the most generous thing this language "
+                      "produces. It names the line, it names the cause, and it "
+                      "reads from the bottom up. Everything under this paragraph "
+                      "is that traceback, written out in your own numbers."),
+    },
+    closing=(
+        "The coils withdraw in the order they arrived, which takes some time, "
+        "and you are left standing in a room that turns out to be quite small.",
+        ">>> del interpreter",
+        "The prompt stays. It was never his.",
+    ),
+)
+
+EXAMINER_BY_ID = {THE_LAST_INTERPRETER.id: THE_LAST_INTERPRETER}
+
+
+def examiner() -> Examiner:
+    """The thing standing at the end of the practical."""
+    return THE_LAST_INTERPRETER
+
+
+def examiner_view(verdict_code: str = "") -> dict:
+    """Everything the client needs to draw and voice the examiner.
+
+    Static module data. The ONLY thing the run contributes is `verdict_code`,
+    which selects one of three closing exchanges, so there is no path by which
+    a question, a test or a solution could reach this payload — there is no
+    field here for one. That is deliberate and it is why this can be shipped
+    inside a sealed run without widening the seal by a single capability.
+    """
+    who = THE_LAST_INTERPRETER
+    return {
+        "id": who.id, "name": who.name, "epithet": who.epithet,
+        "species": who.species, "sprite": who.sprite,
+        "colour": who.colour, "accent": who.accent,
+        "tagline": who.tagline, "blurb": who.blurb, "law": who.law,
+        # Where it stands. world.py owns the geography; this module owns the
+        # animal, and neither of them keeps a second copy of the other's half.
+        "region": world.FINAL_TRIAL["region"],
+        "where": world.FINAL_TRIAL["where"],
+        "arrival": list(who.arrival),
+        "segments": dict(who.segment_lines),
+        "silence": list(who.silence),
+        "closing": list(who.closing),
+        "verdict": list(who.verdict_lines.get(verdict_code, ())),
+        # Said out loud next to its own portrait: the animal is new, the rules
+        # are not, and nothing about the measurement moved to make room for it.
+        "changes_nothing": (
+            "It is an identity, a herald and a voice around a measurement that "
+            "was already here. It seals nothing extra and it unseals nothing. "
+            "The rules below are the rules that were always below."),
+        "sealed": sorted(EXAM_SEAL.sealed),
+        "rules": list(THE_PRACTICAL.rules),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -702,9 +931,22 @@ class Question:
         return asdict(self)
 
     def player_view(self) -> dict:
+        """The question as a slot in a timetable, not as a question.
+
+        `problem_id` and `title` go the same way `pattern` and `skill` do, and
+        for the reason already written above them. The exam reaches into the
+        sealed hold-out, and a hold-out problem is spent when it is served, so
+        a roster naming the questions before they are served hands over sealed
+        ids — with titles attached, which is the whole exercise in four words —
+        at no cost and with the run still abandonable. What the client needs to
+        draw the timetable is the position, the segment, the role, the
+        difficulty and the clock. It is all still here.
+        """
         d = self.to_dict()
         d["pattern"] = "REDACTED"
         d["skill"] = ""
+        d.pop("problem_id", None)
+        d.pop("title", None)
         return d
 
 
@@ -765,6 +1007,9 @@ class Exam:
             "rules": list(fmt.rules),
             "mode": EXAM_MODE,
             "sealed": sorted(EXAM_SEAL.sealed),
+            # Who is in the room. Static module data with no field that could
+            # carry a question; see `examiner_view`.
+            "examiner": examiner_view(),
             "segments": [
                 {"id": s["id"], "label": s["label"], "minutes": s["minutes"],
                  "brief": s["brief"],
@@ -961,18 +1206,44 @@ _MUST_BE_ABSENT = ("canonical_solution", "hidden_tests", "edge_cases",
                    "perf_tests", "alternate_solutions", "mutants")
 
 
+# The answer surface of a puzzle payload, named once so that `exam_view` strips
+# exactly what `audit_view` refuses — the two agreeing by construction rather
+# than by two lists staying in step by hand.
+#
+# `schema.PUZZLE_VISIBLE_MCQ` ships some of these to the client on purpose,
+# because a teaching puzzle needs them to be playable: SPOT_THE_FLAW is
+# literally "two spells, near identical, one cursed, find the line", so the
+# honest version has to be on screen next to the cursed one. Correct code on
+# screen is also precisely the teaching surface an exam may not have. Both
+# readings are right; they just belong to different modes, and `redact_mcq` is
+# mode-blind, so the narrowing happens here.
+#
+# No exam composes one of these today — EXAM_ENCOUNTERS admits CODE_BATTLE,
+# REFACTOR_QUEST and DEBUG_BATTLE and nothing else — so this closes a door
+# rather than a live leak. It is closed anyway: the day somebody widens
+# EXAM_ENCOUNTERS should not also be the day fourteen puzzles start handing out
+# correct code, and finding that out from an audit is better than from a player.
+_MCQ_ANSWER_KEYS = ("answer", "explanation", "distractors", "reference_code",
+                    "flawed_line", "final_state")
+
+
 def exam_view(problem) -> dict:
     """The question as the player may see it.
 
-    Everything here comes from `player_view(mode=EXAM_MODE)`. The one addition is
-    dropping `complexity_choices`: four Big-O options with the right one among
-    them tell you what shape of solution is expected, which is a hint that
-    predates Interview Mode and was never reconsidered. A real practical gives
-    you a specification, examples, and a test suite you can run. It does not give
-    you a multiple-choice list of the answer's cost.
+    Everything here comes from `player_view(mode=EXAM_MODE)`. Two things are
+    taken off it. `complexity_choices` goes because four Big-O options with the
+    right one among them tell you what shape of solution is expected, which is a
+    hint that predates Interview Mode and was never reconsidered — a real
+    practical gives you a specification, examples, and a test suite you can run,
+    not a multiple-choice list of the answer's cost. And the puzzle answer keys
+    go, for the reason set out above them.
     """
     view = problem.player_view(mode=EXAM_MODE)
     view["complexity_choices"] = []
+    mcq = view.get("mcq")
+    if isinstance(mcq, dict):
+        view["mcq"] = {k: v for k, v in mcq.items()
+                       if k not in _MCQ_ANSWER_KEYS}
     view["sealed"] = sorted(EXAM_SEAL.sealed)
     return view
 
@@ -993,8 +1264,7 @@ def audit_view(view: dict) -> list:
         if key in view:
             leaks.append(f"{key} was serialised to the client")
     mcq = view.get("mcq") or {}
-    for key in ("answer", "explanation", "distractors", "reference_code",
-                "flawed_line", "final_state"):
+    for key in _MCQ_ANSWER_KEYS:
         if key in mcq:
             leaks.append(f"mcq.{key} was serialised to the client")
     for test in view.get("visible_tests") or ():
@@ -1252,18 +1522,43 @@ def _verdict(*, set_solved, set_total, codebase_solved, codebase_total,
     }
 
 
+# A question that was never put in front of the player and is drawn from the
+# sealed hold-out. Naming it in the debrief spends nothing and costs everything:
+# end the practical the second it starts and the report tells you the titles of
+# the sealed questions it had lined up for you, still unspent, ready to be met
+# "cold" once you have looked them up.
+UNSEEN_TITLE = "Not asked — still sealed"
+UNSEEN_NOTE = ("You never saw this one, so it is still hold-out content and it "
+               "still has to be met cold. It keeps its name until you sit it.")
+
+
 def debrief(exam: Exam, results, *, skills=None, seconds_by_segment=None,
-            readiness=None, corpus_index=None) -> dict:
+            readiness=None, corpus_index=None, served=()) -> dict:
     """The report: per-question outcome, time spent, what it says about
     readiness, and the specific skills to drill.
 
     `results` is the shape `engine.interview_advance` already records —
     `{problem_id, solved, rank, seconds, root_cause}` — plus anything else the
     grader felt like attaching.
+
+    `served` is the set of problem ids this player has actually been shown, and
+    it exists for one case: a sealed question the run composed but never served.
+    Everything else in this report is about something that happened; that row is
+    about something that did not, and it is the only row that has to stay
+    anonymous. A teachable question keeps its name either way — there is nothing
+    to protect — so the redaction costs a debrief nothing it was worth having.
     """
     fmt = exam.format
     index = _result_index(exam, results)
     seconds_by_segment = seconds_by_segment or {}
+    served = set(served or ())
+    corpus_index = corpus_index or {}
+
+    def unseen(question) -> bool:
+        problem = corpus_index.get(question.problem_id)
+        return (bool(getattr(problem, "sealed", False))
+                and question.problem_id not in served
+                and not index.get(question.problem_id))
 
     questions = []
     segments = []
@@ -1286,17 +1581,21 @@ def debrief(exam: Exam, results, *, skills=None, seconds_by_segment=None,
                 solved_here += 1
                 if question.difficulty in _MEDIUMISH:
                     medium_solved += 1
+            hidden = unseen(question)
             rows.append({
                 "position": question.position,
                 "label": question.label,
                 "role": question.role,
-                "title": question.title,
+                "title": UNSEEN_TITLE if hidden else question.title,
+                "unseen": hidden,
                 "difficulty": question.difficulty,
                 # The labels come back now. Knowing afterwards what the thing was
                 # is the entire value of a debrief, and it costs nothing once the
-                # attempt is scored.
-                "pattern": question.pattern,
-                "skill": question.skill,
+                # attempt is scored — which is the condition, not a figure of
+                # speech. On a question that was never served and is still
+                # sealed, it costs the measurement.
+                "pattern": "" if hidden else question.pattern,
+                "skill": "" if hidden else question.skill,
                 "solved": solved,
                 "rank": result.get("rank", ""),
                 "seconds": round(seconds),
@@ -1306,7 +1605,7 @@ def debrief(exam: Exam, results, *, skills=None, seconds_by_segment=None,
                 "over_target": bool(seconds > question.target_seconds),
                 "root_cause": cause,
                 "bucket": _bucket_of(cause),
-                "assessment": _assess(question, result),
+                "assessment": UNSEEN_NOTE if hidden else _assess(question, result),
             })
         questions.extend(rows)
         if spent is None:
@@ -1369,6 +1668,10 @@ def debrief(exam: Exam, results, *, skills=None, seconds_by_segment=None,
         # No coach, no worked solutions, no hint tree — the exam is over, and what
         # replaces them is this page.
         "sealed": sorted(EXAM_SEAL.sealed),
+        # And the last thing in the room says what it found, in the one language
+        # it has. A closing line, selected by the verdict this report already
+        # computed; it adds no information the page does not already carry.
+        "examiner": examiner_view(verdict["code"]),
     }
     return report
 

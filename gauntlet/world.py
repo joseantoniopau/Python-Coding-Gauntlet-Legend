@@ -5,6 +5,18 @@ unlock graph is the learning graph.
 """
 from __future__ import annotations
 
+# ADDING A REGION COSTS ONE LINE IN ANOTHER FILE.
+#
+# `biome` is not decoration. elements.py builds the whole elemental map out of
+# it — `elements.BIOME_AFFINITY` turns a biome into one of six elements, and
+# every region's weather, its overworld hazard, the element its monsters fight
+# with and which potions its loot table favours all fall out of that one word.
+# A region whose biome is not on that map is simply neutral, which reads as a
+# region nobody finished rather than as a region nobody gave weather to.
+#
+# So: a new region either reuses an existing biome, or it needs an entry in
+# elements.BIOME_AFFINITY. `elements.self_check()` fails by name if it does not
+# get one, which is the loud version of this comment.
 REGIONS = [
     {"id": "python_village", "name": "Python Village", "numeral": "",
      "skill": "PYTHON", "biome": "village", "palette": "dawn",
@@ -163,6 +175,33 @@ BOSSES = [
 ]
 
 BOSS_BY_ID = {b["id"]: b for b in BOSSES}
+
+# ---------------------------------------------------------------------------
+# The last trial
+# ---------------------------------------------------------------------------
+#
+# It is deliberately NOT in BOSSES. finalexam.BOSS_LADDER is built from that
+# list's ORDER — rung N is the Nth entry — so appending to it would renumber
+# every crutch in the game, and nothing about the practical is fought, ranked,
+# rematched or dropped loot by anyway. The Interviewer above is still the
+# fourteenth boss and still takes the last crutch.
+#
+# What this is, is the geography: a place, below the castle, with something in
+# it. gauntlet.finalexam owns the character standing there — its voice, its law
+# and the three lines it has about you — because the exam owns the room.
+FINAL_TRIAL = {
+    "id": "the_last_interpreter",
+    "name": "THE LAST INTERPRETER",
+    "epithet": "of the Standing Prompt",
+    "region": "null_kings_castle",
+    "where": "Underneath the castle, in the room the castle was built on top of "
+             "in order to stop being able to see it.",
+    "sprite": "interpreter", "colour": "#3f7f5a", "accent": "#e8c37d",
+    "blurb": "A python at the scale where the room is a consequence of the "
+             "animal rather than the other way round. It is also, and without "
+             "any apparent contradiction, a wizard. It speaks one language and "
+             "will not be drawn into a second.",
+}
 
 # Boss phases: recognition, explanation, implementation, edge cases, complexity,
 # then a disguised variant. HP falls as phases clear.

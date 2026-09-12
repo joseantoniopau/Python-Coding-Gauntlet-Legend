@@ -17,6 +17,7 @@
 import * as pixel from './pixel.js';
 import * as sprites from './sprites.js';
 import * as bosses from './bosses.js';
+import * as lootart from './lootart.js';
 import * as spellfx from './spellfx.js';
 import * as stagelayer from './battlescene.js';
 
@@ -50,6 +51,68 @@ const DAMAGE_STYLE = {
   heal:   { colour: '#8fd07a', outline: '#132a10', size: 9,  rise: 24, shake: 0 },
   miss:   { colour: '#7ec8ff', outline: '#0b1a2a', size: 8,  rise: 18, shake: 0 },
 };
+
+/* ---------------- the wheel, as motion ----------------
+ *
+ * elements.py owns what an element DOES. This owns what one LOOKS like, and the
+ * two are kept apart on purpose: the server sends an element id, a multiplier
+ * and a matchup kind, and nothing below ever decides any of them.
+ *
+ * `colour` and `dark` are elements.Element's own two fields, copied rather than
+ * fetched because the stage is drawn sixty times a second and an element's
+ * palette is not something that changes mid-fight. If elements.py ever restyles
+ * one, scripts/verify checks the ids still line up; the hexes are art.
+ *
+ * `motion` is the part that matters and the part no colour swap can substitute
+ * for. Six elements that differed only in tint would be one element with a
+ * paint tray, and a player would learn the wheel by reading the label instead
+ * of by watching the screen. So each one moves in a way that means something:
+ *
+ *   FIRE       rises. It starts at the feet and goes up, and keeps going after.
+ *   COLD       converges. Shards arrive from outside and lock in place.
+ *   POISON     lingers. It seeps upward slowly and is still there afterwards.
+ *   BRUTE      arrives. One vertical slam and a shock down the standing line.
+ *   LIGHTNING  is already over. One jagged instant, from the top of the frame.
+ *   VOID       implodes. Everything is drawn inward and then there is nothing.
+ *
+ * `weather` names the ambient particle style an area of this element wears, so
+ * a cold region reads cold before anything has been cast in it.
+ */
+export const ELEMENT_FX = Object.freeze({
+  FIRE:      { colour: '#e06a3c', dark: '#8f3a1e', motion: 'rise',
+               weather: 'ember', sfx: 'crit' },
+  COLD:      { colour: '#7ec8ff', dark: '#2f6d9e', motion: 'converge',
+               weather: 'snow', sfx: 'tick' },
+  POISON:    { colour: '#8fd07a', dark: '#3f7a3a', motion: 'seep',
+               weather: 'motes', sfx: 'tick' },
+  BRUTE:     { colour: '#bf8f4f', dark: '#6f4f28', motion: 'slam',
+               weather: 'ash', sfx: 'hit' },
+  LIGHTNING: { colour: '#f2dc6a', dark: '#9a8220', motion: 'strike',
+               weather: 'rain', sfx: 'crit' },
+  VOID:      { colour: '#6a4f8f', dark: '#2f2445', motion: 'implode',
+               weather: 'ash', sfx: 'spell' },
+  NEUTRAL:   { colour: '#9b96b8', dark: '#4a4450', motion: 'plain',
+               weather: '', sfx: 'hit' },
+});
+
+/* elements.MATCHUP_MULT's floor and ceiling. Everything elemental on this stage
+ * is a lerp between them, so an opposed hit is not "the big one" by a table
+ * somebody has to keep in step — it is big because 1.5 is the top of the range
+ * the server can send. */
+const MULT_FLOOR = 0.65;
+const MULT_CEIL = 1.50;
+
+/* 0 at the most-shrugged-off hit in the game, 1 at the hardest counter. This is
+ * the single number every elemental effect below scales off. */
+function elementalK(multiplier) {
+  const m = typeof multiplier === 'number' && isFinite(multiplier)
+    ? multiplier : 1;
+  return clamp((m - MULT_FLOOR) / (MULT_CEIL - MULT_FLOOR), 0, 1);
+}
+
+export function elementFx(id) {
+  return ELEMENT_FX[String(id || '').toUpperCase()] || ELEMENT_FX.NEUTRAL;
+}
 
 /* The six hint spells the server can grant. VISION is in HINT_SPELLS alongside
  * the five named in the brief, so it gets its own look rather than a default. */
@@ -251,12 +314,20 @@ export class BattleFX {
     this.sprites = new Map();   // frame/variant cache; battles repeat, canvases should not
     this.flashCache = new WeakMap();
     this.hero = null;
+    this.gear = null;           // {weapon: itemDict} — the forged blade, if any
+    this.holdUntil = 0;         // the impact freeze, in render-clock seconds
 
     this.numbers = [];
     this.particles = [];
     this.effects = [];
     this.weather = null;
     this.weatherStyle = null;
+    // The region's own element, and the faint wash that says so. Separate from
+    // `tint`, which is a transient an outcome owns: the affinity is the room and
+    // does not fade.
+    this.affinity = '';
+    this.hazard = '';
+    this.affinityTint = 0;
 
     this.hp = 1; this.hpMax = 1; this.hpShown = 1;
     this.pips = 0; this.pipsLit = 0;
@@ -347,7 +418,12 @@ export class BattleFX {
     this.cam = null;
     this.scene = null;
     this.hero = null;
+    this.gear = null;
+    this.holdUntil = 0;
     this.weather = null;
+    this.affinity = '';
+    this.hazard = '';
+    this.affinityTint = 0;
     this.unmount();
   }
 
@@ -380,7 +456,7 @@ export class BattleFX {
    *   enemy   { name, sprite, colour, boss, hp, hp_max }
    *   pattern the problem's pattern, used for the family colour on non-bosses
    *   heroPalette optional palette override for the player sprite            */
-  setScene({ region, enemy, pattern, heroPalette } = {}) {
+  setScene({ region, enemy, pattern, heroPalette, heroLook, gear } = {}) {
     if (this.stage3d) { stagelayer.destroyScene(this.stage3d); this.stage3d = null; }
     const palName = (region && region.palette) || 'spring';
     const pal = pixel.PALETTES[palName] || pixel.PALETTES.spring;
@@ -425,11 +501,30 @@ export class BattleFX {
 
     this.weatherStyle = pixel.PARTICLE_STYLE[BIOME_WEATHER[biome] || 'motes'];
     this.weather = pixel.makeParticles(biome, STAGE.w, STAGE.ground, 26);
+    // Cleared rather than carried. A fight in the Coliseum straight after one in
+    // the marsh must read as the Coliseum, and setAffinity is called after this
+    // by whoever knows what region this is.
+    this.affinity = '';
+    this.hazard = '';
+    this.affinityTint = 0;
 
+    const tint = heroLook || pixel.PALETTES[heroPalette] || pal;
+    // A forged blade is not a tint. `gear` carries the weapon as an item dict
+    // with its forge block, and lootart.equippedHeroSprites returns exactly the
+    // structure sprites.heroSprites returns, so the rung the player paid nine
+    // regions' metal for is the thing in the hand on the stage — not a recoloured
+    // rusty blade. Falls back the moment anything about that is missing.
+    this.gear = (gear && gear.weapon) ? gear : null;
     try {
-      this.hero = sprites.heroSprites(pixel.PALETTES[heroPalette] || pal);
+      this.hero = this.gear
+        ? lootart.equippedHeroSprites(this.gear, tint)
+        : sprites.heroSprites(tint);
     } catch (e) {
-      this.hero = null;   // the stage is still worth showing without a hero
+      try {
+        this.hero = sprites.heroSprites(tint);
+      } catch (e2) {
+        this.hero = null;   // the stage is still worth showing without a hero
+      }
     }
 
     this.hpMax = Math.max(1, (enemy && enemy.hp_max) || 1);
@@ -589,6 +684,605 @@ export class BattleFX {
       await this._wait(step);
     }
     return this;
+  }
+
+  /* ---------------- the technique ----------------
+   *
+   * A forged blade's technique is not a second combat system. What it DOES is
+   * an ordinary effect on the encounter — another probe, a longer clock, a ward
+   * — resolved server-side through the same path items and class nodes already
+   * use, and this method renders none of that. What it renders is the swing,
+   * and the swing is the one place the player gets to feel nine regions of
+   * metal.
+   *
+   * Everything here scales off ONE number: the rung, 1..9. A rung-eight blade
+   * is bigger, brighter, louder, shakes harder and holds the impact frame four
+   * times as long as a rung-one blade, and every one of those is a lerp off `k`
+   * rather than a table somebody has to keep in step.
+   *
+   * Nothing here says anything about the problem. It cannot: it is handed a
+   * colour, a rung and a rank name, and it has never seen the encounter.
+   */
+  async technique({ tier = 1, name = '', rank = '', colour = '#ffe8a0',
+                    accent = '', crit = false } = {}) {
+    const rung = clamp(Math.round(tier) || 1, 1, 9);
+    const k = (rung - 1) / 8;                  // 0 at rung one, 1 at rung nine
+    const edge = accent || colour;
+
+    // The wind-up. Longer at the top of the ladder, because the anticipation is
+    // most of what makes a big hit read as a big hit.
+    this.heroPose = 1;
+    this.heroLunge = this._amp(5 + 7 * k);
+    if (this.cam) {
+      this.cam.focus(STAGE.heroX);
+      this.cam.cast(0.035 + 0.055 * k, 0.5 + 0.5 * k, 0.2 + 0.2 * k);
+    }
+    this.effects.push(this._charge(colour, edge, 0.26 + 0.24 * k, k));
+    this._sfx('spell');
+    await this._wait(this._t(0.22 + 0.22 * k));
+    if (!this.el) return this;
+
+    // The blow. The arc is drawn once, the length and thickness of it are the
+    // rung, and the flash is capped at 1 because a screen cannot go whiter.
+    this.effects.push(this._arc(colour, edge, 0.3 + 0.2 * k, k));
+    this.flash = Math.min(1, 0.55 + 0.45 * k);
+    this.knock = Math.max(this.knock, this._amp(6 + 8 * k));
+    this.shake(3 + 8 * k);
+    if (this.cam) {
+      this.cam.punch(0.05 + 0.1 * k, 0.35 + 0.2 * k);
+      this.cam.snap();
+      // THE HOLD FRAME. One tenth of a second at rung one, four tenths at rung
+      // nine: the frame the blow landed on is the one the eye gets to read.
+      this.cam.hold(this._t(0.09 + 0.3 * k, { keep: true }));
+    }
+    this.burst({
+      x: STAGE.enemyX, y: STAGE.ground - 30, colour,
+      count: Math.round(14 + 26 * k), power: 46 + 74 * k,
+      gravity: 120, life: 0.5 + 0.4 * k,
+    });
+    // One ring at the bottom of the ladder, four nested ones at the top, each
+    // a beat behind the last. This is the cheapest legible way to say "bigger".
+    const rings = 1 + Math.round(3 * k);
+    for (let i = 0; i < rings; i++) {
+      this.effects.push(this._ring(
+        STAGE.enemyX, STAGE.ground - 30, i % 2 ? edge : colour,
+        26 + 18 * i + 22 * k, (0.34 + 0.16 * k) * (1 + i * 0.35)));
+    }
+    if (rank) {
+      // The rank's trailing numeral, not its whole name. "THE MEASURED CUT IX"
+      // is a banner; a floating readout on a 192-pixel stage is two characters
+      // wide before it starts overhanging the frame.
+      const mark = String(rank).trim().split(/\s+/).pop().toUpperCase();
+      this.damageNumber(mark, {
+        kind: crit ? DAMAGE_KIND.CRIT : DAMAGE_KIND.HIT,
+        x: STAGE.enemyX, y: STAGE.ground - 62 - 8 * k,
+      });
+    }
+    this._sfx(rung >= 6 ? 'victory' : rung >= 3 ? 'crit' : 'hit');
+    // The banner is the top third of the ladder only. A rung-two blade
+    // announcing itself in forty-point letters is the thing that makes an
+    // escalation stop meaning anything.
+    if (rung >= 7 && name) {
+      this.banner = {
+        text: String(name).toUpperCase(),
+        sub: String(rank || '').toUpperCase(),
+        colour, t: 0, dur: this.reducedMotion ? 0.9 : 1.1 + 0.3 * k, slam: true,
+      };
+    }
+    await this._wait(this._t(0.3 + 0.35 * k, { keep: true }));
+    if (this.cam) this.cam.release();
+    return this;
+  }
+
+  /* The wind-up: motes drawn IN toward the blade hand, tightening as they
+   * arrive. The count and the reach are the rung. */
+  _charge(colour, edge, dur, k) {
+    const cx = STAGE.heroX + 6, cy = STAGE.ground - 26;
+    const n = 5 + Math.round(9 * k);
+    const reach = 20 + 26 * k;
+    return { t: 0, dur, draw: (ctx, p) => {
+      const pull = easeIn(p);
+      for (let i = 0; i < n; i++) {
+        const a = (Math.PI * 2 * i) / n + p * 2.2;
+        const r = reach * (1 - pull) + 3;
+        ctx.fillStyle = withAlpha(i % 3 === 0 ? edge : colour, 0.35 + 0.6 * pull);
+        ctx.fillRect(Math.round(cx + Math.cos(a) * r),
+                     Math.round(cy + Math.sin(a) * r * 0.6), 2, 2);
+      }
+      ctx.fillStyle = withAlpha(edge, pull * 0.9);
+      const core = Math.round(1 + 4 * pull * (0.4 + k));
+      ctx.fillRect(Math.round(cx - core / 2), Math.round(cy - core / 2), core, core);
+    } };
+  }
+
+  /* The blow: one arc swept from over the hero's shoulder through the enemy,
+   * with a trailing wake. Width, sweep and the wake's depth are the rung. */
+  _arc(colour, edge, dur, k) {
+    const x0 = STAGE.heroX + 4, x1 = STAGE.enemyX + 10;
+    const top = STAGE.ground - 58 - 14 * k;
+    const bottom = STAGE.ground - 8;
+    const thick = 2 + Math.round(4 * k);
+    const wake = 2 + Math.round(4 * k);
+    return { t: 0, dur, draw: (ctx, p) => {
+      const sweep = easeOut(p);
+      const a = 1 - p;
+      for (let i = 0; i < wake; i++) {
+        const lag = clamp(sweep - i * 0.06, 0, 1);
+        const x = lerp(x0, x1, lag);
+        const y = lerp(top, bottom, lag * lag);
+        ctx.strokeStyle = withAlpha(i === 0 ? edge : colour,
+                                    a * (0.85 - i * 0.13));
+        ctx.lineWidth = Math.max(1, thick - i);
+        ctx.beginPath();
+        ctx.moveTo(x0, top);
+        ctx.quadraticCurveTo((x0 + x) / 2, top - 10 - 10 * k, x, y);
+        ctx.stroke();
+      }
+      // The cut line itself: a hard bright bar at the point of contact.
+      if (p > 0.45) {
+        const cut = (p - 0.45) / 0.55;
+        ctx.fillStyle = withAlpha('#ffffff', (1 - cut) * (0.5 + 0.5 * k));
+        const h = Math.round(2 + 6 * k);
+        ctx.fillRect(STAGE.enemyX - 22 - 14 * k, STAGE.ground - 34 - 4 * k,
+                     Math.round(44 + 28 * k), h);
+      }
+    } };
+  }
+
+  /* ---------------- the elemental layer ----------------
+   *
+   * WHAT THIS IS NOT. It is not damage. Every number that reaches these methods
+   * was decided by elements.resolve_damage on a base the player's typing had
+   * already earned, and a cast that landed nothing arrives here as a zero and
+   * renders as a zero. Nothing below can make a wrong line into a right one,
+   * and nothing below is consulted until after grading.
+   *
+   * What it IS: the part of the fight the player can read. A hit that was worth
+   * one and a half times as much has to LOOK worth one and a half times as
+   * much, or the wheel is arithmetic happening somewhere off-screen and the
+   * player learns it from a tooltip instead of from the fight.
+   */
+
+  /* The area's own weather. Called once per encounter, straight after setScene,
+   * with the region's affinity — which is the region's BIOME pushed through
+   * elements.BIOME_AFFINITY, so a cold place is cold because of what it is.
+   *
+   * A neutral region gets nothing added, and that is the point: five of the
+   * seventeen are neutral, and they are the control group the other twelve are
+   * felt against. Tinting everything would leave nothing to notice.
+   */
+  setAffinity(element, { hazard = '' } = {}) {
+    const id = String(element || '').toUpperCase();
+    this.affinity = (id && id !== 'NEUTRAL' && ELEMENT_FX[id]) ? id : '';
+    this.hazard = this.affinity ? String(hazard || '') : '';
+    if (!this.affinity) {
+      // Back to the biome's own weather. setScene already chose it; re-deriving
+      // it here would be a second opinion about what a swamp looks like.
+      if (this.scene) {
+        this.weatherStyle =
+          pixel.PARTICLE_STYLE[BIOME_WEATHER[this.scene.biome] || 'motes'];
+      }
+      this.affinityTint = 0;
+      return this;
+    }
+    const fx = elementFx(this.affinity);
+    if (fx.weather && pixel.PARTICLE_STYLE[fx.weather]) {
+      this.weatherStyle = pixel.PARTICLE_STYLE[fx.weather];
+      // The particles themselves are rebuilt so the count and the fall speed
+      // belong to the weather rather than to whatever the biome had.
+      this.weather = pixel.makeParticles(
+        this.affinity, STAGE.w, STAGE.ground,
+        fx.weather === 'rain' ? 40 : fx.weather === 'snow' ? 34 : 26);
+    }
+    // Deliberately faint. This is the room, not an effect — at the strength a
+    // cast uses it would read as something happening rather than as somewhere
+    // being somewhere.
+    this.affinityTint = this.reducedMotion ? 0.06 : 0.10;
+    return this;
+  }
+
+  /* One elemental blow, landing on whoever it lands on.
+   *
+   *   element     what the blow is made of
+   *   multiplier  elements.DamageResult.multiplier — the whole scale of this
+   *   kind        OPPOSED | SECONDARY | WEAK_INTO | SAME | NEUTRAL
+   *   damage      what the server says it cost, already resolved
+   *   label       the server's own sentence fragment for the readout
+   *   side        'enemy' (the player struck) or 'hero' (the player was struck)
+   *
+   * The enemy's health bar is moved ONLY when the enemy was the one hit. The
+   * player's health lives on the top bar and belongs to the HUD, which reads it
+   * off the same state the server just wrote.
+   */
+  async elemental({ element = 'NEUTRAL', multiplier = 1, kind = 'NEUTRAL',
+                    damage = 0, label = '', side = 'enemy',
+                    absorbed = 0, resisted = 0 } = {}) {
+    const fx = elementFx(element);
+    const k = elementalK(multiplier);
+    const opposed = kind === 'OPPOSED';
+    const shrugged = kind === 'SAME';
+    const x = side === 'hero' ? STAGE.heroX : STAGE.enemyX;
+    const y = STAGE.ground - 30;
+
+    if (this.cam) this.cam.focus(x);
+
+    // The wind-up is the tell. An opposed hit gets a visible gather before it
+    // lands — which is the half-second in which a player who read the room
+    // gets to know they read it right.
+    if (opposed && !this.reducedMotion) {
+      this.effects.push(this._gather(fx.colour, fx.dark, 0.24, x, y));
+      await this._wait(this._t(0.2));
+      if (!this.el) return this;
+    }
+
+    this.effects.push(this._elementEffect(fx.motion, {
+      x, y, k, colour: fx.colour, dark: fx.dark, shrugged,
+    }));
+
+    // Weight. Every one of these is the same lerp off `k`, so the difference
+    // between a counter and a shrug is one number and not six special cases.
+    this.flash = Math.max(this.flash, shrugged ? 0.12 : 0.25 + 0.55 * k);
+    this.shake(shrugged ? 1 : 2 + 7 * k);
+    if (side === 'enemy') {
+      this.knock = Math.max(this.knock, this._amp(3 + 8 * k));
+      this.setEnemyHp(this.hp - Math.max(0, damage));
+    } else {
+      // The hero rocks back rather than the enemy rocking forward. Nothing goes
+      // red and the character stays standing: being wrong is never punished
+      // with a death screen in this game, and the stage holds that line too.
+      this.knock = this._amp(-(2 + 5 * k));
+      this.heroPose = 2;
+    }
+    if (this.cam) {
+      this.cam.punch(0.03 + 0.09 * k, 0.3 + 0.2 * k);
+      if (opposed) { this.cam.snap(); this.cam.hold(this._t(0.1 + 0.16 * k, { keep: true })); }
+    }
+    this.burst({
+      x, y, colour: shrugged ? fx.dark : fx.colour,
+      count: Math.round((shrugged ? 5 : 10) + 20 * k),
+      power: 34 + 60 * k,
+      // Fire and void refuse gravity in opposite directions, which is most of
+      // what makes the two of them impossible to confuse at a glance.
+      gravity: fx.motion === 'rise' ? -70 : fx.motion === 'implode' ? -10 : 130,
+      life: 0.4 + 0.4 * k,
+    });
+    for (let i = 0; i < (opposed ? 3 : shrugged ? 0 : 1); i++) {
+      this.effects.push(this._ring(x, y, i % 2 ? fx.dark : fx.colour,
+        24 + 16 * i + 20 * k, (0.3 + 0.15 * k) * (1 + i * 0.3)));
+    }
+
+    // The readout. `damage` is the server's number and is never recomputed
+    // here; `label` is the server's own word for the matchup. A zero with a
+    // label on it is the elemental READING of an exchange the trials have
+    // already counted, so it prints the label and not a second total — two
+    // numbers for one blow is two truths about one blow.
+    if (damage > 0 || !label) {
+      this.damageNumber(damage, {
+        kind: opposed ? DAMAGE_KIND.CRIT
+          : shrugged ? DAMAGE_KIND.RESIST : DAMAGE_KIND.HIT,
+        x, y: y - 14,
+      });
+    }
+    if (label) {
+      this.chips.push({
+        text: String(label).toUpperCase(),
+        colour: shrugged ? '#9b96b8' : fx.colour,
+        x, y: y - 30, tx: x, ty: y - 44,
+        t: 0, dur: this.reducedMotion ? 0.9 : 1.4,
+      });
+    }
+    // What the armour actually did, said separately from the elemental
+    // multiplier, because they are two different jobs and blending them into
+    // one "defence" number is the thing elements.py refuses to do.
+    if (absorbed > 0) {
+      this.damageNumber(`-${absorbed} PLATE`, {
+        kind: DAMAGE_KIND.RESIST, x: x + 18, y: y - 2,
+      });
+    } else if (resisted > 0.01) {
+      this.damageNumber(`-${Math.round(resisted * 100)}%`, {
+        kind: DAMAGE_KIND.RESIST, x: x + 18, y: y - 2,
+      });
+    }
+
+    this._sfx(opposed ? 'crit' : shrugged ? 'tick' : fx.sfx);
+    await this._wait(this._t(0.22 + 0.26 * k, { keep: true }));
+    if (this.cam) this.cam.release();
+    return this;
+  }
+
+  /* A status doing its work, on the turn it does it. Poison ticking has to be
+   * visible ON THE VICTIM or a player watching their bar drop concludes the
+   * game is cheating — which is the same complaint, differently worded, as
+   * "the antidote does nothing". */
+  statusTick({ status = '', element = '', damage = 0, side = 'hero',
+               label = '' } = {}) {
+    const fx = elementFx(element);
+    const x = side === 'hero' ? STAGE.heroX : STAGE.enemyX;
+    const y = STAGE.ground - 26;
+    this.effects.push(this._motes(fx.colour, fx.dark, 0.7, x, y,
+                                  String(status).toUpperCase() === 'POISONED'));
+    if (damage > 0) {
+      this.damageNumber(damage, { kind: DAMAGE_KIND.HIT, x: x - 14, y: y - 10 });
+      if (side === 'enemy') this.setEnemyHp(this.hp - damage);
+      this.shake(1);
+    }
+    if (label || status) {
+      this.chips.push({
+        text: String(label || status).toUpperCase(), colour: fx.colour,
+        x, y: y - 24, tx: x, ty: y - 36,
+        t: 0, dur: this.reducedMotion ? 0.8 : 1.2,
+      });
+    }
+    this._sfx('tick');
+    return this;
+  }
+
+  /* A draught going down. Deliberately on the player's side of the stage and
+   * deliberately short: it is not a turn, and an animation long enough to feel
+   * like one would be the interface arguing with the rule. */
+  drink({ colour = '#ff6a7a', amount = 0, name = '' } = {}) {
+    const x = STAGE.heroX, y = STAGE.ground - 24;
+    this.effects.push(this._guard(colour, 0.45));
+    this.burst({ x, y, colour, count: this.reducedMotion ? 4 : 14,
+                 power: 30, gravity: -60, life: 0.5 });
+    if (amount > 0) {
+      this.damageNumber(`+${amount}`, { kind: DAMAGE_KIND.HEAL, x, y: y - 14 });
+    }
+    if (name) {
+      this.chips.push({ text: String(name).toUpperCase(), colour,
+                        x, y: y - 28, tx: x, ty: y - 42,
+                        t: 0, dur: this.reducedMotion ? 0.8 : 1.3 });
+    }
+    this._sfx('unlock');
+    return this;
+  }
+
+  /* ---------------- the six motions ----------------
+   *
+   * One builder each, all returning the same {t, dur, draw} shape the rest of
+   * this file's effects use, so none of them needs its own place in the loop.
+   * `k` is the elemental scale and is the ONLY thing that differs between a
+   * counter and a shrug — the shape is the element's identity and does not
+   * change with how well it went.
+   */
+  _elementEffect(motion, o) {
+    switch (motion) {
+      case 'rise':      return this._fxRise(o);
+      case 'converge':  return this._fxConverge(o);
+      case 'seep':      return this._fxSeep(o);
+      case 'slam':      return this._fxSlam(o);
+      case 'strike':    return this._fxStrike(o);
+      case 'implode':   return this._fxImplode(o);
+      default:          return this._fxPlain(o);
+    }
+  }
+
+  /* FIRE. Columns that start at the feet and go up, and keep going after the
+   * blow is over. Nothing about fire arrives; it grows. */
+  _fxRise({ x, y, k, colour, dark, shrugged }) {
+    const n = 3 + Math.round(5 * k);
+    const dur = 0.42 + 0.3 * k;
+    const reach = (shrugged ? 14 : 26) + 30 * k;
+    const base = STAGE.ground;
+    return { t: 0, dur, draw: (ctx, p) => {
+      const a = 1 - easeIn(p);
+      for (let i = 0; i < n; i++) {
+        const off = ((i / Math.max(1, n - 1)) - 0.5) * (18 + 18 * k);
+        const phase = (p + i * 0.13) % 1;
+        const h = reach * easeOut(phase) * (0.6 + 0.4 * Math.sin(i * 2.1));
+        const w = Math.max(1, Math.round(3 + 3 * k - phase * 3));
+        ctx.fillStyle = withAlpha(i % 2 ? dark : colour, a * (1 - phase * 0.6));
+        ctx.fillRect(Math.round(x + off - w / 2), Math.round(base - h), w,
+                     Math.max(1, Math.round(h)));
+        // the tip, brighter and one pixel narrower — a flame has a point
+        ctx.fillStyle = withAlpha('#ffe8a0', a * (1 - phase) * 0.8);
+        ctx.fillRect(Math.round(x + off - 1), Math.round(base - h - 2), 2, 3);
+      }
+    } };
+  }
+
+  /* COLD. Shards from outside the frame, arriving together and stopping dead.
+   * Then a sheet of frost across the standing line that does not leave. */
+  _fxConverge({ x, y, k, colour, dark, shrugged }) {
+    const n = 5 + Math.round(7 * k);
+    const dur = 0.45 + 0.25 * k;
+    const reach = 34 + 30 * k;
+    const len = 4 + Math.round(5 * k);
+    return { t: 0, dur, draw: (ctx, p) => {
+      const arrive = easeOut(clamp(p / 0.55, 0, 1));
+      const hold = clamp((p - 0.55) / 0.45, 0, 1);
+      for (let i = 0; i < n; i++) {
+        const ang = (Math.PI * 2 * i) / n + 0.4;
+        const r = reach * (1 - arrive) + 4;
+        const px = x + Math.cos(ang) * r;
+        const py = y + Math.sin(ang) * r * 0.7;
+        ctx.strokeStyle = withAlpha(i % 3 ? colour : '#ffffff',
+                                    (1 - hold) * (shrugged ? 0.45 : 0.95));
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(px, py);
+        ctx.lineTo(px + Math.cos(ang) * len, py + Math.sin(ang) * len * 0.7);
+        ctx.stroke();
+      }
+      // the sheet: it spreads outward along the ground and stays put
+      const spread = (16 + 30 * k) * easeOut(p);
+      ctx.fillStyle = withAlpha(dark, (1 - p * 0.7) * 0.55);
+      ctx.fillRect(Math.round(x - spread), STAGE.ground - 1,
+                   Math.round(spread * 2), 2);
+    } };
+  }
+
+  /* POISON. Slow, upward, and still there when the animation is over. It does
+   * not care how the fight is going right now. */
+  _fxSeep({ x, y, k, colour, dark, shrugged }) {
+    const n = 6 + Math.round(10 * k);
+    const dur = 0.7 + 0.4 * k;
+    const spread = 12 + 14 * k;
+    const rise = 26 + 24 * k;
+    return { t: 0, dur, draw: (ctx, p) => {
+      const fade = p < 0.7 ? 1 : 1 - (p - 0.7) / 0.3;
+      for (let i = 0; i < n; i++) {
+        const phase = (p * 0.8 + i / n) % 1;
+        const off = Math.sin(i * 3.7) * spread;
+        const py = STAGE.ground - 4 - rise * phase;
+        const r = Math.max(1, Math.round(1 + 2.5 * (1 - phase) + 2 * k));
+        ctx.fillStyle = withAlpha(i % 3 ? colour : dark,
+                                  fade * (1 - phase) * (shrugged ? 0.4 : 0.85));
+        ctx.fillRect(Math.round(x + off - r / 2), Math.round(py), r, r);
+      }
+      // the low cloud, which is what makes it read as air rather than as sparks
+      ctx.fillStyle = withAlpha(dark, fade * 0.3 * (shrugged ? 0.5 : 1));
+      const w = spread * 2 * (0.6 + 0.4 * easeOut(p));
+      ctx.fillRect(Math.round(x - w / 2), STAGE.ground - 6, Math.round(w), 6);
+    } };
+  }
+
+  /* BRUTE. One thing comes down and the ground takes it. No cleverness at all. */
+  _fxSlam({ x, y, k, colour, dark, shrugged }) {
+    const dur = 0.4 + 0.22 * k;
+    const w = Math.round(10 + 14 * k);
+    return { t: 0, dur, draw: (ctx, p) => {
+      const fall = easeIn(clamp(p / 0.35, 0, 1));
+      if (p < 0.4) {
+        const top = lerp(STAGE.ground - 92, STAGE.ground - 30, fall);
+        ctx.fillStyle = withAlpha(colour, 0.9);
+        ctx.fillRect(Math.round(x - w / 2), Math.round(top), w,
+                     Math.round(STAGE.ground - 26 - top));
+        ctx.fillStyle = withAlpha('#ffffff', 0.5 * (1 - fall));
+        ctx.fillRect(Math.round(x - 2), Math.round(top), 4,
+                     Math.round(STAGE.ground - 26 - top));
+      }
+      // the shock, running both ways down the standing line
+      if (p >= 0.3) {
+        const q = (p - 0.3) / 0.7;
+        const reach = (26 + 46 * k) * easeOut(q);
+        const a = (1 - q) * (shrugged ? 0.4 : 0.9);
+        ctx.fillStyle = withAlpha(dark, a);
+        for (const dir of [-1, 1]) {
+          const h = Math.max(1, Math.round(5 * (1 - q) + 2 * k));
+          ctx.fillRect(Math.round(x + dir * reach), STAGE.ground - h,
+                       Math.round(3 + 3 * k), h);
+        }
+        ctx.fillStyle = withAlpha(colour, a * 0.7);
+        ctx.fillRect(Math.round(x - reach), STAGE.ground - 1,
+                     Math.round(reach * 2), 1);
+      }
+    } };
+  }
+
+  /* LIGHTNING. Already over by the time you saw it. One jagged instant from the
+   * top of the frame, redrawn on a different path two or three times. */
+  _fxStrike({ x, y, k, colour, dark, shrugged }) {
+    const dur = 0.3 + 0.12 * k;
+    const segs = 5 + Math.round(4 * k);
+    const jitter = 5 + 6 * k;
+    // The path is baked, not drawn per frame: a bolt that re-randomised every
+    // frame would be a flicker, and a bolt is a shape.
+    const paths = [];
+    for (let s = 0; s < 2 + Math.round(2 * k); s++) {
+      const pts = [];
+      for (let i = 0; i <= segs; i++) {
+        const t = i / segs;
+        pts.push([x + (Math.random() - 0.5) * jitter * (1 - t) * 2 + (s - 1) * 3,
+                  lerp(0, y, t)]);
+      }
+      paths.push(pts);
+    }
+    return { t: 0, dur, draw: (ctx, p) => {
+      // Strobe: on, off, on. That is what makes it read as electricity rather
+      // than as a beam.
+      const on = p < 0.12 || (p > 0.2 && p < 0.32) || (p > 0.42 && p < 0.5);
+      if (!on) return;
+      const a = shrugged ? 0.5 : 1;
+      paths.forEach((pts, i) => {
+        ctx.strokeStyle = withAlpha(i === 0 ? '#ffffff' : colour, a * (1 - i * 0.25));
+        ctx.lineWidth = Math.max(1, 2 + Math.round(2 * k) - i);
+        ctx.beginPath();
+        ctx.moveTo(pts[0][0], pts[0][1]);
+        for (const [px, py] of pts.slice(1)) ctx.lineTo(px, py);
+        ctx.stroke();
+      });
+      ctx.fillStyle = withAlpha(dark, a * 0.5);
+      ctx.fillRect(Math.round(x - 10 - 8 * k), Math.round(y - 2),
+                   Math.round(20 + 16 * k), 4);
+    } };
+  }
+
+  /* VOID. Not a force — an absence, arriving where a force was expected. The
+   * only effect in this file that runs inward. */
+  _fxImplode({ x, y, k, colour, dark, shrugged }) {
+    const dur = 0.5 + 0.3 * k;
+    const n = 8 + Math.round(10 * k);
+    const reach = 30 + 32 * k;
+    return { t: 0, dur, draw: (ctx, p) => {
+      const pull = easeIn(clamp(p / 0.7, 0, 1));
+      for (let i = 0; i < n; i++) {
+        const ang = (Math.PI * 2 * i) / n + p * 1.6;
+        const r = reach * (1 - pull) + 2;
+        ctx.fillStyle = withAlpha(i % 2 ? colour : dark,
+                                  (shrugged ? 0.4 : 0.9) * (0.3 + 0.7 * pull));
+        ctx.fillRect(Math.round(x + Math.cos(ang) * r),
+                     Math.round(y + Math.sin(ang) * r * 0.75), 2, 2);
+      }
+      // the hole. It grows while everything is being drawn in and then it is
+      // simply not there any more, which is the whole idea.
+      const core = (3 + 9 * k) * (p < 0.7 ? pull : 1 - (p - 0.7) / 0.3);
+      ctx.fillStyle = withAlpha('#120f1c', 0.9);
+      ctx.beginPath();
+      ctx.arc(x, y, Math.max(0.5, core), 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = withAlpha(colour, (1 - p) * 0.8);
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(x, y, Math.max(0.5, core + 2 + 4 * (1 - pull)), 0, Math.PI * 2);
+      ctx.stroke();
+    } };
+  }
+
+  /* NEUTRAL. A plain impact. Weather-free: whatever happened, happened because
+   * you did it. */
+  _fxPlain({ x, y, k, colour, shrugged }) {
+    const dur = 0.3 + 0.15 * k;
+    return { t: 0, dur, draw: (ctx, p) => {
+      const r = (10 + 22 * k) * easeOut(p);
+      ctx.strokeStyle = withAlpha(colour, (1 - p) * (shrugged ? 0.4 : 0.85));
+      ctx.lineWidth = Math.max(1, 2 - Math.round(p * 2));
+      ctx.beginPath();
+      ctx.arc(x, y, Math.max(0.5, r), 0, Math.PI * 2);
+      ctx.stroke();
+    } };
+  }
+
+  /* The gather before a counter lands. Only opposed hits get one — it is the
+   * half-second that says "you read the room right" before the number appears. */
+  _gather(colour, dark, dur, x, y) {
+    return { t: 0, dur, draw: (ctx, p) => {
+      const pull = easeIn(p);
+      for (let i = 0; i < 10; i++) {
+        const ang = (Math.PI * 2 * i) / 10 + p * 3;
+        const r = 34 * (1 - pull) + 3;
+        ctx.fillStyle = withAlpha(i % 3 ? colour : dark, 0.3 + 0.6 * pull);
+        ctx.fillRect(Math.round(x + Math.cos(ang) * r),
+                     Math.round(y + Math.sin(ang) * r * 0.7), 2, 2);
+      }
+    } };
+  }
+
+  /* The lingering mark of a status: a slow drift of the element's own colour
+   * over whoever is carrying it. Drips downward for poison, rises for the rest,
+   * because poison is the one that is IN you rather than on you. */
+  _motes(colour, dark, dur, x, y, down) {
+    const n = 7;
+    return { t: 0, dur, draw: (ctx, p) => {
+      const a = 1 - p;
+      for (let i = 0; i < n; i++) {
+        const phase = (p + i / n) % 1;
+        const off = Math.sin(i * 2.3 + p * 2) * 9;
+        const py = down ? y - 12 + 24 * phase : y + 8 - 26 * phase;
+        ctx.fillStyle = withAlpha(i % 2 ? colour : dark, a * (1 - phase) * 0.9);
+        ctx.fillRect(Math.round(x + off), Math.round(py), 2, 2);
+      }
+    } };
   }
 
   /* ---------------- spells ---------------- */
@@ -1202,6 +1896,7 @@ export class BattleFX {
     if (!this.scene) return;
     this._drawBackdrop(ctx);
     this._drawWeather(ctx);
+    this._drawAffinity(ctx);
     this._drawCombo(ctx);
     this._drawHero(ctx);
     this._drawEnemy(ctx);
@@ -1239,6 +1934,27 @@ export class BattleFX {
   _drawWeather(ctx) {
     if (!this.weather || !this.weatherStyle) return;
     pixel.drawParticles(ctx, this.weather, this.weatherStyle, 0.45);
+  }
+
+  /* The area's affinity, as a wash over the room and a band along the ground.
+   * Under the fighters rather than over them, because it is where they are
+   * standing and not something that is happening to them — and because a wash
+   * over the top would drag every sprite in the game off its own ramp. */
+  _drawAffinity(ctx) {
+    if (!this.affinity || !this.affinityTint) return;
+    const fx = elementFx(this.affinity);
+    ctx.fillStyle = withAlpha(fx.colour, this.affinityTint);
+    ctx.fillRect(0, 0, STAGE.w, STAGE.ground);
+    // The hazard is the floor. Boots answer it, so it is drawn at boot height:
+    // a band the player's feet are actually in.
+    if (this.hazard) {
+      ctx.fillStyle = withAlpha(fx.dark, this.affinityTint * 2.2);
+      ctx.fillRect(0, STAGE.ground - 3, STAGE.w, 4);
+      ctx.fillStyle = withAlpha(fx.colour, this.affinityTint * 1.6);
+      for (let x = (Math.floor(this.clock * 6) % 8); x < STAGE.w; x += 8) {
+        ctx.fillRect(x, STAGE.ground - 1, 3, 1);
+      }
+    }
   }
 
   _shadow(ctx, x, w, alpha = 0.35) {
@@ -1584,4 +2300,6 @@ export function trialsFromFeedback(feedback, combat) {
   }));
 }
 
-export const FX_VERSION = '1.0.0';
+/* 1.1.0 adds technique(): the forged blade's swing, scaled entirely by its
+ * rung, and the camera hold frame in battlescene.js that it drives. */
+export const FX_VERSION = '1.1.0';

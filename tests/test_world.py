@@ -702,6 +702,16 @@ class TestTheRules(GameTest):
                 context={"pattern": "HASH_MAP", "family": "two_sum"})
             if result is None:
                 continue
+            if result.get("refused"):
+                # Called with no `difficulty`, which reads as EASY, so the
+                # TUTORIAL-tier starter refuses. A refusal is the other shape
+                # this function returns and it is free BY CONTRACT: it must not
+                # charge a hint and must not clamp the rank, or an animal saying
+                # "I cannot read this" would cost the same as one that helped.
+                self.assertEqual(result["hint_weight"], 0)
+                self.assertEqual(result["rank_ceiling"], "")
+                self.assertTrue(result["route"]["roads"])
+                continue
             spoke += 1
             self.assertEqual(result["hint_weight"], pets.HINT_WEIGHT)
             self.assertIn(result["rank_ceiling"], ("A", "B", "C", "D"))

@@ -28,7 +28,35 @@
  *   Separate animated parts: a jaw, a wing, a tail, an orbiting skull, a chain.
  *   A contre-jour rim in the boss's own colour, because the stage is near-black
  *     and a near-black creature on it is a hole, not a silhouette.
- *   An ENTRANCE: four beats, up through the floor, rim first, crown last.
+ *   An ENTRANCE: six beats, up through the floor, rim first in three staggered
+ *     bands, crown last, and then 420ms of nothing before it says anything.
+ *
+ * And, added since: the other half of the brief, which is that a boss has to be
+ * epic in TWO places and be the same animal in both.
+ *
+ *   A MAP FORM. 48x48 (72x48 wide) against a 24x24 mob and a 16x24 hero on a
+ *     16-pixel tile grid — twice the height and four times the painted mass of
+ *     anything else out there, with a border a ring and a half thick instead of
+ *     a ring. It is not the battle sprite made small. It is DERIVED from the
+ *     battle sprite by a reduction that keeps the features, drops the detail
+ *     authored for 112 pixels, re-outlines heavily and then re-lights on the
+ *     new silhouette. Because it is derived, the two forms cannot drift; and
+ *     because "cannot drift" is a claim about pixels, it is measured rather
+ *     than asserted. See THE MAP FORM below, and the numbers in
+ *     scripts/verify/bossforms.mjs.
+ *   AN ELEMENT. gauntlet/elements.py already says what every region is, and
+ *     world.py already says which region every boss stands in, so every one of
+ *     these creatures has had an element all along and the art did not know.
+ *     Now the contre-jour rim, the rune glow and the ember ramp rotate to it.
+ *     It costs nothing: a remap of light already on the sprite cannot raise a
+ *     colour count, and the harness checks that it does not.
+ *   A PHASE THAT CHANGES THE SHAPE. Phase 1 cracks; phase 2 goes through. The
+ *     plate is holed at the fault lines and the creature LOSES A LIMB — the
+ *     dragon a wing, the colossus its maul, the Interpreter its hat. The
+ *     hydra, whose opening line is about growing heads, grows one. A phase you
+ *     can only see by reading the health bar is a number, and the silhouette
+ *     is the only part of a sprite that survives a screen shake, a map scale
+ *     and a player who is looking at their own code instead.
  *
  * Fifteen colours, and this file now holds to it. The whole bestiary is inside
  * the budget — worst case fifteen exactly — which it was not before: the way
@@ -52,7 +80,8 @@
 
 /* Single line on purpose: the project's parse check strips /^import.*$/ per
  * line, and a wrapped import statement leaves its own tail behind. */
-import { ramp, mix, shade, rng, hash, drawGrid, applyRim, normalise, shiftRows, bobGrid, sinkRows, squashRows, widenRows, drawGroundShadow } from './sprites.js';
+import { ramp, mix, shade, rng, hash, drawGrid, applyRim, rimLowLeft, normalise, shiftRows, bobGrid, sinkRows, squashRows, widenRows, drawGroundShadow } from './sprites.js';
+import { bossLook, dressGrid, elementPalette, wantsRim, ingestHunters, ELEMENT_IDS } from './bossart.js';
 
 export const BOSS_ART_VERSION = 3;
 
@@ -63,6 +92,18 @@ export const BOSS_H = 64;
 export const BOSS_W = 64;
 export const BOSS_WIDE_W = 96;
 
+/* The marker box. Three quarters of the battle box, so a boss is 48 tall
+ * against a 24-tall mob and a 24-tall hero on a 16-pixel tile grid: twice the
+ * height of anything else that walks around out there, which is the point.
+ * See THE MAP FORM, further down, for how it is derived and why it is derived
+ * rather than drawn. */
+export const BOSS_MAP_H = 48;
+export const BOSS_MAP_W = 48;
+export const BOSS_MAP_WIDE_W = 72;
+/* What the marker box costs against the battle box, used for the sink and the
+ * shadow so a boss meets the ground the same way in both places. */
+export const BOSS_MAP_RATIO = BOSS_MAP_H / BOSS_H;
+
 /* ---------------- glyph table ----------------
  * Every grid in this file draws from exactly this set. Anything else is a typo,
  * and drawGrid silently skips unknown glyphs, so the harness checks for them.
@@ -70,7 +111,8 @@ export const BOSS_WIDE_W = 96;
  *   .    transparent
  *   o    hard outline, near-black bruised toward the body hue
  *   O    lit outline, upper left            (written by applyRim)
- *   Q    contre-jour rim in the boss colour (written by rimPass)
+ *   Q    contre-jour rim in the boss colour (written by rimPass ->
+ *        sprites.rimLowLeft, one low-left source, inside the outline)
  *   B    undecided body mass                (resolved by applyRim)
  *   H L  lit tones, d D shadow tones        (resolved by applyRim, or authored)
  *   a A  accent base / accent light
@@ -110,7 +152,78 @@ export const BOSS_GLYPHS = 'oOQBHLdDaAkewWgGnbCctTsrRfuUxXzZjJimMl';
  *            a furnace is still chrome; chrome tinted the colour of a furnace
  *            is plastic.
  */
-export function bossPalette(base, accentHex, phase = 0) {
+/* ---------------- the element ----------------
+ * gauntlet/elements.py gives every biome an affinity and gauntlet/world.py puts
+ * every boss in a region, so each of these creatures HAS an element whether the
+ * art admits it or not. Until now it did not: the Twin Pointer Behemoth guards
+ * a COLD mountain pass in hot orange, which quietly tells the player that the
+ * game's own type chart is decoration.
+ *
+ * The fix is deliberately NOT a new material. A material costs a palette slot,
+ * and four of these creatures already paint exactly fifteen colours, so the
+ * element is carried by ROTATING light that is already on the sprite: the
+ * contre-jour rim, the lit outline, the rune glow and the three ember steps.
+ * Nothing is added, which means nothing can go over budget — a remap cannot
+ * raise a colour count, only collapse one — and the thing a player actually
+ * reads from across a ridge, which is what colour the light coming off the
+ * creature is, finally agrees with the ground it is standing on.
+ *
+ * NEUTRAL is not an element — elements.py is explicit about that — and so it
+ * is not in this table. A canopy boss is lit exactly as authored, which is the
+ * correct answer rather than a missing one.
+ *
+ * web/js/bossart.js, written alongside this, offers elementPalette() over the
+ * same contract — reassigns existing slots, never adds a key. It is a richer
+ * answer than this one (it carries materials, not just light) and this is
+ * deliberately the shape that can be swapped for it: one function, palette in,
+ * same palette out. Wiring it is an integration pass, not this one, because
+ * that file is another pass's and is still moving.
+ */
+const ELEMENT_LIGHT = Object.freeze({
+  FIRE:      { rim: '#ff9d4a', glow: '#ffd08a', ember: ['#ff7a24', '#ffd473'], mix: 0.52 },
+  COLD:      { rim: '#8fd8ff', glow: '#d8f4ff', ember: ['#5aa8e8', '#cfeeff'], mix: 0.60 },
+  LIGHTNING: { rim: '#bcd8ff', glow: '#ffffff', ember: ['#7fb8ff', '#eaf4ff'], mix: 0.56 },
+  POISON:    { rim: '#a8dc48', glow: '#e0f89a', ember: ['#8cc22e', '#dcf27a'], mix: 0.58 },
+  BRUTE:     { rim: '#e0b070', glow: '#f6dcae', ember: ['#c8873a', '#f0c98a'], mix: 0.32 },
+  VOID:      { rim: '#a878e8', glow: '#e2ccff', ember: ['#8a4fd0', '#d8b8ff'], mix: 0.64 },
+});
+
+/* Rotate the light, leave the materials alone. `f` — the ember's deep step —
+ * is folded onto the body's own deepest shadow rather than given an elemental
+ * tone of its own, for the same reason the file already folds steel's shadow
+ * onto bone's: in a near-black ambient the bottom of every ramp converges, and
+ * paying a slot to disagree about it is what puts a sprite over budget. */
+/* One frozen stand-in per element, so the palette overlay can be handed a
+ * `look` without bossPalette having to resolve a real one — it is given a
+ * colour and an element id and nothing else, and bossart.elementPalette only
+ * ever reads `.element` off what it is passed. Frozen and built once: this sits
+ * behind a cached sprite build, but a palette that allocates per call is a
+ * palette that will eventually be called per frame by somebody. */
+const ELEMENT_STUB = Object.freeze(Object.fromEntries(
+  ELEMENT_IDS.map(id => [id, Object.freeze({ id: `element:${id}`, element: id, motifs: [] })])));
+
+function elementLight(pal, element, lit) {
+  const e = ELEMENT_LIGHT[element];
+  if (!e) return pal;
+  const t = lit ? Math.min(0.9, e.mix + 0.2) : e.mix;
+  /* The rim and the rune glow are LIGHT and take the element almost whole; the
+   * lit outline is the creature's own edge catching that light and keeps most
+   * of its own hue. Halving the difference instead — a fifty-fifty mix of a
+   * red body light and a cold source — lands on grey every time, and a grey
+   * contre-jour on a near-black stage is the hole this pass exists to avoid.
+   * Which colour the light coming off a creature is IS the thematic claim, so
+   * it is allowed to win. The body underneath is still entirely its own. */
+  pal.Q = mix(pal.Q, e.rim, Math.min(0.86, t + 0.25));
+  pal.O = mix(pal.O, e.rim, t * 0.55);
+  pal.u = mix(pal.u, e.glow, Math.min(0.9, t + 0.2));
+  pal.i = mix(pal.i, e.glow, t * 0.5);
+  pal.r = e.ember[0];
+  pal.R = e.ember[1];
+  pal.f = pal.D;
+  return pal;
+}
+
+export function bossPalette(base, accentHex, phase = 0, element = null) {
   const ph = phase | 0;
   const cracked = ph === 1, lit = ph >= 2;
   const src = base || '#8a8f9c';
@@ -135,7 +248,7 @@ export function bossPalette(base, accentHex, phase = 0) {
    * also simply true: in a near-black ambient every material converges. */
   const deep = seen(mix(steel.shadow2, bone.shadow1, 0.5), 0.08);
   const spec = seen(steel.light2, 0.3);
-  return {
+  const pal = {
     o: mix(r.outline, '#08070d', cracked ? 0.74 : 0.62),
     O: lit ? mix(r.rim, heat, 0.45) : r.rim,
     Q: lit ? mix(r.light1, heat, 0.55) : mix(r.light1, src, cracked ? 0.48 : 0.3),
@@ -166,6 +279,27 @@ export function bossPalette(base, accentHex, phase = 0) {
     m: mix(r.outline, '#08070d', cracked ? 0.74 : 0.62),          // chain shadow is the outline
     l: wood.shadow1,
   };
+  /* Two passes, in this order, and the order is the point.
+   *
+   * elementLight() above rotates the light that is already on the sprite — the
+   * cheap, safe half, and the half that keeps a creature reading as LIT.
+   * bossart.elementPalette() then overlays what the element is MADE of, and it
+   * is allowed to win, because it carries two opinions this file never had:
+   *
+   *   BRUTE does not glow. Its contre-jour collapses onto the outline, because
+   *     rock does not emit. ELEMENT_LIGHT gave it a warm tan rim, which is a
+   *     lamp with a rock painted on it.
+   *   VOID refuses the rim outright. docs/09 §8 makes one hot low-left rim the
+   *     law of this cast, and void is the one thing in the game whose whole
+   *     idea is being the exception to it. ELEMENT_LIGHT gave void a purple
+   *     rim — a perfectly obedient member of a cast it is supposed to break.
+   *
+   * It also collapses r/f/R/u/i onto three steps of one shared mark ramp, so
+   * the theme pass costs strictly fewer rendered colours than it replaces. A
+   * boss at fifteen cannot go over budget by acquiring an element, which is
+   * what made wiring this safe on sprites that were already at the cap. */
+  return elementPalette(elementLight(pal, element, lit),
+    ELEMENT_STUB[element] || ELEMENT_STUB.NEUTRAL, ph);
 }
 
 /* ---------------- grid surgery ----------------
@@ -243,17 +377,38 @@ const isEmpty = ch => ch === undefined || ch === T || ch === ' ';
 /* applyRim lights the upper-left outline. This lights the opposite edge in the
  * boss's own colour. Contre-jour is the cheapest separation there is, and on a
  * stage this dark it is the difference between a silhouette and a hole. */
+/* The contre-jour rim.
+ *
+ * This used to be a local pass that turned an outline pixel into 'Q' wherever
+ * the cell BELOW or to the RIGHT of it was empty. Two things were wrong with
+ * that, and both of them are visible rather than theoretical:
+ *
+ *   IT ATE THE OUTLINE. applyRim() already promotes an outline pixel to the lit
+ *     'O' wherever the cell above or to the LEFT is empty. Between the two,
+ *     every pixel on the silhouette boundary has an empty neighbour on some
+ *     side, so every one of them was rewritten and NOT ONE black pixel survived
+ *     anywhere on the perimeter. Measured on the Hash Titan's marker: 166 of
+ *     166 boundary pixels lit, zero outline. docs/09 §8 opens with "heavy black
+ *     outline", an ordinary monster out of sprites.js keeps its black boundary
+ *     for exactly that reason, and the bosses were the one cast in the game
+ *     that had quietly stopped having one. At map scale, over grass and water,
+ *     the outline is the entire read.
+ *
+ *   IT WAS TWO LIGHTS. Lower-right from here, upper-left from applyRim: a
+ *     creature lit from both, which is the specific thing "ONE hot rim light
+ *     from a low source" forbids, and which is most of why a boss standing next
+ *     to a mob looked like it had been drawn for a different game.
+ *
+ * sprites.rimLowLeft() is the rig the hero, the mobs and bossart.js all already
+ * light with: one source, low and to the left, painted INSIDE the body — it
+ * skips edge glyphs entirely, so the black outline survives it. Using it here
+ * is not a new idea, it is this file finally using the shared one. The protect
+ * set is bossart.js's, plus this file's own material glyphs, so the rim does
+ * not paint over an eye, an ember, gold, bone or chrome on its way past. */
+const RIM_PROTECT = 'rRuUiWwkaAbCcezZgGMnxXjJmltTsf';
+
 function rimPass(grid) {
-  const w = Math.max(...grid.map(r => r.length));
-  const g = normalise(grid, w);
-  const out = g.map(r => r.split(''));
-  for (let y = 0; y < g.length; y++) {
-    for (let x = 0; x < w; x++) {
-      if (g[y][x] !== 'o') continue;
-      if (isEmpty(at(g, y + 1, x)) || isEmpty(at(g, y, x + 1))) out[y][x] = 'Q';
-    }
-  }
-  return out.map(r => r.join(''));
+  return rimLowLeft(grid, 'Q', RIM_PROTECT);
 }
 
 /* Deterministic wear. Runs before applyRim so the speckles survive it: applyRim
@@ -327,6 +482,61 @@ function fracture(grid, seed, phase, faults) {
       const row = cells[y];
       if (!row || x < 1 || x >= row.length - 1) continue;
       if (isMass(row[x])) row[x] = rand() < 0.3 ? 'D' : 'k';
+    }
+  }
+  return cells.map(r => r.join(''));
+}
+
+/* Phase 2 does not crack the plate, it goes THROUGH it. At the midpoint of
+ * each authored fault the mass is burned away to transparent and the rim of
+ * the opening is left white-hot, so the stage is visible through the creature.
+ *
+ * The reason this exists rather than a third round of fissures: a fissure is
+ * interior detail, and interior detail is invisible at map scale, invisible
+ * under a screen shake, and invisible to anyone not staring at the sprite.
+ * A hole changes the SILHOUETTE, and the silhouette is the only part of a
+ * sprite that survives every one of those. Measured, not assumed — see
+ * scripts/verify/bossforms.mjs, which counts the silhouette cells each phase
+ * moves and fails the roster if any of them moves none.
+ *
+ * Ragged by rng(hash(seed)), so a given creature is holed in exactly the same
+ * places in every session, and the same places every time it is brought back
+ * to phase 2 inside one fight. */
+function breach(grid, phase, faults, seed) {
+  if (phase < BOSS_PHASE.CORE || !faults || !faults.length) return grid;
+  const w = Math.max(...grid.map(r => r.length));
+  const cells = normalise(grid, w).map(r => r.split(''));
+  const rand = rng(hash(`${seed}|breach`) || 11);
+  for (let i = 0; i < Math.min(2, faults.length); i++) {
+    const f = faults[i];
+    const cx = (f[0] | 0) + 1;
+    const cy = (f[1] | 0) + Math.round((f[2] || 10) * 0.55);
+    const rh = 3, rw = 4;
+    for (let dy = -rh; dy <= rh; dy++) {
+      const row = cells[cy + dy];
+      if (!row) continue;
+      const span = Math.max(1, Math.round(rw * Math.sqrt(Math.max(0, 1 - (dy * dy) / (rh * rh + 0.5)))
+        - (rand() < 0.4 ? 1 : 0)));
+      for (let dx = -span; dx <= span; dx++) {
+        const x = cx + dx;
+        if (x < 1 || x >= row.length - 1) continue;
+        if (isMass(row[x]) || row[x] === 'k' || row[x] === 'u' || row[x] === 'U') row[x] = T;
+      }
+    }
+    /* The edge of the opening is where the inside is showing, so it is the
+     * hottest thing on the creature. One ring, nothing more: two rings and the
+     * hole stops reading as a hole and starts reading as a lamp. */
+    for (let dy = -rh - 1; dy <= rh + 1; dy++) {
+      const row = cells[cy + dy];
+      if (!row) continue;
+      for (let dx = -rw - 1; dx <= rw + 1; dx++) {
+        const x = cx + dx;
+        if (x < 1 || x >= row.length - 1 || !isMass(row[x])) continue;
+        const near = (cells[cy + dy - 1] && cells[cy + dy - 1][x] === T)
+          || (cells[cy + dy + 1] && cells[cy + dy + 1][x] === T)
+          || row[x - 1] === T || row[x + 1] === T;
+        if (near) row[x] = rand() < 0.55 ? 'U' : 'u';
+      }
     }
   }
   return cells.map(r => r.join(''));
@@ -1968,6 +2178,149 @@ const WYRM_FIN = [
 ];
 
 /* ================================================================
+ * THE LAST INTERPRETER  —  the face of the final practical
+ * ================================================================
+ * A python at the scale where the room is a consequence of the animal, coiled
+ * three turns deep, wearing a hat that was ceremonial once and is now simply
+ * very old. Spectacles in gold, because nine hundred years of reading is nine
+ * hundred years of reading.
+ *
+ * It is assembled from the same kit as the wyrm and deliberately NOT from the
+ * wyrm's grids: the two would read as the same animal in two colours, and this
+ * one is the last thing the player sees. What it borrows is the layering — the
+ * coils run a third of a turn apart so the length swims along itself instead of
+ * pulsing — and nothing else.
+ *
+ * The staff is a separate layer behind the body and is never animated with the
+ * head. It does not move. That is the characterisation: the creature has been
+ * holding it in the same position for nine centuries and the fight is not a
+ * reason to change that.
+ */
+const INTERP_COIL = [
+  '.......oooooooooooo.......',
+  '....oooBBBBBBBBBBBBooo....',
+  '..ooBBBBBBaBBBBaBBBBBBoo..',
+  '.oBBBBBBBBBBBBBBBBBBBBBBo.',
+  'oBBBBBBoooooooooooBBBBBBBo',
+  'oBaBBBo...........oBBBBaBo',
+  'oBBBBo.............oBBBBBo',
+  'oBaBBo.............oBBBaBo',
+  'oBBBBo.............oBBBBBo',
+  'oBaBBBo...........oBBBBaBo',
+  'oBBBBBBoooooooooooBBBBBBBo',
+  'oaBBBBBBBBBBBBBBBBBBBBBBao',
+  '.oBBBBBBaBBBBBBaBBBBBBBBo.',
+  '..ooBBBBBBBBBBBBBBBBBBoo..',
+  '....oooBBBBBBBBBBBBooo....',
+  '.......oooooooooooo.......',
+];
+
+/* Gold frames, cold lenses. `e` is the shared deep tone the whole file
+ * collapses its dark ends onto, so the rims cost no palette slot of their own.
+ */
+const INTERP_HEAD = [
+  '......oooooooooooo......',
+  '....ooBBBBBBBBBBBBoo....',
+  '..ooBBBBBBBBBBBBBBBBoo..',
+  '.oBBBBBBBBBBBBBBBBBBBBo.',
+  'oBBBBBBBBBBBBBBBBBBBBBBo',
+  'oBaaaaoBBBBoaaaaoBBBBBBo',
+  'oaoiiaoBBBBoaoiiaBBBBBBo',
+  'oaaiiaaaaaaaaiiaaBBBBBBo',
+  'oBaooaBBBBBBaooaBBBBBBBo',
+  'oBBBBBBBBBBBBBBBBBBBBBBo',
+  'oBaBBBBBBBBBBBBBBBBBBBBo',
+  '.oBBBBBBBBBBBBBBBBBBBBo.',
+  '..oBBBBBBBBBBBBBBBBBBBo.',
+  '...ooooooooooooooooooo..',
+  '........................',
+  '........................',
+];
+
+/* The one length of it that is neither coil nor head, so the animal reads as
+ * continuous rather than as a portrait next to some rings. */
+const INTERP_NECK = [
+  '...oooooooo...',
+  '.ooBBBBBBBBoo.',
+  'oBBBBBBBBBBBBo',
+  'oBBBBBBBBBBBBo',
+  'oBaBBBBBBBBaBo',
+  'oBBBBBBBBBBBBo',
+  'oBBBBBBBBBBBBo',
+  '.ooBBBBBBBBoo.',
+  '...oooooooo...',
+];
+
+const INTERP_JAW = [
+  '...ooooooooooooo....',
+  '...obobobobobBBo....',
+  '...oBBBBBBBBBBBo....',
+  '....ooooooooooo.....',
+];
+
+/* The one frame where it opens. `i` is the cold lens tone doing double duty as
+ * the light coming back up out of the throat, which is the single most
+ * unsettling thing available inside the palette budget. */
+const INTERP_JAW_OPEN = [
+  '...ooooooooooooo....',
+  '...okkkkkkkkkkBo....',
+  '..okkkkkkkkkkkkBo...',
+  '..okkkkkkkkkkkkBBo..',
+  '..obobobobobobBBo..',
+  '..oBBBBBBBBBBBBBBo..',
+  '...oooooooooooooo...',
+];
+
+/* Cloth, a gold band, and one rune at the point. The brim is wider than the
+ * head by a lot, which is the whole silhouette: seen from the doorway this
+ * animal is a circle with a triangle on it. */
+const INTERP_HAT = [
+  '.............oo.............',
+  '............oiao............',
+  '............otto............',
+  '...........otTTto...........',
+  '...........otTTto...........',
+  '..........otTTTTto..........',
+  '..........otTTTTto..........',
+  '.........otTTTTTTto.........',
+  '.........otTTTTTTto.........',
+  '........otTTTTTTTTto........',
+  '.......otTTTTTTTTTTto.......',
+  '......oaaaaaaaaaaaaaao......',
+  '....oootttttttttttttttooo...',
+  '..ootTTTTTTTTTTTTTTTTTTTToo.',
+  '.otTTTTTTTTTTTTTTTTTTTTTTTTo',
+  '..ooooooooooooooooooooooooo.',
+];
+
+const INTERP_STAFF = [
+  '..oao...',
+  '.oaiao..',
+  'oaiiiao.',
+  '.oaiao..',
+  '..obo...',
+  '..obo...',
+  '..obo...',
+  '..obo...',
+  '..obo...',
+  '..obo...',
+  '..obo...',
+  '..obo...',
+  '..obo...',
+  '..obo...',
+  '..obo...',
+  '..obo...',
+  '..obo...',
+  '..obo...',
+  '..obo...',
+  '..obo...',
+  '..obo...',
+  '..obo...',
+  '..obo...',
+  '..ooo...',
+];
+
+/* ================================================================
  * REGISTRY
  * ================================================================
  * One entry per archetype. `body` is the authored mass; `parts` are the layers
@@ -1988,6 +2341,7 @@ const ART = {
     stage: { scale: 1.75, sink: 11, bias: -8 },
     core: null,                                       // the reliquary is authored in the ribs
     faults: [[26, 8, 12], [38, 8, 12], [19, 26, 7], [45, 26, 7]],
+    shed: 'soul',                                // phase 2: the soul in its orbit goes out
     parts: [
       { name: 'hem', grid: LICH_HEM, ox: 16, oy: 53, behind: true,
         frames: [[0, 0], [0, 1], [-1, -1], [2, 2], [-2, 1]],
@@ -2008,6 +2362,7 @@ const ART = {
     stage: { scale: 1.5, sink: 4, bias: 0 },
     core: [55, 40],                                   // furnace behind the sternum
     faults: [[30, 26, 12], [52, 34, 14], [60, 46, 10]],
+    shed: 'wing',                                // phase 2: a wing is torn off at the shoulder
     parts: [
       // The wing is the slowest thing on the creature and the jaw the fastest.
       // One clock, four rates: nothing is ever at the top of its arc twice.
@@ -2036,6 +2391,7 @@ const ART = {
     stage: { scale: 1.75, sink: 9, bias: -8 },
     core: [32, 29],                                   // the reactor under the breastplate
     faults: [[24, 23, 14], [40, 23, 14], [32, 44, 12]],
+    shed: 'shield',                                // phase 2: the rubric-shield is struck out of its hand
     parts: [
       { name: 'shield', grid: KNIGHT_SHIELD, ox: 1, oy: 29,
         frames: [[0, 0], [0, 1], [-1, -2], [2, 2], [-3, -4]],
@@ -2053,6 +2409,7 @@ const ART = {
     stage: { scale: 1.75, sink: 10, bias: -8 },
     core: null,
     faults: [[22, 28, 14], [43, 28, 14]],
+    shed: 'keys',                                // phase 2: the ring of keys snaps off the belt
     parts: [
       { name: 'keys', grid: TITAN_CHAIN, ox: 46, oy: 27,
         frames: [[0, 0], [1, 1], [-2, -1], [3, 3], [-3, 2]],
@@ -2067,6 +2424,7 @@ const ART = {
     stage: { scale: 1.75, sink: 10, bias: -8 },
     core: null,
     faults: [[20, 30, 14], [45, 32, 12]],
+    shed: 'maul',                                // phase 2: it drops the maul
     parts: [
       { name: 'maul', grid: COLOSSUS_MAUL, ox: 1, oy: 44,
         frames: [[0, 0], [0, 1], [2, -18], [6, 4], [-4, 2]],
@@ -2080,6 +2438,16 @@ const ART = {
     stage: { scale: 1.5, sink: 4, bias: 0 },
     core: [48, 46],
     faults: [[36, 44, 12], [60, 44, 12]],
+    /* The only creature here that GAINS mass at phase 2. Everything else in
+     * the roster loses a limb; this one's taunt is "for every duplicate you
+     * fail to skip, I grow another head", and a boss whose art contradicts its
+     * own opening line is worse than one with no art at all. */
+    grow: [
+      { name: 'neckNew', grid: HYDRA_NECK, ox: 62, oy: 22, flip: true, behind: true,
+        frames: [[0, 0], [-1, 2], [3, -2], [6, 3], [4, 1]],
+        drift: { x: 2, y: 2, rate: 1.5, phase: 0.85 },
+        skew: [3, 4, 6, 9, 5], alt: { 3: HYDRA_NECK_BITE } },
+    ],
     parts: [
       // Three heads on three rates and three phases. Synchronise them and the
       // creature stops being a hydra and becomes a hat rack.
@@ -2104,6 +2472,7 @@ const ART = {
     stage: { scale: 1.75, sink: 12, bias: -8 },
     core: null,
     faults: [[16, 30, 10], [46, 30, 10]],
+    shed: 'ragR',                                // phase 2: half the shroud is torn away
     parts: [
       { name: 'ragL', grid: WRAITH_TAIL, ox: 12, oy: 50, behind: true,
         frames: [[0, 0], [1, 1], [-2, -1], [3, 2], [-2, 1]],
@@ -2120,6 +2489,7 @@ const ART = {
     stage: { scale: 1.75, sink: 10, bias: -8 },
     core: [32, 30],
     faults: [[14, 24, 14], [50, 24, 14]],
+    shed: 'tail',                                // phase 2: the tail is severed
     parts: [
       { name: 'tail', grid: BEHEMOTH_TAIL, ox: 0, oy: 34, behind: true,
         frames: [[0, 0], [1, 1], [-2, -2], [3, 2], [-3, 3]],
@@ -2134,6 +2504,7 @@ const ART = {
     stage: { scale: 1.75, sink: 9, bias: -8 },
     core: null,
     faults: [[14, 32, 14], [48, 32, 14]],
+    shed: 'runeB',                                // phase 2: the second rune goes dark
     parts: [
       { name: 'runeA', grid: GOLEM_RUNE, ox: 5, oy: 21,
         frames: [[0, 0], [0, 2], [2, -4], [-4, 6], [1, 3]],
@@ -2150,6 +2521,7 @@ const ART = {
     stage: { scale: 1.75, sink: 9, bias: -8 },
     core: [32, 36],
     faults: [[22, 44, 14], [42, 44, 14]],
+    shed: 'branch',                                // phase 2: a limb comes off — the literal kind
     parts: [
       { name: 'branch', grid: ENT_BRANCH, ox: 4, oy: 34,
         frames: [[0, 0], [1, 1], [-2, -2], [4, 3], [-3, 1]],
@@ -2164,6 +2536,7 @@ const ART = {
     stage: { scale: 1.75, sink: 10, bias: -8 },
     core: null,
     faults: [[10, 25, 8], [50, 25, 8]],
+    shed: 'skullB',                                // phase 2: one of the bound skulls breaks up
     parts: [
       { name: 'skullA', grid: NECRO_SKULL, ox: 48, oy: 24,
         frames: [[0, 0], [1, 2], [3, -3], [-7, 4], [2, 3]],
@@ -2180,6 +2553,7 @@ const ART = {
     stage: { scale: 1.75, sink: 9, bias: -8 },
     core: [32, 30],
     faults: [[16, 32, 14], [48, 32, 14]],
+    shed: 'piston',                                // phase 2: the piston blows out of its housing
     parts: [
       // The gear indexes a quarter turn on every beat, so it keeps turning
       // while the rest of the machine is standing still. That is the whole
@@ -2201,6 +2575,7 @@ const ART = {
     stage: { scale: 1.75, sink: 10, bias: -8 },
     core: [32, 33],
     faults: [[18, 40, 12], [46, 40, 12]],
+    shed: 'wingR',                                // phase 2: the right wing is taken off
     parts: [
       // The two wings run at the same rate half a turn apart, so the downbeat
       // of one is the upbeat of the other and the thing never looks pinned.
@@ -2225,6 +2600,7 @@ const ART = {
     stage: { scale: 1.5, sink: 4, bias: 0 },
     core: [62, 44],
     faults: [[50, 38, 12], [64, 52, 12]],
+    shed: 'fin',                                // phase 2: the dorsal fin shears away
     parts: [
       // The coils run slow and a third of a turn apart, so the animal swims
       // along its own length instead of pulsing like a ring.
@@ -2253,6 +2629,48 @@ const ART = {
         alt: { 3: WYRM_JAW_OPEN } },
     ],
   },
+  interpreter: {
+    name: 'The Last Interpreter', wide: true, colour: '#3f7f5a',
+    accent: '#e8c37d', anim: 'coil',
+    body: { grid: INTERP_COIL, ox: 58, oy: 46 }, wear: 0.03,
+    // Slow. Nothing about this creature is in a hurry and the telegraph is the
+    // longest in the file on purpose: it gives you time, which is the one thing
+    // the room it stands in does not.
+    motion: { bob: 2, sway: 2, phase: 0.2, period: 2400, telegraph: 720 },
+    stage: { scale: 1.5, sink: 4, bias: 0 },
+    core: [66, 43],
+    faults: [[54, 37, 12], [68, 51, 12]],
+    shed: 'hat',                                // phase 2: the hat comes off. It does not pick it up.
+    parts: [
+      { name: 'staff', grid: INTERP_STAFF, ox: 84, oy: 8, behind: true,
+        frames: [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]],
+        drift: { x: 0, y: 0, rate: 0, phase: 0 } },
+      { name: 'coilMid', grid: INTERP_COIL, ox: 48, oy: 32, behind: true,
+        frames: [[0, 0], [1, 0], [-2, -1], [3, 1], [-3, 1]],
+        drift: { x: 2, y: 1, rate: 0.4, phase: 0 },
+        skew: [0, 2, -3, 4, -2] },
+      { name: 'coilTop', grid: INTERP_COIL, ox: 36, oy: 19, behind: true,
+        frames: [[0, 0], [2, 0], [-3, -1], [5, 1], [-4, 1]],
+        drift: { x: 2, y: 1, rate: 0.4, phase: 0.33 },
+        skew: [0, 3, -4, 6, -3] },
+      { name: 'neck', grid: INTERP_NECK, ox: 27, oy: 22,
+        frames: [[0, 0], [1, 1], [-3, -2], [4, 2], [-3, 2]],
+        drift: { x: 2, y: 2, rate: 0.6, phase: 0.5 },
+        skew: [0, 2, -3, 4, -2] },
+      { name: 'head', grid: INTERP_HEAD, ox: 6, oy: 16,
+        frames: [[0, 0], [1, 1], [-3, -2], [5, 2], [-4, 3]],
+        drift: { x: 2, y: 2, rate: 0.8, phase: 0.15 },
+        skew: [0, 1, -2, 3, -2] },
+      { name: 'jaw', grid: INTERP_JAW, ox: 8, oy: 28,
+        frames: [[0, 0], [1, 1], [-3, -1], [5, 6], [-4, 4]],
+        drift: { x: 1, y: 2, rate: 1.2, phase: 0.4 },
+        alt: { 3: INTERP_JAW_OPEN } },
+      { name: 'hat', grid: INTERP_HAT, ox: 2, oy: 2,
+        frames: [[0, 0], [1, 1], [-3, -3], [5, 1], [-4, 4]],
+        drift: { x: 2, y: 1, rate: 0.8, phase: 0.15 },
+        skew: [0, 1, -2, 3, -2] },
+    ],
+  },
 };
 
 /* ---------------- key resolution ----------------
@@ -2272,15 +2690,389 @@ export const BOSS_SHAPE_FOR = Object.freeze({
   golem: 'golem', dragon: 'dragon', ent: 'ent', necromancer: 'necromancer',
   automaton: 'automaton', lich: 'lich', demon: 'demon', wyrm: 'wyrm',
   interviewer: 'knight', knight: 'knight', colossus: 'colossus',
+  // world.FINAL_TRIAL. Not a boss and not in world.BOSSES — the practical is
+  // measured rather than fought — but it has a face now and the face has to
+  // resolve from the same table as everything else with one.
+  interpreter: 'interpreter', the_last_interpreter: 'interpreter',
+  python_wizard: 'interpreter', serpent: 'interpreter',
 });
 
 export const BOSS_ART_FOR_ID = Object.freeze({
-  rolling_titan: 'colossus',
+  /* ---- world.BOSSES, by id ----
+   * Every row's `sprite` already resolves through BOSS_SHAPE_FOR, so for a
+   * caller that passes the sprite key these are redundant. For a caller that
+   * passes the ID they are not, and until now they were missing: resolveBoss()
+   * fell through to the hash and 'three_sum_hydra' came back as a wyrm. That is
+   * the worst failure mode in this file — not a throw, not a blank sprite, but
+   * a confidently drawn wrong animal — and it went unnoticed because the one
+   * harness that checked ids went through bossArtKey(), which reads .sprite.
+   * Two bosses share the titan sprite, so rolling_titan is listed with the
+   * others rather than apart from them: the id is what separates them. */
+  hash_titan: 'titan',            three_sum_hydra: 'hydra',
+  window_wraith: 'wraith',        twin_behemoth: 'behemoth',
+  matrix_golem: 'golem',          tree_dragon: 'dragon',
+  path_sum_ent: 'ent',            graph_necromancer: 'necromancer',
+  rolling_titan: 'colossus',      editor_automaton: 'automaton',
+  complexity_wyrm: 'wyrm',        serialization_lich: 'lich',
+  bug_demon: 'demon',             the_interviewer: 'knight',
+
+  /* ---- gauntlet/hunters.py, the seventeen roaming apexes ----
+   * Transcribed from hunters.APEXES: each row's `sprite` is a key its author
+   * marked as NOT YET AUTHORED, and its `sprite_fallback` is the archetype in
+   * this file they meant it to borrow until it is. Honouring that is the whole
+   * point of the field — resolving these by hash instead would give every apex
+   * a silhouette its own designer did not choose.
+   *
+   * Six archetypes carry two apexes each (or an apex and a boss). They are not
+   * twins: an apex also carries its region's ELEMENT, which rotates the rim,
+   * the glow and the embers, so the Rimewarden comes off a cold pass in cold
+   * light and the Unnamed comes out of the castle in void light on the same
+   * body. See BOSS_ELEMENT directly below.
+   *
+   * They get everything a boss gets: both forms, three phases, the shed limb,
+   * the entrance. An apex that hunts you across a region and then turns out to
+   * be a recoloured mob is a worse encounter than no apex at all. */
+  margin_walker: 'wraith',       thresher: 'automaton',
+  storm_ordinal: 'titan',        sporecrown: 'ent',
+  zeroth_weight: 'golem',        fenlight: 'hydra',
+  rimewarden: 'colossus',        cinder_phoenix: 'dragon',
+  fourth_orientation: 'knight',  unreturning: 'lich',
+  bough_stalker: 'wyrm',         lattice_stag: 'behemoth',
+  relighter: 'necromancer',      slagmother: 'demon',
+  the_doubling: 'automaton',     sand_champion: 'titan',
+  the_unnamed: 'colossus',
 });
 
+/* ---------------- element per creature ----------------
+ * TRANSCRIBED, not invented. Each row is
+ *     world.BOSSES[i].region -> world.REGION_BY_ID[...].biome
+ *                            -> elements.BIOME_AFFINITY[biome]
+ * with the region's PRIMARY affinity taken, which is the first entry of
+ * elements.REGION_AFFINITIES. Two of them come out NEUTRAL because the canopy
+ * is neutral; that is the world's answer and it is left alone rather than
+ * dressed up. The Interpreter stands in world.FINAL_TRIAL, under the castle,
+ * which is VOID.
+ *
+ * Keyed by ART key rather than boss id because that is all a caller has: fx.js
+ * passes enemy.sprite and nothing else. Where two bosses share an archetype the
+ * colour still separates them, and their regions agree anyway.
+ */
+export const BOSS_ELEMENT = Object.freeze({
+  titan: 'LIGHTNING',       // hashmap_highlands / highland
+  hydra: 'BRUTE',           // array_caverns / cave
+  wraith: 'POISON',         // sliding_window_marsh / swamp
+  behemoth: 'COLD',         // twin_pointer_pass / mountain
+  golem: 'BRUTE',           // matrix_citadel / citadel
+  dragon: 'NEUTRAL',        // binary_tree_canopy / canopy
+  ent: 'NEUTRAL',           // binary_tree_canopy / canopy
+  necromancer: 'LIGHTNING', // graph_wastes / wastes
+  colossus: 'POISON',       // rolling_titan, sliding_window_marsh / swamp
+  automaton: 'BRUTE',       // matrix_citadel / citadel
+  wyrm: 'COLD',             // complexity_tower / tower
+  lich: 'VOID',             // recursive_forest / deepforest
+  demon: 'FIRE',            // debugging_dungeon / dungeon
+  knight: 'VOID',           // the_interviewer, null_kings_castle / castle
+  interpreter: 'VOID',      // FINAL_TRIAL, under null_kings_castle
+
+  /* The same fourteen again, by ID. The archetype rows above answer a caller
+   * holding enemy.sprite; these answer one holding the world.py row's id, and
+   * they are not the same answer wherever two bosses share a sprite. The
+   * Rolling Titan stands in the marsh and is POISON; the Hash Titan stands in
+   * the highlands and is LIGHTNING. Both are 'titan'. Keying only by archetype
+   * gave them one element and quietly made the marsh boss a highland one. */
+  hash_titan: 'LIGHTNING',       three_sum_hydra: 'BRUTE',
+  window_wraith: 'POISON',       twin_behemoth: 'COLD',
+  matrix_golem: 'BRUTE',         tree_dragon: 'NEUTRAL',
+  path_sum_ent: 'NEUTRAL',       graph_necromancer: 'LIGHTNING',
+  rolling_titan: 'POISON',       editor_automaton: 'BRUTE',
+  complexity_wyrm: 'COLD',       serialization_lich: 'VOID',
+  bug_demon: 'FIRE',             the_interviewer: 'VOID',
+  the_last_interpreter: 'VOID',
+
+  /* The apexes, by id, from hunters.APEXES[].element. Keyed by ID rather than
+   * by archetype on purpose: six archetypes carry two of these, and the
+   * element is the thing that keeps them apart. The Doubling is a cold
+   * automaton in the tower and the Thresher is a neutral one in the fields;
+   * same body, two different animals coming at you. */
+  margin_walker: 'NEUTRAL',      thresher: 'NEUTRAL',
+  storm_ordinal: 'LIGHTNING',    sporecrown: 'POISON',
+  zeroth_weight: 'BRUTE',        fenlight: 'POISON',
+  rimewarden: 'COLD',            cinder_phoenix: 'FIRE',
+  fourth_orientation: 'BRUTE',   unreturning: 'VOID',
+  bough_stalker: 'NEUTRAL',      lattice_stag: 'LIGHTNING',
+  relighter: 'NEUTRAL',          slagmother: 'FIRE',
+  the_doubling: 'COLD',          sand_champion: 'NEUTRAL',
+  the_unnamed: 'VOID',
+});
+
+/* The element a given key fights as. The RAW key is tried first so an apex
+ * keeps its own region's light instead of inheriting the element of whichever
+ * archetype it borrows a body from. NEUTRAL and anything unknown return null,
+ * which is the signal to light the creature exactly as authored. */
+export function bossElement(key) {
+  const raw = String(key || '');
+  const e = BOSS_ELEMENT[raw] || BOSS_ELEMENT[resolveBoss(raw)];
+  return e && e !== 'NEUTRAL' ? e : null;
+}
+
+/* What element to light a given call with. A caller may override — the forge
+ * preview wants to see a creature in another element's light — and passing
+ * anything unknown, or 'NEUTRAL', means "as authored". */
+function elementFor(rawKey, opts) {
+  if (opts && opts.element !== undefined && opts.element !== null) {
+    const e = String(opts.element).toUpperCase();
+    return ELEMENT_LIGHT[e] ? e : null;
+  }
+  return bossElement(rawKey);
+}
+
+/* ================================================================
+ * THE THEME LAYER — web/js/bossart.js, wired
+ * ================================================================
+ * This file is the STAGING: boxes, frames, beats, phases, caches, the draw
+ * call, the entrance. bossart.js is the THEME: what a fire boss is made of and
+ * what a void boss does to the light. They were authored in parallel against an
+ * agreed interface and then never connected to each other, which is the one
+ * failure two parallel passes reliably produce — both halves complete, both
+ * halves passing their own harness, and no import between them. Everything
+ * below is that import.
+ *
+ * What the theme actually buys, and why it was worth wiring rather than
+ * declaring done:
+ *
+ *   THE ELEMENT BECOMES GEOMETRY. Until now the element was ELEMENT_LIGHT, and
+ *     ELEMENT_LIGHT is a recolour: it rotates the rim, the glow and the embers
+ *     and touches not one pixel of coverage. Measured, a FIRE titan and a COLD
+ *     titan differed in 245 pixels and in ZERO silhouette cells — the same
+ *     shape in two colours, which is the one thing the brief names as a
+ *     failure. bossart.dressGrid() makes each element a different verb done to
+ *     the contour: fire SHEDS upward, cold ACCRETES 45-degree spurs away from
+ *     the key light, poison SAGS into pendant drops, brute CHIPS mass out,
+ *     lightning SPANS a filament between two points of the contour, void
+ *     SUBTRACTS — holes inward and the outline itself missing along the lower
+ *     left, exactly where every other creature in this game is brightest.
+ *     NEUTRAL is not an element and gets no treatment; five regions are neutral
+ *     on purpose and they are the control group.
+ *
+ *   THE APEXES STOP BEING CLONES. Three pairs of the seventeen shared an
+ *     archetype and, with the element carrying no geometry, were byte-identical
+ *     in silhouette: the Thresher and the Doubling, the Storm Ordinal and the
+ *     Sand Champion, the Rimewarden and the Unnamed. They are separated now by
+ *     the element verb rather than by hue.
+ *
+ * What is deliberately NOT wired is bossart.motifsFor(). Its stamps — the Hash
+ * Titan's keyring, the Wraith's empty frame, the Ent's single arm — are the
+ * right idea and this file already has them, authored as real parts that shed
+ * on a phase change (ART.titan's 'keys', ART.wraith's 'ragR', ART.ent's
+ * 'branch'). Stamping the motif on top would give the Hash Titan two keyrings.
+ * The vocabulary is taken; the duplicate identity is not.
+ */
+
+/* gauntlet/hunters.py APEXES — id, name and region, which is all
+ * bossart.ingestHunters() reads. bossart.js was written before hunters.py
+ * existed and stands up seventeen placeholder ids of its own ('apex_unnamed',
+ * 'apex_half_formed', ...) against the right seventeen REGIONS; handing it
+ * these rows re-keys that authored art onto the ids the server actually uses.
+ * Without this call every apex resolved to bossart's unknown fallback and the
+ * theme layer had nothing to say about any of them.
+ *
+ * The regions are the load-bearing column and they are transcribed, not
+ * invented: each apex's element comes out of elements.region_affinities() for
+ * the region named here, which is why this table carries no element of its own
+ * to disagree with BOSS_ELEMENT above. */
+const APEX_ROSTER = Object.freeze([
+  { id: 'margin_walker',      name: 'The Margin-Walker',    region: 'python_village' },
+  { id: 'thresher',           name: 'The Thresher',         region: 'fields_of_syntax' },
+  { id: 'storm_ordinal',      name: 'The Storm Ordinal',    region: 'hashmap_highlands' },
+  { id: 'sporecrown',         name: 'The Sporecrown',       region: 'stringwood_labyrinth' },
+  { id: 'zeroth_weight',      name: 'The Zeroth Weight',    region: 'array_caverns' },
+  { id: 'fenlight',           name: 'The Fenlight',         region: 'sliding_window_marsh' },
+  { id: 'rimewarden',         name: 'The Rimewarden',       region: 'twin_pointer_pass' },
+  { id: 'cinder_phoenix',     name: 'The Cinder Phoenix',   region: 'stack_queue_mines' },
+  { id: 'fourth_orientation', name: 'The Fourth Orientation', region: 'matrix_citadel' },
+  { id: 'unreturning',        name: 'The Unreturning',      region: 'recursive_forest' },
+  { id: 'bough_stalker',      name: 'The Bough Stalker',    region: 'binary_tree_canopy' },
+  { id: 'lattice_stag',       name: 'The Lattice Stag',     region: 'graph_wastes' },
+  { id: 'relighter',          name: 'The Relighter',        region: 'dp_ruins' },
+  { id: 'slagmother',         name: 'The Slagmother',       region: 'debugging_dungeon' },
+  { id: 'the_doubling',       name: 'The Doubling',         region: 'complexity_tower' },
+  { id: 'sand_champion',      name: 'The Sand Champion',    region: 'coding_coliseum' },
+  { id: 'the_unnamed',        name: 'The Unnamed',          region: 'null_kings_castle' },
+]);
+
+/* Taken once, at module load, before anything can resolve a look and cache the
+ * fallback it would have got. Returns how many rows it took; a mismatch is a
+ * roster drift between this file and bossart.js and bossArtSelfCheck reports
+ * it, so it is recorded rather than asserted — a boss file that refuses to load
+ * because an art roster moved is a worse failure than a plain-looking apex. */
+const APEX_INGESTED = ingestHunters(APEX_ROSTER);
+
+/* Which region a key stands in, for the one case where the sprite key alone is
+ * ambiguous: 'titan' is both the Hash Titan in the highlands and the Rolling
+ * Titan in the marsh, and bossart.bossLook() disambiguates on a region hint.
+ * Frozen hint objects rather than an object literal per call — this is behind a
+ * cache today and should not become an allocation if it ever stops being. */
+const REGION_HINT = Object.freeze(Object.fromEntries(Object.entries({
+  titan: 'hashmap_highlands',        hash_titan: 'hashmap_highlands',
+  colossus: 'sliding_window_marsh',  rolling_titan: 'sliding_window_marsh',
+  hydra: 'array_caverns',            three_sum_hydra: 'array_caverns',
+  wraith: 'sliding_window_marsh',    window_wraith: 'sliding_window_marsh',
+  behemoth: 'twin_pointer_pass',     twin_behemoth: 'twin_pointer_pass',
+  golem: 'matrix_citadel',           matrix_golem: 'matrix_citadel',
+  dragon: 'binary_tree_canopy',      tree_dragon: 'binary_tree_canopy',
+  ent: 'binary_tree_canopy',         path_sum_ent: 'binary_tree_canopy',
+  necromancer: 'graph_wastes',       graph_necromancer: 'graph_wastes',
+  automaton: 'matrix_citadel',       editor_automaton: 'matrix_citadel',
+  wyrm: 'complexity_tower',          complexity_wyrm: 'complexity_tower',
+  lich: 'recursive_forest',          serialization_lich: 'recursive_forest',
+  demon: 'debugging_dungeon',        bug_demon: 'debugging_dungeon',
+  knight: 'null_kings_castle',       the_interviewer: 'null_kings_castle',
+  interpreter: 'null_kings_castle',  the_last_interpreter: 'null_kings_castle',
+}).map(([k, v]) => [k, Object.freeze({ region: v })])));
+
+/* A look, plus the element the CALL is actually being lit as — which is not
+ * always the look's own, because callers may override (the forge preview shows
+ * a creature in another element's light, and a preview whose geometry disagreed
+ * with its palette would be showing something that cannot exist).
+ *
+ * Both maps are bounded by the number of distinct keys anything ever asks for,
+ * not by frames drawn: ~50 real keys x 7 elements worst case. They are cleared
+ * rather than evicted at the cap because a theme lookup is cheap to rebuild and
+ * an LRU here would be machinery guarding nothing. */
+const lookCache = new Map();
+const themeCache = new Map();
+const LOOK_CAP = 256;
+
+function lookOf(rawKey) {
+  const k = String(rawKey || '');
+  const hit = lookCache.get(k);
+  if (hit !== undefined) return hit;
+  const look = bossLook(k, REGION_HINT[k]);
+  if (lookCache.size >= LOOK_CAP) lookCache.clear();
+  lookCache.set(k, look);
+  return look;
+}
+
+/* The look the geometry pass should run under. `element` has already been
+ * through elementFor(), so it is either a real element id or null meaning
+ * "as authored"; null resolves to the look's own, and a look whose element
+ * already agrees is returned untouched rather than copied. */
+function themeOf(rawKey, element) {
+  const look = lookOf(rawKey);
+  const el = element || look.element || 'NEUTRAL';
+  if (look.element === el) return look;
+  const ck = `${look.id}|${el}`;
+  const hit = themeCache.get(ck);
+  if (hit !== undefined) return hit;
+  const out = Object.freeze(Object.assign({}, look, { element: el }));
+  if (themeCache.size >= LOOK_CAP) themeCache.clear();
+  themeCache.set(ck, out);
+  return out;
+}
+
+/* The geometry half of the element, run at BATTLE scale in both forms.
+ *
+ * That is the decision the "same creature" claim rests on, and it is worth
+ * stating plainly: the map form dresses before it reduces, not after. Dressing
+ * a 48-pixel marker separately would draw a second, smaller set of spurs from a
+ * different seed, and the two forms would carry different decoration at the one
+ * scale the player compares them across. Dressing first and reducing after
+ * means the marker's spurs are literally the battle form's spurs, box-sampled.
+ * The promise the map silhouette makes is the one the fight keeps. */
+function dress(grid, rawKey, element, frame, beat, phase) {
+  if (!element) return grid;   // NEUTRAL and unknown: the control group, untouched
+  return budgetGuard(grid, dressGrid(grid, themeOf(rawKey, element),
+    { frame: frame | 0, beat: beat | 0, phase: phase | 0 }));
+}
+
+/* Glyphs the element is ALLOWED to introduce, because they cost nothing.
+ *
+ *   . o      transparent and the hard outline. Every sprite pays for both.
+ *   r R f    the element's own mark ramp. bossart.elementPalette collapses all
+ *            three onto three steps of ONE shared ramp, so an element's marks
+ *            are three colours whether it paints one of them or all of them.
+ *   u i      folded onto that same ramp's specular by the same pass — one more
+ *            slot, already spent by whichever of r/R/f the verb also used.
+ *   k        the void black, which this file defines as the same value as the
+ *            outline. An eye socket, a visor slit and a hole punched by the
+ *            void verb are one absence of light and one palette entry.
+ *   U W      white. Every boss in this cast has a white already.
+ */
+const DRESS_FREE = new Set(['.', 'o', 'r', 'R', 'f', 'u', 'i', 'k', 'U', 'W']);
+/* Where a disallowed glyph goes instead: a light one onto the mark ramp's hot
+ * step, anything else onto its mid step. */
+const DRESS_LIGHT = new Set(['A', 'C', 'H', 'L', 'T', 'G', 'Z', 'X', 'J', 'M']);
+
+/* Keep the theme pass budget-neutral, which is a rule this file already states
+ * and the theme pass quietly broke on exactly one element.
+ *
+ * Five of the six verbs write only into slots elementPalette has already
+ * collapsed onto a single shared mark ramp, so they cost nothing: measured,
+ * FIRE, COLD, BRUTE, LIGHTNING and VOID all add zero rendered colours. POISON
+ * does not. Its pendant drops are authored as 'a' and 'A' — the CREATURE'S
+ * accent, not the element's mark — and on a boss that never painted its accent
+ * those are two brand-new colours. That is how the Rolling Titan and the
+ * Sporecrown came out at sixteen: not a palette with sixteen entries, but
+ * fourteen pixels of accent base and fourteen of accent light appearing on a
+ * sprite that had been paying for neither.
+ *
+ * So: a cell the element CHANGED may only hold a glyph the creature was
+ * already painting, or one of the free set above. Anything else folds onto the
+ * mark ramp. Cells the element did not touch are left exactly as authored,
+ * which is what keeps this a guard rather than a second art pass — the Rolling
+ * Titan's own accent pixels are still its own accent.
+ *
+ * Runs once per cached sprite build, never on a draw path, and allocates one
+ * row array per row it actually rewrites. A grid the guard has nothing to say
+ * about is returned by reference. */
+function budgetGuard(before, after) {
+  if (!after || after.length !== before.length) return after;
+  /* What the creature already pays for. Built off the pre-dress grid, so the
+   * element cannot authorise its own new colour by being the thing that
+   * introduced it. */
+  let paid = null;
+  let out = after;
+  for (let y = 0; y < after.length; y++) {
+    const a = after[y], b = before[y];
+    if (a === b) continue;
+    let row = null;
+    for (let x = 0; x < a.length; x++) {
+      const ch = a[x];
+      if (ch === b[x] || DRESS_FREE.has(ch)) continue;
+      if (paid === null) {
+        paid = new Set();
+        for (let i = 0; i < before.length; i++) {
+          const r = before[i];
+          for (let j = 0; j < r.length; j++) paid.add(r[j]);
+        }
+      }
+      if (paid.has(ch)) continue;
+      if (row === null) row = a.split('');
+      row[x] = DRESS_LIGHT.has(ch) ? 'R' : 'r';
+    }
+    if (row !== null) {
+      if (out === after) out = after.slice();
+      out[y] = row.join('');
+    }
+  }
+  return out;
+}
+
+/* An unknown key used to collapse to the titan. That was fine while the only
+ * callers were the fourteen rows of world.BOSSES, and it stops being fine the
+ * moment something else wants boss-grade art — gauntlet/hunters.py is being
+ * written with seventeen roaming apex monsters in it, one per region, and
+ * seventeen identical titans is a worse answer than seventeen wrong ones.
+ *
+ * So an unrecognised key is HASHED onto the roster instead: stable forever for
+ * a given name, spread across the fifteen silhouettes, and still deterministic.
+ * A nullish key keeps the old answer, because "no key" is a bug in the caller
+ * and should look like the same bug every time. */
 export function resolveBoss(spriteKeyOrId) {
   const k = String(spriteKeyOrId || '');
-  return BOSS_ART_FOR_ID[k] || BOSS_SHAPE_FOR[k] || (ART[k] ? k : 'titan');
+  if (!k) return 'titan';
+  return BOSS_ART_FOR_ID[k] || BOSS_SHAPE_FOR[k] || (ART[k] ? k
+    : BOSS_ARCHETYPES[hash(k) % BOSS_ARCHETYPES.length]);
 }
 
 /* Art for a world.BOSSES row: the id override wins, then the sprite key. */
@@ -2324,7 +3116,19 @@ export const BOSS_MOTION = Object.freeze(Object.fromEntries(
       sink: (art.stage && art.stage.sink) || 0,
       bias: (art.stage && art.stage.bias) || 0,
       parts: (art.parts || []).length,
+      /* What it loses, and what it puts out, when the fight turns. Null for
+       * neither. A driver that wants to punctuate a phase change — a camera
+       * kick, a sound, a line — reads this rather than diffing two sprites. */
+      sheds: art.shed || null,
+      grows: (art.grow || []).map(p => p.name),
       phases: BOSS_PHASE_COUNT,
+      /* The element it is lit by, from BOSS_ELEMENT. Null means NEUTRAL and
+       * means the palette is left exactly as authored. */
+      element: BOSS_ELEMENT[k] && BOSS_ELEMENT[k] !== 'NEUTRAL' ? BOSS_ELEMENT[k] : null,
+      /* The marker. Same creature, 0.75 of the box, its own outline weight. */
+      mapW: art.wide ? BOSS_MAP_WIDE_W : BOSS_MAP_W,
+      mapH: BOSS_MAP_H,
+      mapSink: Math.round(((art.stage && art.stage.sink) || 0) * (BOSS_MAP_H / BOSS_H)),
       shadow: art.wide ? 44 : 30,
       colour: art.colour,
       accent: art.accent,
@@ -2358,18 +3162,26 @@ export function bossStageScale(key) {
 /* Lighting for the scene, so the stage can be tinted to the creature standing
  * on it. Returned as plain hex strings; fx.js can drop them straight into a
  * gradient or a withAlpha(). */
-export function bossLighting(key, colour) {
+export function bossLighting(key, colour, element) {
   const art = ART[resolveBoss(key)];
   const base = colour || art.colour;
   const r = ramp(base);
   const a = ramp(art.accent);
+  /* The stage is lit by the creature standing on it, and the creature is lit
+   * by its region's element, so the stage inherits the element too. Without
+   * this the sprite would carry a cold rim while the fog behind it stayed the
+   * colour it was before — which reads as a recoloured sprite on somebody
+   * else's background, the exact thing the rim is there to prevent. */
+  const el = ELEMENT_LIGHT[element === undefined ? BOSS_ELEMENT[resolveBoss(key)] : element];
+  const tone = (hex, to, t) => (el ? mix(hex, to, t) : hex);
   return {
     key: resolveBoss(key),
     colour: base,
+    element: el ? (element === undefined ? BOSS_ELEMENT[resolveBoss(key)] : element) : null,
     accent: art.accent,
-    rim: r.light1,
-    glow: mix(r.light2, '#ffffff', 0.3),
-    ember: a.light1,
+    rim: tone(r.light1, el && el.rim, 0.78),
+    glow: tone(mix(r.light2, '#ffffff', 0.3), el && el.glow, 0.6),
+    ember: tone(a.light1, el && el.ember[1], 0.55),
     ambient: mix(r.shadow2, '#0a0910', 0.55),
     fog: mix(r.shadow1, '#0e0c16', 0.72),
     floor: mix(r.shadow2, '#141220', 0.6),
@@ -2408,7 +3220,19 @@ function partOffset(part, frame, beat) {
   return [(part.ox | 0) + (f[0] | 0) + dx, (part.oy | 0) + (f[1] | 0) + dy];
 }
 
-function assemble(key, frame, beat) {
+/* The parts THIS phase has. Phase 2 is where a boss stops being the same
+ * object: `shed` names the part it loses, `grow` the parts it puts out. Both
+ * change the SILHOUETTE, which is the whole point — phases 0 and 1 differ by
+ * light and fissures, and a fissure is not visible from the map or through a
+ * screen shake. A limb is. */
+function partsFor(art, phase) {
+  const base = art.parts || [];
+  if (phase < BOSS_PHASE.CORE) return base;
+  const kept = art.shed ? base.filter(p => p.name !== art.shed) : base;
+  return art.grow ? kept.concat(art.grow) : kept;
+}
+
+function assemble(key, frame, beat, phase = 0) {
   const art = ART[key];
   const w = art.wide ? BOSS_WIDE_W : BOSS_W;
   const canvasGrid = blank(w, BOSS_H);
@@ -2422,7 +3246,7 @@ function assemble(key, frame, beat) {
    * still reads, which is the point: the parts are the performance. */
   const bd = driftAt(art.body.drift, beat);
 
-  const parts = art.parts || [];
+  const parts = partsFor(art, phase);
   for (const p of parts) {
     if (!p.behind) continue;
     const [ox, oy] = partOffset(p, frame, beat);
@@ -2437,6 +3261,194 @@ function assemble(key, frame, beat) {
   return canvasGrid;
 }
 
+/* ================================================================
+ * THE MAP FORM
+ * ================================================================
+ * The same creature, standing on a 16-pixel tile grid next to a 16x24 hero.
+ *
+ * Until now the overworld drew the BATTLE sprite at 1:1 and called that the map
+ * form. That is not a map form, it is a battle sprite that has been made small,
+ * and the two fail differently. At 1.75 on a near-black stage a one-pixel
+ * outline and a dusting of patina are detail; at 1:1 over grass, ruins and
+ * water they are noise, and the first thing noise costs you is the silhouette
+ * — which at marker scale is the ONLY thing the player has. A boss you cannot
+ * name from the far side of a ridge is a coloured blob with a health bar
+ * waiting inside it.
+ *
+ * So the map form is authored, and it is authored FROM the battle form rather
+ * than beside it. One pipeline, four passes:
+ *
+ *   1. REDUCE.  The assembled character grid — body, parts, damage and all —
+ *      is box-sampled 0.72:1 into a smaller grid. A destination cell is filled
+ *      when 40% of the source under it was, which keeps the mass and drops the
+ *      hairlines. The winning glyph is a WEIGHTED vote, not a majority: an eye
+ *      socket, a lit core, an ember and a specular count 2.4x, ordinary mass
+ *      1x, and the old outline 0.3x. Plain majority loses the eyes first, and
+ *      a reduced sprite without its eyes is not the same creature any more.
+ *   2. DESPECKLE. A single cell of one tone marooned in another is resampling
+ *      noise at this size, so it is absorbed. Features are exempt: a one-cell
+ *      eye at map scale IS the eye.
+ *   3. OUTLINE, HEAVILY. One full ring of hard outline dilated around the
+ *      whole silhouette. That is the boss tell and it is deliberately a thing
+ *      no ordinary monster on the tile grid has: mobs are 24x24 with a one-
+ *      pixel edge, this is 48 tall with two, and the difference is legible
+ *      before any of the interior is.
+ *   4. RE-LIGHT. applyRim and the contre-jour pass run on the REDUCED
+ *      silhouette, not on a resampled copy of the big one's lighting. The
+ *      light is derived at the size it will be seen at, which is the whole
+ *      difference between authoring small and shrinking large.
+ *
+ * What it does NOT do is as deliberate. No patina — pitting authored for 112
+ * pixels is dirt at 48. No beats — a part drifting one pixel is the thing that
+ * makes the battle form feel alive and is entirely invisible on a tile map, and
+ * paying six cache entries per phase for it would be paying for nothing. The
+ * map form breathes on the frame flip and bobs on the pose, and that is all it
+ * needs to not look nailed down.
+ *
+ * Because it is derived rather than drawn, the two forms cannot drift apart.
+ * That is a claim about pixels, so it is measured rather than asserted:
+ * scripts/verify/bossforms.mjs normalises both silhouettes into one box and
+ * reports the per-boss agreement and intersection-over-union.
+ */
+const MAP_INSET = 1;                 // room for the heavy outline to grow into
+const MAP_FILL = 0.52;               // more than half the source under a cell
+
+/* Glyphs that ARE the creature's identity and must survive a 0.72 reduction. */
+const MAP_FEATURE = 'kwWuUiedrRXZGM';
+/* The old outline, which is about to be replaced by a heavier one and should
+ * not be allowed to win cells on the way there. */
+const MAP_OUTLINE = 'oOQ';
+/* Features are also exempt from the despeckle: a one-cell eye is the eye. */
+const MAP_KEEP = 'kwWuUierR';
+
+function reduceGrid(grid, nw, nh) {
+  const h = grid.length;
+  const w = Math.max(...grid.map(r => r.length));
+  const src = normalise(grid, w);
+  const out = [];
+  for (let ry = 0; ry < nh; ry++) {
+    const y0 = Math.floor((ry * h) / nh);
+    const y1 = Math.max(y0 + 1, Math.floor(((ry + 1) * h) / nh));
+    const row = new Array(nw);
+    for (let rx = 0; rx < nw; rx++) {
+      const x0 = Math.floor((rx * w) / nw);
+      const x1 = Math.max(x0 + 1, Math.floor(((rx + 1) * w) / nw));
+      let total = 0, on = 0;
+      const score = new Map();
+      for (let y = y0; y < y1; y++) {
+        const line = src[y];
+        if (line === undefined) continue;
+        for (let x = x0; x < x1; x++) {
+          total++;
+          const ch = line[x];
+          if (isEmpty(ch)) continue;
+          on++;
+          const weight = MAP_FEATURE.indexOf(ch) >= 0 ? 2.4
+            : MAP_OUTLINE.indexOf(ch) >= 0 ? 0.3 : 1;
+          score.set(ch, (score.get(ch) || 0) + weight);
+        }
+      }
+      if (!total || on / total < MAP_FILL) { row[rx] = T; continue; }
+      /* Argmax with a glyph-order tie-break, so the answer does not depend on
+       * the order the source happened to be walked in. */
+      let best = 'B', bestV = -1;
+      for (const [ch, v] of score) {
+        if (v > bestV || (v === bestV && ch < best)) { best = ch; bestV = v; }
+      }
+      row[rx] = best;
+    }
+    out.push(row.join(''));
+  }
+  return out;
+}
+
+function despeckle(grid) {
+  const w = Math.max(...grid.map(r => r.length));
+  const src = normalise(grid, w);
+  const out = src.map(r => r.split(''));
+  for (let y = 0; y < src.length; y++) {
+    for (let x = 0; x < w; x++) {
+      const ch = src[y][x];
+      if (isEmpty(ch) || MAP_KEEP.indexOf(ch) >= 0) continue;
+      const up = at(src, y - 1, x), down = at(src, y + 1, x);
+      const left = at(src, y, x - 1), right = at(src, y, x + 1);
+      if (isEmpty(up) || up !== down || up !== left || up !== right || up === ch) continue;
+      out[y][x] = up;
+    }
+  }
+  return out.map(r => r.join(''));
+}
+
+/* One ring of hard outline dilated around everything. Where the reduction
+ * happened to keep a cell of the old outline this lands on top of it and the
+ * edge reads two deep; where it did not, this is the edge. Either way the
+ * creature carries a heavier border than anything else on the tile grid. */
+function heavyOutline(grid) {
+  const w = Math.max(...grid.map(r => r.length));
+  const src = normalise(grid, w);
+  const out = src.map(r => r.split(''));
+  for (let y = 0; y < src.length; y++) {
+    for (let x = 0; x < w; x++) {
+      if (!isEmpty(src[y][x])) continue;
+      if (!isEmpty(at(src, y - 1, x)) || !isEmpty(at(src, y + 1, x))
+        || !isEmpty(at(src, y, x - 1)) || !isEmpty(at(src, y, x + 1))) out[y][x] = 'o';
+    }
+  }
+  return out.map(r => r.join(''));
+}
+
+function assembleMap(key, frame, phase, rawKey, element) {
+  const art = ART[key];
+  const boxW = art.wide ? BOSS_MAP_WIDE_W : BOSS_MAP_W;
+  let grid = assemble(key, frame, 0, phase);
+  /* The same damage passes, in the same order, BEFORE the reduction. A crack
+   * opened after the reduction would be a crack drawn at the wrong scale; a
+   * limb shed after it would be a limb the reduction had already merged into
+   * the torso. The creature is damaged and then made small, in that order,
+   * which is also the order it happens to it. */
+  grid = fracture(grid, `${key}:${frame}:${phase}`, phase, art.faults);
+  grid = breach(grid, phase, art.faults, `${key}:${phase}`);
+  grid = ember(grid, phase, art.core);
+  grid = ignite(grid, phase, art.core);
+  /* Dressed at battle scale and THEN reduced — see dress() for why this is the
+   * order the "same creature" claim depends on. */
+  grid = dress(grid, rawKey, element, frame, 0, phase);
+  grid = despeckle(reduceGrid(grid, boxW - MAP_INSET * 2, BOSS_MAP_H - MAP_INSET * 2));
+  const box = blank(boxW, BOSS_MAP_H);
+  stamp(box, grid, MAP_INSET, MAP_INSET);
+  return rimPass(applyRim(heavyOutline(box)));
+}
+
+export function bossMapSize(key) {
+  const art = ART[resolveBoss(key)];
+  return { w: art.wide ? BOSS_MAP_WIDE_W : BOSS_MAP_W, h: BOSS_MAP_H };
+}
+
+/* The overworld form. Two frames, three phases, no beats — see above for why.
+ * Same cache, same eviction, same determinism guarantee as the battle form. */
+export function bossMapSprite(spriteKey, colour, frame = 0, opts = {}) {
+  const key = resolveBoss(spriteKey);
+  const art = ART[key];
+  const base = colour || art.colour;
+  const f = Math.min(frameIndex(frame), BOSS_FRAME.BREATHE);
+  const ph = bossPhase(opts && opts.phase !== undefined ? opts.phase : 0);
+  const el = elementFor(spriteKey, opts);
+  const cacheKey = `M|${key}|${lookOf(spriteKey).id}|${base}|${f}|${ph}|${el || '-'}`;
+  const hit = cacheGet(cacheKey);
+  if (hit) return hit;
+  const { canvas, ctx } = offscreen(art.wide ? BOSS_MAP_WIDE_W : BOSS_MAP_W, BOSS_MAP_H);
+  drawGrid(ctx, assembleMap(key, f, ph, spriteKey, el), bossPalette(base, art.accent, ph, el));
+  return cachePut(cacheKey, canvas);
+}
+
+/* Both map frames of one boss at one phase. Two canvases; call it when a
+ * region loads and the overworld never generates inside its own draw. */
+export function warmBossMap(spriteKey, colour, phase = 0) {
+  bossMapSprite(spriteKey, colour, BOSS_FRAME.IDLE, { phase });
+  bossMapSprite(spriteKey, colour, BOSS_FRAME.BREATHE, { phase });
+  return 2;
+}
+
 /* ---------------- rasterising ---------------- */
 function offscreen(w, h) {
   const c = document.createElement('canvas');
@@ -2447,12 +3459,36 @@ function offscreen(w, h) {
 }
 
 const spriteCache = new Map();
-/* A fight's working set is ONE creature: two idle frames x six beats, plus the
- * three action frames, all of it x three phases = 45 canvases. The bound that
- * actually matters is the pathological one — a caller warming every archetype
- * at every phase, which is 14 x 3 x 15 = 630 — so the cap sits just above it
- * and nothing any caller can legitimately ask for ever thrashes. */
-const CACHE_CAP = 640;
+
+/* One shared cache for both forms — map entries are prefixed 'M|' — because
+ * they are the same creature and a caller crossing between them should not pay
+ * twice for the crossing.
+ *
+ * A fight's working set is ONE creature: two idle frames x six beats, plus the
+ * three action frames, all of it x three phases = 45 canvases. A region's is
+ * one boss marker: two frames x three phases = 6. The bound that actually
+ * matters is the pathological one, a caller warming everything:
+ *
+ *   battle  32 looks x 3 phases x (2 x 6 beats + 3 frames)  = 1440
+ *   map     32 looks x 3 phases x 2 frames                  =  192
+ *                                                             ----
+ *                                                             1632
+ *
+ * so the cap sits just above that and nothing any caller can legitimately ask
+ * for ever thrashes. (It was 640 against a set of 675 — one archetype was
+ * added to the roster after the number was written, and the arithmetic was not
+ * redone. Then it was 832 against 15 ARCHETYPES, and the unit changed under it:
+ * the theme layer keys on the LOOK, so the fourteen named bosses, the
+ * seventeen apexes and the final trial are thirty-two distinct entries where
+ * there used to be fifteen. scripts/verify/bossforms.mjs warms the whole roster
+ * and counts rebuilds, so the next time the unit changes it is a failing
+ * harness rather than a slow frame nobody attributes to this.)
+ *
+ * Worth being plain about what this cap costs: full, at 64x64 RGBA, it is
+ * roughly 27MB, and it is only ever full if a caller warms every creature in
+ * the game at every phase — a codex screen or this project's art harness. A
+ * fight holds fifteen canvases and a region holds six. */
+const CACHE_CAP = 1792;
 
 /* True LRU rather than insertion order. With three phases in play the oldest
  * INSERTED entry is frequently the current phase's idle frame, and evicting
@@ -2487,22 +3523,36 @@ export function bossSprite(spriteKey, colour, frame = 0, opts = {}) {
    * multiply the cache to hide a difference nobody can see in 240ms. */
   const beat = (f <= BOSS_FRAME.BREATHE && opts && opts.beat)
     ? (((opts.beat | 0) % BOSS_BEATS) + BOSS_BEATS) % BOSS_BEATS : 0;
-  const cacheKey = `${key}|${base}|${f}|${ph}|${beat}`;
+  const el = elementFor(spriteKey, opts);
+  /* The LOOK id, not just the archetype. Two creatures can share a body and an
+   * element and still be different animals — the Slagmother and the Bug Demon
+   * are both FIRE demons — and the theme pass seeds its geometry on the look
+   * id, so leaving it out of the key made the second one a cache hit on the
+   * first and handed back a byte-identical sprite. The id is coarser than the
+   * raw key on purpose: 'titan' and 'hash_titan' resolve to one look and should
+   * share one entry. */
+  const lid = lookOf(spriteKey).id;
+  const cacheKey = `${key}|${lid}|${base}|${f}|${ph}|${beat}|${el || '-'}`;
   const hit = cacheGet(cacheKey);
   if (hit) return hit;
 
-  let grid = assemble(key, f, beat);
+  let grid = assemble(key, f, beat, ph);
   if (art.wear) grid = patina(grid, `${key}:${base}:${f}`, art.wear + ph * 0.05, 'd');
   // Damage before shading: applyRim derives light from the silhouette, and a
   // fissure opened after the fact would be lit as if the plate were still shut.
   grid = fracture(grid, `${key}:${f}:${ph}`, ph, art.faults);
+  grid = breach(grid, ph, art.faults, `${key}:${ph}`);
   grid = ember(grid, ph, art.core);
   grid = ignite(grid, ph, art.core);
+  /* The element, as geometry, before the light. Same reason the damage passes
+   * run before it: applyRim derives the light from the silhouette, and a spur
+   * grown after the fact would be an unlit spur on a lit creature. */
+  grid = dress(grid, spriteKey, el, f, beat, ph);
   grid = rimPass(applyRim(grid));
 
   const w = art.wide ? BOSS_WIDE_W : BOSS_W;
   const { canvas, ctx } = offscreen(w, BOSS_H);
-  drawGrid(ctx, grid, bossPalette(base, art.accent, ph));
+  drawGrid(ctx, grid, bossPalette(base, art.accent, ph, el));
   return cachePut(cacheKey, canvas);
 }
 
@@ -2621,18 +3671,54 @@ export function drawBoss(ctx, key, x, y, opts = {}) {
   if (frame === undefined || frame === null) frame = pose.frame;
   const phase = bossPhase(opts.phase);
   const beat = reduced ? 0 : (opts.beat === undefined ? pose.beat : opts.beat);
-  const img = bossSprite(artKey, colour, frame, { phase, beat });
-  if (!img) return null;
 
   /* Scale. A caller that passes nothing, or that passes the stage default,
    * is asking for "however big this creature should be on the battle stage"
    * and gets the per-archetype answer. A caller with its own number — the
-   * overworld map, at 1 — is taken at its word and nothing is applied on top,
-   * including the sink, which only means anything against a ground line. */
+   * overworld map, at 1 — is taken at its word and nothing is applied on top.
+   *
+   * And a caller asking for 1:1 or smaller is not asking for a small battle
+   * sprite, it is asking for the MAP FORM, so that is what it gets. This is
+   * the one branch that decides which of the two bodies of work a call lands
+   * in, and it is deliberately inferred rather than demanded: overworld.js
+   * already passes `scale: 1` and is not this pass's file to edit. `map: true`
+   * or `map: false` overrides it either way for anything that wants to be
+   * explicit — a bestiary page showing both forms side by side needs to. */
   const staged = opts.scale === undefined || opts.scale === BOSS_STAGE_SCALE;
+  const asked = opts.scale === undefined ? 1 : opts.scale;
+  const mapped = opts.map !== undefined ? !!opts.map : (!staged && asked <= 1.05);
+
+  /* The element travels on the CALLER'S key, not the resolved archetype: two
+   * apexes sharing a body are told apart by their region's light and would be
+   * identical if this passed artKey through. */
+  const element = opts.element === undefined ? bossElement(key) : opts.element;
+  /* And so does the KEY. The line above already worked this out for the
+   * element and then handed the resolved archetype to the sprite builders
+   * anyway, which threw the distinction away again one line later: the builders
+   * key their cache and seed their theme geometry on the look, and the look of
+   * 'colossus' is the Rolling Titan whichever apex asked for it. Passing the
+   * caller's key through costs nothing — both builders resolve internally — and
+   * it is the difference between the Rimewarden and the Unnamed being two
+   * creatures on one body and being one creature drawn twice.
+   *
+   * It also stops drawBoss missing the cache that warmBoss just filled: a
+   * caller that warms by id and draws by archetype was building every frame
+   * twice under two different keys. */
+  const img = mapped
+    ? bossMapSprite(key, colour, frame, { phase, element })
+    : bossSprite(key, colour, frame, { phase, beat, element });
+  if (!img) return null;
+
   const scale = staged ? m.scale : opts.scale;
-  const sink = staged ? (opts.sink === undefined ? m.sink : opts.sink) : 0;
-  const bias = staged ? (opts.bias === undefined ? m.bias : opts.bias) : 0;
+  /* The map form keeps the battle form's relationship with the ground — the
+   * feet go the same fraction of the body under the floor — so a creature that
+   * is planted in its stage is planted on its tile too. Scaled by the ratio of
+   * the two boxes rather than copied, or a 48-tall marker would sink eleven
+   * pixels and stand in a hole. */
+  const sink = mapped ? (opts.sink === undefined ? Math.round(m.sink * BOSS_MAP_RATIO) : opts.sink)
+    : staged ? (opts.sink === undefined ? m.sink : opts.sink) : 0;
+  const bias = mapped ? 0 : staged ? (opts.bias === undefined ? m.bias : opts.bias) : 0;
+  const spread = mapped ? m.shadow * BOSS_MAP_RATIO : m.shadow;
 
   const w = Math.round(img.width * scale);
   const h = Math.round(img.height * scale);
@@ -2651,8 +3737,8 @@ export function drawBoss(ctx, key, x, y, opts = {}) {
   if (opts.shadow !== false) {
     const squeeze = m.floats ? 0.7 : 1;
     drawGroundShadow(ctx, Math.round(x + bias + dx * 0.4), Math.round(y + 1),
-      Math.round(m.shadow * scale * 0.5 * squeeze),
-      Math.round(m.shadow * scale * 0.17 * squeeze),
+      Math.round(spread * scale * 0.5 * squeeze),
+      Math.round(spread * scale * 0.17 * squeeze),
       m.floats ? 0.22 : 0.36);
   }
 
@@ -2671,13 +3757,13 @@ export function drawBoss(ctx, key, x, y, opts = {}) {
 
   // Everything below the ground line goes into the floor.
   const below = top + h - Math.round(y);
-  if (opts.occlude !== false && sink > 0 && below > 0) {
-    const light = BOSS_PALETTES[artKey] || bossLighting(artKey, colour);
+  if (opts.occlude !== false && !mapped && sink > 0 && below > 0) {
+    const light = bossLighting(artKey, colour, element);
     floorVeil(ctx, left, left + w, Math.round(y), below,
       opts.floorTone || light.floor);
   }
 
-  return { x: left, y: top, w, h, frame, phase, beat, key: artKey };
+  return { x: left, y: top, w, h, frame, phase, beat, key: artKey, map: mapped };
 }
 
 /* ================================================================
@@ -2687,40 +3773,94 @@ export function drawBoss(ctx, key, x, y, opts = {}) {
  * that the renderer got around to. This is four beats, and the creature is not
  * whole until the last one:
  *
- *   0.00-0.28  THE FLOOR ANSWERS. Nothing is visible but the ground giving
- *              way: a widening scar under the feet and dust thrown off it.
- *   0.22-0.62  THE RISE. The creature comes up through that scar, clipped at
- *              the ground line, so it is genuinely emerging rather than
- *              sliding in from off-frame. Its own rim light arrives first.
- *   0.55-0.80  THE CROWN LIGHTS. A flare in the creature's own colour washes
- *              the silhouette, brightest at the top — the contre-jour hitting
- *              the highest thing on the stage before anything else.
- *   0.75-1.00  THE SETTLE. It drops the last pixels onto the ground line, the
- *              shadow snaps in hard, and dust comes back off the impact.
+ * The timings below are the contract. Another pass drives this — fx.js owns the
+ * camera, the letterbox and the taunt card — so every number a driver needs is
+ * a millisecond, exported, and not left as a fraction for someone to guess at.
+ *
+ *   0     - 616 ms   THE FLOOR ANSWERS. Nothing of the creature is visible.
+ *                    The ground gives way: a scar widening under the feet and
+ *                    chips thrown off it. Camera shake ramps 2 -> 3.7.
+ *   484   - 1364 ms  THE RISE, STAGGERED. It comes up through that scar,
+ *                    clipped at the ground line, so it is genuinely emerging
+ *                    rather than sliding in from off-frame. The rim arrives
+ *                    ahead of the body in THREE bands as each clears the
+ *                    floor — feet at ~790 ms, torso at ~1058 ms, crown at
+ *                    ~1364 ms. One reveal is a wipe; three is a creature
+ *                    coming out of the ground a piece at a time.
+ *   1210  - 1760 ms  THE CROWN LIGHTS. A wash in the creature's own colour
+ *                    over the whole silhouette — the contre-jour finding the
+ *                    tallest thing on the stage. Stage flash ramps to 0.66.
+ *   1716  - 1892 ms  THE IMPACT. It lands. Shake spikes to 9, stage flash to
+ *                    0.85, dust comes back off the floor.
+ *   1892  - 2200 ms  THE SETTLE. Shadow hardens in, dust falls, shake decays
+ *                    to 1. The creature is whole and holding still.
+ *   2200  - 2620 ms  THE HOLD. Nothing moves but the idle loop. This beat is
+ *                    the one that is always cut and is the reason an entrance
+ *                    reads as an event rather than a transition: the room is
+ *                    finished, the thing is standing in it, and nobody has
+ *                    said anything yet.
+ *   2620 ms          THE FIRST LINE. bossEntrance().taunt goes true here.
  *
  * Deterministic in k: same progress, same frame, forever. Allocates nothing —
  * the only canvases are the cached sprite and its cached silhouette.
  */
 export const BOSS_ENTRANCE_MS = 2200;
+/* The beat between the settle and the taunt. Held separately from the animated
+ * duration so a driver can shorten the silence without restaging the arrival. */
+export const BOSS_ENTRANCE_HOLD_MS = 420;
+export const BOSS_TAUNT_AT_MS = BOSS_ENTRANCE_MS + BOSS_ENTRANCE_HOLD_MS;
+
+/* The same table as data, for a driver that would rather read it than parse a
+ * comment. `from`/`to` are fractions of BOSS_ENTRANCE_MS; ms are absolute from
+ * the start of the arrival. */
+export const BOSS_ENTRANCE_BEATS = Object.freeze([
+  { name: 'floor',  from: 0,    to: 0.28, fromMs: 0,    toMs: 616,  does: 'ground opens, no creature yet' },
+  { name: 'rise',   from: 0.22, to: 0.62, fromMs: 484,  toMs: 1364, does: 'emerges through the floor, rim first, in three bands' },
+  { name: 'crown',  from: 0.55, to: 0.80, fromMs: 1210, toMs: 1760, does: 'contre-jour wash over the whole silhouette' },
+  { name: 'impact', from: 0.78, to: 0.86, fromMs: 1716, toMs: 1892, does: 'lands; shake 9, flash 0.85, dust' },
+  { name: 'settle', from: 0.86, to: 1,    fromMs: 1892, toMs: 2200, does: 'shadow hardens, dust falls, shake decays' },
+  { name: 'hold',   from: 1,    to: 1.19, fromMs: 2200, toMs: 2620, does: 'nothing. This is the beat before the line.' },
+]);
+
+/* Where the three rim bands clear the ground, as fractions of the whole
+ * arrival. Derived from the smoothstep on the rise rather than typed twice. */
+export const BOSS_ENTRANCE_RIM_MS = Object.freeze([790, 1058, 1364]);
+
+/* Where the clock stops. Derived from the two constants rather than typed, so
+ * shortening the hold moves the line and nothing else. */
+const ENTRANCE_END_T = 1 + BOSS_ENTRANCE_HOLD_MS / BOSS_ENTRANCE_MS;
 
 /* What the entrance wants from the caller at a given progress: how hard to
  * shake, how hard to flash the stage, and whether the impact has landed yet.
  * A caller drives its camera from this rather than guessing at the timing. */
 export function bossEntrance(key, k = 0) {
-  const t = Math.max(0, Math.min(1, k));
+  /* k runs past 1 through the hold. Clamped at the top of the hold rather than
+   * at the settle, so a driver can feed it one clock all the way to the line. */
+  const t = Math.max(0, Math.min(ENTRANCE_END_T, k));
   const impact = 0.78;
   const hit = t >= impact && t < impact + 0.08;
+  const held = t >= 1;
   return {
     key: resolveBoss(key),
     duration: BOSS_ENTRANCE_MS,
+    hold: BOSS_ENTRANCE_HOLD_MS,
+    tauntAt: BOSS_TAUNT_AT_MS,
     t,
-    beat: t < 0.28 ? 'floor' : t < 0.62 ? 'rise' : t < 0.8 ? 'crown' : 'settle',
+    ms: Math.round(t * BOSS_ENTRANCE_MS),
+    beat: held ? 'hold' : hit ? 'impact' : t < 0.28 ? 'floor'
+      : t < 0.62 ? 'rise' : t < 0.8 ? 'crown' : 'settle',
     impactAt: impact,
     landed: t >= impact,
-    shake: hit ? 9 : t < 0.28 ? 2 + t * 6 : t < 0.62 ? 3 : 1,
-    flash: hit ? 0.85 : t > 0.55 && t < impact ? (t - 0.55) * 1.2 : 0,
+    /* True for exactly one thing: the frame on which the boss is allowed to
+     * speak. Everything before it is staging and should not be interrupted. */
+    taunt: t >= ENTRANCE_END_T,
+    shake: held ? 0 : hit ? 9 : t < 0.28 ? 2 + t * 6 : t < 0.62 ? 3 : 1,
+    flash: held ? 0 : hit ? 0.85 : t > 0.55 && t < impact ? (t - 0.55) * 1.2 : 0,
   };
 }
+
+/* Three. Two is a wipe with a pause in it and four is a staircase. */
+const ENTRANCE_BANDS = 3;
 
 function dustRing(ctx, cx, groundY, spread, rise, a, colour) {
   // Twelve hard chips on a fixed lattice. No rng in a draw path, ever.
@@ -2786,10 +3926,30 @@ export function drawBossEntrance(ctx, key, x, y, k, opts = {}) {
     ctx.clip();
     ctx.globalAlpha = Math.min(1, 0.35 + rise * 0.75);
     ctx.drawImage(img, left, top, w, h);
-    // Its own rim arrives before the body does: a hot silhouette under a dim one.
-    if (rise < 1) {
+    /* Its own rim arrives before the body does, and it arrives in pieces. Each
+     * third of the creature flares as it clears the floor, so what the player
+     * sees is feet, then torso, then crown, rather than one sprite sliding up
+     * behind one wipe. Same canvas, same cached silhouette, three clips — the
+     * stagger costs nothing but the clip rects. */
+    if (rise < 1 && !reduced) {
       const sil = silhouette(img, light.rim);
-      ctx.globalAlpha = (1 - rise) * 0.8;
+      const sm = rise * rise * (3 - 2 * rise);
+      for (let i = 0; i < ENTRANCE_BANDS; i++) {
+        const emerge = (i + 1) / ENTRANCE_BANDS;
+        const d = sm - emerge;
+        if (d < -0.02 || d > 0.34) continue;
+        const y0 = top + Math.round(h * (1 - emerge));
+        const y1 = top + Math.round(h * (1 - i / ENTRANCE_BANDS));
+        if (y1 <= y0) continue;
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(left - 8, y0, w + 16, y1 - y0);
+        ctx.clip();
+        ctx.globalAlpha = Math.max(0, 1 - Math.max(0, d) / 0.34) * 0.9;
+        ctx.drawImage(sil, left, top, w, h);
+        ctx.restore();
+      }
+      ctx.globalAlpha = (1 - rise) * 0.45;
       ctx.drawImage(sil, left, top, w, h);
     }
     ctx.globalAlpha = 1;
@@ -2835,14 +3995,21 @@ export function bossInfo(key) {
     key: artKey,
     name: art.name,
     size: bossSize(artKey),
+    mapSize: bossMapSize(artKey),
     motion: BOSS_MOTION[artKey],
     lighting: BOSS_PALETTES[artKey],
+    element: bossElement(artKey),
     parts: (art.parts || []).map(p => p.name),
+    sheds: art.shed || null,
+    grows: (art.grow || []).map(p => p.name),
     frames: BOSS_FRAME_NAMES.slice(),
     phases: BOSS_PHASE_NAMES.slice(),
     beats: BOSS_BEATS,
     core: art.core ? art.core.slice() : null,
     faults: (art.faults || []).length,
     entrance: BOSS_ENTRANCE_MS,
+    hold: BOSS_ENTRANCE_HOLD_MS,
+    tauntAt: BOSS_TAUNT_AT_MS,
+    entranceBeats: BOSS_ENTRANCE_BEATS,
   };
 }

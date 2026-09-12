@@ -131,9 +131,18 @@ h1, h2, h3, .pixel { font-family: 'Press Start 2P', 'Courier New', monospace; }
 #region-card h3 { margin: 0 0 6px; font-size: calc(11px * var(--scale)); color: var(--gold); }
 #region-card p { margin: 0; font-size: calc(12px * var(--scale)); color: var(--ink-dim); line-height: 1.5; }
 #world-hint {
+  /* Faint text was fine over the old dark tilemap and is unreadable over the
+     current one, which has bright grass and canopy under it. The controls are
+     the one thing on this screen a new player must be able to read, so they get
+     the same backing the region card already has rather than a lighter ink. */
   pointer-events: none; margin-left: auto; font-size: calc(11px * var(--scale));
-  color: var(--ink-faint); text-align: right; line-height: 1.7;
+  color: var(--ink-dim); text-align: right; line-height: 1.7;
+  background: rgba(10, 8, 18, 0.72);
+  border: 1px solid var(--line);
+  padding: 8px 10px;
+  border-radius: 2px;
 }
+#world-hint .kbd { color: var(--text); }
 #world-side {
   width: 330px; flex: 0 0 330px; border-left: 3px solid var(--line);
   background: var(--panel); overflow-y: auto; padding: 12px;
@@ -499,6 +508,9 @@ textarea.explain {
 .rung.done { color: var(--green); }
 .rung.current { color: var(--gold-hi); }
 .rung.next { color: var(--ink-dim); }
+/* Placed past by the diagnostic rather than worked through. Open, not
+   finished — so it reads as available, not as a tick. */
+.rung.skipped { color: var(--ink-dim); }
 .rung.locked { color: var(--ink-faint); }
 .beat {
   padding: 12px 14px; border-left: 3px solid var(--violet); background: #14112400;
@@ -585,3 +597,86 @@ input[type="range"]:hover::-webkit-slider-thumb { background: var(--gold-hi); }
 /* A chain inside a quest row: four steps of one person's life, indented under
  * the premise rather than lined up with it. */
 .list-item .rung { padding: 3px 0 3px 10px; }
+
+/* ======================================================================
+ * THE WORLD LAYER
+ * ======================================================================
+ *
+ * Two pieces of chrome that belong to no single screen and so cannot live in
+ * the screen that raises them: the low-health alarm, which is drawn over the
+ * battle stage, and the hunt banner, which is fixed to the viewport because the
+ * way out of an apex fight has to be visible from wherever the player happens
+ * to be typing.
+ *
+ * Everything else the four world-layer modules draw is built out of the classes
+ * already above — .frame, .list-item, .skill-row, .gate, .tag, .grid2 — on
+ * purpose. A town that did not look like the rest of the game would read as a
+ * different game.
+ */
+
+/* -- the low-health alarm -----------------------------------------------
+ * The colour, the two alphas and the RATE all arrive from upkeep.alarm() and
+ * are set as inline properties by main.js. Nothing about the thresholds is in
+ * here: this file knows how to draw a pulse and not when one is warranted. */
+#hero-alarm {
+  position: absolute; pointer-events: none; z-index: 3;
+  border-radius: 50%; mix-blend-mode: screen;
+}
+@keyframes heroalarm {
+  0%, 100% { opacity: var(--a0, .25); }
+  50%      { opacity: var(--a1, .85); }
+}
+/* The number beside the bar goes red on the same band the sprite pulses on, so
+ * a player who is reading the problem rather than watching the sprite still has
+ * somewhere to catch it. */
+#chud-you-hp-v.alarming { color: var(--red); }
+/* A player who asked for less movement still has to be told. main.js holds the
+ * wash at the top of its band instead of blinking; this is the belt to that
+ * braces, because a flashing overlay is the exact thing this setting exists to
+ * switch off. */
+body.reduced-motion #hero-alarm { animation: none !important; }
+
+/* -- the hunt banner -----------------------------------------------------
+ * Up for the whole of an apex fight, on every screen. FLEE ALWAYS SUCCEEDS — no
+ * roll, turn one included — and the button is never hidden, disabled or moved,
+ * because a door that could refuse it would trap a player in a fight they were
+ * told they could always leave. */
+.hunt-banner {
+  /* Bottom RIGHT, not bottom centre: on the battle screen the centre of the
+     bottom edge is the code the player is typing, and a persistent strip over
+     it would make the escape the thing that gets in the way. The toast rail is
+     top-right, so these two never meet. */
+  position: fixed; right: 16px; bottom: 14px;
+  z-index: 95; display: flex; align-items: center; gap: 10px;
+  padding: 8px 14px; background: var(--panel-2);
+  border: 3px solid var(--apex, var(--red));
+  box-shadow: 0 4px 0 var(--shadow);
+  font-size: calc(11px * var(--scale));
+  max-width: 94vw; white-space: nowrap;
+}
+.hunt-banner .hb-name {
+  font-family: 'Press Start 2P', monospace; font-size: calc(8px * var(--scale));
+  color: var(--apex, var(--red)); letter-spacing: 1px;
+}
+.hunt-banner .hb-bar {
+  width: 160px; max-width: 30vw; height: 10px; flex: 0 0 auto;
+  background: #0d0b16; border: 2px solid var(--line);
+}
+.hunt-banner .hb-bar > i {
+  display: block; height: 100%; background: var(--apex, var(--red));
+  transition: width .35s;
+}
+.hunt-banner .hb-num {
+  color: var(--ink-dim); font-variant-numeric: tabular-nums;
+}
+.hunt-banner .hb-casts { color: var(--ink-faint); }
+
+/* -- the telegraph, in words -------------------------------------------
+ * The canvas says it wordlessly on purpose; hunters.py's telegraph table has a
+ * countdown channel that the drawn version deliberately does not honour, and a
+ * number belongs in text. This is that text, appended to the region card. */
+#apex-telegraph { pointer-events: none; }
+
+/* -- the town, the sages, the roll call ---------------------------------- */
+#town-tabs .btn.primary { border-color: var(--gold); }
+.voice-face canvas, .cap-face canvas { image-rendering: pixelated; display: block; }

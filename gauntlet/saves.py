@@ -391,6 +391,11 @@ def capture_history(conn: sqlite3.Connection) -> dict:
         "attempts": db.recent_attempts(conn, limit=1000000),
         "boss_records": db.boss_history(conn),
         "interview_runs": db.interview_history(conn, limit=1000000),
+        # The hold-out ledger is graded evidence like the rest, and it is the
+        # only record of which sealed problems have been spent. A slot that
+        # carried the state without it would hand back a save whose transfer
+        # score had no encounters under it.
+        "transfer_encounters": db.transfer_ledger(conn),
     }
 
 
@@ -398,7 +403,12 @@ def _restore_history(conn: sqlite3.Connection, history: dict) -> int:
     """Replace the queryable tables with the snapshot's. Destructive by design —
     a save state is a timeline, not a merge — and always reversible, because the
     undo snapshot taken before a load carries history whenever the incoming save
-    does."""
+    does.
+
+    With one exception, and it is the point: transfer_encounters is merged, not
+    replaced. Mastery is allowed to rewind with the timeline. The record of
+    which sealed problems this player has already had in front of them is not.
+    """
     written = 0
     conn.execute("DELETE FROM attempts")
     for row in history.get("attempts") or []:
@@ -416,6 +426,15 @@ def _restore_history(conn: sqlite3.Connection, history: dict) -> int:
     for row in history.get("interview_runs") or []:
         db.record_interview(conn, **{k: v for k, v in row.items() if k != "id"})
         written += 1
+    # NOT deleted, and not part of "destructive by design". A save slot rewinds
+    # the game; it does not rewind the player. The hold-out ledger records what
+    # this person has already seen, and if a slot load could erase it the
+    # transfer score would be farmable by the most obvious move there is —
+    # save, sit a sealed problem, fail, load, sit it again knowing the answer.
+    # db.merge_transfer folds the snapshot in additively and never upgrades a
+    # row, so a rollback can lower nothing and a real save transfer still
+    # carries its evidence onto a fresh install.
+    written += db.merge_transfer(conn, history.get("transfer_encounters") or [])
     conn.commit()
     return written
 

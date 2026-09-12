@@ -363,6 +363,56 @@ const PARTY_CSS = `
 .pt-check .track i { display:block; height:100%; background:var(--ink-faint) }
 .pt-check.met .track i { background:var(--green) }
 .pt-pet .actions { margin-top:auto; padding-top:6px }
+.pt-pet.fallen { border-color:var(--red); border-style:dashed; opacity:.9 }
+.pt-pet.fallen canvas { filter:grayscale(1) brightness(.6) }
+.pt-pet.fallen .pt-p-name { color:var(--red) }
+.pt-pet.toodeep { border-color:var(--orange) }
+.pt-p-dead { font-size:10px; color:var(--red); letter-spacing:.06em;
+  border-top:1px solid var(--line); padding-top:6px; line-height:1.7 }
+.pt-p-tier { display:flex; gap:6px; align-items:center; flex-wrap:wrap;
+  font-size:9px; letter-spacing:.06em }
+.pt-p-tier i { font-style:normal; border:1px solid var(--line); padding:1px 5px;
+  color:var(--violet) }
+.pt-p-tier i.reach { color:var(--green); border-color:var(--green) }
+.pt-p-tier i.short { color:var(--orange); border-color:var(--orange) }
+
+/* ---- the ladder ---- */
+.pt-ladder { display:flex; flex-direction:column; gap:4px; margin:12px 0 }
+.pt-rung { display:grid; grid-template-columns:92px 84px 1fr; gap:8px;
+  align-items:center; border:1px solid var(--line); background:var(--panel);
+  padding:7px 9px; font-size:10px; line-height:1.6 }
+.pt-rung.here { border-color:var(--gold) }
+.pt-rung.gap { border-color:var(--orange) }
+.pt-rung .name { color:var(--violet); letter-spacing:.07em }
+.pt-rung.here .name { color:var(--gold-hi) }
+.pt-rung .through { color:var(--ink-faint); letter-spacing:.05em }
+.pt-rung .who { color:var(--ink-dim) }
+.pt-rung .who b { color:var(--green); font-weight:normal }
+.pt-rung .who i { font-style:normal; color:var(--ink-faint) }
+
+/* ---- a refusal, and the roads out of it ---- */
+.pt-refuse { border:1px solid var(--orange); background:var(--panel);
+  padding:12px; display:flex; flex-direction:column; gap:8px }
+.pt-refuse .pt-r-head { display:flex; gap:10px; align-items:flex-start }
+.pt-refuse canvas { image-rendering:pixelated; flex:0 0 auto; filter:saturate(.6) }
+.pt-refuse .pt-r-who { font-size:11px; letter-spacing:.05em; color:var(--orange) }
+.pt-refuse .pt-r-said { font-size:12px; line-height:1.8; font-style:italic }
+.pt-refuse .pt-r-not { font-size:11px; line-height:1.8; color:var(--green) }
+.pt-roads { display:flex; flex-direction:column; gap:4px }
+.pt-road { border:1px solid var(--line); padding:7px 9px; font-size:10px;
+  line-height:1.7 }
+.pt-road.open { border-color:var(--green) }
+.pt-road .t { color:var(--ink); letter-spacing:.04em }
+.pt-road.open .t { color:var(--green) }
+.pt-road .d { color:var(--ink-dim); display:block }
+.pt-road .c { color:var(--gold); float:right }
+
+/* ---- the barrow ---- */
+.pt-fall { display:flex; flex-direction:column; gap:10px }
+.pt-fall .ln { font-size:12px; line-height:1.9; color:var(--ink) }
+.pt-fall .cost { border:1px solid var(--red); padding:10px; font-size:11px;
+  line-height:1.8; color:var(--red) }
+.pt-fall .keep { color:var(--gold-hi); font-size:11px; letter-spacing:.04em }
 
 /* ---- the intervention card ---- */
 .pt-speak { border:1px solid var(--line-hi); background:var(--panel);
@@ -446,6 +496,71 @@ const PET_W = 20;
 const PET_H = 16;
 
 const PET_SHAPES = {
+  /* STUB. A boar piglet with one ear, which is the whole of the character: it
+   * is small, it is not clever, and something already went wrong for it once
+   * before the game started. Drawn facing right at the same weight as the rest
+   * of the roster so that BARROW below reads as this animal scaled and ruined
+   * rather than as a different species. */
+  boar: [
+    '....................',
+    '....................',
+    '...............oo...',
+    '..............oBao..',
+    '.o............oBBo..',
+    'oao.....oooooooBBoo.',
+    '.oo...ooBBBBBBBBwko.',
+    '...oooBBBBBBBBBBBBgo',
+    '..oBBaBBBBBBBBBBBBgo',
+    '..oBBBBBBBBBBBBBBBoo',
+    '..oBaBBaBBaBBBBBBoo.',
+    '..oBBBBBBBBBBBBBBo..',
+    '...oBo.oBo..oBo.....',
+    '...oBo.oBo..oBo.....',
+    '...ooo.ooo..ooo.....',
+    '....................',
+  ],
+  /* BARROW. The same silhouette at cart size, filling the box the piglet
+   * rattled around in. One ear, still. The tusks have grown up through the jaw
+   * and out again in the cream tone the rest of the roster uses for teeth, and
+   * they are the only thing on this animal that is new. */
+  boar_great: [
+    '.............oooo...',
+    '.o..........oBBBBo..',
+    'oao.........oBaBBo..',
+    '.oo......ooooBBBBo..',
+    '..ooo..ooBBBBBBBBoo.',
+    '.oBBBoBBBBBBBBBBwkBo',
+    'oBBaBBBBBBBBBBBBBBgo',
+    'oBBBBBBBBBBBBBBBBBgo',
+    'oBaBBaBBBBBBBBBBBggo',
+    'oBBBBBBBBBBBBBBBoggo',
+    'oBaBBaBBaBBBBBBooggo',
+    'oBBBBBBBBBBBBBBo.ogo',
+    '.oBBBBBBBBBBBBo..ooo',
+    '.oBo.oBo..oBBo......',
+    '.oBo.oBo..oBBo......',
+    '.ooo.ooo..oooo......',
+  ],
+  /* MIMIC. A mantle, two eyes and eight arms that do not agree with each other
+   * about where the floor is. Nothing about it is symmetrical on purpose. */
+  octopus: [
+    '.......ooooo........',
+    '.....ooBBBBBoo......',
+    '....oBBBBBBBBBo.....',
+    '...oBBBBBBBBBBBo....',
+    '...oBwkBBBBBwkBo....',
+    '...oBBBBBBBBBBBo....',
+    '...oBaBBBBBBBaBo....',
+    '....oBBBBBBBBBo.....',
+    '...ooBoBoBoBoBoo....',
+    '..oBooBoBoBoBooBo...',
+    '.oBo.oBoBoBoBo.oBo..',
+    'oBo..oBo.oBo..oBo.oo',
+    'oao..oao.oao..oao.o.',
+    '.oo...oo..oo...oo...',
+    '....................',
+    '....................',
+  ],
   jaguar: [
     '....................',
     '.oo.............oo..',
@@ -1257,6 +1372,18 @@ function confirmRespec(scope, branchId, tree, branch) {
  * companion costs is never further down the page than what it says.
  */
 
+/* The companion screen.
+ *
+ * ONE animal walks with you, and the screen is built around that being a
+ * decision rather than an inventory. So the first thing on it is the ladder —
+ * six tiers, what each reads through, and who is in it — because the question
+ * this page exists to answer is "which depth do I currently have no answer
+ * for", and a player should be able to answer it without opening twelve cards.
+ *
+ * A dead companion is drawn dead: grey, dashed, its own name in red, and the
+ * fact stated in words underneath. It keeps its card and its bond. The codex
+ * does not quietly lose people.
+ */
 export async function paintCompanions() {
   ensureStyle();
   leave();
@@ -1268,22 +1395,50 @@ export async function paintCompanions() {
   if (payload.error) { HOST.toast('NO', refusal(payload), 'red'); return; }
 
   const roster = payload.pets || [];
-  const limit = payload.limit || 2;
+  const limit = payload.limit || 1;
+  const tiers = payload.tiers || [];
+  const fallen = new Set(payload.fallen || []);
   const progressById = new Map(
     ((discovery && discovery.progress) || []).map(row => [row.pet, row]));
-  const active = roster.filter(p => p.active).map(p => p.id);
+  const activeId = payload.active || (roster.find(p => p.active) || {}).id || '';
+  const activePet = roster.find(p => p.id === activeId);
   const found = roster.filter(p => p.found);
+
+  const ladder = tiers.map(t => {
+    const mine = (t.companions || []).filter(id => found.some(p => p.id === id
+      && !fallen.has(id)));
+    const here = activePet && activePet.tier === t.tier;
+    const names = (t.companions || []).map(id => {
+      const pet = roster.find(p => p.id === id);
+      if (!pet) return '';
+      if (fallen.has(id)) return `<i>${esc(pet.name)} (gone)</i>`;
+      if (!pet.found) return `<i>???</i>`;
+      return `<b>${esc(pet.name)}</b>`;
+    }).filter(Boolean).join(' · ');
+    return `<div class="pt-rung${here ? ' here' : ''}${mine.length ? '' : ' gap'}">
+      <span class="name">${esc(t.label.toUpperCase())}</span>
+      <span class="through">THROUGH ${esc(t.helps_through)}</span>
+      <span class="who">${names || 'nobody'}${mine.length ? ''
+        : ' — you have no answer at this depth'}</span>
+    </div>`;
+  }).join('');
 
   const cards = roster.map(pet => {
     const prog = progressById.get(pet.id) || {};
+    const dead = pet.fallen || fallen.has(pet.id);
     const cost = `<span class="pt-p-cost">
       <span class="lab">COSTS</span>
       <span>1 hint</span>
       <span class="lab">·</span>
-      <span class="kind">${esc(pet.hint_label)}</span>
+      <span class="kind">${esc(pet.hint_label || 'reads nothing yet')}</span>
       <span class="lab">·</span>
       <span class="ceil">best rank afterwards: ${esc(pet.rank_ceiling)}</span>
     </span>`;
+    const tier = `<div class="pt-p-tier">
+      <i>${esc(pet.tier_label || pet.tier || '')}</i>
+      <i class="reach">READS THROUGH ${esc(pet.helps_through || '')}</i>
+      ${pet.lineage ? '<i>the same animal, elsewhere on the ladder</i>' : ''}
+    </div>`;
 
     if (!pet.found) {
       const checks = (prog.checks || []).map(checkHtml).join('')
@@ -1296,6 +1451,7 @@ export async function paintCompanions() {
             <div class="pt-p-tag">${esc(pet.where || 'somewhere you have not been')}</div>
           </span>
         </div>
+        ${tier}
         <div class="pt-p-tag" style="color:var(--ink)">${esc(pet.how)}</div>
         ${cost}
         <div class="pt-checks">${checks}</div>
@@ -1306,19 +1462,20 @@ export async function paintCompanions() {
       ? `<span class="next">${esc(pet.next)} at ${pet.next_at}
           (${Math.max(0, pet.next_at - pet.bond)} to go)</span>`
       : '<span class="next">nothing further to earn</span>';
-    return `<div class="pt-pet${pet.active ? ' active' : ''}">
+    return `<div class="pt-pet${pet.active ? ' active' : ''}${dead ? ' fallen' : ''}">
       <div class="pt-p-head">
         <span data-pt-pet-art="${esc(pet.id)}"></span>
         <span class="grow">
-          <span class="pt-p-name" style="color:${esc(pet.colour)}">
+          <span class="pt-p-name" style="${dead ? '' : `color:${esc(pet.colour)}`}">
             ${esc(pet.name.toUpperCase())}</span>
           <div class="pt-p-tag">${esc(pet.species)} · teaches ${esc(pet.skill)}</div>
           <div class="pt-p-tag">${esc(pet.tagline)}</div>
         </span>
       </div>
+      ${tier}
       ${cost}
       <div class="pt-bond">
-        <span class="rank">${esc(pet.rank_label.toUpperCase())}</span>
+        <span class="rank">${esc(String(pet.rank_label || '').toUpperCase())}</span>
         <span class="track"><i style="width:${Math.round((pet.fraction || 0) * 100)}%"></i></span>
         ${next}
       </div>
@@ -1327,29 +1484,42 @@ export async function paintCompanions() {
       ${(pet.passive || []).length
         ? `<div class="pt-p-passive">${(pet.passive || []).map(esc).join(' · ')}</div>`
         : '<div class="pt-p-tag">no passive yet — bond buys one</div>'}
+      ${dead ? `<div class="pt-p-dead">IT IS NOT COMING BACK. Not as this. The
+        entry stays in the codex and so does the bond, because neither of those
+        is a thing you can be made to give back.</div>` : ''}
       <div class="actions">
-        <button class="btn small${pet.active ? ' good' : ''}"
-          data-pt-pet-toggle="${esc(pet.id)}">
-          ${pet.active ? 'IN THE FIELD ✔' : 'TAKE ALONG'}</button>
+        ${dead ? '<button class="btn small" disabled>GONE</button>'
+          : pet.active
+            ? '<button class="btn small good" data-pt-pet-dismiss="1">IN THE FIELD ✔ — SEND HOME</button>'
+            : `<button class="btn small" data-pt-pet-take="${esc(pet.id)}">TAKE ALONG</button>`}
         <button class="btn small" data-pt-pet-page="${esc(pet.id)}">READ</button>
       </div>
     </div>`;
   }).join('');
 
   const near = (payload.hints || []).filter(h => h.checks && h.checks.length);
+  const deepest = activePet ? activePet.helps_through : '';
 
   shell('COMPANIONS', 'pets', `
     <div class="pt-strip">
-      <span class="pt-pill${active.length ? ' hot' : ''}">
-        IN THE FIELD <b>${active.length}</b> / ${limit}</span>
+      <span class="pt-pill${activePet ? ' hot' : ''}">
+        IN THE FIELD <b>${activePet ? esc(activePet.name) : 'nobody'}</b> / ${limit}</span>
+      ${activePet ? `<span class="pt-pill">READS THROUGH <b>${esc(deepest)}</b></span>` : ''}
       <span class="pt-pill">MET <b>${found.length}</b> / ${roster.length}</span>
+      ${fallen.size ? `<span class="pt-pill" style="border-color:var(--red);
+        color:var(--red)">LOST <b>${fallen.size}</b></span>` : ''}
     </div>
-    <p class="pt-lead">Two walk with you, never three — at three there is a
-      companion for every kind of trouble and choosing stops being a choice.
-      None of them can be pressed like a button. They speak when the encounter
-      shows the thing they know about, and speaking costs a hint and lowers the
-      best rank you can still earn. That price is printed on every card before
-      anything any of them has to say.</p>
+    <p class="pt-lead">One walks with you, never two. What it IS decides what
+      unasked help exists at all: a companion above its depth does not give you
+      a thinner hint, it gives you nothing and says so. That is the whole of the
+      decision and it is made here rather than mid-fight.
+      <b style="color:var(--green);font-weight:normal">It is never a dead end.</b>
+      The first rung of every spell tree is open to anybody, the coach speaks
+      after a failed submission and has never asked who you brought, and the
+      worked solution comes free after three attempts. Those three do not care
+      about tiers and never have.</p>
+    <div class="section-title">THE LADDER</div>
+    <div class="pt-ladder">${ladder}</div>
     <div class="pt-pets">${cards}</div>
     ${near.length ? `<div class="frame" style="padding:12px;margin-top:12px">
       <div class="section-title">NEAREST</div>
@@ -1369,29 +1539,83 @@ export async function paintCompanions() {
     if (pet) showPetPage(pet, progressById.get(pet.id));
   });
 
-  bind('[data-pt-pet-toggle]', async (node) => {
-    const id = node.dataset.ptPetToggle;
-    const next = active.includes(id)
-      ? active.filter(x => x !== id)
-      : active.concat([id]);
-    // set_active() truncates past the limit in silence, which from in here
-    // looks like a click that did nothing. So the limit is enforced where the
-    // player can see it, naming who is already out there.
-    if (next.length > limit) {
-      const names = active
-        .map(a => (roster.find(p => p.id === a) || {}).name)
-        .filter(Boolean).join(' and ');
-      HOST.toast('TWO, NOT THREE',
-        `${names} are already with you. Send one home first.`, 'red');
-      return;
-    }
+  /* Taking a new companion IS dismissing the old one — there is no separate
+   * destructive gesture and nothing here is permanent except the barrow. The
+   * swap is named out loud anyway, because with a limit of one a click that
+   * silently benches somebody is a decision the game made for you. */
+  bind('[data-pt-pet-take]', async (node) => {
+    const id = node.dataset.ptPetTake;
     let r;
-    try { r = await api.setPets(next); } catch (e) { broke('THEY STAYED PUT', e); return; }
+    try {
+      r = activeId ? await api.recallPet(id) : await api.setPets([id]);
+    } catch (e) { broke('THEY STAYED PUT', e); return; }
     if (refuse(r, 'THEY STAYED PUT')) return;
     HOST.sfx('pet');
+    if (r.stepped_down_line) {
+      HOST.toast('ONE AT A TIME', `“${r.stepped_down_line}” — you can go back for
+        them whenever you like. Nothing about this is final.`);
+    }
     await HOST.refresh();
     paintCompanions();
   });
+
+  // The barrow scene, if the client has not played it yet. It is handed back
+  // on every catalogue read until it is acknowledged, so a refresh between the
+  // fight and the scene cannot swallow it. Shown last, over a page that is
+  // already painted, so closing it leaves the player somewhere.
+  if (payload.fall) showTheFall(payload.fall);
+
+  bind('[data-pt-pet-dismiss]', async () => {
+    let r;
+    try { r = await api.dismissPet(); } catch (e) { broke('IT STAYED', e); return; }
+    if (refuse(r, 'IT STAYED')) return;
+    HOST.sfx('select');
+    if (r.line) {
+      HOST.toast('SENT HOME', `“${r.line}” It waits at ${r.waits_at || 'home'}.
+        Reversible, always.`);
+    }
+    await HOST.refresh();
+    paintCompanions();
+  });
+}
+
+/* THE BARROW. Four lines, the plain statement of what it cost, and the three
+ * roads that were never a companion's to close. It is shown once and then
+ * acknowledged; the FACT stays in the save forever, because the legendary
+ * return is gated on it. */
+export function showTheFall(scene, { onClose } = {}) {
+  if (!scene || !scene.lines) return null;
+  ensureStyle();
+  const m = openModal(`
+    <h2 style="color:var(--red)">${scene.retroactive
+      ? 'SOMETHING YOU DID NOT SEE HAPPEN'
+      : 'THE UNCLOSED BRACKET'}</h2>
+    <div class="pt-fall">
+      ${scene.retroactive ? `<p class="small muted">You cleared that barrow
+        before this was written down. It is being told to you now rather than
+        replayed at you, because you were not standing there and pretending
+        otherwise would be a lie about your own save.</p>` : ''}
+      ${(scene.lines || []).map(l => `<div class="ln">${esc(l)}</div>`).join('')}
+      <div class="keep">You are carrying ${esc(scene.keepsake || 'it')}.</div>
+      <div class="cost">${esc(scene.cost || '')}</div>
+      <div class="section-title">WHAT IS STILL OPEN</div>
+      <div class="pt-roads">${(scene.roads || []).map(r => `<div class="pt-road open">
+        <span class="c">${esc(r.costs || '')}</span>
+        <span class="t">${esc(r.title)}</span>
+        <span class="d">${esc(r.detail)}</span></div>`).join('')}</div>
+    </div>
+    <div class="actions"><button class="btn primary" data-pt-close>GO ON</button></div>`,
+    { wide: true });
+  if (!m) return null;
+  HOST.sfx('unlock');
+  modalActions(m, {
+    '[data-pt-close]': async () => {
+      dismiss();
+      try { await api.ackFall(); } catch (e) { /* the fact is already saved */ }
+      if (onClose) onClose();
+    },
+  });
+  return m;
 }
 
 function checkHtml(row) {
@@ -1505,6 +1729,9 @@ export async function petTick(signals, host, opts = {}) {
 
 export function renderIntervention(event, host, { linger = 0 } = {}) {
   if (!event || !host) return null;
+  // Two shapes come out of the server and they are told apart by `refused`.
+  // A refusal is not a quieter hint and must not be drawn as one.
+  if (event.refused) return renderRefusal(event, host, { linger });
   ensureStyle();
   clearIntervention();
   HOST.sfx('pet');
@@ -1555,6 +1782,137 @@ export function renderIntervention(event, host, { linger = 0 } = {}) {
   return card;
 }
 
+/* ------------------------------------------------------- the honest no
+ *
+ * The companion in the field is below the depth of this encounter, so it has
+ * nothing — not a thinner hint, NOTHING — and it says so. The card is built
+ * around one distinction, because getting it wrong is the difference between a
+ * system with a shape and a system that feels broken:
+ *
+ *     IT IS THE COMPANION THAT CANNOT HELP. HELP STILL EXISTS.
+ *
+ * So the refusal is drawn in the warning colour, not the sealed colour; it
+ * costs nothing and the card says the number out loud; and the roads that are
+ * open to somebody carrying the wrong animal are listed UNDERNEATH IT, in the
+ * same card, with the three that need no companion at all marked in green. A
+ * player should never have to go and look for the way out.
+ */
+function roadsHtml(route) {
+  const petless = new Set((route && route.petless_roads) || []);
+  return ((route && route.roads) || []).map(r => `<div class="pt-road${
+    petless.has(r.id) ? ' open' : ''}">
+    <span class="c">${esc(r.costs || '')}</span>
+    <span class="t">${esc(r.title)}${petless.has(r.id)
+      ? ' — needs nobody' : ''}</span>
+    <span class="d">${esc(r.detail)}</span></div>`).join('');
+}
+
+function companionsHtml(route) {
+  const rows = (route && route.companions) || [];
+  if (!rows.length) return '';
+  return `<div class="pt-roads">${rows.slice(0, 4).map(c => `<div class="pt-road">
+    <span class="c">${esc(c.tier_label)}</span>
+    <span class="t">${esc(c.name)} — ${esc(c.species)}${c.found
+      ? ' (you have this one; it is sitting at home)' : ''}</span>
+    <span class="d">${esc(c.found ? c.where : c.how)}</span></div>`).join('')}</div>`;
+}
+
+export function renderRefusal(event, host, { linger = 0 } = {}) {
+  if (!event || !host) return null;
+  ensureStyle();
+  clearIntervention();
+  HOST.sfx('select');
+  const route = event.route || {};
+  const card = el('div', 'pt-refuse');
+  card.innerHTML = `
+    <div class="pt-s-meter">
+      <span class="count">NOT A HINT</span>
+      <span>·</span>
+      <span>COSTS ${event.hint_weight || 0} HINTS</span>
+      <span>·</span>
+      <span class="ceil">YOUR RANK IS UNTOUCHED</span>
+      <span class="rule">${esc(event.tier_label || event.tier || '')} reads through
+        ${esc(event.helps_through || '')}. This room is
+        ${esc(event.difficulty || '')}.</span>
+    </div>
+    <div class="pt-r-head">
+      <span data-pt-refuser></span>
+      <span class="grow">
+        <span class="pt-r-who">${esc(String(event.name || '').toUpperCase())}
+          CANNOT READ THIS ONE</span>
+        <div class="pt-r-said">“${esc(event.opening || '')}”</div>
+        <div class="pt-r-not">That is this animal's limit, not the game's. Every
+          road below is open to you right now, and the first three of them have
+          never asked who you brought.</div>
+      </span>
+    </div>
+    <div class="pt-roads">${roadsHtml(route)}</div>
+    ${(route.companions || []).length ? `<div class="section-title">WHO READS
+      ${esc(event.difficulty || 'THIS')}</div>${companionsHtml(route)}` : ''}
+    <div class="actions">
+      <button class="btn small" data-pt-pets>THE ROSTER</button>
+      <button class="btn small" data-pt-noted>UNDERSTOOD</button>
+    </div>`;
+  host.appendChild(card);
+  const art = $('[data-pt-refuser]', card);
+  if (art) inBag(CARD_BAG, () => art.appendChild(petCanvas(event, 2)));
+  const dispose = () => { release(CARD_BAG); card.remove(); standingCard = null; };
+  if (linger > 0) {
+    inBag(CARD_BAG, () => {
+      const id = setTimeout(dispose, linger);
+      keep(() => clearTimeout(id));
+    });
+  }
+  bind('[data-pt-noted]', () => dispose(), card);
+  bind('[data-pt-pets]', () => { dispose(); paintCompanions(); }, card);
+  standingCard = { node: card, dispose };
+  return card;
+}
+
+/* The same refusal, for a SPELL the player deliberately reached for rather
+ * than an intervention that arrived unasked. engine.use_hint answers
+ * `{error: "above_tier", ...}` — deliberately not `{error: "sealed"}`, because
+ * a seal means the capability does not exist here and this means the animal
+ * cannot reach it, and those two need different answers from the player.
+ *
+ * Call it from wherever a hint is cast. `route` is already attached; nothing
+ * else has to be fetched. If you want the roads with no refusal attached —
+ * for a player who simply has nobody — api.hintRoute() returns the same object
+ * and spends nothing to do it.
+ */
+export function showHintRefusal(result, { onClose } = {}) {
+  if (!result || result.error !== 'above_tier') return null;
+  ensureStyle();
+  const route = result.route || {};
+  const m = openModal(`
+    <h2 style="color:var(--orange)">${result.companion_name
+      ? `${esc(String(result.companion_name).toUpperCase())} CANNOT READ THIS ONE`
+      : 'NOBODY IS WALKING WITH YOU'}</h2>
+    <p class="small muted">Rung ${result.level} of this spell tree is read out by
+      the companion in the field. ${result.companion_name
+        ? `${esc(result.companion_name)} covers ${esc(result.helps_through || '')}
+           and this room is ${esc(result.difficulty || '')}.`
+        : ''}
+      Nothing was spent and your rank is untouched.</p>
+    ${result.opening ? `<p class="small" style="font-style:italic;line-height:1.9">
+      “${esc(result.opening)}”</p>` : ''}
+    <p class="small" style="color:var(--green);line-height:1.8">${esc(result.message || '')}</p>
+    <div class="section-title">WHAT IS OPEN</div>
+    <div class="pt-roads">${roadsHtml(route)}</div>
+    ${(route.companions || []).length ? `<div class="section-title">WHO READS
+      ${esc(result.difficulty || 'THIS')}</div>${companionsHtml(route)}` : ''}
+    <div class="actions">
+      <button class="btn small" data-pt-pets>THE ROSTER</button>
+      <button class="btn primary" data-pt-close>UNDERSTOOD</button>
+    </div>`, { wide: true });
+  if (!m) return null;
+  modalActions(m, {
+    '[data-pt-close]': () => { dismiss(); if (onClose) onClose(); },
+    '[data-pt-pets]': () => { dismiss(); paintCompanions(); },
+  });
+  return m;
+}
+
 /* The moment one of them decides to stay. engine.submit() returns these in
  * `found_pets` as full discovery payloads so the meeting can be shown properly
  * rather than logged. */
@@ -1596,11 +1954,13 @@ const SPRITE_BY_PET = {
   jaguar: 'jaguar', python: 'snake', llama: 'llama', penguin: 'penguin',
   velociraptor: 'raptor', axolotl: 'axolotl', tortoise: 'tortoise',
   nautilus: 'nautilus', crow: 'crow',
+  stub: 'boar', barrow: 'boar_great', mimic: 'octopus',
 };
 const COLOUR_BY_PET = {
   jaguar: '#e8a33d', python: '#4fb783', llama: '#d8c8a8', penguin: '#7ec8ff',
   velociraptor: '#c4553f', axolotl: '#f2a0b5', tortoise: '#6b8f3f',
   nautilus: '#a89aff', crow: '#9b96b8',
+  stub: '#b08968', barrow: '#7a5c46', mimic: '#c98f6b',
 };
 
 /* =========================================================================

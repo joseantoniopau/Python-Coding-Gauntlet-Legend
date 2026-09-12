@@ -1627,9 +1627,16 @@ def _syntax_error_line(exc: SyntaxError, line: str) -> str:
 
 BUILTIN_NAMES = frozenset("""
 abs all any bool chr dict divmod enumerate filter float format frozenset int
-isinstance len list map max min ord pow range repr reversed round set setattr
-sorted str sum tuple type zip True False None print
+isinstance iter len list map max min next ord pow range repr reversed round
+set setattr sorted str sum tuple type zip True False None print
 """.split())
+# `next` and `iter` were missing, and their absence was not a judgement — the
+# set was authored before anything in the game used them. Seventeen of the
+# secret arts in gauntlet/sages.py are built on `next(generator, default)`,
+# which is the whole shape of "read the first thing that matches and do not
+# walk the rest", and without this the checker refused a builtin by telling the
+# player it was an unbound name. gauntlet/sages.REQUIRED_BUILTINS is derived
+# from the templates, so if a later art needs another one it will say so.
 
 
 def _bound_in(tree: ast.AST) -> set:
@@ -2000,6 +2007,333 @@ def check_semantics(inc: Incantation, answers: dict, line: str,
 
 
 # ---------------------------------------------------------------------------
+# Complexity: the spine of the damage
+# ---------------------------------------------------------------------------
+# THE ONE RULE THIS SECTION EXISTS TO ENFORCE: damage follows the complexity of
+# the Python the player actually wrote, and nothing else is allowed to be the
+# spine. Not a number attached to the move, not the level of the character, not
+# the rarity of the staff. Harder Python hits harder. That is the only incentive
+# this game is permitted to offer, because it is the only one that points at the
+# thing the player came here to learn.
+#
+# `Incantation.power` survives, demoted to a FLOOR (see POWER_FLOOR_SHARE). It
+# guarantees a correct cast is never worthless; it no longer decides anything.
+#
+# The measure has five ingredients and every one of them is read off the text:
+#
+#   1. CONSTRUCTS   What Python is in the line, by kind. A subscript costs
+#                   more than a name, a comprehension costs more than a loop,
+#                   a lambda costs more than either. COMPLEXITY_POINTS is the
+#                   table and it is the whole opinion of this module.
+#   2. AUTHORSHIP   Who typed it. A hole the scaffold pre-filled is not the
+#                   player's work; the skeleton at tier 0 is a printed line the
+#                   player read. SKELETON_CREDIT is the dial, and it means the
+#                   scaffold fade and the damage curve are THE SAME CURVE: as
+#                   the game stops helping, the same cast starts hitting harder,
+#                   without a single extra rule to explain.
+#   3. NESTING      How deep the player's own expressions go. `counts[k]` is
+#                   one level; `counts[nums[i]]` is two; the second is harder to
+#                   hold in your head and it pays for that.
+#   4. FORM         Comprehension or loop. A comprehension that does the work of
+#                   a loop scores higher, on purpose and not as a matter of
+#                   taste: it is the form that composes, the form an interviewer
+#                   reads faster, and the form a player will not reach for
+#                   unless something pays them to.
+#   5. COMPOSITION  Two different ideas in one expression — a lookup inside an
+#                   arithmetic, a predicate inside a comprehension. Composing is
+#                   the step between knowing idioms and writing Python, so it is
+#                   the one flat bonus in the table.
+#
+# What is deliberately NOT measured: length, cleverness, obscurity, or line
+# count. `counts.get(k, 0) + 1` and `counts.get(k,0)+1` score identically,
+# because they are the same Python and the sandbox already proved it.
+
+# Points per construct. Tuned against one anchor: bestiary.BASE_DAMAGE is 10,
+# which is what every encounter budget in the game was written around. With
+# DAMAGE_UNIT at 11.0 the MEASURED median of an ordinary cast at tier 1, taken
+# over all sixty-six incantations casting their own worked examples, is exactly
+# 10. That is not a coincidence, it is the calibration, and
+# self_check_complexity() fails if it drifts outside 9.0 to 11.5.
+#
+# The range either side of that median is the whole point: 7 at the bottom for
+# `i += 1` with the answer on screen, 29 at the top for a filtered comprehension
+# typed from memory. Four times the damage for writing better Python, in the
+# same game, on the same turn.
+COMPLEXITY_POINTS = {
+    # statements — the shape of the line
+    "assign": 1, "augassign": 2, "branch": 4, "loop": 5, "delete": 2,
+    "assert": 4, "return": 2, "function": 4,
+    # expressions — the substance of it
+    "call": 3, "keyword": 2, "attribute": 2, "subscript": 3, "slice": 4,
+    "arith": 2, "unary": 1, "compare": 3, "chained_compare": 4, "logic": 4,
+    "comprehension": 9, "comp_filter": 5, "nested_comprehension": 7,
+    "generator": 8, "lambda": 6, "conditional": 5, "walrus": 6,
+    "literal_structure": 2, "fstring": 3, "unpack": 4,
+}
+
+# Constructs grouped into IDEAS. Two ideas in one authored expression is what
+# `composed` means; five calls in a row is one idea five times.
+COMPLEXITY_FAMILY = {
+    "call": "invocation", "keyword": "invocation", "attribute": "invocation",
+    "subscript": "indexing", "slice": "indexing",
+    "arith": "arithmetic", "unary": "arithmetic",
+    "compare": "predicate", "chained_compare": "predicate", "logic": "predicate",
+    "comprehension": "comprehension", "comp_filter": "comprehension",
+    "nested_comprehension": "comprehension", "generator": "comprehension",
+    "lambda": "abstraction", "conditional": "abstraction", "walrus": "abstraction",
+    "literal_structure": "construction", "fstring": "construction",
+    "unpack": "construction",
+}
+
+# What producing a hole is worth before anything inside it is counted. A BINDER
+# is the dearest of the cheap ones because the player invented that name rather
+# than reading it off a monster.
+RETRIEVAL_POINTS = {ENEMY: 1, NAME: 1, MEMBER: 2, LITERAL: 1, EXPR: 2, BINDER: 2}
+
+# How much of the printed skeleton counts as the player's work, by tier. At tier
+# 0 the line is on the screen with one blank in it and the player is being shown
+# Python, not writing it. At tier 3 there is nothing on the screen at all.
+SKELETON_CREDIT = (0.30, 0.45, 0.75, 1.00)
+
+DEPTH_POINTS = 2          # per level of authored nesting past the first
+DEPTH_CAP = 4             # beyond four levels it is not depth, it is a mess
+COMPOSITION_POINTS = 6    # two ideas in one expression, once
+
+SCORE_FULL = 40.0         # raw points that read as a score of 100
+WEIGHT_MIN = 0.55         # `i += 1` with the answer already on screen
+WEIGHT_MAX = 3.00         # a composed, filtered comprehension typed from memory
+
+DAMAGE_UNIT = 11.0        # damage per unit of weight — the calibration constant
+POWER_FLOOR_SHARE = 0.45  # Incantation.power's remaining job: a floor, not a spine
+
+
+@dataclass(frozen=True)
+class Complexity:
+    """How much Python one cast actually demanded. Pure measurement."""
+    score: int = 0                # 0-100, for the player and the UI
+    weight: float = WEIGHT_MIN    # the damage multiplier the score becomes
+    raw: float = 0.0              # unnormalised points, for tuning
+    authored: float = 0.0         # points the player typed
+    skeleton: float = 0.0         # points the scaffold printed, after credit
+    holes_filled: int = 0
+    depth: int = 0
+    form: str = "atom"            # atom | call | branch | loop | comprehension
+    composed: bool = False
+    constructs: tuple = ()        # (name, count) pairs, sorted
+    families: tuple = ()          # the authored ideas, sorted
+    notes: tuple = ()             # short player-facing lines, never the answer
+
+    def to_dict(self) -> dict:
+        data = asdict(self)
+        data["constructs"] = [list(pair) for pair in self.constructs]
+        data["families"] = list(self.families)
+        data["notes"] = list(self.notes)
+        return data
+
+
+_NESTING_NODES = (
+    ast.Call, ast.Subscript, ast.Attribute, ast.BinOp, ast.BoolOp, ast.Compare,
+    ast.UnaryOp, ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp,
+    ast.Lambda, ast.IfExp, ast.Slice,
+)
+
+
+def _constructs_of(node) -> list:
+    """The construct names one AST node contributes. Data, not judgement."""
+    names = []
+    if isinstance(node, ast.Assign):
+        names.append("assign")
+    elif isinstance(node, ast.AugAssign):
+        names.append("augassign")
+    elif isinstance(node, (ast.If, ast.IfExp)):
+        names.append("branch" if isinstance(node, ast.If) else "conditional")
+    elif isinstance(node, (ast.For, ast.While, ast.AsyncFor)):
+        names.append("loop")
+    elif isinstance(node, ast.Delete):
+        names.append("delete")
+    elif isinstance(node, ast.Assert):
+        names.append("assert")
+    elif isinstance(node, ast.Return):
+        names.append("return")
+    elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        names.append("function")
+    elif isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp)):
+        names.append("comprehension")
+        names += ["nested_comprehension"] * max(0, len(node.generators) - 1)
+        names += ["comp_filter"] * sum(len(g.ifs) for g in node.generators)
+    elif isinstance(node, ast.GeneratorExp):
+        names.append("generator")
+        names += ["comp_filter"] * sum(len(g.ifs) for g in node.generators)
+    elif isinstance(node, ast.Lambda):
+        names.append("lambda")
+    elif isinstance(node, ast.NamedExpr):
+        names.append("walrus")
+    elif isinstance(node, ast.Call):
+        names.append("call")
+        names += ["keyword"] * len(node.keywords)
+    elif isinstance(node, ast.Attribute):
+        names.append("attribute")
+    elif isinstance(node, ast.Subscript):
+        names.append("subscript")
+    elif isinstance(node, ast.Slice):
+        names.append("slice")
+    elif isinstance(node, ast.BinOp):
+        names.append("arith")
+    elif isinstance(node, ast.UnaryOp):
+        names.append("unary")
+    elif isinstance(node, ast.BoolOp):
+        names.append("logic")
+    elif isinstance(node, ast.Compare):
+        names.append("chained_compare" if len(node.ops) > 1 else "compare")
+    elif isinstance(node, (ast.Tuple, ast.List, ast.Set, ast.Dict)):
+        names.append("literal_structure")
+    elif isinstance(node, ast.JoinedStr):
+        names.append("fstring")
+    elif isinstance(node, ast.Starred):
+        names.append("unpack")
+    return names
+
+
+def _measure_tree(node, depth: int = 0) -> tuple:
+    """(points, counts, deepest). Recursive so nesting can actually be seen."""
+    points = 0.0
+    counts: dict = {}
+    for name in _constructs_of(node):
+        points += COMPLEXITY_POINTS.get(name, 0)
+        counts[name] = counts.get(name, 0) + 1
+    deepest = depth
+    child_depth = depth + (1 if isinstance(node, _NESTING_NODES) else 0)
+    for child in ast.iter_child_nodes(node):
+        sub_points, sub_counts, sub_depth = _measure_tree(child, child_depth)
+        points += sub_points
+        for name, count in sub_counts.items():
+            counts[name] = counts.get(name, 0) + count
+        deepest = max(deepest, sub_depth)
+    return points, counts, deepest
+
+
+def _measure_source(source: str) -> tuple:
+    """Measure a whole statement. A fragment that will not parse scores zero."""
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError, MemoryError, RecursionError):
+        return 0.0, {}, 0
+    return _measure_tree(tree)
+
+
+def _measure_fragment(text: str) -> tuple:
+    """Measure one hole's answer, which is an expression and not a statement."""
+    text = (text or "").strip()
+    if not text:
+        return 0.0, {}, 0
+    try:
+        tree = ast.parse(text, mode="eval")
+    except (SyntaxError, ValueError, MemoryError, RecursionError):
+        return 0.0, {}, 0
+    return _measure_tree(tree)
+
+
+def authored_holes(inc: Incantation, tier: int) -> tuple:
+    """Which holes the player typed at this tier. Mirrors render_template."""
+    if int(tier) <= 0:
+        keep = inc.target_hole
+        return (keep,) if keep else inc.hole_names
+    return inc.hole_names
+
+
+def _form_of(counts: dict) -> str:
+    if counts.get("comprehension") or counts.get("generator"):
+        return "comprehension"
+    if counts.get("loop"):
+        return "loop"
+    if counts.get("branch"):
+        return "branch"
+    if counts.get("call") or counts.get("subscript"):
+        return "call"
+    return "atom"
+
+
+def measure_complexity(inc: Incantation | str, answers: dict | None, *,
+                       line: str = "", tier: int = 1,
+                       strict: bool = True) -> Complexity:
+    """How much Python this cast demanded, read off the cast and the template.
+
+    ``answers`` is the hole -> text mapping; ``line`` is the assembled line.
+    ``strict`` False means the player typed freely and nothing could be matched
+    back onto the template — in which case the whole line is theirs, at full
+    credit, which is the honest reading of what just happened.
+
+    Pure and side-effect free: call it on a line you are only thinking about.
+    """
+    inc = BY_ID[inc] if isinstance(inc, str) else inc
+    tier = max(0, min(MAX_TIER, int(tier)))
+    answers = dict(answers or {})
+    line = line or fill(inc.template, answers)
+    notes: list = []
+
+    if not strict or not answers:
+        # Everything on screen was blank; everything in the line is the player's.
+        points, counts, depth = _measure_source(_executable(inc, line, {}, False))
+        authored, skeleton = points, 0.0
+        families = {COMPLEXITY_FAMILY[name] for name in counts
+                    if name in COMPLEXITY_FAMILY}
+        filled = 0
+        notes.append("typed from memory")
+    else:
+        placeholders = {name: "_h%d" % index
+                        for index, name in enumerate(inc.hole_names)}
+        skeleton_points, counts, _ = _measure_source(
+            _executable(inc, fill(inc.template, placeholders), placeholders, True))
+        skeleton = skeleton_points * SKELETON_CREDIT[tier]
+
+        typed = authored_holes(inc, tier)
+        authored = 0.0
+        depth = 0
+        families = set()
+        filled = 0
+        for hole in inc.holes:
+            if hole.name not in typed:
+                continue
+            text = (answers.get(hole.name) or "").strip()
+            if not text:
+                continue
+            filled += 1
+            authored += RETRIEVAL_POINTS.get(hole.kind, 1)
+            sub_points, sub_counts, sub_depth = _measure_fragment(text)
+            authored += sub_points
+            depth = max(depth, sub_depth)
+            for name, count in sub_counts.items():
+                counts[name] = counts.get(name, 0) + count
+                if name in COMPLEXITY_FAMILY:
+                    families.add(COMPLEXITY_FAMILY[name])
+
+    form = _form_of(counts)
+    composed = len(families) >= 2
+    raw = authored + skeleton
+    if depth > 1:
+        bonus = DEPTH_POINTS * min(DEPTH_CAP, depth - 1)
+        raw += bonus
+        notes.append("nested %d deep" % depth)
+    if composed:
+        raw += COMPOSITION_POINTS
+        notes.append("composed %s and %s" % tuple(sorted(families)[:2]))
+    if form == "comprehension":
+        notes.append("comprehension, not a loop")
+    elif form == "loop":
+        notes.append("a loop; a comprehension would score higher")
+
+    score = int(round(max(0.0, min(100.0, raw * 100.0 / SCORE_FULL))))
+    weight = WEIGHT_MIN + (WEIGHT_MAX - WEIGHT_MIN) * (score / 100.0)
+    return Complexity(
+        score=score, weight=round(weight, 3), raw=round(raw, 2),
+        authored=round(authored, 2), skeleton=round(skeleton, 2),
+        holes_filled=filled, depth=depth, form=form, composed=composed,
+        constructs=tuple(sorted(counts.items())),
+        families=tuple(sorted(families)), notes=tuple(notes),
+    )
+
+
+# ---------------------------------------------------------------------------
 # The cast
 # ---------------------------------------------------------------------------
 
@@ -2024,6 +2358,12 @@ class CastResult:
     cost: int = 0
     skill_deltas: dict = field(default_factory=dict)
     teaching_withheld: bool = False   # True in interview: measured, not taught
+    # What the typing was worth, and why. `complexity` is the whole measurement
+    # so a client can show the player which part of their line paid.
+    complexity: dict = field(default_factory=dict)
+    complexity_score: int = 0
+    weight: float = 0.0
+    scale: float = 1.0                # what the caller multiplied it by
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -2043,10 +2383,25 @@ _LAYER_DEFAULT = {
 
 
 def _damage_for(inc: Incantation, enemy: Enemy | None, tier: int, streak: int,
-                seconds: float, timed: bool) -> tuple:
-    """Damage, and whether it struck a weakness or was shrugged off."""
-    amount = float(inc.power)
-    amount *= 1.0 + 0.25 * max(0, min(MAX_TIER, tier))   # less help, more force
+                seconds: float, timed: bool, complexity: Complexity | None = None,
+                scale: float = 1.0) -> tuple:
+    """Damage, and whether it struck a weakness or was shrugged off.
+
+    The spine is `complexity.weight` — what the player actually wrote. There is
+    no longer a tier term here: the tier already moved the weight, through
+    SKELETON_CREDIT, so applying it twice would pay for the same fact twice.
+
+    `inc.power` is now a floor and only a floor. A correct cast of a simple line
+    is never worthless, but authoring a big number on a move can no longer make
+    that move hit hard. If you want to hit hard, write better Python.
+
+    `scale` is the caller's business — moveset rank falloff, groove, class
+    affinity — folded in multiplicatively and last, so nothing outside this
+    module can invert the incentive: doubling `scale` doubles a bad cast and a
+    good one alike, and the good one was already worth more.
+    """
+    weight = complexity.weight if complexity is not None else WEIGHT_MIN
+    amount = max(DAMAGE_UNIT * weight, float(inc.power) * POWER_FLOOR_SHARE)
     amount *= 1.0 + min(0.5, 0.05 * max(0, streak))      # fluency compounds
     weakness = bool(enemy and enemy.weakness and enemy.weakness == inc.family)
     resisted = bool(enemy and inc.family in (enemy.resists or ()))
@@ -2056,12 +2411,22 @@ def _damage_for(inc: Incantation, enemy: Enemy | None, tier: int, streak: int,
         amount *= 0.5
     if timed and seconds and seconds <= inc.par_seconds:
         amount *= 1.15
+    amount *= max(0.0, float(scale))
     return max(1, int(round(amount))), weakness, resisted
 
 
-def _deltas_for(inc: Incantation, correct: bool, layer: str, tier: int) -> dict:
+def _deltas_for(inc: Incantation, correct: bool, layer: str, tier: int,
+                complexity: Complexity | None = None) -> dict:
+    """What one cast is worth to mastery.
+
+    Mastery follows the same spine damage does, for the same reason: the player
+    who wrote the harder line learned more, and pretending otherwise would mean
+    the number on the health bar and the number on the skill disagree about what
+    just happened. The floor is 2.0, so a plain correct cast always moves it.
+    """
     if correct:
-        deltas = {inc.skill: round(2.0 + 0.6 * tier, 2)}
+        score = complexity.score if complexity is not None else 0
+        deltas = {inc.skill: round(2.0 + 1.8 * (score / 100.0), 2)}
         if inc.skill != "PYTHON":
             deltas["PYTHON"] = 0.6
         if tier >= 2:
@@ -2080,7 +2445,8 @@ def _deltas_for(inc: Incantation, correct: bool, layer: str, tier: int) -> dict:
 
 def cast(incantation_id: str, answers, context: BattleContext, *,
          tier: int = 1, seconds: float = 0.0, streak: int = 0,
-         timed: bool = False, apply: bool = True) -> CastResult:
+         timed: bool = False, apply: bool = True, scale: float = 1.0,
+         target: str = "") -> CastResult:
     """Resolve one typed attack through all three layers, in order.
 
     ``answers`` is either a hole -> text mapping (tiers 0-2) or the whole line as
@@ -2092,6 +2458,11 @@ def cast(incantation_id: str, answers, context: BattleContext, *,
 
     A wrong cast WASTES THE TURN. It returns damage 0, ``turn_wasted`` True and
     a line explaining what went wrong, which is never the answer.
+
+    ``scale`` is a multiplier the caller owns — movesets.py sends rank falloff,
+    groove and class affinity through it. ``target`` names the enemy to strike
+    when the incantation has no ENEMY hole to read one off, which is how an AoE
+    move points the same line at a second monster without inventing a template.
     """
     inc = BY_ID.get(incantation_id)
     if inc is None:
@@ -2139,7 +2510,7 @@ def cast(incantation_id: str, answers, context: BattleContext, *,
         return _fail(inc, "semantics", teaching, line, tier, seconds,
                      teaching_allowed, detail=detail)
 
-    target_name = answers.get(inc.target_hole, "")
+    target_name = answers.get(inc.target_hole, "") or target
     enemy = context.enemy(target_name)
     if enemy is None:
         for hole in inc.holes:
@@ -2150,8 +2521,11 @@ def cast(incantation_id: str, answers, context: BattleContext, *,
         # somewhere, or a correct cast would be indistinguishable from a wasted turn.
         living = context.living()
         enemy = living[0] if living else None
+    measured = measure_complexity(inc, answers, line=line, tier=tier,
+                                  strict=strict)
     damage, weakness, resisted = _damage_for(inc, enemy, tier, streak, seconds,
-                                             timed)
+                                             timed, complexity=measured,
+                                             scale=scale)
     defeated = False
     if enemy is not None and apply:
         enemy.hp = max(0, enemy.hp - damage)
@@ -2164,8 +2538,17 @@ def cast(incantation_id: str, answers, context: BattleContext, *,
         weakness=weakness, resisted=resisted,
         effect=(inc.effect + "_true") if weakness else inc.effect,
         defeated=defeated, turn_wasted=False, tier=tier, seconds=round(seconds, 2),
-        cost=inc.cost, skill_deltas=_deltas_for(inc, True, "", tier),
+        cost=inc.cost,
+        skill_deltas=_deltas_for(inc, True, "", tier, complexity=measured),
         teaching_withheld=not teaching_allowed,
+        # In a measured run the SCORE still comes back — it is what the cast was
+        # worth and the health bar is about to show it anyway — but the notes do
+        # not. "a loop; a comprehension would score higher" is coaching, and
+        # Interview Mode does not coach.
+        complexity=(measured.to_dict() if teaching_allowed
+                    else {**measured.to_dict(), "notes": []}),
+        complexity_score=measured.score,
+        weight=measured.weight, scale=round(float(scale), 3),
     )
 
 
@@ -2213,6 +2596,21 @@ def new_moveset() -> dict:
         "equipped": list(STARTING_MOVES),
         "slots": START_SLOTS,
         "stats": {},
+        # The two numbers that are about CASTING rather than about one line.
+        #
+        # `stats` is per-incantation and cannot answer "twelve casts in a row
+        # that parsed and named real things", because a player who alternates
+        # two lines has a best_streak of one on each and a clean run of twelve.
+        # Nothing else in the save could answer it either, so `record_cast`
+        # folds it in here, next to the evidence it is derived from, rather
+        # than in a counter some call site has to remember to increment.
+        #
+        # `recalled` is casts made at the top scaffold tier — the whole line
+        # typed from memory, no ghost. It is the only evidence in this file
+        # that separates fluency from familiarity.
+        "clean_streak": 0,
+        "best_clean_streak": 0,
+        "recalled_casts": 0,
     }
 
 
@@ -2307,12 +2705,34 @@ def stats_for(moveset: dict, incantation_id: str) -> CastStats:
 
 
 def record_cast(moveset: dict, result: CastResult, *,
-                seconds: float = 0.0, now: float | None = None) -> CastStats:
-    """Fold one resolved cast into the evidence the scaffold is driven by."""
+                seconds: float = 0.0, now: float | None = None,
+                tier: int | None = None) -> CastStats:
+    """Fold one resolved cast into the evidence the scaffold is driven by.
+
+    `tier` is the scaffold tier the line was cast AT. It is optional because
+    the per-incantation statistics below do not need it; it is accepted because
+    the book-wide `recalled_casts` counter does, and asking the caller for a
+    number it already holds is cheaper than recomputing the tier here from the
+    stats this call is in the middle of changing.
+    """
     stats = stats_for(moveset, result.incantation)
     stats.record(correct=result.correct, layer=result.layer,
                  seconds=seconds or result.seconds, now=now)
     moveset.setdefault("stats", {})[result.incantation] = stats.to_dict()
+
+    # The book-wide counters. A clean cast is one that PARSED AND NAMED REAL
+    # THINGS — `result.correct` is exactly that verdict and nothing softer —
+    # and a miss puts the run back to zero, which is what makes the number mean
+    # anything.
+    if result.correct:
+        streak = int(moveset.get("clean_streak", 0)) + 1
+        moveset["clean_streak"] = streak
+        moveset["best_clean_streak"] = max(
+            int(moveset.get("best_clean_streak", 0)), streak)
+        if tier is not None and int(tier) >= len(TIER_NAMES) - 1:
+            moveset["recalled_casts"] = int(moveset.get("recalled_casts", 0)) + 1
+    else:
+        moveset["clean_streak"] = 0
     return stats
 
 
@@ -2415,13 +2835,32 @@ def next_demand(moveset: dict, context: BattleContext, *, chapter: int = 99,
     }
 
 
+def expected_damage(inc: Incantation | str, *, tier: int = 1) -> float:
+    """What a competent, unremarkable cast of this incantation is worth.
+
+    The template filled with its own worked example, at the given tier. It is
+    the honest estimate because it is a real measurement of a real line: no
+    encounter has to guess at a move's strength any more, it can ask.
+    """
+    inc = BY_ID[inc] if isinstance(inc, str) else inc
+    measured = measure_complexity(inc, dict(inc.example), tier=tier)
+    amount, _, _ = _damage_for(inc, None, tier, 0, 0.0, False,
+                               complexity=measured)
+    return float(amount)
+
+
 def battle_length(context: BattleContext, moveset: dict, *, tier: int = 1) -> int:
     """Roughly how many correct casts this field will take. Battles run long on
-    purpose: a two-cast fight teaches nobody anything."""
+    purpose: a two-cast fight teaches nobody anything.
+
+    Measured rather than declared: every candidate move is scored at the tier
+    the player is actually playing at, so a fight against a fluent player is
+    correctly predicted to be shorter. That is not the fight getting easier, it
+    is the player getting better, and the estimate should say so."""
     pool = demandable(moveset, context) or list(equipped(moveset))
     if not pool:
         return 0
-    average = sum(i.power for i in pool) / len(pool) * (1.0 + 0.25 * tier)
+    average = sum(expected_damage(i, tier=tier) for i in pool) / len(pool)
     total_hp = sum(e.hp for e in context.living())
     return max(1, int(round(total_hp / max(1.0, average))))
 
@@ -2448,6 +2887,60 @@ def self_test(inc: Incantation | str, *, explain: bool = False):
     return (result.correct, result) if explain else result.correct
 
 
+def self_check_complexity() -> dict:
+    """The damage curve, measured over the whole catalogue. Real numbers.
+
+    Calibration anchor: `bestiary.BASE_DAMAGE` is 10 and `SIGNATURE_DAMAGE` is
+    16, and every encounter in the game was sized around those two numbers. An
+    ordinary cast at tier 1 has to land near 10 and a weakness strike near 16,
+    or the authored length of every fight in the game is quietly wrong.
+    """
+    problems: list = []
+    rows = []
+    for inc in CATALOGUE:
+        damage = [expected_damage(inc, tier=t) for t in range(MAX_TIER + 1)]
+        scores = [measure_complexity(inc, dict(inc.example), tier=t).score
+                  for t in range(MAX_TIER + 1)]
+        rows.append({"id": inc.id, "power": inc.power, "damage": damage,
+                     "score": scores})
+        if damage != sorted(damage):
+            problems.append("%s: damage falls as the scaffold is removed" % inc.id)
+        if min(damage) < 1:
+            problems.append("%s: a correct cast landed for nothing" % inc.id)
+
+    tier1 = sorted(r["damage"][1] for r in rows)
+    median = tier1[len(tier1) // 2]
+    if not 9.0 <= median <= 11.5:
+        problems.append("the median ordinary cast is %.1f, not near "
+                        "bestiary.BASE_DAMAGE of 10" % median)
+
+    # The thing this whole section exists for: two casts of the SAME move, one
+    # written plainly and one written well. If the second is not worth more,
+    # complexity is not the spine and the file has failed.
+    plain = measure_complexity("mirror", {"out": "out", "expr": "n", "var": "n",
+                                          "seq": "nums"}, tier=3)
+    rich = measure_complexity("mirror", {"out": "out", "seq": "nums", "var": "n",
+                                         "expr": "n * 2 if n % 2 else n"}, tier=3)
+    if rich.score <= plain.score:
+        problems.append("writing better Python in the same move paid no more")
+
+    return {
+        "moves": len(rows),
+        "unit": DAMAGE_UNIT,
+        "weight_range": (WEIGHT_MIN, WEIGHT_MAX),
+        "median_ordinary_cast": median,
+        "tier1_range": (tier1[0], tier1[-1]),
+        "tier3_range": (min(r["damage"][3] for r in rows),
+                        max(r["damage"][3] for r in rows)),
+        "same_move_plain": {"score": plain.score, "weight": plain.weight},
+        "same_move_written_well": {"score": rich.score, "weight": rich.weight,
+                                   "notes": list(rich.notes)},
+        "gain_for_writing_it_better": round(rich.weight / plain.weight, 3),
+        "rows": rows,
+        "problems": problems,
+    }
+
+
 def self_test_all() -> dict:
     """Every incantation, every layer. Used by the acceptance tests."""
     failures = {}
@@ -2472,7 +2965,11 @@ def self_test_all() -> dict:
 #      Render each demand with render_template(inc, tier_for_move(moveset, id,
 #      state["skills"]), context=context) and send the ghost text to the client.
 #   3. On a submitted cast: cast(id, answers, context, tier=..., seconds=...,
-#      streak=state["player"]["combo"], timed=(mode == MODE_INTERVIEW)).
+#      streak=state["player"]["combo"], timed=(mode == MODE_INTERVIEW),
+#      scale=<whatever gauntlet/movesets.py's scale_for said, or 1.0>).
+#      result.damage is already complexity-scaled; result.complexity is the
+#      whole measurement, for a client that wants to show the player WHICH part
+#      of the line they just wrote is what paid.
 #      Apply result.damage to the named enemy, fold result.skill_deltas into
 #      state["skills"][name]["mastery"] the way _apply_outcome already does for
 #      a graded submission, and call record_cast(moveset, result) so the
@@ -2486,3 +2983,21 @@ def self_test_all() -> dict:
 # The SRS hook is stats: CastStats.last_correct_at and median_seconds are the
 # per-idiom evidence srs.py needs to schedule a line for re-demand days later.
 # Repetition inside a fight builds fluency; only the schedule builds retention.
+#
+# WHAT CHANGED WHEN COMPLEXITY BECAME THE SPINE
+# ----------------------------------------------
+# `_damage_for` no longer reads `Incantation.power` as a strength. It reads
+# `measure_complexity`, which reads the line the player typed. `power` survives
+# as a floor — POWER_FLOOR_SHARE of it — so a correct cast of a simple idiom is
+# never worth nothing, and that is the only job it has left. Authoring a bigger
+# number on a move can no longer make that move hit harder. The only way to hit
+# harder is to write better Python, which is the whole design and now the whole
+# arithmetic. `self_check_complexity()` measures the curve over all sixty-six
+# incantations and fails if the median ordinary cast drifts away from
+# bestiary.BASE_DAMAGE.
+#
+# The old `1 + 0.25 * tier` term is gone rather than retained, because the tier
+# now enters through SKELETON_CREDIT: at tier 0 the line is printed on the
+# screen and the player gets 30% of its credit, at tier 3 there is nothing on
+# the screen and they get all of it. The scaffold fade and the damage curve are
+# the same curve, and there is one rule to explain instead of two.

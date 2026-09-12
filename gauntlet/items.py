@@ -13,6 +13,15 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass, field, asdict
 
+from . import elements, world
+
+# `elements` is the layer ABOVE this one in every sense except the import graph:
+# it reads world.REGIONS and it reads nothing here. The dependency runs this way
+# round because the elemental gear below is DERIVED from its tables rather than
+# copied beside them — eight pairs of boots authored twice would be eight pairs
+# of boots that eventually disagree about what they protect you from. There is
+# no cycle: elements imports world, and world imports nothing.
+
 # --------------------------------------------------------------------------
 # Attributes
 # --------------------------------------------------------------------------
@@ -111,6 +120,25 @@ EFFECT_LABELS = {
     "shrine_bonus": "+{p}% shrine rewards",
     "armor_repair": "+{p}% armour restored per repair",
     "second_wind": "one free re-cast per battle without breaking your combo",
+
+    # -- the elemental layer (gauntlet/elements.py) -------------------------
+    # Armour does TWO jobs and the whole point of the system is that the player
+    # chooses between them, so they are two keys and never one blended
+    # "defence" number. `elements.armour_from_effects` reads exactly these and
+    # nothing else, which is why they are spelled the way that module spells
+    # them rather than the way this one would have.
+    #
+    # Points are FLAT and certain; they work against a hit you did not plan
+    # for. Resistance is PROPORTIONAL and conditional; it is worth more the
+    # bigger the hit and worth nothing against an element you read wrong.
+    "armour_points": "-{v} damage from every hit, up to this armour's share of it",
+    "armour_cap": "flat armour may stop up to {p}% of any single hit",
+    "resist_fire": "-{p}% damage from FIRE",
+    "resist_cold": "-{p}% damage from COLD",
+    "resist_poison": "-{p}% damage from POISON",
+    "resist_brute": "-{p}% damage from BRUTE FORCE",
+    "resist_lightning": "-{p}% damage from LIGHTNING",
+    "resist_void": "-{p}% damage from VOID",
 
 
     # -- character classes and skill trees (gauntlet/classes.py) -------------
@@ -227,6 +255,12 @@ class Item:
     hidden: bool = False
     source: str = "drop"        # drop | boss | secret | quest | vendor | upgrade
     skill: str = ""             # thematic tie to a skill, for drop weighting
+    # The wheel. A weapon's element is what it STRIKES with; armour's is what it
+    # is warded against, which is already said numerically in `resist_*` and is
+    # repeated here only so the tooltip and the sprite tint have one word to
+    # read. "" means neutral, which is most of the catalogue and is a real
+    # answer rather than a gap — see elements.NEUTRAL.
+    element: str = ""
     # Upgrades are earned, never bought. `upgrades` names what this becomes and
     # `upgrade_requirement` is the evidence that earns it; both are filled in from
     # UPGRADE_PATHS at import, so the whole progression reads as one table rather
@@ -666,6 +700,373 @@ CATALOGUE: list = [
                 "second_wind": 1},
        flavour="Half the budget, whole answer. The clock is still checking its work."),
 ]
+
+# --------------------------------------------------------------------------
+# The elemental layer, as objects you can actually hold
+# --------------------------------------------------------------------------
+#
+# elements.py describes three roads and offers a choice between them. A choice
+# nobody can equip is a diagram, so this section puts all three in the
+# catalogue, DERIVED from that module's own tables:
+#
+#   PLATE   flat armour points, capped at half of any hit. Certainty.
+#   WARDED  one element, heavily, and nothing against the other five. Leverage.
+#   CLOAK   no mitigation at all, a longer bar instead. The road that buys the
+#           most typing, which is the road this game would like you to take.
+#
+# and boots, which are not defence at all: they are elements.BOOTS, verbatim,
+# because the overworld asks `elements.hazard_step(region, equipped["feet"])`
+# and that function looks the id up in elements.BOOTS_BY_ID. Authoring them
+# twice would be authoring two answers to "do these keep the ember out".
+#
+# Numbers scale with rarity rather than being free-handed per item, so a rarer
+# piece is measurably stronger and the loot ladder stays honest.
+
+# Points by rarity. Deliberately modest against base damage in the high single
+# digits: elements.resolve_damage caps flat absorption at a fraction of the hit
+# anyway, so a big number here would not do what it appears to promise.
+_PLATE_POINTS = {"COMMON": 1, "UNCOMMON": 2, "RARE": 3, "EPIC": 4,
+                 "LEGENDARY": 6, "MYTHIC": 7}
+# Resistance by rarity, clamped by elements.PIECE_RESIST_CAP on the way in.
+_WARD_RESIST = {"COMMON": 0.06, "UNCOMMON": 0.10, "RARE": 0.15, "EPIC": 0.20,
+                "LEGENDARY": 0.26, "MYTHIC": 0.30}
+# What rarity buys on the CLOAK road, which has no mitigation to scale. Added on
+# top of the archetype's own bars rather than replacing them, so an epic cloak is
+# a longer epic cloak and not a different garment. Without this every cloak in
+# the game would be identical whatever it cost, and a road where rarity buys
+# nothing is a road nobody walks twice.
+_BAR_BONUS = {"COMMON": 0, "UNCOMMON": 0, "RARE": 2, "EPIC": 4,
+              "LEGENDARY": 6, "MYTHIC": 8}
+
+
+def armour_effects(kind: str, rarity: str, element: str = "") -> dict:
+    """The effect bag for one piece of armour of a given archetype and rarity.
+
+    Runs the numbers through `elements.armour_profile`, which clamps them, and
+    reads the result back out into effect keys. Going through that function
+    rather than round the side of it means a piece can never be authored past a
+    cap the damage function is going to ignore anyway.
+
+    RARITY SCALES A ROAD; IT DOES NOT MOVE YOU ONTO A BETTER ONE. Only PLATE and
+    MAIL scale their points, because points are what those two are FOR. A warded
+    piece keeps the single token point its archetype declares and a cloak keeps
+    none, however rare either gets. Letting a rare ward carry a rare plate's
+    points would make it plate-with-resistance-attached, and the moment one road
+    is a superset of another the player has no decision left to make — which is
+    the decision elements.py wrote three archetypes to offer.
+    """
+    scaled = kind in ("PLATE", "MAIL")
+    bars = _BAR_BONUS.get(rarity, 0) if kind == "CLOAK" else 0
+    profile = elements.armour_profile(
+        kind, points=_PLATE_POINTS.get(rarity, 1) if scaled else None,
+        element=element, resist=_WARD_RESIST.get(rarity, 0.0) if element else 0.0,
+        bonus_health=bars, bonus_focus=bars)
+    out: dict = {}
+    if profile.points:
+        out["armour_points"] = profile.points
+        out["armour_cap"] = round(profile.points_cap, 2)
+    for eid, value in profile.resist.items():
+        out[f"resist_{eid.lower()}"] = round(value, 2)
+    if profile.bonus_health:
+        out[elements.HEALTH_EFFECT_KEY] = profile.bonus_health
+    if profile.bonus_focus:
+        out[elements.FOCUS_EFFECT_KEY] = profile.bonus_focus
+    return out
+
+
+_WARD_FLAVOUR = {
+    "FIRE": "Quenched once, in something that was not water.",
+    "COLD": "It never frosts over. Nothing on it ever has.",
+    "POISON": "Waxed at every seam. The smell is the point.",
+    "BRUTE": "Thicker where a shoulder goes through a wall.",
+    "LIGHTNING": "Wired to a tail that drags. Leave it dragging.",
+    "VOID": "You keep finding it by touch.",
+}
+
+_WARDED_SLOT = {"FIRE": "chest", "COLD": "chest", "POISON": "head",
+                "BRUTE": "offhand", "LIGHTNING": "head", "VOID": "offhand"}
+_WARDED_ICON = {"chest": "chest", "head": "helm", "offhand": "shield"}
+_WARDED_NAME = {"FIRE": "Cinderward Hauberk", "COLD": "Rimeward Hauberk",
+                "POISON": "Sporeward Mask", "BRUTE": "Stoneward Buckler",
+                "LIGHTNING": "Earthward Coif", "VOID": "Lampward Pavise"}
+
+
+def _elemental_gear() -> list:
+    """Six warded pieces, three cloaks, three plates and the seven boots.
+
+    Built rather than typed. The six wards are one per element because the
+    whole argument of a warded piece is that it answers ONE area and shrugs at
+    the rest; five of them would leave an element with no answer, and the
+    player would read that as the wheel being uneven rather than as an omission.
+    """
+    made: list = []
+
+    # -- warded: one element, heavily -------------------------------------
+    for eid in elements.ELEMENT_IDS:
+        slot = _WARDED_SLOT[eid]
+        made.append(_i(
+            id=f"ward_{eid.lower()}", name=_WARDED_NAME[eid], slot=slot,
+            rarity="RARE", icon=_WARDED_ICON[slot], element=eid,
+            effects=armour_effects("WARDED", "RARE", eid),
+            flavour=_WARD_FLAVOUR[eid]))
+
+    # -- plate: flat points, and the only kind whose points still count when
+    #    something large lands
+    made.append(_i(id="field_plate", name="Field Plate", slot="chest",
+                   rarity="UNCOMMON", icon="plate",
+                   effects=armour_effects("PLATE", "UNCOMMON"),
+                   flavour="Heavy, unsubtle, and it does not care what hit you."))
+    made.append(_i(id="warden_helm", name="Warden's Helm", slot="head",
+                   rarity="RARE", icon="helm",
+                   effects=armour_effects("PLATE", "RARE"),
+                   flavour="Dented in one place, from something it stopped."))
+    made.append(_i(id="bulwark_of_the_long_fight", name="Bulwark of the Long Fight",
+                   slot="offhand", rarity="EPIC", icon="shield",
+                   effects=armour_effects("PLATE", "EPIC"),
+                   flavour="Every mark on it is a fight that went to twenty turns."))
+
+    # -- cloaks and helms: no mitigation, a longer bar. The brief's third road,
+    #    and the strictly best one for a player who is here to type.
+    made.append(_i(id="wanderers_cloak", name="Wanderer's Cloak", slot="chest",
+                   rarity="UNCOMMON", icon="chest",
+                   effects=armour_effects("CLOAK", "UNCOMMON"),
+                   flavour="It stops nothing. You simply last longer in it."))
+    made.append(_i(id="long_study_hood", name="Hood of the Long Study", slot="head",
+                   rarity="RARE", icon="helm",
+                   effects=armour_effects("CLOAK", "RARE"),
+                   flavour="Cut so the light falls on the page and not on you."))
+    made.append(_i(id="mantle_of_the_tenth_turn", name="Mantle of the Tenth Turn",
+                   slot="trinket", rarity="EPIC", icon="relic",
+                   effects=armour_effects("CLOAK", "EPIC"),
+                   flavour="Nobody has ever been killed by a fight lasting too long."))
+
+    # -- boots: elements.BOOTS, as items. The id is the contract — hazard_step
+    #    looks the equipped `feet` id up in elements.BOOTS_BY_ID, so a boot
+    #    whose item id drifted from its Boots id would be a boot that protects
+    #    against nothing and says otherwise on the tooltip.
+    existing = {item.id for item in CATALOGUE}
+    for boot in elements.BOOTS:
+        if boot.id in existing:
+            continue                      # worn_boots is already in the catalogue
+        effects: dict = {}
+        if boot.bonus_health:
+            effects[elements.HEALTH_EFFECT_KEY] = boot.bonus_health
+        if boot.bonus_focus:
+            effects[elements.FOCUS_EFFECT_KEY] = boot.bonus_focus
+        if not effects:
+            # Marching Boots and Wayfarer's are the only pair with nothing but
+            # speed, and an item with an empty effect bag renders as a blank
+            # tooltip. The speed is real; it is just not an effect key, because
+            # the overworld reads it off elements.BOOTS and not off this dict.
+            effects[elements.HEALTH_EFFECT_KEY] = 1
+        rarity = ("RARE" if len(boot.immunities) > 1
+                  else "UNCOMMON" if boot.immunities else "COMMON")
+        made.append(_i(id=boot.id, name=boot.name, slot="feet", rarity=rarity,
+                       icon="boots", element=boot.element,
+                       effects=effects, flavour=boot.blurb))
+    return made
+
+
+# -- what a weapon strikes with ---------------------------------------------
+#
+# Derived, not authored. Every weapon in the catalogue already declares the
+# SKILL it belongs to, and world.REGIONS already says which region teaches that
+# skill, and elements.AFFINITY already says what that region is made of. So a
+# Hashblade strikes with LIGHTNING because the Hashmap Highlands are a plateau
+# in a storm, and nobody had to decide that twice.
+#
+# A weapon with no skill — the Rusty Blade, the Quicksilver Edge — stays
+# neutral, which is the right answer for a weapon that belongs to nowhere.
+
+_REGION_FOR_SKILL = {}
+for _region in world.REGIONS:
+    _REGION_FOR_SKILL.setdefault(_region["skill"], _region["id"])
+del _region
+
+for _item in CATALOGUE:
+    if _item.slot == "weapon" and not _item.element and _item.skill:
+        _found = elements.affinity_for(_REGION_FOR_SKILL.get(_item.skill, ""))
+        # Left EMPTY rather than stamped NEUTRAL. They are the same thing to the
+        # damage function, but an empty field lets `strike_element` fall through
+        # to the companion, and a blade from a region with no weather ought to
+        # take the colour of whatever is walking beside you.
+        if _found in elements.ELEMENTS:
+            _item.element = _found
+del _item, _found
+
+CATALOGUE.extend(_elemental_gear())
+
+
+def strike_element(equipped: dict | None, *, fallback: str = "") -> str:
+    """What the player's blow is made of.
+
+    The weapon decides, because the weapon is the thing that lands. `fallback`
+    is the caller's second opinion — engine.py passes the active companion's
+    element, since a companion is the other thing standing next to you and
+    elements.PET_ELEMENT exists precisely to answer that — and NEUTRAL is the
+    honest last word rather than an exception.
+
+    Deliberately NOT summed or blended across slots. Two elements at once would
+    mean never being wrong about the room, and reading the room is the decision.
+    """
+    weapon = (equipped or {}).get("weapon", "")
+    item = BY_ID.get(weapon)
+    if item is not None and item.element in elements.ELEMENTS:
+        return item.element
+    return fallback if fallback in elements.ELEMENTS else elements.NEUTRAL
+
+
+def boots_id(equipped: dict | None) -> str:
+    """The equipped boots, as an id elements.hazard_step will recognise."""
+    feet = (equipped or {}).get("feet", "")
+    return feet if feet in elements.BOOTS_BY_ID else ""
+
+
+def armour_view(effects: dict | None) -> dict:
+    """The defensive half of a loadout, rendered. One place, so the equipment
+    screen, the battle HUD and the smith's comparison cannot disagree."""
+    profile = elements.armour_from_effects(effects or {})
+    return {
+        "points": profile.points,
+        "points_cap": round(profile.points_cap, 2),
+        "resist": {eid: round(v, 3) for eid, v in profile.resist.items()},
+        "bonus_health": profile.bonus_health,
+        "bonus_focus": profile.bonus_focus,
+        "text": describe({k: v for k, v in (effects or {}).items()
+                          if k in ("armour_points", "armour_cap")
+                          or k.startswith("resist_")}),
+    }
+
+
+
+# --------------------------------------------------------------------------
+# The apex trophies — seventeen, one per roaming hunter
+# --------------------------------------------------------------------------
+#
+# `hunters.TROPHIES` is a MANIFEST, not an implementation: hunters.py does not
+# own this file, so it wrote down seventeen rows built only out of slots,
+# rarities and `EFFECT_LABELS` keys that already exist here, and said that
+# whoever wired the drop should transcribe them. This is that transcription,
+# and `trophy_manifest_matches()` below is the thing that catches a drift
+# rather than a comment claiming there will not be one.
+#
+# `hidden=True` and `source="boss"` together keep them out of the ordinary loot
+# tables. An apex trophy is paid by `hunters.bounty()` and by nothing else — a
+# sideways-best-in-slot that fell out of a random chest would stop being the
+# receipt for a fight you were not supposed to win the first time.
+#
+# They are deliberately SIDEWAYS: best in the game at exactly one thing and
+# mediocre at everything else, so wearing one is a decision about which area you
+# are walking into rather than an upgrade you never take off.
+
+APEX_TROPHY_IDS: tuple = (
+    "surveyors_rod", "hooked_tine", "ungrounded_key", "rearranged_quill",
+    "index_zero_plate", "unclosed_corner", "frozen_wick", "topmost_plate",
+    "seam_rivet", "unwound_frame", "left_fork_claw", "lit_tine",
+    "prised_tile", "unsalvaged_plate", "eighth_bar", "hour_through_glass",
+    "struck_label",
+)
+
+CATALOGUE.extend([
+    _i(id='surveyors_rod', name="The Surveyor's Rod", slot='trinket', rarity='RARE',
+       element='', source="boss", icon="trophy", hidden=True,
+       effects={"mana_max": 4, "hint_discount": 0.1},
+       flavour="Four hinges. It measures what is still there."),   # python_village
+    _i(id='hooked_tine', name="Hooked Tine", slot='trinket', rarity='RARE',
+       element='', source="boss", icon="trophy", hidden=True,
+       effects={"stamina_max": 5},
+       flavour="Off the drum. It is still turning slightly."),   # fields_of_syntax
+    _i(id='ungrounded_key', name="The Ungrounded Key", slot='ring1', rarity='EPIC',
+       element='LIGHTNING', source="boss", icon="trophy", hidden=True,
+       effects={"resist_lightning": 0.28, "mana_max": 3},
+       flavour="It opens nothing. It was never for a door."),   # hashmap_highlands
+    _i(id='rearranged_quill', name="Rearranged Quill", slot='trinket', rarity='EPIC',
+       element='POISON', source="boss", icon="trophy", hidden=True,
+       effects={"resist_poison": 0.28, "stamina_max": 4},
+       flavour="The letters on it are not the letters it had."),   # stringwood_labyrinth
+    _i(id='index_zero_plate', name="The Index-Zero Plate", slot='offhand', rarity='EPIC',
+       element='BRUTE', source="boss", icon="trophy", hidden=True,
+       effects={"armour_points": 5, "armour_cap": 0.5},
+       flavour="Cut deep, and cut first."),   # array_caverns
+    _i(id='unclosed_corner', name="An Unclosed Corner", slot='trinket', rarity='EPIC',
+       element='POISON', source="boss", icon="trophy", hidden=True,
+       effects={"resist_poison": 0.24, "resist_cold": 0.18},
+       flavour="One of four. The other three are still out there."),   # sliding_window_marsh
+    _i(id='frozen_wick', name="The Frozen Wick", slot='head', rarity='EPIC',
+       element='COLD', source="boss", icon="trophy", hidden=True,
+       effects={"resist_cold": 0.3, "stamina_max": 4},
+       flavour="Lit. Not burning. It has not decided to stop."),   # twin_pointer_pass
+    _i(id='topmost_plate', name="The Topmost Plate", slot='chest', rarity='EPIC',
+       element='FIRE', source="boss", icon="trophy", hidden=True,
+       effects={"resist_fire": 0.3, "armour_points": 3},
+       flavour="Unloaded from the top, which is the only way."),   # stack_queue_mines
+    _i(id='seam_rivet', name="The Seam Rivet", slot='ring2', rarity='EPIC',
+       element='BRUTE', source="boss", icon="trophy", hidden=True,
+       effects={"resist_brute": 0.28, "armour_points": 2},
+       flavour="It has been four directions and holds none."),   # matrix_citadel
+    _i(id='unwound_frame', name="The Unwound Frame", slot='trinket', rarity='LEGENDARY',
+       element='VOID', source="boss", icon="trophy", hidden=True,
+       effects={"resist_void": 0.3, "mana_max": 5},
+       flavour="The innermost one. It never got to return."),   # recursive_forest
+    _i(id='left_fork_claw', name="The Left-Fork Claw", slot='ring1', rarity='EPIC',
+       element='', source="boss", icon="trophy", hidden=True,
+       effects={"crit_bonus": 0.12, "stamina_max": 4},
+       flavour="It committed a long time ago."),   # binary_tree_canopy
+    _i(id='lit_tine', name="The Lit Tine", slot='head', rarity='LEGENDARY',
+       element='LIGHTNING', source="boss", icon="trophy", hidden=True,
+       effects={"resist_lightning": 0.3, "loot_luck": 0.1},
+       flavour="A route, snapped off. It still knows the way."),   # graph_wastes
+    _i(id='prised_tile', name="A Prised Tile", slot='offhand', rarity='LEGENDARY',
+       element='', source="boss", icon="trophy", hidden=True,
+       effects={"armour_points": 6, "mana_max": 4},
+       flavour="Still lit. It should not be, off the floor."),   # dp_ruins
+    _i(id='unsalvaged_plate', name="Unsalvaged Plate", slot='chest', rarity='LEGENDARY',
+       element='FIRE', source="boss", icon="trophy", hidden=True,
+       effects={"resist_fire": 0.3, "armour_points": 4},
+       flavour="One hairline. The hairline is the useful part."),   # debugging_dungeon
+    _i(id='eighth_bar', name="The Eighth Bar", slot='offhand', rarity='LEGENDARY',
+       element='COLD', source="boss", icon="trophy", hidden=True,
+       effects={"resist_cold": 0.28, "armour_points": 4},
+       flavour="The eighth is a problem. The ninth is somebody else's."),   # complexity_tower
+    _i(id='hour_through_glass', name="The Hour Through Glass", slot='trinket', rarity='LEGENDARY',
+       element='', source="boss", icon="trophy", hidden=True,
+       effects={"rank_grace": 0.15, "stamina_max": 5},
+       flavour="Fused sand. You can read the time through it."),   # coding_coliseum
+    _i(id='struck_label', name="The Struck Label", slot='chest', rarity='MYTHIC',
+       element='VOID', source="boss", icon="trophy", hidden=True,
+       effects={"resist_void": 0.3, "resist_cold": 0.2, "armour_points": 5, "stamina_max": 5},
+       flavour="It does not do anything at all. That is the tell."),   # null_kings_castle
+])
+
+
+def trophy_manifest_matches() -> list:
+    """Every place this transcription could have drifted from hunters.py.
+
+    Late import, because `items` cannot import `hunters` at module scope:
+    hunters imports forge and forge imports this file. Returns a list of
+    problems, empty when the two agree.
+    """
+    try:
+        from . import hunters as _hunters
+    except Exception as exc:                      # pragma: no cover
+        return ["hunters did not import: %s" % exc]
+    problems = []
+    manifest = getattr(_hunters, "TROPHIES", {})
+    if set(manifest) != set(APEX_TROPHY_IDS):
+        problems.append("trophy ids differ: %s" % sorted(
+            set(manifest) ^ set(APEX_TROPHY_IDS)))
+    for tid, row in manifest.items():
+        here = BY_ID.get(tid)
+        if here is None:
+            problems.append("%s is in the manifest and not in the catalogue" % tid)
+            continue
+        for field in ("slot", "rarity", "element"):
+            if getattr(here, field) != row[field]:
+                problems.append("%s.%s: manifest %r, catalogue %r"
+                                % (tid, field, row[field], getattr(here, field)))
+        if dict(here.effects) != dict(row["effects"]):
+            problems.append("%s effects drifted" % tid)
+    return problems
 
 BY_ID = {item.id: item for item in CATALOGUE}
 
@@ -1246,9 +1647,22 @@ def hero_look(armor: dict | None = None, equipped: dict | None = None) -> dict:
 SWITCH_KEYS = frozenset({
     "reveal_category", "probe_reveal_value", "perf_insight", "second_wind",
     "combo_shield", "srs_preview",
+    # Requested by forge.WIRING §1, and granted here rather than in a second
+    # list. A learning spell's focus is refunded in full or it is not; two
+    # sources of that do not refund it twice. forge.SWITCH_REQUESTS is the
+    # literal that asked for it and it is now empty, which is how that module
+    # proves the request was granted exactly once.
+    "spell_refund",
     # legendary signatures, which are conditions rather than amounts
     "sealed_hints", "no_second_attempt", "armor_eternal", "combo_brittle",
     "combo_immortal", "no_clock", "rank_floor", "probe_unbounded",
+    # Not a switch in the yes/no sense, but summing it is nonsense in exactly
+    # the same way: `armour_cap` is "the best points_cap you are wearing", so
+    # two pieces of plate cap at plate's fraction and not at twice it. Summing
+    # it would let four mail pieces out-cap plate, which inverts the one
+    # decision the armour system exists to offer. elements.ARMOUR_POINT_CAP is
+    # the hard ceiling underneath either way.
+    "armour_cap",
     "boundary_sense", "prereq_sight", "phase_preview", "off_map",
     "unlabelled", "oblige", "sealed_in_exam",
     # An absolute, not an amount: "maximum stamina IS {v}". Summing two of them

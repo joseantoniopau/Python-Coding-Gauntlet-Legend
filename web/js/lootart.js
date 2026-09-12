@@ -42,6 +42,11 @@
  * Wiring is documented at the bottom of the file under INTEGRATION.
  */
 import { ramp, mix, rng, hash, applyRim, gridSprite, composeSprite, drawGroundShadow, scaleSprite, heroFrame, HERO_W, HERO_H, HERO_WEAPON_KEYS } from './sprites.js';
+/* The forge section below builds its metals out of the shared five-step ramps
+ * rather than out of loose hex, which is the only way a Quarterturn Bronze
+ * blade and a bronze pauldron end up the same bronze. palette.js is a leaf
+ * module — it imports nothing — so this costs no cycle. */
+import { RAMPS, SHADE, OUTLINE, rampFrom as deriveRamp, rimFor } from './palette.js';
 
 export const LOOT_ART_VERSION = '1.1.0';
 
@@ -321,11 +326,11 @@ function colourDist(a, b) {
   return (2 + rm / 256) * dr * dr + 4 * dg * dg + (2 + (255 - rm) / 256) * db * db;
 }
 
-function fitPalette(pal) {
+function fitPalette(pal, budget = BUDGET) {
   const glyphs = Object.keys(pal);
   const uniq = [];
   for (const g of glyphs) if (pal[g] && !uniq.includes(pal[g])) uniq.push(pal[g]);
-  if (uniq.length <= BUDGET) return pal;
+  if (uniq.length <= budget) return pal;
   const pinnedHex = new Set(PINNED.map(g => pal[g]).filter(Boolean));
   /* How many glyphs point at each colour, so a merge keeps the colour that is
    * carrying more of the sprite and retires the one that is carrying less. */
@@ -333,7 +338,7 @@ function fitPalette(pal) {
   for (const g of glyphs) if (pal[g]) weight.set(pal[g], (weight.get(pal[g]) || 0) + 1);
   const live = uniq.slice();
   const remap = new Map();
-  while (live.length > BUDGET) {
+  while (live.length > budget) {
     let best = Infinity, bi = -1, bj = -1;
     for (let i = 0; i < live.length; i++) {
       for (let j = i + 1; j < live.length; j++) {
@@ -406,6 +411,7 @@ function buildRarityPalette(material, rarity) {
     e: style.voidHex,
     x: style.energyHex,
     X: lighten(style.energyHex, 0.28),
+    i: '#8fd07a',
     p: style.gemHex || cloth.base,
   };
 }
@@ -2101,9 +2107,16 @@ export function applyRarity(grid, rarity, opts = {}) {
    * rim before ornament leaves every fitting unlit. */
   let g = silhouette(grid, opts.shapeKey || '', style);
   g = ornament(g, shape, style, seed, frame);
+  /* The motif and aura passes gauntlet/legendaries.py asked for, in the two
+   * places its brief specifies: the mark is cut in before the rim lights it,
+   * the aura is drawn outside the silhouette after the light has moved. Both
+   * are opt-in and default off, so every existing item renders byte-identically
+   * to how it did before they existed. */
+  if (opts.motif) g = applyMotif(g, opts.motif, { tier: opts.tier || style.index + 1, seed, frame });
   g = applyRim(g);
   g = corrupt(g, style, seed);
   g = animate(g, style, frame, seed);
+  if (opts.aura) g = applyAura(g, opts.aura, { tier: opts.tier || style.index + 1, seed, frame });
   return g;
 }
 
@@ -2344,6 +2357,13 @@ export function frameFor(item, opts = {}) {
  * effect_text. Nothing else is required and nothing else is read.
  */
 export function drawItem(ctx, item, x, y, opts = {}) {
+  /* A forged weapon is a different object drawn from a different table, and
+   * every call site in the game already goes through here. Routing it at the
+   * top means the smith's work shows up in the inventory, the loot card and
+   * the battle scene without any of them learning a second call. Detection is
+   * strict — see forgeOf() — so nothing in the existing catalogue is caught. */
+  const forged = forgeOf(item);
+  if (forged) return drawForgeWeapon(ctx, forged, x, y, opts);
   const scale = Math.max(1, opts.scale || 1);
   const frame = frameFor(item, opts);
   const img = itemSprite(item, frame);
@@ -3180,6 +3200,8 @@ function compactStyle(style) {
  * (heroX + ox * scale, heroY + oy * scale). */
 export function heroWeaponOverlay(item, opts = {}) {
   if (!item) return null;
+  const forged = forgeOf(item);
+  if (forged) return forgeWeaponOverlay(forged, opts);
   const facing = HERO_WEAPON_ANCHOR[opts.facing] ? opts.facing : 'down';
   const frame = frameFor(item, opts);
   const key = heroWeaponKeyFor(item);
@@ -3424,7 +3446,13 @@ function equipKey(gear, opts, facing, frame, pose) {
   let k = `${facing}:${frame}:${pose}`;
   for (const slot of ['weapon', 'offhand', 'head', 'chest', 'hands', 'feet', 'back', 'cloak']) {
     const it = g[slot];
-    k += `|${it ? `${it.id || it.name || '?'}:${normaliseRarity(it.rarity)}` : ''}`;
+    if (!it) { k += '|'; continue; }
+    /* The forge state has to be in the key. It was not, and the result was the
+     * worst kind of bug this module can have: the smith took the metal, the
+     * rung went up, the inventory icon changed — and the blade in the player's
+     * hand was served from cache and never moved. */
+    const f = forgeOf(it);
+    k += `|${it.id || it.name || '?'}:${normaliseRarity(it.rarity)}${f ? `:${f.key}` : ''}`;
   }
   const o = opts || {};
   k += `|${o.cloak || ''}${o.tunic || ''}${o.skin || ''}${o.hair || ''}${o.boot || ''}${o.trim || ''}${o.metal || ''}`;
@@ -3435,6 +3463,22 @@ export function equippedHeroFrame(facing = 'down', frame = 0, gear = null, opts 
   const dir = ['down', 'up', 'left', 'right'].includes(facing) ? facing : 'down';
   const f = ((frame % 4) + 4) % 4;
   const tint = heroEquipOpts(gear, opts);
+  /* Two weapons at one anchor is one weapon too many. heroEquipOpts() sets
+   * `weapon` because the cheap tint-only path needs it — that caller composites
+   * nothing and would otherwise get an unarmed hero — but THIS path draws the
+   * real overlay on top, and leaving sprites.js's own blade underneath it means
+   * the silhouette the player sees is whichever of the two is bigger.
+   *
+   * That was not a cosmetic problem. It was hiding the ladder: a forged rung
+   * that grew two pixels of guard grew them inside an outline the underlying
+   * weapon was already filling, so the upgrade measured as a change to the
+   * overlay and as nothing at all on the hero. */
+  /* Deleting the key is not disarming. heroOpts() merges DEFAULT_HERO over
+   * anything it is handed, and DEFAULT_HERO.weapon is 'sword' — so a deleted
+   * `weapon` came back as a sword under the overlay, which is the exact double
+   * blade the paragraph above says it is removing. `null` is the value
+   * sprites.js documents as unarmed and the only one it honours. */
+  if (gear && gear.weapon) tint.weapon = null;
   const key = equipKey(gear, tint, dir, f, pose);
   return equippedCache.get(key, () => heroWithGear(
     heroFrame(dir, f, tint, pose), gear,
@@ -3493,6 +3537,2692 @@ export function shapeMaterial(shapeKey) {
 }
 
 /* ================================================================
+ * THE FORGE
+ * ================================================================
+ * A class weapon is not loot. Loot is rolled, shown once and replaced; a forged
+ * weapon is the same object for fifty hours, carried into every fight, and the
+ * player watches it change. That is a different art problem and it gets a
+ * different pipeline rather than a seventh rarity tier.
+ *
+ * gauntlet/forge.py owns the fifty-four objects — six lines, nine rungs each —
+ * and its art brief states the problem this section was written to fix in
+ * numbers rather than as an aspiration: across the hero rungs the old weapon
+ * ladder produced six distinct frames and ZERO changes to the alpha mask.
+ * "A rung-nine weapon that is a rung-one weapon in a different grey is the
+ * single biggest gap between this feature and the word the player used, which
+ * was epic."
+ *
+ * Four rules, and they are the whole section:
+ *
+ *   1. NINE RUNGS MEANS NINE OBJECTS. Not one object under nine filters. Every
+ *      rung moves the OUTLINE — a longer fuller is the one interior detail
+ *      allowed to be interior, and it is paid for by a crossguard that grows
+ *      teeth, a pommel that grows a stone, wings, horns, and at the top a
+ *      blade that stops being straight. forgeSpread() measures it and
+ *      scripts/verify/forge.mjs fails the build on a rung that does not move.
+ *   2. SIX LINES MEANS SIX SILHOUETTES. forge.py ships the six blades as four
+ *      shapes — the Calipers and the Chain are both `relic`, the Maul and the
+ *      Spanner are both `hammer` — and its brief calls fixing that "the
+ *      cheapest legibility win available here". FORGE_BLADES fixes it: each
+ *      line gets its own grid in the icon and its own pose in the hand.
+ *   3. THE MATERIAL CHOOSES THE RAMP. Not a tint over one grey ladder — the
+ *      actual five-step materials out of palette.js, so a Quarterturn Bronze
+ *      blade is made of the same bronze as a bronze pauldron and belongs in
+ *      the same frame. Material and metal are separate inputs, because they
+ *      are separate facts: "steel" is how finished the object is, and
+ *      "marshsilver" is what the player carried out of the marsh.
+ *   4. TIME IS A RUNG. Rungs 1-4 do not move at all, which is what makes rung
+ *      5 landing feel like something happened. Above that the light drifts
+ *      along the edge, motes lift off the metal, the inlay pulses and the
+ *      stone lights from inside — all of it precomputed into cached frames,
+ *      none of it recomputed per frame, no Math.random anywhere in the path.
+ *
+ * This section owns no game rules. It does not know what a metal costs, what a
+ * technique does, or whether you may upgrade. It takes forge.art_at()'s dict
+ * and draws it, and an input it has never heard of falls back rather than
+ * throwing — see forgeWeaponKey() and forgeMetalKey(). That contract is
+ * deliberate: art that throws on an unknown key takes the screen with it.
+ */
+
+/* Bigger than ITEM_SIZE on purpose. 24 is the right box for an inventory icon
+ * and it is the wrong box for the object this ladder has to escalate inside:
+ * by rung 6 a sword has wings, and wings in a 24 box means clipping the wings
+ * or never growing them. 32 leaves the top rungs somewhere to go and is still
+ * a power of two, so an integer scale lands on pixel boundaries at every size
+ * the game draws at. */
+/* Bigger than ITEM_SIZE on purpose. 24 is the right box for an inventory icon
+ * and it is the wrong box for the object this ladder has to escalate inside:
+ * by rung 6 a blade has wings, and wings in a 24 box means clipping the wings
+ * or never growing them. 32 leaves the top rungs somewhere to go and is still
+ * a power of two, so an integer scale lands on pixel boundaries at every size
+ * the game draws at. */
+export const FORGE_SIZE = 32;
+const FN = FORGE_SIZE;
+
+/* Nine rungs, which is gauntlet/forge.py's number — MAX_TIER — not a number
+ * chosen here. Six blades times nine rungs is the fifty-four objects that file
+ * says exist, and if it ever moves this constant is the only place art has to
+ * follow it. */
+export const FORGE_TIER_COUNT = 9;
+
+/* One frame count for every animated rung, and twelve rather than eight for a
+ * specific reason: the auras below run at their own periods — the ember fall
+ * is a four, the quench plume is a six, the glint is the full cycle — and a
+ * cached frame table can only hold periods that divide it. Twelve holds four
+ * and six; eight holds neither. At FRAME_MS that is 1.3s for a highlight to
+ * travel a blade, which is slow enough to read as light moving rather than as
+ * a flicker. */
+export const FORGE_FRAMES = 12;
+
+/* Grid helpers at forge width. Deliberately a second pair rather than a
+ * widening of row()/mid(): those two are called by every shape above and by
+ * the gear overlays, and changing a signature used in forty places to save ten
+ * lines here is how a file this size acquires a bug nobody can find. */
+function frow(...runs) {
+  const out = new Array(FN).fill('.');
+  for (let i = 0; i < runs.length; i += 2) {
+    const x = runs[i] | 0, s = String(runs[i + 1]);
+    for (let k = 0; k < s.length; k++) {
+      const ch = s[k], px = x + k;
+      if (ch === '.' || px < 0 || px >= FN) continue;
+      out[px] = ch;
+    }
+  }
+  return out.join('');
+}
+function fmid(s) { return frow(Math.floor((FN - s.length) / 2), s); }
+function fblank() { return '.'.repeat(FN); }
+function frepeat(rowStr, n) { return new Array(n).fill(rowStr); }
+
+/* ---------------- metals ----------------
+ * These are gauntlet/forge.py's METALS, by id, with the region each one drops
+ * in. Nothing here invents a metal: the ids, the rungs and the regions are
+ * that file's, and forgeVocabulary() exists so a test over there can prove the
+ * two lists have not drifted.
+ *
+ * What IS decided here is the only thing art gets to decide — which of the
+ * shared five-step materials in palette.js each metal is made of. That is the
+ * whole of rule B: Quarterturn Bronze is made of the same bronze as a bronze
+ * pauldron, so the two belong in one frame, and a blade carried out of the
+ * Matrix Citadel looks like the place it came from rather than like a hue.
+ *
+ * `colour` is the metal's own hex as forge.py ships it, kept for captions and
+ * as the derivation source if this table ever falls behind that one.
+ */
+const FORGE_METALS = {
+  fieldiron: {
+    rung: 1, label: 'Fieldiron', region: 'fields_of_syntax', colour: '#8a7f6a',
+    ramp: 'iron', trim: 'rust', grip: 'leather', energy: null,
+  },
+  keybrass: {
+    rung: 2, label: 'Keybrass', region: 'hashmap_highlands', colour: '#c9a05a',
+    ramp: 'gold', trim: 'bronze', grip: 'leather', energy: null,
+  },
+  loomsteel: {
+    rung: 2, label: 'Loomsteel', region: 'stringwood_labyrinth', colour: '#9aa4b8',
+    ramp: 'steel', trim: 'bronze', grip: 'leather', energy: null,
+  },
+  marshsilver: {
+    rung: 3, label: 'Marshsilver', region: 'sliding_window_marsh', colour: '#b9c8c0',
+    ramp: 'silver', trim: 'frost', grip: 'leather', energy: '#b7d4f8',
+  },
+  faultsteel: {
+    rung: 3, label: 'Faultsteel', region: 'stack_queue_mines', colour: '#7e6f66',
+    ramp: 'gunmetal', trim: 'rust', grip: 'hide', energy: null,
+  },
+  quarterturn: {
+    rung: 4, label: 'Quarterturn Bronze', region: 'matrix_citadel', colour: '#b07a45',
+    ramp: 'bronze', trim: 'goldleaf', grip: 'hide', energy: null,
+  },
+  heartwood_iron: {
+    rung: 4, label: 'Heartwood Iron', region: 'recursive_forest', colour: '#6f7a55',
+    ramp: 'iron', trim: 'venom', grip: 'wood', energy: '#85d07c',
+  },
+  wastes_iron: {
+    rung: 4, label: 'Wastes-iron', region: 'graph_wastes', colour: '#6a6470',
+    ramp: 'stone', trim: 'void', grip: 'hide', energy: '#755f8c',
+  },
+  tilegold: {
+    rung: 5, label: 'Tilegold', region: 'dp_ruins', colour: '#e0b44a',
+    ramp: 'goldleaf', trim: 'ember', grip: 'leather', energy: '#ffc26a',
+  },
+  doubling_steel: {
+    rung: 5, label: 'Doubling Steel', region: 'complexity_tower', colour: '#8fa8c8',
+    ramp: 'chrome', trim: 'frost', grip: 'velvet', energy: '#b7d4f8',
+  },
+  nullsteel: {
+    rung: 6, label: 'Nullsteel', region: 'null_kings_castle', colour: '#4a4458',
+    ramp: 'void', trim: 'arcane', grip: 'velvet', energy: '#bd91f9',
+  },
+};
+
+export const FORGE_METAL_KEYS = Object.keys(FORGE_METALS);
+
+/* The metal a rung is mostly made of, read off the `cost` tables in
+ * gauntlet/forge.py rather than interpolated. It is what a caller gets when it
+ * asks for a rung and does not say what it was forged with, and it is what an
+ * unrecognised metal name falls back to — so an unknown metal at rung 7 comes
+ * back as doubling steel rather than as field iron. */
+const TIER_METAL = [
+  'fieldiron', 'fieldiron', 'fieldiron', 'keybrass', 'marshsilver',
+  'quarterturn', 'wastes_iron', 'doubling_steel', 'tilegold', 'nullsteel',
+];
+
+/* Every spelling the rest of the world might send, including the bare material
+ * nouns, because a blade that renders as the wrong metal because two files
+ * disagreed about a noun is a bug the player sees and we would not. */
+const METAL_ALIAS = {
+  iron: 'fieldiron', field_iron: 'fieldiron', slag: 'fieldiron', scrap: 'fieldiron',
+  brass: 'keybrass', key_brass: 'keybrass',
+  steel: 'loomsteel', loom: 'loomsteel', truesteel: 'loomsteel',
+  silver: 'marshsilver', marsh: 'marshsilver', marsh_silver: 'marshsilver',
+  fault: 'faultsteel', gunmetal: 'faultsteel', fault_steel: 'faultsteel',
+  bronze: 'quarterturn', quarter: 'quarterturn', quarterturn_bronze: 'quarterturn',
+  heartwood: 'heartwood_iron', heart: 'heartwood_iron',
+  wastes: 'wastes_iron', waste: 'wastes_iron', wasteiron: 'wastes_iron',
+  gold: 'tilegold', tile: 'tilegold', goldleaf: 'tilegold',
+  doubling: 'doubling_steel', chrome: 'doubling_steel', adamant: 'doubling_steel',
+  null: 'nullsteel', null_steel: 'nullsteel', void: 'nullsteel',
+  source: 'nullsteel', sourceforged: 'nullsteel',
+};
+
+/* Lowercase, strip everything that is not a letter or a digit. "Wastes-iron",
+ * "wastes_iron" and "Wastes Iron" are one metal; pretending otherwise is how a
+ * lookup table acquires six rows that mean the same thing. */
+function slug(v) { return String(v == null ? '' : v).toLowerCase().replace(/[^a-z0-9]+/g, ''); }
+
+const metalKeyCache = new Map();
+
+/* Resolve anything to a metal. Exact key, then alias, then a containment scan
+ * over the keys, labels and ramp names, then the rung's own metal. It cannot
+ * fail and it never throws — which is the entire point of rule D. */
+export function forgeMetalKey(metal, tier = 1) {
+  const t = clampTier(tier);
+  if (metal && FORGE_METALS[metal]) return metal;
+  const s = slug(metal);
+  if (!s) return TIER_METAL[t];
+  const cacheKey = `${s}:${t}`;
+  const hit = metalKeyCache.get(cacheKey);
+  if (hit) return hit;
+  let found = '';
+  if (METAL_ALIAS[s]) found = METAL_ALIAS[s];
+  if (!found) {
+    for (const k of FORGE_METAL_KEYS) {
+      const ks = slug(k), ls = slug(FORGE_METALS[k].label);
+      if (s === ks || s === ls || s.includes(ks) || ks.includes(s) || s.includes(ls)) { found = k; break; }
+    }
+  }
+  if (!found) found = TIER_METAL[t];
+  if (metalKeyCache.size >= 256) metalKeyCache.delete(metalKeyCache.keys().next().value);
+  metalKeyCache.set(cacheKey, found);
+  return found;
+}
+
+export function forgeMetal(metal, tier = 1) {
+  return FORGE_METALS[forgeMetalKey(metal, tier)];
+}
+
+/* ---------------- the rungs ----------------
+ * Read this table as a smith's worklist rather than as a stat block. Each row
+ * says what she did to the weapon this time, and every row does something the
+ * SILHOUETTE can carry — which is the whole reason this section exists. The
+ * art brief in gauntlet/forge.py states the problem it was written to fix in
+ * numbers: across the six hero rungs the old ladder produced six distinct
+ * frames and ZERO changes to the alpha mask. Six greys is not nine objects.
+ *
+ *   1 Unworked    stock. A bar with an edge on it and nothing else.
+ *   2 Trued       squared up: the guard gains a fitting at each end and the
+ *                 counterweight gets a proper cap.
+ *   3 Fullered    the body is broadened and a groove cut down it.
+ *   4 Quenched    the guard widens again and drops lugs; a stone is set.
+ *   5 Inlaid      the quillons turn up, trim runs the length of the body, and
+ *                 the pommel swells into the grip.
+ *   6 Runed       broader again, a rune cut into the groove, a faceted stone.
+ *   7 Chased      the quillons fork and the crown grows over the crest.
+ *   8 Crowned     wings, claws around the stone, and the body stops being
+ *                 straight.
+ *   9 Unlabelled  a deeper sweep, teeth under the guard, and — see the aura of
+ *                 the same name — the row that would carry a maker's mark is
+ *                 left empty. On a shelf of animated legendaries a deliberate
+ *                 absence is the loudest thing there.
+ *
+ * `polish` withholds the specular step at the bottom of the ladder, which is
+ * what makes rungs 1-2 read as raw stock: unfinished metal does not catch the
+ * light, and handing it a highlight anyway is the single fastest way to make
+ * nine rungs look like one weapon in nine hues.
+ */
+const FORGE_RUNGS = [
+  null,
+  { rung: 1, name: 'Unworked',   widen: 0, fuller: 0, teeth: 0, inlay: 0, stone: 0, crest: 0, curve: 0, polish: 0, motion: 'still' },
+  { rung: 2, name: 'Trued',      widen: 0, fuller: 0, teeth: 1, inlay: 0, stone: 1, crest: 0, curve: 0, polish: 1, motion: 'still' },
+  { rung: 3, name: 'Fullered',   widen: 1, fuller: 1, teeth: 1, inlay: 0, stone: 1, crest: 0, curve: 0, polish: 1, motion: 'still' },
+  { rung: 4, name: 'Quenched',   widen: 1, fuller: 2, teeth: 2, inlay: 1, stone: 2, crest: 0, curve: 0, polish: 2, motion: 'still' },
+  { rung: 5, name: 'Inlaid',     widen: 1, fuller: 2, teeth: 3, inlay: 2, stone: 2, crest: 1, curve: 0, polish: 2, motion: 'a specular drifts along the edge' },
+  { rung: 6, name: 'Runed',      widen: 2, fuller: 3, teeth: 3, inlay: 2, stone: 3, crest: 2, curve: 0, polish: 2, motion: 'and motes lift off the metal' },
+  { rung: 7, name: 'Chased',     widen: 2, fuller: 3, teeth: 4, inlay: 3, stone: 3, crest: 3, curve: 0, polish: 2, motion: 'and the inlay pulses along its length' },
+  { rung: 8, name: 'Crowned',    widen: 2, fuller: 3, teeth: 4, inlay: 3, stone: 4, crest: 4, curve: 1, polish: 2, motion: 'and the stone is lit from inside' },
+  { rung: 9, name: 'Unlabelled', widen: 2, fuller: 3, teeth: 5, inlay: 3, stone: 4, crest: 4, curve: 2, polish: 2, motion: 'and the maker’s row is left empty' },
+];
+
+export function clampTier(tier) {
+  const t = Math.round(Number(tier));
+  if (!Number.isFinite(t)) return 1;
+  return t < 1 ? 1 : t > FORGE_TIER_COUNT ? FORGE_TIER_COUNT : t;
+}
+
+export function forgeRung(tier) { return FORGE_RUNGS[clampTier(tier)]; }
+
+export function forgeTierName(tier) { return forgeRung(tier).name; }
+
+/* Rung 5 is where the ladder starts moving, and it is the ONLY place that
+ * number is written down: forgeAnimate(), forgeInfo() and the vocabulary all
+ * read it from here rather than each carrying their own copy of the rule. */
+export const FORGE_FIRST_ANIMATED = 5;
+
+/* Which rungs move. Two things can pin a rung that would otherwise animate:
+ * `frames: 1` on the art dict, which gauntlet/forge.py documents as the
+ * override legendaries asked for, and the `stillness` aura — an aura whose
+ * whole content is that a weapon which ought to be moving is not. */
+export function forgeFrameCount(tier, art) {
+  if (art && art.frames === 1) return 1;
+  if (art && art.aura === 'stillness') return 1;
+  return forgeRung(tier).rung >= FORGE_FIRST_ANIMATED ? FORGE_FRAMES : 1;
+}
+
+/* ---------------- the weapons ----------------
+ * Ten families, authored at rung 1 and authored DELIBERATELY PLAIN. A rung-1
+ * sword is a bar of stock with a straight guard, no fuller, no inlay and a
+ * cap where a pommel stone will go, because a ladder whose bottom rung already
+ * has wings has nowhere to climb and ends up escalating in hue — which is the
+ * failure the whole of this file exists to avoid.
+ *
+ * Every family declares its ANATOMY rather than leaving the passes below to
+ * guess it. A guess is wrong exactly once per family and then it is wrong
+ * forever: a fuller cut down the middle of a bow, a pommel stone set in the
+ * butt-spike of a spear. Naming the parts costs six numbers and buys the
+ * parametric passes the right to be simple.
+ *
+ *   blade   [y0,y1]  the working mass — what gets broadened, grooved, curved
+ *   guard   y        where quillons and teeth grow, or null for a weapon with
+ *                    no guard, in which case the widest row stands in
+ *   grip    [y0,y1]  wrapped, never decorated; a decorated grip is a blister
+ *   pommel  y        the counterweight
+ *   stones  [{y,x}]  where a set stone belongs. x is the LEFT column of a six
+ *                    wide setting, because a stone placed by an algorithm
+ *                    always lands in the wrong hole
+ *   crest   {y,x,dir} 'up' grows spikes above (x is the centre column);
+ *                    'pommel' grows the pommel upward into the grip (x is the
+ *                    left column of a six wide flare)
+ *   axis    x        the long centreline, for inlay and motes
+ *   kind    blade | haft | head | bow | focus — how the passes interpret it
+ *   curve   whether the blade may be swept at the top rungs. A crossed pair
+ *           and an axe head cannot be, and shearing them anyway produces the
+ *           one artefact that makes procedural art look procedural
+ */
+const FORGE_WEAPONS = {
+  /* The archivist's Hashblade and every straight sword the smith will ever be
+   * handed. This is the family the ladder was designed on. */
+  sword: {
+    label: 'blade', kind: 'blade', axis: 16, curve: true,
+    blade: [1, 20], guard: 21, guard2: 22, grip: [23, 27], pommel: 28,
+    stones: [{ y: 28, x: 13 }], crest: { y: 28, x: 13, dir: 'pommel' },
+    grid: [
+      fblank(), fmid('oo'), fmid('oBBo'), fmid('oBBo'),
+      ...frepeat(fmid('oBBBBo'), 17),
+      fmid('oggggggo'), fmid('oggggo'),
+      ...frepeat(fmid('osso'), 5),
+      fmid('oggggo'), fmid('oggo'), fmid('oo'), fblank(),
+    ],
+    growth: {
+      /* Langets: two straps of trim running up off the guard onto the blade.
+       * The first thing a real smith adds to a blade he intends to keep. */
+      5: [[20, 13, 'g'], [20, 18, 'g'], [19, 13, 'g'], [19, 18, 'g'],
+          [22, 12, 'oggggggo']],
+      /* The grip gains a risered wrap. Four pixels on each side of the hand,
+       * which at 32px is the difference between a tool and a weapon. */
+      6: [[24, 13, 'og'], [24, 18, 'go'], [26, 13, 'og'], [26, 18, 'go']],
+      /* A ricasso — the blade squares out where the hand would choke up on it.
+       * Authored at widen 2 columns, which is what rung 6 is drawn at. */
+      7: [[19, 11, 'oB'], [19, 20, 'Bo'], [20, 11, 'oB'], [20, 20, 'Bo']],
+      /* Swept wings. They start exactly where the quillon ticks the teeth pass
+       * grew end, so guard and wing are one continuous sweep rather than two
+       * features that happen to be near each other. */
+      8: [[18, 8, 'ogg'], [17, 7, 'ogg'], [16, 7, 'oo'],
+          [18, 21, 'ggo'], [17, 22, 'ggo'], [16, 23, 'oo']],
+      /* And at the last rung they reach past the width of the guard. Note the
+       * row the wing capped at is re-cut as trim rather than left as outline:
+       * a cap buried inside a longer wing is a black line across it. */
+      9: [[16, 6, 'ogg'], [15, 5, 'ogg'], [14, 4, 'ogg'], [13, 4, 'oo'],
+          [16, 23, 'ggo'], [15, 24, 'ggo'], [14, 25, 'ggo'], [13, 26, 'oo']],
+    },
+  },
+
+  /* The berserker's pair. Crossed rather than parallel, because two parallel
+   * blades at 32px read as one thick blade and the whole point of a pair is
+   * that you can tell it is a pair from the outline. */
+  sabers: {
+    label: 'pair', kind: 'blade', axis: 16, curve: false,
+    blade: [2, 24], guard: 25, grip: [26, 27], pommel: 28,
+    stones: [{ y: 28, x: 2 }, { y: 28, x: 24 }],
+    crest: { y: 28, x: 2, dir: 'pommel' },
+    crest2: { y: 28, x: 24, dir: 'pommel' },
+    grid: [
+      fblank(), fblank(),
+      frow(4, 'oo', 26, 'oo'),
+      frow(3, 'oBBo', 25, 'oBBo'), frow(4, 'oBBo', 24, 'oBBo'),
+      frow(5, 'oBBo', 23, 'oBBo'), frow(6, 'oBBo', 22, 'oBBo'),
+      frow(7, 'oBBo', 21, 'oBBo'), frow(8, 'oBBo', 20, 'oBBo'),
+      frow(9, 'oBBo', 19, 'oBBo'), frow(10, 'oBBo', 18, 'oBBo'),
+      frow(11, 'oBBo', 17, 'oBBo'), frow(12, 'oBBo', 16, 'oBBo'),
+      frow(13, 'oBBo', 15, 'oBBo'), frow(13, 'oBBBBo'),
+      frow(15, 'oBBo', 13, 'oBBo'), frow(16, 'oBBo', 12, 'oBBo'),
+      frow(17, 'oBBo', 11, 'oBBo'), frow(18, 'oBBo', 10, 'oBBo'),
+      frow(19, 'oBBo', 9, 'oBBo'), frow(20, 'oBBo', 8, 'oBBo'),
+      frow(21, 'oBBo', 7, 'oBBo'), frow(22, 'oBBo', 6, 'oBBo'),
+      frow(23, 'oBBo', 5, 'oBBo'), frow(24, 'oBBo', 4, 'oBBo'),
+      frow(2, 'oggggo', 24, 'oggggo'),
+      frow(3, 'osso', 25, 'osso'), frow(3, 'osso', 25, 'osso'),
+      frow(3, 'oggo', 25, 'oggo'), frow(4, 'oo', 26, 'oo'),
+      fblank(), fblank(),
+    ],
+    growth: {
+      5: [[24, 2, 'og'], [24, 27, 'go'], [23, 3, 'og'], [23, 26, 'go']],
+      6: [[26, 2, 'og'], [26, 29, 'go'], [27, 2, 'og'], [27, 29, 'go']],
+      /* Ricasso squares on both blades, at the rows where they cross. */
+      7: [[16, 9, 'oB'], [16, 20, 'Bo'], [17, 8, 'oB'], [17, 21, 'Bo']],
+      /* Recurve hooks at the tips — the move a straight blade cannot make and
+       * the reason this family does not take the shear. */
+      8: [[3, 1, 'oo'], [4, 1, 'og'], [3, 28, 'oo'], [4, 29, 'go']],
+      9: [[2, 1, 'og'], [5, 0, 'oo'], [2, 28, 'go'], [5, 30, 'oo'],
+          [6, 3, 'oo'], [6, 26, 'oo']],
+    },
+  },
+
+  /* The seer's Tracing Needle, and anything short. A dagger is mostly grip, so
+   * it escalates at the hilt where a sword escalates at the blade. */
+  dagger: {
+    label: 'knife', kind: 'blade', axis: 16, curve: true,
+    blade: [5, 18], guard: 19, guard2: 20, grip: [21, 25], pommel: 26,
+    stones: [{ y: 26, x: 13 }], crest: { y: 26, x: 13, dir: 'pommel' },
+    grid: [
+      ...frepeat(fblank(), 5),
+      fmid('oo'), fmid('oBBo'), fmid('oBBo'),
+      ...frepeat(fmid('oBBBBo'), 11),
+      fmid('oggggggo'), fmid('oggggo'),
+      ...frepeat(fmid('osso'), 5),
+      fmid('oggggo'), fmid('oggo'),
+      ...frepeat(fblank(), 4),
+    ],
+    growth: {
+      5: [[18, 13, 'g'], [18, 18, 'g'], [20, 12, 'oggggggo']],
+      6: [[22, 13, 'og'], [22, 18, 'go'], [24, 13, 'og'], [24, 18, 'go']],
+      7: [[17, 11, 'oB'], [17, 20, 'Bo'], [18, 11, 'oB'], [18, 20, 'Bo']],
+      8: [[16, 8, 'ogg'], [15, 7, 'ogg'], [14, 7, 'oo'],
+          [16, 21, 'ggo'], [15, 22, 'ggo'], [14, 23, 'oo']],
+      9: [[14, 6, 'ogg'], [13, 5, 'ogg'], [12, 4, 'ogg'], [11, 4, 'oo'],
+          [14, 23, 'ggo'], [13, 24, 'ggo'], [12, 25, 'ggo'], [11, 26, 'oo']],
+    },
+  },
+
+  /* Recursion Spear. A haft weapon escalates at the head and at the butt, and
+   * never in the middle: a spear with decoration halfway down the shaft is a
+   * spear nobody can hold. */
+  spear: {
+    label: 'polearm', kind: 'haft', axis: 16, curve: true,
+    blade: [5, 11], guard: 12, grip: [13, 28], pommel: 29,
+    stones: [{ y: 29, x: 13 }], crest: { y: 5, x: 16, dir: 'up' },
+    grid: [
+      ...frepeat(fblank(), 5),
+      fmid('oo'), fmid('oBBo'), fmid('oBBBBo'),
+      fmid('oBBBBBBo'), fmid('oBBBBBBo'), fmid('oBBBBo'), fmid('oBBo'),
+      fmid('oggo'),
+      ...frepeat(fmid('osso'), 16),
+      fmid('oggo'), fmid('oo'), fblank(),
+    ],
+    growth: {
+      5: [[12, 12, 'oggggggo'], [13, 13, 'og'], [13, 18, 'go']],
+      6: [[11, 13, 'og'], [11, 18, 'go'], [28, 13, 'og'], [28, 18, 'go']],
+      /* Wings behind the head — a boar spear's crossbar, the detail that says
+       * this is a weapon for something that pushes back. */
+      7: [[11, 11, 'oB'], [11, 20, 'Bo'], [10, 11, 'oo'], [10, 20, 'oo']],
+      8: [[11, 7, 'ogg'], [10, 7, 'oo'], [11, 22, 'ggo'], [10, 23, 'oo']],
+      9: [[9, 5, 'ogg'], [8, 5, 'oo'], [9, 24, 'ggo'], [8, 25, 'oo']],
+    },
+  },
+
+  /* Queue Lance. Heavier than the spear and it shows it at the vamplate, which
+   * is the one silhouette a lance has that nothing else does. */
+  lance: {
+    label: 'lance', kind: 'haft', axis: 16, curve: false,
+    blade: [4, 11], guard: 12, guard2: 13, grip: [15, 27], pommel: 28,
+    stones: [{ y: 28, x: 13 }], crest: { y: 4, x: 16, dir: 'up' },
+    grid: [
+      ...frepeat(fblank(), 4),
+      fmid('oo'), fmid('oBBo'), fmid('oBBBBo'), fmid('oBBBBo'),
+      fmid('oBBBBBBo'), fmid('oBBBBBBo'),
+      fmid('oBBBBBBBBo'), fmid('oBBBBBBBBo'),
+      fmid('oggggggggggo'), fmid('oggggggggo'), fmid('oBBBBo'),
+      ...frepeat(fmid('osso'), 13),
+      fmid('oggggo'), fmid('oggo'), fmid('oo'), fblank(),
+    ],
+    growth: {
+      5: [[12, 9, 'og'], [12, 22, 'go'], [13, 10, 'og'], [13, 21, 'go']],
+      6: [[14, 13, 'og'], [14, 18, 'go'], [26, 13, 'og'], [26, 18, 'go']],
+      7: [[11, 10, 'oB'], [11, 21, 'Bo']],
+      /* The grip gains a wrap rather than the vamplate gaining more width.
+       * A lance is already the widest thing in this section at rung 6 and
+       * pushing it further just fills the box with fitting. */
+      8: [[15, 13, 'og'], [15, 18, 'go'], [16, 13, 'og'], [16, 18, 'go']],
+      9: [[10, 7, 'ogg'], [9, 7, 'oo'], [10, 22, 'ggo'], [9, 23, 'oo']],
+    },
+  },
+
+  /* Tree Axe and the berserker's Draft Axe. The one family that is asymmetric
+   * by construction, so it escalates asymmetrically: the bit deepens and only
+   * at the top does a back-spike appear. Symmetry is what makes procedural art
+   * look procedural, and an axe is the family that gets to say so. */
+  axe: {
+    label: 'axe', kind: 'head', axis: 20, curve: false, mass: 'B',
+    blade: [5, 14], guard: 15, grip: [16, 28], pommel: 29,
+    stones: [{ y: 29, x: 11 }], crest: { y: 4, x: 13, dir: 'up' },
+    grid: [
+      ...frepeat(fblank(), 4),
+      frow(12, 'oooo'),
+      frow(12, 'osso', 16, 'oooo'),
+      frow(12, 'osso', 16, 'BBBBo'),
+      frow(12, 'osso', 16, 'BBBBBBo'),
+      frow(12, 'osso', 16, 'BBBBBBBo'),
+      frow(12, 'osso', 16, 'BBBBBBBBo'),
+      frow(12, 'osso', 16, 'BBBBBBBBo'),
+      frow(12, 'osso', 16, 'BBBBBBBo'),
+      frow(12, 'osso', 16, 'BBBBBBo'),
+      frow(12, 'osso', 16, 'BBBBo'),
+      frow(12, 'osso', 16, 'oooo'),
+      frow(12, 'oggo'),
+      ...frepeat(frow(12, 'osso'), 13),
+      frow(12, 'oggo'), frow(13, 'oo'), fblank(),
+    ],
+    growth: {
+      /* The bit deepens forward. Authored one column outside the rung-3
+       * geometry rather than on top of it: a stamp that lands where the widen
+       * pass has already been measures as a change to nothing at all. */
+      5: [[8, 24, 'Bo'], [9, 25, 'Bo'], [10, 25, 'Bo'], [11, 24, 'Bo']],
+      /* A beard: the bit hooks back under, toward the hand. The cheapest way
+       * to make an axe read as a weapon rather than as a tool. */
+      6: [[14, 16, 'BBBBo'], [15, 16, 'BBo']],
+      /* The top of the head squares up and reaches forward over the bit. */
+      7: [[4, 16, 'oooo'], [5, 16, 'BBBBo'], [6, 20, 'BBo'], [7, 22, 'BBo']],
+      /* The back-spike. Nothing at all on the far side of the haft until now,
+       * which is what makes rung 7 the rung the shape changes character. */
+      8: [[8, 9, 'ogo'], [9, 8, 'ogo'], [10, 8, 'ogo'], [11, 9, 'ogo'],
+          [7, 10, 'oo'], [12, 10, 'oo']],
+      9: [[9, 5, 'ogg'], [10, 5, 'ogg'], [8, 6, 'oo'], [11, 6, 'oo']],
+    },
+  },
+
+  /* Heap Hammer and the warden's Boundary Maul. A head weapon has nothing to
+   * sharpen, so it escalates by growing MASS: the head squares up, gains
+   * flanges, then a crown of spikes. */
+  hammer: {
+    label: 'maul', kind: 'head', axis: 16, curve: false,
+    blade: [4, 10], guard: 11, grip: [12, 28], pommel: 29,
+    stones: [{ y: 29, x: 13 }], crest: { y: 4, x: 16, dir: 'up' },
+    grid: [
+      ...frepeat(fblank(), 4),
+      fmid('oooooooooooo'),
+      ...frepeat(fmid('oBBBBBBBBBBo'), 5),
+      fmid('oooooooooooo'),
+      fmid('oggo'),
+      ...frepeat(fmid('osso'), 17),
+      fmid('oggo'), fmid('oo'), fblank(),
+    ],
+    growth: {
+      5: [[5, 8, 'oB'], [5, 23, 'Bo'], [6, 8, 'oB'], [6, 23, 'Bo'],
+          [7, 8, 'oB'], [7, 23, 'Bo']],
+      6: [[4, 8, 'oo'], [4, 23, 'oo'], [8, 8, 'oo'], [8, 23, 'oo'],
+          [9, 9, 'oo'], [9, 22, 'oo']],
+      /* Flanges: the faces of the head step out into ribs. */
+      7: [[6, 6, 'oBB'], [6, 24, 'BBo'], [7, 6, 'oBB'], [7, 24, 'BBo'],
+          [5, 7, 'oo'], [5, 24, 'oo'], [8, 7, 'oo'], [8, 24, 'oo']],
+      8: [[6, 3, 'ogo'], [7, 3, 'ogo'], [5, 4, 'oo'], [8, 4, 'oo'],
+          [6, 27, 'ogo'], [7, 27, 'ogo'], [5, 27, 'oo'], [8, 27, 'oo']],
+      /* A flange under the head rather than another row on top of it: the
+       * crest ladder owns everything above the crown, and two passes adding
+       * rows to the same edge is how a head ends up with its outline buried
+       * one row inside itself. */
+      9: [[9, 6, 'oo'], [9, 24, 'oo'],
+          [11, 10, 'oggggggggggo'], [12, 12, 'oggggggo']],
+    },
+  },
+
+  /* Window Staff. No guard and no edge, so every move it has is at the head —
+   * which is why the crest ladder does the heavy lifting here and the teeth
+   * pass falls back to the widest row. */
+  staff: {
+    label: 'staff', kind: 'focus', axis: 16, curve: false,
+    blade: [4, 9], guard: 9, grip: [10, 28], pommel: 29,
+    stones: [{ y: 29, x: 13 }], crest: { y: 4, x: 16, dir: 'up' },
+    grid: [
+      ...frepeat(fblank(), 4),
+      fmid('oggo'), fmid('ogmmgo'), fmid('ogmmmmgo'),
+      fmid('ogmmmmgo'), fmid('ogmmgo'), fmid('oggo'),
+      ...frepeat(fmid('osso'), 19),
+      fmid('oggo'), fmid('oo'), fblank(),
+    ],
+    growth: {
+      /* Bindings down the shaft. Authored as rings rather than as prongs off
+       * the head because the head is already carrying four parametric passes,
+       * and a fifth thing up there stops being a weapon and becomes a pile.
+       * A staff that gains fittings along its length is also simply what a
+       * worked staff looks like. */
+      5: [[10, 13, 'oggggo'], [11, 13, 'oggggo']],
+      6: [[26, 13, 'oggggo'], [27, 13, 'oggggo']],
+      7: [[12, 13, 'oggggo'], [13, 14, 'oggo']],
+      8: [[19, 13, 'oggggo'], [20, 13, 'oggggo']],
+      9: [[15, 13, 'oggggo'], [16, 12, 'oggggggo'], [17, 13, 'oggggo']],
+    },
+  },
+
+  /* Matrix Bow. Everything about a bow is the limb, so the limb is what grows:
+   * it deepens, it recurves, and at the top it carries a second string. */
+  bow: {
+    label: 'bow', kind: 'bow', axis: 8, curve: false, teethWidth: 10,
+    blade: [4, 29], guard: 14, guard2: 13, grip: [15, 18], pommel: null,
+    stones: [{ y: 16, x: 5 }], crest: { y: 4, x: 19, dir: 'up' },
+    grid: [
+      ...frepeat(fblank(), 4),
+      frow(18, 'oooo'),
+      frow(16, 'osso', 21, 'w'), frow(14, 'osso', 21, 'w'),
+      frow(12, 'osso', 21, 'w'), frow(11, 'osso', 21, 'w'),
+      frow(10, 'osso', 21, 'w'), frow(9, 'osso', 21, 'w'),
+      frow(8, 'osso', 21, 'w'), frow(7, 'osso', 21, 'w'),
+      frow(7, 'osso', 21, 'w'), frow(6, 'osso', 21, 'w'),
+      frow(5, 'osssso', 21, 'w'), frow(5, 'osssso', 21, 'w'),
+      frow(5, 'osssso', 21, 'w'), frow(5, 'osssso', 21, 'w'),
+      frow(6, 'osso', 21, 'w'), frow(7, 'osso', 21, 'w'),
+      frow(7, 'osso', 21, 'w'), frow(8, 'osso', 21, 'w'),
+      frow(9, 'osso', 21, 'w'), frow(10, 'osso', 21, 'w'),
+      frow(11, 'osso', 21, 'w'), frow(12, 'osso', 21, 'w'),
+      frow(14, 'osso', 21, 'w'), frow(16, 'osso', 21, 'w'),
+      frow(18, 'oooo'),
+      fblank(), fblank(),
+    ],
+    growth: {
+      /* The belly deepens, away from the riser — which the teeth pass has
+       * already taken as far as a riser is allowed to go, so a bow is the one
+       * family whose middle rungs have to be authored rather than grown. */
+      4: [[8, 10, 'os'], [9, 9, 'os'], [24, 9, 'os'], [25, 10, 'os']],
+      5: [[11, 7, 'os'], [12, 6, 'os'], [21, 6, 'os'], [22, 7, 'os']],
+      6: [[14, 5, 'og'], [19, 5, 'og'], [15, 11, 'go'], [18, 11, 'go']],
+      /* Recurve: the tips bend back against the string. */
+      7: [[5, 20, 'oo'], [6, 19, 'og'], [28, 20, 'oo'], [27, 19, 'og'],
+          [4, 17, 'oo'], [29, 17, 'oo']],
+      /* A nocked arrow. The one detail that makes a bow read as a bow, and it
+       * is asymmetric, which is the sort of thing you only put on the weapon
+       * you actually carry. */
+      8: [[16, 22, 'ssssssgo'], [15, 28, 'ooo'], [17, 28, 'ooo'],
+          [15, 22, 'o'], [17, 22, 'o']],
+      9: [[8, 22, 'og'], [9, 23, 'og'], [24, 22, 'og'], [23, 23, 'og'],
+          [3, 18, 'oooo'], [30, 18, 'oooo']],
+    },
+  },
+
+  /* The artificer's Dynamic Relic, the analyst's Calipers, the archivist's
+   * Recall Chain: a held focus rather than a weapon. It has no edge to sharpen
+   * so the core itself is what the smith works — it is cut, faceted, and
+   * finally caged. */
+  focus: {
+    label: 'focus', kind: 'focus', axis: 16, curve: false,
+    blade: [4, 13], guard: 14, guard2: 15, grip: [16, 26], pommel: 27,
+    stones: [{ y: 27, x: 13 }], crest: { y: 4, x: 16, dir: 'up' },
+    grid: [
+      ...frepeat(fblank(), 4),
+      fmid('oo'), fmid('ommo'), fmid('ommmmo'), fmid('ommmmmmo'),
+      fmid('ommmmmmmmo'), fmid('ommmmmmmmo'),
+      fmid('ommmmmmo'), fmid('ommmmo'), fmid('ommo'), fmid('oo'),
+      fmid('oggggo'), fmid('oggo'),
+      ...frepeat(fmid('osso'), 11),
+      fmid('oggggo'), fmid('oggo'), fmid('oo'),
+      fblank(), fblank(),
+    ],
+    growth: {
+      5: [[14, 11, 'og'], [14, 20, 'go'], [15, 12, 'og'], [15, 19, 'go']],
+      /* A cage. Two arms of trim reaching up around the core, which is what
+       * separates a relic somebody forged from a rock somebody found. */
+      6: [[13, 10, 'og'], [13, 21, 'go'], [12, 10, 'og'], [12, 21, 'go'],
+          [11, 10, 'oo'], [11, 21, 'oo']],
+      7: [[10, 9, 'og'], [10, 22, 'go'], [9, 9, 'og'], [9, 22, 'go'],
+          [8, 9, 'oo'], [8, 22, 'oo']],
+      8: [[7, 8, 'ogo'], [6, 8, 'ogo'], [5, 9, 'oo'],
+          [7, 21, 'ogo'], [6, 21, 'ogo'], [5, 21, 'oo']],
+      9: [[9, 5, 'ogo'], [8, 5, 'oo'], [10, 5, 'oo'],
+          [9, 24, 'ogo'], [8, 24, 'oo'], [10, 24, 'oo'],
+          [3, 14, 'oggo'], [2, 15, 'oo']],
+    },
+  },
+
+  /* ---- the three that gauntlet/forge.py's art brief asked for by name ----
+   * Six signature blades were sharing four grids: the Calipers and the Chain
+   * were both `relic`, the Maul and the Spanner were both `hammer`. The brief
+   * calls six distinct hand poses "the cheapest legibility win available
+   * here", and it is right — two lines that share a silhouette are two lines
+   * the player cannot tell apart at the one moment it matters, which is when
+   * somebody else is holding one.
+   */
+
+  /* The Analyst's Calipers. Two arms on a pivot, open at the top, and no edge
+   * anywhere on it — the only weapon in the game that has never cut anything.
+   * The gap between the jaws is the point of the object, so the growth table
+   * is careful never to close it: this line escalates at the pivot and along
+   * the outside of the arms, never inward. */
+  calipers: {
+    label: 'calipers', kind: 'blade', axis: 16, curve: false, mass: 'B',
+    teethWidth: 16, keepGap: [15, 16],
+    blade: [4, 15], guard: 16, guard2: 17, grip: [19, 27], pommel: 28,
+    stones: [{ y: 28, x: 13 }], crest: { y: 28, x: 13, dir: 'pommel' },
+    grid: [
+      ...frepeat(fblank(), 4),
+      frow(9, 'ooooo', 18, 'ooooo'),
+      ...frepeat(frow(9, 'oBBBo', 18, 'oBBBo'), 3),
+      ...frepeat(frow(10, 'oBBBo', 17, 'oBBBo'), 6),
+      ...frepeat(frow(10, 'oBBBBBBBBBBo'), 2),
+      frow(12, 'ogmmmmgo'), fmid('oggggo'), fmid('oggo'),
+      ...frepeat(fmid('osso'), 9),
+      fmid('oggggo'), fmid('oggo'), fmid('oo'), fblank(),
+    ],
+    growth: {
+      5: [[16, 10, 'og'], [16, 19, 'go'], [17, 12, 'og'], [17, 17, 'go']],
+      6: [[3, 9, 'ooooo'], [3, 18, 'ooooo']],
+      7: [[8, 8, 'og'], [9, 8, 'og'], [8, 21, 'go'], [9, 21, 'go'],
+          [7, 9, 'oo'], [7, 21, 'oo'], [10, 9, 'oo'], [10, 21, 'oo']],
+      8: [[5, 7, 'og'], [6, 7, 'og'], [4, 8, 'oo'], [7, 8, 'oo'],
+          [5, 22, 'go'], [6, 22, 'go'], [4, 21, 'oo'], [7, 21, 'oo']],
+      9: [[11, 7, 'og'], [12, 7, 'og'], [10, 8, 'oo'], [13, 8, 'oo'],
+          [11, 22, 'go'], [12, 22, 'go'], [10, 21, 'oo'], [13, 21, 'oo']],
+    },
+  },
+
+  /* The Recall Chain. Three heavy links and the narrow joins between them,
+   * which is a silhouette nothing else in the game has. The rings themselves
+   * are the `link` and `chain` motifs' job — the grid supplies the mass and
+   * the motif pass cuts the holes, which is the division of labour the whole
+   * motif vocabulary exists for. */
+  chain: {
+    label: 'chain', kind: 'focus', axis: 16, curve: false, mass: 'B',
+    blade: [4, 18], guard: 19, guard2: 20, grip: [21, 27], pommel: 28,
+    stones: [{ y: 28, x: 13 }], crest: { y: 28, x: 13, dir: 'pommel' },
+    grid: [
+      ...frepeat(fblank(), 4),
+      fmid('oooo'), fmid('oBBBBo'), fmid('oBBBBo'), fmid('oooo'),
+      fmid('oBBo'),
+      fmid('oooo'), fmid('oBBBBo'), fmid('oBBBBo'), fmid('oooo'),
+      fmid('oBBo'),
+      fmid('oooo'), fmid('oBBBBo'), fmid('oBBBBo'), fmid('oooo'),
+      fmid('oBBo'), fmid('oggo'), fmid('oggggo'),
+      ...frepeat(fmid('osso'), 7),
+      fmid('oggggo'), fmid('oggo'), fmid('oo'), fblank(),
+    ],
+    growth: {
+      5: [[19, 13, 'og'], [19, 18, 'go'], [20, 12, 'og'], [20, 19, 'go']],
+      6: [[8, 13, 'og'], [8, 18, 'go'], [13, 13, 'og'], [13, 18, 'go'],
+          [18, 13, 'og'], [18, 18, 'go']],
+      7: [[4, 12, 'oooooooo'], [7, 12, 'oooooooo'], [9, 12, 'oooooooo'],
+          [12, 12, 'oooooooo'], [14, 12, 'oooooooo'], [17, 12, 'oooooooo']],
+      8: [[5, 10, 'og'], [6, 10, 'og'], [4, 10, 'oo'], [7, 10, 'oo'],
+          [5, 20, 'go'], [6, 20, 'go'], [4, 20, 'oo'], [7, 20, 'oo']],
+      9: [[15, 10, 'og'], [16, 10, 'og'], [14, 10, 'oo'], [17, 10, 'oo'],
+          [15, 20, 'go'], [16, 20, 'go'], [14, 20, 'oo'], [17, 20, 'oo']],
+    },
+  },
+
+  /* The Toolwright's Spanner. An open jaw and a throat, which is a hammer that
+   * is unmistakably not a hammer — and it is the only head in the section with
+   * a HOLE in it, so it reads at any size. */
+  spanner: {
+    label: 'spanner', kind: 'head', axis: 16, curve: false, mass: 'B',
+    teethWidth: 20, keepGap: [14, 17],
+    blade: [4, 11], guard: 12, guard2: 13, grip: [13, 27], pommel: 28,
+    stones: [{ y: 28, x: 13 }], crest: { y: 28, x: 13, dir: 'pommel' },
+    grid: [
+      ...frepeat(fblank(), 4),
+      frow(9, 'oooo', 19, 'oooo'),
+      frow(9, 'oBBo', 19, 'oBBo'), frow(9, 'oBBo', 19, 'oBBo'),
+      frow(10, 'oBBo', 18, 'oBBo'),
+      frow(10, 'oBBBBBBBBBBo'), frow(10, 'oBBBBBBBBBBo'),
+      frow(11, 'oBBBBBBBBo'), frow(12, 'oBBBBBBo'),
+      fmid('oggggo'),
+      ...frepeat(fmid('osso'), 15),
+      fmid('oggggo'), fmid('oggo'), fmid('oo'), fblank(),
+    ],
+    growth: {
+      5: [[12, 11, 'oggggggggo']],
+      6: [[3, 9, 'oooo'], [3, 19, 'oooo']],
+      7: [[5, 7, 'og'], [6, 7, 'og'], [4, 8, 'oo'], [7, 8, 'oo'],
+          [5, 23, 'go'], [6, 23, 'go'], [4, 22, 'oo'], [7, 22, 'oo']],
+      8: [[10, 8, 'og'], [10, 22, 'go'], [11, 9, 'og'], [11, 21, 'go']],
+      9: [[8, 6, 'og'], [9, 6, 'og'], [7, 7, 'oo'], [10, 7, 'oo'],
+          [8, 24, 'go'], [9, 24, 'go'], [7, 23, 'oo'], [10, 23, 'oo']],
+    },
+  },
+};
+
+export const FORGE_WEAPON_KEYS = Object.keys(FORGE_WEAPONS);
+
+/* Every name the rest of the game might hand us for a weapon: the six class
+ * ids, the six signature weapon ids out of gauntlet/classes.py, the ten ids in
+ * world.WEAPONS, the icon vocabulary items.py already ships, and the ordinary
+ * English words a designer will type into a JSON file at four in the morning.
+ *
+ * This table is the cheap half of rule D. The expensive half is that missing
+ * from it is not an error: forgeWeaponKey() falls through to a substring scan
+ * and then to `sword`, because a blade nobody has heard of is still a blade
+ * and a screen with a blade on it beats a screen with a stack trace on it. */
+/* The six lines gauntlet/forge.py ships, by id, each with its own silhouette.
+ * That last part is the point: forge.py's own art brief calls two lines
+ * sharing a grid "the cheapest legibility win available here", and it was
+ * right — the Calipers and the Chain were both `relic`, the Maul and the
+ * Spanner were both `hammer`, and a player cannot tell apart two weapons that
+ * are the same picture. `tint` is the class colour that file carries; it is
+ * the fallback accent when a caller gives a blade and a rung but no art. */
+const FORGE_BLADES = {
+  analysts_calipers:   { family: 'calipers', tint: '#7ec8ff' },
+  draft_axe:           { family: 'axe',      tint: '#ff7a4a' },
+  recall_chain:        { family: 'chain',    tint: '#c8a8ff' },
+  boundary_maul:       { family: 'hammer',   tint: '#8fd07a' },
+  toolwrights_spanner: { family: 'spanner',  tint: '#e8c37d' },
+  tracing_needle:      { family: 'dagger',   tint: '#ff6a7a' },
+};
+
+export const FORGE_BLADE_KEYS = Object.keys(FORGE_BLADES);
+
+const WEAPON_ALIAS = {
+  /* classes */
+  archivist: 'chain', berserker: 'axe', seer: 'dagger',
+  analyst: 'calipers', warden: 'hammer', artificer: 'spanner',
+  /* the six signature lines */
+  recallchain: 'chain', draftaxe: 'axe', tracingneedle: 'dagger',
+  analystscalipers: 'calipers', boundarymaul: 'hammer',
+  toolwrightsspanner: 'spanner',
+  caliper: 'calipers', wrench: 'spanner', maul: 'hammer',
+  /* world.WEAPONS */
+  hashblade: 'sword', twinsabers: 'sabers', windowstaff: 'staff',
+  recursionspear: 'spear', queuelance: 'lance', depthblade: 'dagger',
+  treeaxe: 'axe', heaphammer: 'hammer', matrixbow: 'bow',
+  dynamicrelic: 'focus',
+  /* icons and plain words */
+  blade: 'sword', longsword: 'sword', greatsword: 'sword', claymore: 'sword',
+  saber: 'sabers', sabre: 'sabers', sabres: 'sabers', twinblades: 'sabers',
+  knife: 'dagger', dirk: 'dagger', needle: 'dagger', stiletto: 'dagger',
+  polearm: 'spear', glaive: 'spear', halberd: 'spear', pike: 'lance',
+  hatchet: 'axe', cleaver: 'axe', mace: 'hammer', warhammer: 'hammer',
+  rod: 'staff', wand: 'staff', cane: 'staff', scepter: 'staff',
+  sceptre: 'staff', crozier: 'staff',
+  crossbow: 'bow', longbow: 'bow', shortbow: 'bow',
+  relic: 'focus', orb: 'focus', lens: 'focus', prism: 'focus',
+  core: 'focus', tome: 'focus', talisman: 'focus',
+};
+
+const weaponKeyCache = new Map();
+
+/* Resolve anything at all to a family. Never throws, never returns undefined.
+ * Order is intent first: an explicit family key beats an alias beats a
+ * substring, because "recursion_spear" contains "sword" in nobody's spelling
+ * but "greatsword_of_the_spearwright" contains both. */
+export function forgeWeaponKey(weapon) {
+  if (weapon && FORGE_WEAPONS[weapon]) return weapon;
+  if (weapon && FORGE_BLADES[weapon]) return FORGE_BLADES[weapon].family;
+  const raw = weapon && typeof weapon === 'object'
+    ? (weapon.weapon || weapon.family || weapon.id || weapon.icon || weapon.name)
+    : weapon;
+  const s = slug(raw);
+  if (!s) return 'sword';
+  if (FORGE_WEAPONS[s]) return s;
+  for (const id of FORGE_BLADE_KEYS) if (slug(id) === s) return FORGE_BLADES[id].family;
+  const hit = weaponKeyCache.get(s);
+  if (hit) return hit;
+  let found = WEAPON_ALIAS[s] || '';
+  if (!found) {
+    for (const k of FORGE_WEAPON_KEYS) if (s.includes(k)) { found = k; break; }
+  }
+  if (!found) {
+    for (const a of Object.keys(WEAPON_ALIAS)) if (s.includes(a)) { found = WEAPON_ALIAS[a]; break; }
+  }
+  if (!found) found = 'sword';
+  if (weaponKeyCache.size >= 256) weaponKeyCache.delete(weaponKeyCache.keys().next().value);
+  weaponKeyCache.set(s, found);
+  return found;
+}
+
+export function forgeWeapon(weapon) { return FORGE_WEAPONS[forgeWeaponKey(weapon)]; }
+
+/* ---------------- geometry the passes share ----------------
+ * Every pass below reads the grid it was handed rather than the table the grid
+ * came from. That is not purity for its own sake: the passes run in sequence,
+ * each one moves the edges, and a pass that used the AUTHORED column numbers
+ * would decorate where the object used to be. Teeth grown on a guard that the
+ * widen pass already pushed out is the whole difference between a weapon and
+ * a weapon with its fittings floating beside it.
+ */
+
+/* Contiguous spans of non-empty cells on one row. A crossed pair has two per
+ * row for most of its height and one where the blades meet, and every pass
+ * that assumes exactly one of them is wrong for the berserker. */
+function runsAt(cells, y) {
+  const r = cells[y];
+  if (!r) return [];
+  const out = [];
+  let a = -1;
+  for (let x = 0; x < r.length; x++) {
+    const solid = r[x] !== '.' && r[x] !== ' ';
+    if (solid && a < 0) a = x;
+    if (!solid && a >= 0) { out.push([a, x - 1]); a = -1; }
+  }
+  if (a >= 0) out.push([a, r.length - 1]);
+  return out;
+}
+
+/* The run this family considers its working mass. `mass` names the interior
+ * glyph a family cares about, which is how the axe's bit is worked and its
+ * haft is left alone — a haft that broadens with the bit is a club. */
+/* EVERY span of working material on this row, not just the widest one. A
+ * crossed pair has two, a pair of caliper arms has two, and a pass that took
+ * only the widest grooved one sabre of two and left the other blank — which
+ * looks less like a design decision and more like a bug, because it was. */
+function massRuns(cells, y, fam) {
+  if (fam.mass) {
+    const r = cells[y];
+    const out = [];
+    let a = -1;
+    for (let x = 0; x <= r.length; x++) {
+      const hit = x < r.length && r[x] === fam.mass;
+      if (hit && a < 0) a = x;
+      if (!hit && a >= 0) { if (x - 1 - a >= 1) out.push([a - 1, x]); a = -1; }
+    }
+    return out;
+  }
+  return runsAt(cells, y).filter(([a, b]) => b - a >= 2);
+}
+
+function massRun(cells, y, fam) {
+  if (fam.mass) {
+    /* An axe's bit and its haft are one unbroken run — they are joined, that
+     * is what a socket is — so "the widest run" finds the whole thing and
+     * grooves the handle. Name the material instead and take the span of it,
+     * bounded by whatever sits either side. */
+    const r = cells[y];
+    let bestA = -1, bestB = -2, a = -1;
+    for (let x = 0; x <= r.length; x++) {
+      const hit = x < r.length && r[x] === fam.mass;
+      if (hit && a < 0) a = x;
+      if (!hit && a >= 0) { if (x - 1 - a > bestB - bestA) { bestA = a; bestB = x - 1; } a = -1; }
+    }
+    if (bestA < 0) return null;
+    return [bestA - 1, bestB + 1];
+  }
+  let best = null;
+  for (const [a, b] of runsAt(cells, y)) {
+    if (b - a < 2) continue;
+    if (!best || (b - a) > (best[1] - best[0])) best = [a, b];
+  }
+  return best;
+}
+
+function widestRowIn(cells, range) {
+  let bestY = -1, bestW = -1;
+  for (let y = range[0]; y <= range[1]; y++) {
+    for (const [a, b] of runsAt(cells, y)) {
+      if (b - a > bestW) { bestW = b - a; bestY = y; }
+    }
+  }
+  return bestY;
+}
+
+const inBox = (y, x) => y >= 0 && y < FN && x >= 0 && x < FN;
+/* Write only into empty space. Used by everything that reaches AROUND the
+ * object — claws, crest spikes, teeth — because a claw that overwrites the
+ * thing it is gripping is a hole. */
+function soft(cells, y, x, ch) {
+  if (!inBox(y, x)) return;
+  if (cells[y][x] === '.' || cells[y][x] === ' ') cells[y][x] = ch;
+}
+function hard(cells, y, x, ch) { if (inBox(y, x)) cells[y][x] = ch; }
+
+/* Which shadow glyph a groove cut into this material should be. A groove in
+ * steel is body shadow; a groove in a grip is leather shadow; a groove in a
+ * gem is gem shadow. One map, because a fuller drawn in body shadow down a
+ * wooden haft is a stripe of grey paint. */
+const GROOVE = {
+  B: 'd', H: 'd', L: 'd', d: 'D', b: 'd',
+  s: 'u', t: 'u', u: 'u', w: 'u',
+  m: 'n', M: 'n', n: 'n',
+  g: 'y', G: 'y', y: 'y',
+  c: 'v', C: 'v',
+};
+
+/* ---------------- 1. broaden ----------------
+ * The first thing the smith does that the player can see from across the room.
+ * Only rows in the blade grow, only runs wide enough to have an interior, and
+ * a row that has nearly tapered to a point grows less than the body does — so
+ * the blade gets broader without the tip going blunt. */
+function forgeWiden(cells, fam, extra) {
+  if (!extra) return;
+  const [y0, y1] = fam.blade;
+  for (let y = y0; y <= y1; y++) {
+    for (const [a, b] of runsAt(cells, y)) {
+      const width = b - a - 1;
+      if (width < 2) continue;
+      if (cells[y][a] !== 'o' || cells[y][b] !== 'o') continue;
+      /* Each edge grows in the material that is actually behind it. An axe row
+       * is haft, then bit, in one run: broadening both ends with one glyph
+       * either turns the handle into a club or puts wood on the cutting edge.
+       * A row that is nothing but outline — the top and bottom cap of a hammer
+       * head — grows not at all, or the cap becomes a black bar. */
+      const li = cells[y][a + 1], ri = cells[y][b - 1];
+      const addFor = (inner) => {
+        if (inner === 'o' || inner === 'O' || inner === '.' || inner === ' ') return 0;
+        if (fam.mass && inner !== fam.mass) return 0;
+        /* Three interior pixels is a body; two is a taper. Widening a taper
+         * as hard as a body blunts the point, and NOT widening a three-wide
+         * arm leaves an instrument like the Calipers with no rung-3 move at
+         * all — which is the failure this whole ladder exists to prevent. */
+        return width >= 3 ? extra : Math.max(0, extra - 1);
+      };
+      let la = addFor(li), ra = addFor(ri);
+      /* Some objects ARE their gap. The Calipers measure with the space
+       * between two arms and the Spanner grips with the space between two
+       * jaws; broadening those arms until they meet does not make a better
+       * instrument, it makes a club. A family that has a gap says where it is
+       * and the widen pass stops at the edge of it. */
+      const gap = fam.keepGap;
+      if (gap) {
+        if (b < gap[0]) ra = Math.max(0, Math.min(ra, gap[0] - 1 - b));
+        if (a > gap[1]) la = Math.max(0, Math.min(la, a - gap[1] - 1));
+      }
+      if (la && a - la >= 0) {
+        cells[y][a] = li;
+        for (let k = 1; k < la; k++) cells[y][a - k] = li;
+        cells[y][a - la] = 'o';
+      }
+      if (ra && b + ra < FN) {
+        cells[y][b] = ri;
+        for (let k = 1; k < ra; k++) cells[y][b + k] = ri;
+        cells[y][b + ra] = 'o';
+      }
+    }
+  }
+}
+
+/* ---------------- 2. the fuller ----------------
+ * A groove down the blade, and the one escalation in this whole section that
+ * is allowed to be interior rather than outline — because a fuller IS
+ * interior, and faking it as a notch in the edge would be drawing a saw.
+ * It pays its way by getting LONGER: at rung 3 it is a short groove near the
+ * shoulder, at rung 8 it runs the length of the blade with a rune cut into it.
+ */
+function fullerRows(fam, level) {
+  const [y0, y1] = fam.blade;
+  const len = y1 - y0 + 1;
+  const frac = [0, 0.45, 0.70, 0.92][Math.min(3, level)];
+  const out = [];
+  /* A bow and a held focus have no shoulder and no point, so their groove is
+   * a laminate line that grows outward from the middle instead of downward
+   * from the tip. Same pass, honest about two different objects. */
+  if (fam.kind === 'bow' || fam.kind === 'focus') {
+    const mid = (y0 + y1) >> 1, half = Math.max(1, Math.round(len * frac / 2));
+    for (let y = mid - half; y <= mid + half; y++) if (y >= y0 && y <= y1) out.push(y);
+  } else {
+    const end = y0 + Math.round(len * frac);
+    for (let y = y0 + 2; y <= Math.min(end, y1); y++) out.push(y);
+  }
+  /* Never across the hand. A bow's blade range is the whole limb and the riser
+   * is in the middle of it; a groove cut through the grip is a groove through
+   * the part of the weapon that is wrapped. */
+  if (!fam.grip) return out;
+  return out.filter(y => y < fam.grip[0] || y > fam.grip[1]);
+}
+
+/* The two columns the centreline falls on. A blade an even number of pixels
+ * wide has no middle column, and rounding to one of them puts the groove
+ * visibly off-centre down the whole length — which at 32px is the single most
+ * obvious way to make a symmetrical object look hand-placed by a machine. */
+function centreCols(a, b) {
+  const inner = b - a - 1;
+  if (inner % 2 === 0) { const c = a + inner / 2; return [c, c + 1]; }
+  return [a + (inner + 1) / 2, a + (inner + 1) / 2];
+}
+
+function forgeFuller(cells, fam, def, tier) {
+  if (!def.fuller) return;
+  const rows = fullerRows(fam, def.fuller);
+  for (const y of rows) {
+    for (const [a, b] of massRuns(cells, y, fam)) {
+    if (b - a < 4) continue;
+    const [c0, c1] = centreCols(a, b);
+    const cut = (x, ch) => {
+      if (x <= a || x >= b) return;
+      const g = GROOVE[cells[y][x]];
+      if (g) cells[y][x] = ch === null ? g : ch;
+    };
+    /* From rung 6 a rune is cut INTO the groove rather than painted beside it.
+     * Every third row, so the inscription reads as intermittent marks rather
+     * than as a light-up strip. */
+    cut(c0, (tier >= 6 && y % 3 === 0) ? 'r' : null);
+    if (c1 === c0) { continue; }
+    /* At full depth the groove has two walls: the far one catches the light
+     * the near one loses, which is what makes it read as a cut rather than as
+     * a pencil line. Below that it is simply a wide groove. */
+    if (def.fuller >= 3 && b - a >= 6) cut(c1, 'L');
+    else cut(c1, null);
+    }
+  }
+}
+
+/* ---------------- 3. teeth ----------------
+ * The crossguard, and the brief's own example. Five steps: it widens, it
+ * widens again and drops lugs, the quillons turn up, they become horns, and
+ * finally the underside grows actual teeth.
+ *
+ * A family with no guard — a staff, a bow — falls back to its widest row,
+ * which is the same move the rarity ladder makes for an unauthored shape. It
+ * is a floor, not a ceiling: a staff's head prongs out instead of a guard
+ * growing quillons, and that is the right answer for a staff anyway.
+ */
+/* Runs a fitting may be grown on. A bowstring is one pixel wide and it is a
+ * run like any other, so without this the teeth pass grows quillons on the
+ * string — which is both funny and exactly the sort of thing a parametric
+ * pass does when nobody measures it. */
+function fittable(cells, y) { return runsAt(cells, y).filter(([a, b]) => b - a >= 2); }
+
+function extendRuns(cells, y, fill, limit = 22) {
+  if (y < 0 || y >= FN) return;
+  for (const [a, b] of fittable(cells, y)) {
+    if (b - a + 1 >= limit) continue;
+    if (a >= 1 && (cells[y][a - 1] === '.' || cells[y][a - 1] === ' ')) {
+      cells[y][a] = fill; cells[y][a - 1] = 'o';
+    }
+    if (b <= FN - 2 && (cells[y][b + 1] === '.' || cells[y][b + 1] === ' ')) {
+      cells[y][b] = fill; cells[y][b + 1] = 'o';
+    }
+  }
+}
+
+function forgeTeeth(cells, fam, level, silhouette) {
+  if (!level) return;
+  const gy = fam.guard != null ? fam.guard : widestRowIn(cells, fam.blade);
+  if (gy < 0 || gy >= FN) return;
+  const fill = fam.guard != null ? 'g' : (cells[gy][(runsAt(cells, gy)[0] || [0, 0])[0] + 1] || 'g');
+  /* Two pixels each side at the first step, not one. One pixel is four pixels
+   * of silhouette across the whole object, which measures as a change and does
+   * not read as one — and rung 2 is the rung a player buys to find out whether
+   * upgrading is worth doing at all. */
+  /* Every family says how big its fitting is allowed to get. A lance is meant
+   * to have a vamplate the width of the box; a bow riser that grows to the
+   * same width has stopped being a riser and become a plank across the bow. */
+  const cap = (fam.teethWidth || 22)
+    + (silhouette === 'broad' ? 4 : silhouette === 'narrow' ? -4 : 0);
+  extendRuns(cells, gy, fill, cap);
+  extendRuns(cells, gy, fill, cap);
+  /* The second guard row goes with it where a family has one, so the fitting
+   * reads as thicker rather than as a wider plate on top of the same block. */
+  if (fam.guard2 != null) extendRuns(cells, fam.guard2, fill, cap);
+  if (level >= 2) {
+    /* Two more, not one. Rung 4 is the rung where the guard stops being a
+     * fitting and starts being a guard, and one pixel a side measured as a
+     * change without reading as one — which is the same mistake rung 2 made
+     * before it was counted. */
+    extendRuns(cells, gy, fill, cap);
+    extendRuns(cells, gy, fill, cap);
+    for (const [a, b] of fittable(cells, gy)) { soft(cells, gy + 1, a, 'o'); soft(cells, gy + 1, b, 'o'); }
+  }
+  if (level >= 3) {
+    for (const [a, b] of fittable(cells, gy)) {
+      soft(cells, gy - 1, a, 'o'); soft(cells, gy - 2, a, 'o');
+      soft(cells, gy - 1, b, 'o'); soft(cells, gy - 2, b, 'o');
+    }
+  }
+  if (level >= 4) {
+    /* The quillon tip forks. Deliberately NOT a taller spike: the authored
+     * wings at the top rungs climb from exactly here, and two passes both
+     * growing upward out of the same four pixels is how a swept guard turns
+     * into a handful of loose dots. */
+    for (const [a, b] of fittable(cells, gy)) {
+      soft(cells, gy - 1, a - 1, 'o'); soft(cells, gy + 1, a - 1, 'o');
+      soft(cells, gy - 1, b + 1, 'o'); soft(cells, gy + 1, b + 1, 'o');
+    }
+  }
+  if (level >= 5) {
+    /* Teeth hang off the underside — and only where there is something
+     * directly above for them to hang off. A tooth under a gap is not a tooth,
+     * it is one loose pixel, and one loose pixel beside a sprite is the single
+     * most common way procedural art gives itself away. */
+    for (const [a, b] of fittable(cells, gy)) {
+      for (let x = a; x <= b; x += 2) {
+        const above = cells[gy + 1] && cells[gy + 1][x];
+        if (!above || above === '.' || above === ' ') continue;
+        soft(cells, gy + 2, x, 'o');
+      }
+    }
+  }
+}
+
+/* ---------------- 4. inlay ----------------
+ * Trim run down the blade beside the fuller. Dashed, then close, then
+ * continuous with set pips — the ladder a real inlay actually climbs, and the
+ * reason rung 5 is called Inlaid.
+ */
+function forgeInlay(cells, fam, level) {
+  if (!level) return;
+  /* Trim laid into a blade is inlay; trim laid down a bow limb is a sticker,
+   * and trim laid inside a crystal core is a scratch. The families that have
+   * no worked flat to inlay escalate at the crest and the setting instead. */
+  if (fam.kind === 'bow' || fam.kind === 'focus') return;
+  const [y0, y1] = fam.blade;
+  const stride = level >= 3 ? 1 : level >= 2 ? 2 : 4;
+  for (let y = y0 + 3; y <= y1 - 1; y += stride) {
+    for (const [a, b] of massRuns(cells, y, fam)) {
+    if (b - a < 5) continue;
+    const [c0, c1] = centreCols(a, b);
+    const put = (x, ch) => {
+      if (x <= a || x >= b) return;
+      const c = cells[y][x];
+      if (c === '.' || c === 'o' || c === 'O' || c === 'r') return;
+      cells[y][x] = ch;
+    };
+    put(c0 - 1, 'g'); put(c1 + 1, 'g');
+    if (level >= 3 && y % 5 === 0) { put(c0 - 1, 'm'); put(c1 + 1, 'm'); }
+    }
+  }
+}
+
+/* ---------------- 5. the stone ----------------
+ * A cap, then a stone, then a faceted stone that hangs below the pommel, then
+ * one held in claws. Placed from the family table rather than derived, because
+ * a stone placed by an algorithm always lands in the wrong hole.
+ */
+function forgeStone(cells, seat, level) {
+  if (!level || !seat) return;
+  const { y, x } = seat;
+  if (!inBox(y, x) || x + 5 >= FN) return;
+  if (level >= 1) {
+    /* Rung 2 fits a proper cap: the counterweight squares up to the full width
+     * of the setting the smith is eventually going to put a stone in. On a
+     * family whose pommel is already that wide this does nothing and the rung
+     * is carried by the guard instead — which is why every family also
+     * declares a second fitting row. */
+    for (let k = 1; k <= 4; k++) soft(cells, y, x + k, 'g');
+    const edge = (cx) => {
+      if (!inBox(y, cx)) return;
+      const c = cells[y][cx];
+      if (c === '.' || c === ' ') cells[y][cx] = 'o';
+    };
+    edge(x); edge(x + 5);
+  }
+  if (level >= 2) {
+    for (let k = 1; k <= 4; k++) hard(cells, y, x + k, k === 2 || k === 3 ? 'M' : 'm');
+  }
+  if (level >= 3 && y + 2 < FN) {
+    hard(cells, y, x, 'o'); hard(cells, y, x + 5, 'o');
+    hard(cells, y + 1, x, 'o'); hard(cells, y + 1, x + 5, 'o');
+    for (let k = 1; k <= 4; k++) hard(cells, y + 1, x + k, k === 2 || k === 3 ? 'M' : 'm');
+    /* The bottom edge closes the stone, but only across space it can have:
+     * this seat may be halfway up a bow riser rather than hanging in air. */
+    hard(cells, y + 2, x, 'o'); hard(cells, y + 2, x + 5, 'o');
+    for (let k = 1; k <= 4; k++) soft(cells, y + 2, x + k, 'o');
+  }
+  if (level >= 4) {
+    soft(cells, y - 1, x + 1, 'o'); soft(cells, y - 1, x + 2, 'g');
+    soft(cells, y - 1, x + 3, 'g'); soft(cells, y - 1, x + 4, 'o');
+    soft(cells, y, x - 1, 'o'); soft(cells, y, x + 6, 'o');
+    soft(cells, y + 1, x - 1, 'o'); soft(cells, y + 1, x + 6, 'o');
+    soft(cells, y + 3, x + 2, 'o'); soft(cells, y + 3, x + 3, 'o');
+    /* Once claws wrap the setting from outside, the setting's own edge is no
+     * longer an edge — and leaving it as outline puts two near-black columns
+     * side by side, which at 32px reads as a crack down the middle of the
+     * mount rather than as metal holding a stone. */
+    for (const ry of [y, y + 1]) {
+      for (const cx of [x, x + 5]) {
+        if (inBox(ry, cx) && (cells[ry][cx] === 'o' || cells[ry][cx] === 'O')) cells[ry][cx] = 'g';
+      }
+    }
+  }
+}
+
+/* ---------------- 6. the crest ----------------
+ * Where a weapon grows a crown. Two directions, because half these families
+ * crown at the head and half crown at the pommel, and a spike above the point
+ * of a sword is not a crest, it is a second sword.
+ */
+function forgeCrest(cells, seat, level) {
+  if (!level || !seat) return;
+  const { y, x, dir } = seat;
+  if (dir === 'pommel') {
+    /* The pommel swells upward into the grip: the rows above it widen to the
+     * setting's own width, then flare past it. */
+    for (let k = 1; k <= Math.min(level, 4); k++) {
+      const ry = y - k;
+      if (ry < 0) break;
+      if (k <= 2 || level >= 3) { hard(cells, ry, x, 'o'); hard(cells, ry, x + 5, 'o'); }
+      /* The grip's own edge is now INSIDE the flare, so it stops being an edge.
+       * Leaving it as outline puts two near-black columns side by side down the
+       * middle of the fitting, which reads as a crack rather than as a swell. */
+      for (let i = 1; i <= 4; i++) {
+        const c = cells[ry][x + i];
+        if (c === '.' || c === ' ' || c === 'o' || c === 'O') cells[ry][x + i] = 'g';
+      }
+      if (level >= 3 && k <= 2) { soft(cells, ry, x - 1, 'o'); soft(cells, ry, x + 6, 'o'); }
+    }
+    return;
+  }
+  /* Nearest run rather than the run containing x: by the time the crest is
+   * placed the crown may have been broadened and sheared out from under the
+   * authored column, and a crest that silently declines to appear is worse
+   * than one that lands a pixel off. */
+  let run = null, bestD = Infinity;
+  for (const r of runsAt(cells, y)) {
+    const d = Math.abs(((r[0] + r[1]) / 2) - x);
+    if (d < bestD) { bestD = d; run = r; }
+  }
+  if (!run) return;
+  const [a, b] = run;
+  const c0 = (a + b) >> 1, c1 = (a + b + 1) >> 1;
+  soft(cells, y - 1, c0, 'o'); soft(cells, y - 1, c1, 'o');
+  if (level >= 2) { soft(cells, y - 1, a, 'o'); soft(cells, y - 1, b, 'o'); }
+  if (level >= 3) {
+    soft(cells, y - 2, c0, 'o'); soft(cells, y - 2, c1, 'o');
+    soft(cells, y - 1, a - 1, 'o'); soft(cells, y - 1, b + 1, 'o');
+    for (let x2 = a; x2 <= b; x2++) soft(cells, y - 1, x2, 'g');
+  }
+  if (level >= 4) {
+    soft(cells, y - 3, c0, 'o'); soft(cells, y - 3, c1, 'o');
+    soft(cells, y - 2, a, 'o'); soft(cells, y - 2, b, 'o');
+    soft(cells, y - 2, a - 1, 'o'); soft(cells, y - 2, b + 1, 'o');
+  }
+}
+
+/* ---------------- 7. the curve ----------------
+ * The brief's last silhouette move, and the strongest one: at the top rungs
+ * the blade stops being straight.
+ *
+ * Done as a per-row integer shear, which is how a pixel artist draws a curved
+ * blade — the stair-step IS the curve at this resolution, and anything smoother
+ * would need antialiasing the rest of the game does not have. The profile is
+ * zero at the shoulder and maximum at the point, so the hilt stays where the
+ * hand is and only the steel sweeps. Families whose geometry cannot take it
+ * say so in their table: shearing a crossed pair opens the X, and shearing an
+ * axe head detaches it from the haft.
+ */
+function forgeCurve(cells, fam, amountIn) {
+  if (!amountIn || !fam.curve) return;
+  const [y0, y1] = fam.blade;
+  const span = Math.max(1, y1 - y0);
+  /* Scaled to the length being bent. Two pixels of sweep across twenty rows of
+   * longsword is a curve; the same two pixels across a seven-row spear head is
+   * a bent spear, and a bent weapon reads as a broken one. */
+  const amount = Math.min(amountIn, Math.max(1, Math.round((span + 1) / 8)));
+  for (let y = y0; y <= y1; y++) {
+    /* 1.25 rather than a straight ramp: the sweep has to be zero for several
+     * rows above the guard or the hilt visibly detaches from the hand, and it
+     * has to reach its full offset well before the point or the "curve" is two
+     * pixels at the tip and nothing anywhere else. */
+    const t = (y1 - y) / span;
+    const dx = Math.round(amount * Math.pow(t, 1.25));
+    if (!dx) continue;
+    const src = cells[y].slice();
+    let clipped = false;
+    for (let x = 0; x < FN; x++) {
+      if (src[x] === '.' || src[x] === ' ') continue;
+      if (x + dx >= FN) { clipped = true; break; }
+    }
+    if (clipped) continue;
+    for (let x = 0; x < FN; x++) cells[y][x] = '.';
+    for (let x = 0; x < FN; x++) {
+      if (src[x] === '.' || src[x] === ' ') continue;
+      cells[y][x + dx] = src[x];
+    }
+  }
+}
+
+
+/* ================================================================
+ * MOTIFS AND AURAS
+ * ================================================================
+ * gauntlet/legendaries.py asked for twelve motifs and six auras; forge.py adds
+ * six and six more and ships the two MERGED tables as ART_MOTIFS and
+ * ART_AURAS. This is the one implementation of both, and forgeVocabulary()
+ * publishes the key list so a test over there can prove nothing has drifted.
+ *
+ * The two passes sit in different places for a reason the art brief is explicit
+ * about, and getting it wrong is visible:
+ *
+ *   A MOTIF is cut INTO the object, between ornament and applyRim, so the rim
+ *   pass lights the mark the same way it lights everything else. A motif added
+ *   after the rim is a sticker.
+ *
+ *   An AURA is drawn OUTSIDE the silhouette, after animate, because it is not
+ *   part of the object — it is what the object is doing to the air around it.
+ *   An aura drawn before the rim gets shaded like metal and stops reading as
+ *   light.
+ *
+ * Every motif is deterministic in (tier, seed). Every aura is deterministic in
+ * (frame, seed). Neither ever calls Math.random, and both are evaluated once
+ * per cached frame and never in a draw path.
+ */
+
+/* The object's own extent, which is what every mark below is placed against.
+ * Placing marks against the 32-box instead would put a tally on a dagger in
+ * the air beside it. */
+function bodyBox(cells) {
+  let x0 = FN, y0 = FN, x1 = -1, y1 = -1;
+  for (let y = 0; y < cells.length; y++) {
+    for (let x = 0; x < FN; x++) {
+      const c = cells[y][x];
+      if (c === '.' || c === ' ') continue;
+      if (x < x0) x0 = x;
+      if (x > x1) x1 = x;
+      if (y < y0) y0 = y;
+      if (y > y1) y1 = y;
+    }
+  }
+  return x1 < 0 ? null : { x0, y0, x1, y1 };
+}
+
+/* Glyphs a mark may be cut into: body, trim and stone, never outline and never
+ * empty space. A motif that overwrites the outline punches a hole in the
+ * silhouette, which is the one thing this whole section is built to protect. */
+const MARKABLE = new Set(['B', 'b', 'H', 'L', 'd', 'D', 's', 't', 'u', 'g', 'G', 'y', 'm', 'M', 'n', 'w', 'c', 'C', 'v']);
+
+function markable(cells, y, x) {
+  return inBox(y, x) && MARKABLE.has(cells[y][x]);
+}
+function mark(cells, y, x, ch) {
+  if (markable(cells, y, x)) cells[y][x] = ch;
+}
+/* Cut a pixel OUT of the object — used by keyward and by the unlabelled aura.
+ * Interior only: taking an outline pixel severs the shape. */
+function unmark(cells, y, x) {
+  if (!inBox(y, x)) return;
+  const c = cells[y][x];
+  if (c === 'o' || c === 'O' || c === '.' || c === ' ') return;
+  cells[y][x] = '.';
+}
+
+/* The column with the most body in it, which is where a mark down the long
+ * axis belongs. Derived rather than taken from fam.axis so a sheared blade
+ * carries its marks with it. */
+function densestColumn(cells, box) {
+  let best = box.x0, bestN = -1;
+  for (let x = box.x0; x <= box.x1; x++) {
+    let n = 0;
+    for (let y = box.y0; y <= box.y1; y++) if (markable(cells, y, x)) n++;
+    if (n > bestN) { bestN = n; best = x; }
+  }
+  return best;
+}
+
+/* The widest fully-marked row, for the motifs that want to sit across the
+ * object rather than down it. */
+function widestMarkRow(cells, box) {
+  let best = box.y0, bestN = -1;
+  for (let y = box.y0; y <= box.y1; y++) {
+    let n = 0;
+    for (let x = box.x0; x <= box.x1; x++) if (markable(cells, y, x)) n++;
+    if (n > bestN) { bestN = n; best = y; }
+  }
+  return best;
+}
+
+function markSpan(cells, y, box) {
+  let a = -1, b = -1;
+  for (let x = box.x0; x <= box.x1; x++) {
+    if (!markable(cells, y, x)) continue;
+    if (a < 0) a = x;
+    b = x;
+  }
+  return a < 0 ? null : [a, b];
+}
+
+/* ---------------- the eighteen motifs ----------------
+ * Each one is the sentence gauntlet/forge.py's ART_MOTIFS writes about it,
+ * turned into pixels. Where that text says "one pixel per rung" or "along its
+ * long axis", the code does exactly that and not something near it — the point
+ * of shipping the descriptions with the data was that they be drawable.
+ */
+const FORGE_MOTIFS = {
+  /* four upright scratches and a fifth struck through them */
+  tally(cells, box, c) {
+    const cx = densestColumn(cells, box);
+    const top = box.y0 + Math.round((box.y1 - box.y0) * 0.35);
+    const len = Math.max(3, Math.round((box.y1 - box.y0) * 0.22));
+    for (let i = 0; i < 4; i++) {
+      const x = cx - 3 + i * 2;
+      for (let y = top; y < top + len; y++) mark(cells, y, x, 'g');
+    }
+    for (let i = 0; i < 5; i++) mark(cells, top + Math.floor(len / 2) + (i > 2 ? 1 : 0), cx - 4 + i * 2, 'G');
+  },
+
+  /* a single-pixel spiral wound inward from the widest point, one arm per
+   * frame at animated tiers */
+  spiral(cells, box, c) {
+    const y = widestMarkRow(cells, box);
+    const span = markSpan(cells, y, box);
+    if (!span) return;
+    const cx = (span[0] + span[1]) >> 1;
+    const arms = c.animated ? 1 + (c.frame % 6) : 6;
+    let x = span[0], yy = y, dx = 1, dy = 0, run = Math.min(5, span[1] - span[0]);
+    for (let arm = 0; arm < arms && run > 0; arm++) {
+      for (let k = 0; k < run; k++) { mark(cells, yy, x, 'g'); x += dx; yy += dy; }
+      const t = dx; dx = -dy; dy = t;
+      if (arm % 2 === 1) run -= 1;
+    }
+    mark(cells, y, cx, 'G');
+  },
+
+  /* two interlocked links where the body meets its haft or band */
+  chain(cells, box, c) {
+    const y = Math.round(box.y0 + (box.y1 - box.y0) * 0.62);
+    const span = markSpan(cells, y, box);
+    if (!span) return;
+    const cx = (span[0] + span[1]) >> 1;
+    for (const [ox, oy] of [[-2, 0], [1, 1]]) {
+      mark(cells, y + oy, cx + ox, 'g'); mark(cells, y + oy, cx + ox + 1, 'g');
+      mark(cells, y + oy + 1, cx + ox, 'g'); mark(cells, y + oy + 1, cx + ox + 1, 'g');
+      mark(cells, y + oy, cx + ox, 'y');
+    }
+  },
+
+  /* a palm, fingers spread, filling the body */
+  open_hand(cells, box, c) {
+    const cx = densestColumn(cells, box);
+    const cy = Math.round(box.y0 + (box.y1 - box.y0) * 0.45);
+    for (let x = cx - 1; x <= cx + 1; x++) for (let y = cy; y <= cy + 2; y++) mark(cells, y, x, 'g');
+    for (const [dx, dy] of [[-3, -1], [-2, -2], [0, -3], [2, -2], [3, 0]]) {
+      mark(cells, cy + dy, cx + dx, 'g');
+      mark(cells, cy + dy + 1, cx + dx, 'y');
+    }
+  },
+
+  /* a lidless circle with a single dark pixel at its centre, set high */
+  eye(cells, box, c) {
+    const cy = box.y0 + Math.max(2, Math.round((box.y1 - box.y0) * 0.22));
+    const span = markSpan(cells, cy, box);
+    if (!span) return;
+    const cx = (span[0] + span[1]) >> 1;
+    for (const [dx, dy] of [[-1, -1], [0, -1], [1, -1], [-2, 0], [2, 0], [-1, 1], [0, 1], [1, 1]]) {
+      mark(cells, cy + dy, cx + dx, 'g');
+    }
+    mark(cells, cy, cx, 'D');
+  },
+
+  /* a branching hairline crack from one edge */
+  fracture(cells, box, c) {
+    const rand = rng(c.seed ^ 0x1d3b);
+    let x = box.x0 + 1 + Math.floor(rand() * 2);
+    let y = Math.round(box.y0 + (box.y1 - box.y0) * 0.3);
+    const steps = Math.max(4, Math.round((box.y1 - box.y0) * 0.45));
+    for (let i = 0; i < steps; i++) {
+      mark(cells, y, x, 'D');
+      y += 1;
+      if (rand() > 0.55) x += rand() > 0.5 ? 1 : -1;
+      if (i === Math.floor(steps / 2)) {
+        let bx = x + 1, by = y;
+        for (let k = 0; k < 3; k++) { mark(cells, by, bx, 'D'); bx += 1; by += 1; }
+      }
+    }
+  },
+
+  /* a welded join across the body, brighter than the metal, corner to corner */
+  seam(cells, box, c) {
+    const w = box.x1 - box.x0, h = box.y1 - box.y0;
+    const n = Math.max(w, h);
+    for (let i = 0; i <= n; i++) {
+      const x = box.x0 + Math.round((i / n) * w);
+      const y = box.y0 + Math.round((i / n) * h);
+      mark(cells, y, x, 'W');
+      mark(cells, y, x + 1, 'G');
+    }
+  },
+
+  /* one pixel of accent at each extreme end of the body and nothing between */
+  boundary(cells, box, c) {
+    for (const y of [box.y0, box.y1]) {
+      const span = markSpan(cells, y, box);
+      if (!span) continue;
+      const cx = (span[0] + span[1]) >> 1;
+      mark(cells, y, cx, 'r');
+      mark(cells, y, cx + ((span[1] - span[0]) > 2 ? 1 : 0), 'r');
+    }
+  },
+
+  /* three barbs raked backward along one edge */
+  thorn(cells, box, c) {
+    const step = Math.max(2, Math.round((box.y1 - box.y0) / 5));
+    for (let i = 0; i < 3; i++) {
+      const y = box.y0 + Math.round((box.y1 - box.y0) * 0.3) + i * step;
+      const span = markSpan(cells, y, box);
+      if (!span) continue;
+      soft(cells, y, span[0] - 1, 'o');
+      soft(cells, y + 1, span[0] - 1, 'o');
+      mark(cells, y, span[0], 'g');
+    }
+  },
+
+  /* a band of accent across the lower third, lightening what is above it and
+   * leaving what is below it dark */
+  dawn_line(cells, box, c) {
+    const y = Math.round(box.y0 + (box.y1 - box.y0) * 0.66);
+    for (let x = box.x0; x <= box.x1; x++) mark(cells, y, x, 'g');
+    for (let yy = box.y0; yy < y; yy++) {
+      for (let x = box.x0; x <= box.x1; x++) {
+        const ch = cells[yy][x];
+        if (ch === 'B' || ch === 'd') cells[yy][x] = 'L';
+      }
+    }
+    for (let yy = y + 1; yy <= box.y1; yy++) {
+      for (let x = box.x0; x <= box.x1; x++) {
+        const ch = cells[yy][x];
+        if (ch === 'B' || ch === 'L' || ch === 'H') cells[yy][x] = 'd';
+      }
+    }
+  },
+
+  /* a single green pixel, off-centre, that does not move when the glint does.
+   * 'i' is its own glyph precisely so the glint cannot claim it — see HARD. */
+  index_dot(cells, box, c) {
+    const cx = densestColumn(cells, box);
+    const y = Math.round(box.y0 + (box.y1 - box.y0) * 0.38);
+    if (!markable(cells, y, cx + 1)) mark(cells, y, cx, 'i');
+    else mark(cells, y, cx + 1, 'i');
+  },
+
+  /* three ward-teeth cut into the lower edge, unevenly spaced */
+  keyward(cells, box, c) {
+    const y = box.y1 - 1;
+    const span = markSpan(cells, y, box);
+    if (!span) return;
+    for (const dx of [1, 3, 6]) {
+      unmark(cells, y, span[0] + dx);
+      unmark(cells, y - 1, span[0] + dx);
+    }
+  },
+
+  /* two opposed arms closing on the body, the gap narrowing one pixel a rung */
+  caliper_jaw(cells, box, c) {
+    const y = Math.round(box.y0 + (box.y1 - box.y0) * 0.45);
+    const span = markSpan(cells, y, box);
+    if (!span) return;
+    const cx = (span[0] + span[1]) >> 1;
+    const gap = Math.max(1, 6 - Math.floor(c.tier / 2));
+    for (const dir of [-1, 1]) {
+      const from = cx + dir * Math.ceil(gap / 2);
+      for (let k = 0; k < 3; k++) mark(cells, y, from + dir * k, 'g');
+      mark(cells, y - 1, from, 'y');
+      mark(cells, y + 1, from, 'y');
+    }
+  },
+
+  /* evenly spaced ticks along one edge, every fifth one a pixel longer */
+  rule_marks(cells, box, c) {
+    let i = 0;
+    for (let y = box.y0 + 2; y <= box.y1 - 2; y += 2, i++) {
+      const span = markSpan(cells, y, box);
+      if (!span) continue;
+      mark(cells, y, span[0], 'g');
+      if (i % 5 === 4) mark(cells, y, span[0] + 1, 'g');
+    }
+  },
+
+  /* the temper line: a hard boundary where the metal changes shade, drawn
+   * rather than shaded */
+  quench_line(cells, box, c) {
+    const y = Math.round(box.y0 + (box.y1 - box.y0) * 0.45);
+    for (let x = box.x0; x <= box.x1; x++) {
+      if (markable(cells, y, x)) cells[y][x] = 'G';
+      for (let yy = y + 1; yy <= box.y1; yy++) {
+        const ch = cells[yy][x];
+        if (ch === 'B' || ch === 'L' || ch === 'H') cells[yy][x] = 'd';
+      }
+    }
+  },
+
+  /* the smith's stamp: three struck pips in a triangle, slightly off square */
+  forge_mark(cells, box, c) {
+    const y = Math.round(box.y0 + (box.y1 - box.y0) * 0.72);
+    const span = markSpan(cells, y, box);
+    if (!span) return;
+    const cx = (span[0] + span[1]) >> 1;
+    mark(cells, y, cx, 'd');
+    mark(cells, y + 1, cx - 2, 'd');
+    mark(cells, y + 1, cx + 1, 'd');
+  },
+
+  /* one closed ring of accent, and a second behind it drawn only where the
+   * first does not cover it */
+  link(cells, box, c) {
+    const y = Math.round(box.y0 + (box.y1 - box.y0) * 0.4);
+    const span = markSpan(cells, y, box);
+    if (!span) return;
+    const cx = (span[0] + span[1]) >> 1;
+    const ring = (ox, oy, ch) => {
+      for (const [dx, dy] of [[-1, -1], [0, -1], [-1, 1], [0, 1], [-2, 0], [1, 0]]) {
+        const py = y + oy + dy, px = cx + ox + dx;
+        if (ch === 'y' && cells[py] && (cells[py][px] === 'g')) continue;
+        mark(cells, py, px, ch);
+      }
+    };
+    ring(2, 2, 'y');
+    ring(0, 0, 'g');
+  },
+
+  /* a single-pixel fault running WITH the long axis, and it does not branch */
+  hairline(cells, box, c) {
+    const cx = densestColumn(cells, box) + 1;
+    /* Short. A fault that runs the whole length of an object stops reading as
+     * a fault and starts reading as a seam, which is a different motif and is
+     * three entries up this table. */
+    const from = box.y0 + Math.round((box.y1 - box.y0) * 0.28);
+    const to = box.y0 + Math.round((box.y1 - box.y0) * 0.58);
+    for (let y = from; y <= to; y++) mark(cells, y, cx, 'D');
+  },
+};
+
+export const FORGE_MOTIF_KEYS = Object.keys(FORGE_MOTIFS);
+
+/* ---------------- the twelve auras ----------------
+ * Drawn outside the silhouette, after the light has moved. `x` and `X` are the
+ * accent and its lit state; neither is in HARD, so the travelling specular
+ * cannot claim an aura pixel and make it look like part of the metal.
+ */
+const FORGE_AURAS = {
+  /* sparks detach from the lower edge and fall two pixels before fading */
+  emberfall(cells, box, c) {
+    const rand = rng(c.seed ^ 0x3ab1);
+    const phase = c.frame % 4;
+    for (let i = 0; i < 4; i++) {
+      const x = box.x0 + Math.floor(rand() * Math.max(1, box.x1 - box.x0 + 1));
+      let y = box.y1;
+      while (y >= 0 && cells[y] && cells[y][x] === '.') y--;
+      for (let s = 0; s < 3; s++) {
+        const fall = ((phase + i) % 4);
+        if (fall > 2) continue;
+        soft(cells, y + 2 + fall, x, fall === 0 ? 'X' : 'x');
+        break;
+      }
+    }
+  },
+
+  /* a one-pixel halo that brightens and dims WITHOUT travelling */
+  coldlight(cells, box, c) {
+    const lit = (c.frame % 4) < 2;
+    for (let y = box.y0 - 1; y <= box.y1 + 1; y++) {
+      for (let x = box.x0 - 1; x <= box.x1 + 1; x++) {
+        if (!inBox(y, x) || cells[y][x] !== '.') continue;
+        /* Sparse on purpose. A pixel at every point on the outline is not a
+         * halo, it is a second outline in a brighter colour, and at 32px it
+         * fills the space around the object with noise. */
+        if (((x * 3 + y * 5) % 7) !== 0) continue;
+        let touching = false;
+        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          const c2 = cells[y + dy] && cells[y + dy][x + dx];
+          if (c2 && c2 !== '.' && c2 !== ' ') touching = true;
+        }
+        if (touching) cells[y][x] = lit ? 'X' : 'x';
+      }
+    }
+  },
+
+  /* pixels of the silhouette go missing and return; never more than three at
+   * once, never the same three twice */
+  voidbite(cells, box, c) {
+    const rand = rng((c.seed ^ 0x77d9) + c.frame * 2654435761);
+    let bitten = 0, tries = 0;
+    while (bitten < 3 && tries++ < 60) {
+      const x = box.x0 + Math.floor(rand() * (box.x1 - box.x0 + 1));
+      const y = box.y0 + Math.floor(rand() * (box.y1 - box.y0 + 1));
+      const ch = inBox(y, x) ? cells[y][x] : '.';
+      if (ch === '.' || ch === ' ' || ch === 'o' || ch === 'O') continue;
+      cells[y][x] = '.';
+      bitten++;
+    }
+  },
+
+  /* accent wicks down the blade and off the point, one pixel per frame */
+  slowbleed(cells, box, c) {
+    const cx = densestColumn(cells, box);
+    const y = box.y1 + 1 + (c.frame % Math.max(1, FN - box.y1 - 2));
+    soft(cells, y, cx, 'X');
+    soft(cells, y + 1, cx, 'x');
+  },
+
+  /* no animation at all, at a rung that normally animates. forgeFrameCount()
+   * pins the frame; there is nothing left for this to draw, and that is the
+   * entire content of it. */
+  stillness() {},
+
+  /* a second, offset shadow that does not match the room's light */
+  handshadow(cells, box, c) {
+    const src = cells.map(r => r.slice());
+    for (let y = box.y0; y <= box.y1; y++) {
+      for (let x = box.x0; x <= box.x1; x++) {
+        const ch = src[y][x];
+        if (ch === '.' || ch === ' ') continue;
+        soft(cells, y + 1, x + 2, 'x');
+      }
+    }
+  },
+
+  /* a two-pixel plume off the upper edge that rises, thins and vanishes. Its
+   * period is six against the glint's twelve, so the two coincide once a cycle
+   * instead of on every plume — which is as close to the brief's "never sync"
+   * as a cached frame table can honestly get. */
+  quenchsteam(cells, box, c) {
+    const cx = densestColumn(cells, box);
+    const t = c.frame % 6;
+    const top = box.y0 - 1;
+    if (t >= 5) return;
+    soft(cells, top - t, cx, t < 2 ? 'X' : 'x');
+    if (t < 3) soft(cells, top - t, cx + 1, 'x');
+    if (t >= 1 && t < 4) soft(cells, top - t + 1, cx, 'x');
+  },
+
+  /* the lowest third of the body cycles one step up its ramp and back */
+  heatglow(cells, box, c) {
+    const up = (c.frame % 4) < 2;
+    if (!up) return;
+    const from = Math.round(box.y0 + (box.y1 - box.y0) * 0.66);
+    const step = { D: 'd', d: 'B', B: 'L', L: 'H', u: 's', s: 't', y: 'g', g: 'G' };
+    for (let y = from; y <= box.y1; y++) {
+      for (let x = box.x0; x <= box.x1; x++) {
+        const n = step[cells[y][x]];
+        if (n) cells[y][x] = n;
+      }
+    }
+  },
+
+  /* a single accent pixel travelling the long axis end to end, one a frame —
+   * the only aura that reads as an instrument rather than as power */
+  measure(cells, box, c) {
+    const h = box.y1 - box.y0;
+    const y = box.y0 + (c.frame % Math.max(1, h + 1));
+    soft(cells, y, box.x1 + 1, 'X');
+    soft(cells, y, box.x0 - 1, 'x');
+  },
+
+  /* one accent pixel lights per frame along a row of marks until the row is
+   * full, then all of them go dark at once */
+  tallylight(cells, box, c) {
+    const n = 6;
+    const lit = c.frame % (n + 2);
+    if (lit > n) return;
+    const y = box.y1 + 1;
+    for (let i = 0; i < lit; i++) soft(cells, y, box.x0 + i * 2, i === lit - 1 ? 'X' : 'x');
+  },
+
+  /* three accent pixels outside the silhouette, arranged as a bent path, that
+   * swap which of them is brightest */
+  roadglow(cells, box, c) {
+    const pts = [[box.y1 + 1, box.x0 - 2], [box.y1 - 1, box.x0 - 3], [box.y1 - 4, box.x0 - 3]];
+    const hot = Math.floor(c.frame / 4) % 3;
+    pts.forEach(([y, x], i) => soft(cells, y, x, i === hot ? 'X' : 'x'));
+  },
+
+  /* the aura draws, and then the row that would carry a maker's mark is left
+   * empty. Interior only — taking the outline would sever the object — so what
+   * is left is a punched slot rather than a break, which is the difference
+   * between a statement and damage. */
+  unlabelled(cells, box, c) {
+    FORGE_AURAS.coldlight(cells, box, { ...c, frame: 0 });
+    const y = Math.round(box.y0 + (box.y1 - box.y0) * 0.78);
+    const span = markSpan(cells, y, box);
+    if (!span) return;
+    for (let x = span[0]; x <= span[1]; x++) unmark(cells, y, x);
+  },
+};
+
+export const FORGE_AURA_KEYS = Object.keys(FORGE_AURAS);
+
+/* Cut a motif into a grid. Exported because gauntlet/legendaries.py asked for
+ * the same vocabulary on artifacts that are not forged, and a second
+ * implementation of eighteen marks is eighteen chances to disagree. */
+export function applyMotif(grid, motifKey, opts = {}) {
+  const fn = FORGE_MOTIFS[motifKey];
+  if (!fn) return grid;
+  const cells = toCells(grid);
+  const box = bodyBox(cells);
+  if (!box) return grid;
+  fn(cells, box, {
+    tier: clampTier(opts.tier || 1), seed: opts.seed || 1,
+    frame: opts.frame || 0, animated: !!opts.animated,
+  });
+  return toRows(cells);
+}
+
+export function applyAura(grid, auraKey, opts = {}) {
+  const fn = FORGE_AURAS[auraKey];
+  if (!fn) return grid;
+  const cells = toCells(grid);
+  const box = bodyBox(cells);
+  if (!box) return grid;
+  fn(cells, box, {
+    tier: clampTier(opts.tier || 1), seed: opts.seed || 1,
+    frame: opts.frame || 0,
+  });
+  return toRows(cells);
+}
+
+/* ---------------- the metal, as a palette ----------------
+ * Built out of palette.js ramps and nothing else, which is the whole of rule B:
+ * a Quarterturn Bronze blade is the same five bronzes as a bronze pauldron,
+ * so the two belong in one frame. The rung contributes exactly one thing to
+ * colour — POLISH — and it is a subtraction: at the bottom of the ladder the
+ * specular step is withheld and the metal never catches the light, which is
+ * what raw stock looks like and what makes rung 5 landing feel earned.
+ *
+ * Everything then goes through fitPalette(), the same fifteen-colour merge the
+ * rarity ladder uses. Eight materials' worth of ramps is nineteen colours and
+ * the budget is fifteen; merging the two nearest until it fits is what an
+ * artist does when they run out of palette entries, and it is measured off the
+ * RASTER in scripts/verify/forge.mjs rather than trusted here.
+ */
+const forgePaletteCache = new Map();
+
+/* lootart's own MATERIAL vocabulary — the nine names gauntlet/forge.py's art
+ * dict is allowed to send — mapped onto the shared five-step ramps. One line
+ * each, and the mapping is the whole of rule B for the callers that send a
+ * material rather than a metal. */
+const MATERIAL_RAMP = {
+  steel: 'steel', iron: 'iron', gold: 'goldleaf', cloth: 'cloth',
+  leather: 'leather', wood: 'wood', bone: 'bone', paper: 'bone', glass: 'frost',
+};
+
+/* The one colour in the file that is not derived from anything: the index
+ * dot's green. It is a SIGNAL rather than a material — the motif's whole
+ * content is "this pixel means something and it never moves" — so it does not
+ * belong to the metal and does not shift with it. It is also the colour
+ * items.py already uses for Uncommon, so it is not a new green in the game. */
+const INDEX_GREEN = '#8fd07a';
+
+function buildForgePalette(metalKey, tier, material, accent) {
+  const m = FORGE_METALS[metalKey] || FORGE_METALS.fieldiron;
+  const def = forgeRung(tier);
+  /* An explicit metal wins, because a metal is a THING the player carried back
+   * from somewhere; a material is the art dict's shorthand for how finished
+   * the object is. When only the material is named — which is what
+   * forge.art_at() sends — it picks the ramp. */
+  const bodyRamp = metalKey ? m.ramp : (MATERIAL_RAMP[material] || m.ramp);
+  const body = RAMPS[bodyRamp] || RAMPS.iron;
+  /* The accent is given per rung so nine rungs do not become one object in
+   * nine golds. Derived through palette.js rather than used raw, so the
+   * fitting has a shadow and a specular and reads as metal. */
+  const trim = accent ? deriveRamp(accent, 'metal', SHADE.LIGHT) : (RAMPS[m.trim] || RAMPS.bronze);
+  const grip = RAMPS[m.grip] || RAMPS.leather;
+  const bone = RAMPS.bone;
+  /* A gem only exists once the smith has set one. Below that the gem glyphs
+   * point at trim, which costs the palette nothing and leaves the merge pass
+   * more room where it matters — at the top, where there is actually a stone. */
+  const gemHex = m.energy || accent;
+  const gem = def.stone >= 2
+    ? (gemHex ? deriveRamp(gemHex, 'magic', SHADE.SPEC) : trim)
+    : trim;
+  const lit = def.polish >= 2;
+  const spec = lit ? body[SHADE.SPEC] : body[SHADE.LIGHT];
+  /* Runes exist from rung 6. Before that r/R are spare and are pointed at
+   * trim, for the same reason. */
+  const runeHex = tier >= 6 ? (m.energy || accent || trim[SHADE.SPEC]) : trim[SHADE.LIGHT];
+  const runeLit = tier >= 6 ? mix(runeHex, '#ffffff', 0.35) : trim[SHADE.SPEC];
+  return {
+    /* At the top the outline stops being neutral: a nullsteel blade carries
+     * its own colour right out to its edge. Two rungs only, and at 18% — any
+     * more and the shared near-black that makes the whole game read as one set
+     * of objects stops being shared. */
+    o: tier >= 8 && m.energy ? mix(OUTLINE, m.energy, 0.18) : OUTLINE,
+    O: lit ? rimFor(bodyRamp) : body[SHADE.LIGHT],
+    B: body[SHADE.MID], b: body[SHADE.MID],
+    H: lit ? body[SHADE.SPEC] : body[SHADE.LIGHT],
+    L: body[SHADE.LIGHT], d: body[SHADE.DARK], D: body[SHADE.DEEP],
+    s: grip[SHADE.MID], t: grip[SHADE.LIGHT], u: grip[SHADE.DARK],
+    g: trim[SHADE.MID], G: lit ? trim[SHADE.SPEC] : trim[SHADE.LIGHT], y: trim[SHADE.DARK],
+    m: gem[SHADE.MID], M: gem[SHADE.SPEC], n: gem[SHADE.DARK],
+    w: bone[SHADE.LIGHT],
+    W: spec,
+    r: runeHex, R: runeLit,
+    x: accent || runeHex, X: mix(accent || runeLit, '#ffffff', 0.3),
+    i: INDEX_GREEN,
+  };
+}
+
+/* `metal` may be null: that is the normal case when the caller is handing over
+ * an art dict from forge.art_at(), which names a material and an accent and
+ * says nothing about what the thing was forged out of. */
+/* The held weapon gets a HARDER budget than the icon, and not for tidiness.
+ * Fifteen colours is a per-sprite rule, and a hero with a weapon in hand is
+ * two sprites composited: the character costs fourteen on its own, so a
+ * weapon that spends its full fifteen puts the finished frame over. Seven is
+ * what a 6x12 object can actually use — measured, not guessed — and it keeps
+ * the composite at or under what the rarity ladder already costs, which is the
+ * number that matters because that is the bar the game currently meets. */
+const HAND_BUDGET = 7;
+
+export function forgePalette(metal, tier, material, accent, budget) {
+  const t = clampTier(tier);
+  const key = `${metal ? forgeMetalKey(metal, t) : ''}:${t}:${material || ''}:${accent || ''}:${budget || ''}`;
+  const hit = forgePaletteCache.get(key);
+  if (hit) return hit;
+  const built = fitPalette(buildForgePalette(
+    metal ? forgeMetalKey(metal, t) : '', t, material, accent), budget || BUDGET);
+  if (forgePaletteCache.size >= 256) forgePaletteCache.delete(forgePaletteCache.keys().next().value);
+  forgePaletteCache.set(key, built);
+  return built;
+}
+
+/* What a given look actually costs in colours. The harness reads this; so
+ * should anyone adding a glyph. */
+export function forgePaletteBudget(metal, tier, material, accent) {
+  const pal = forgePalette(metal, tier, material, accent);
+  const uniq = new Set(Object.values(pal).filter(Boolean));
+  return { used: uniq.size, budget: BUDGET, ok: uniq.size <= BUDGET };
+}
+
+/* ---------------- motion ----------------
+ * Rungs 1-4 do not move. That is a decision rather than an omission: if
+ * everything drifts then nothing does, and the moment the smith hands back a
+ * weapon that has started breathing has to be a moment.
+ *
+ *   5  a specular drifts ALONG THE EDGE, hilt to point. Not a diagonal sweep
+ *      across the body — this is a blade, and light runs down a blade.
+ *   6  motes lift off the metal. Fixed columns, only the height changes: a
+ *      particle that appears somewhere new each frame is noise, a particle
+ *      that climbs is heat.
+ *   7  the inlay pulses, running along its own length rather than switching
+ *      on, so the inscription reads as being run THROUGH.
+ *   8  and the stone is lit from inside.
+ *
+ * Every frame of this is precomputed and cached. Nothing here is evaluated in
+ * a draw path, and the only randomness is rng() seeded off the weapon and its
+ * metal, so the same blade looks the same forever.
+ */
+function forgeAnimate(grid, def, frame, seed, hasAura) {
+  if (def.rung < FORGE_FIRST_ANIMATED) return grid;
+  const cells = toCells(grid);
+  const f = ((frame % FORGE_FRAMES) + FORGE_FRAMES) % FORGE_FRAMES;
+  const rand = rng((seed || 1) ^ 0x5bf03635);
+
+  /* The lit edge: body that has empty space or outline up and to the left,
+   * which is where the key light in docs/09-story-bible.md §8 actually falls.
+   * Ordered bottom to top so the highlight travels hilt to point. */
+  const edge = [];
+  for (let y = FN - 1; y >= 0; y--) {
+    for (let x = 0; x < FN; x++) {
+      const ch = cells[y][x];
+      if (!HARD.has(ch)) continue;
+      const up = y > 0 ? cells[y - 1][x] : '.';
+      const left = x > 0 ? cells[y][x - 1] : '.';
+      const bare = (c) => c === '.' || c === ' ' || c === 'o' || c === 'O';
+      if (bare(up) || bare(left)) edge.push([y, x]);
+    }
+  }
+  if (edge.length) {
+    /* The band runs off both ends of the list rather than wrapping, so there
+     * is a frame where the blade is quiet. A highlight that never leaves is a
+     * highlight the eye stops seeing. */
+    /* The band is sized to the edge it is travelling, not fixed. Eight frames
+     * over sixty pixels of edge with a three-pixel band puts a gap between
+     * every frame and the next, and a highlight that teleports in steps reads
+     * as a flicker rather than as light moving. Half a frame's travel of
+     * overlap is what makes it slide.
+     *
+     * Frame 0 is authored to be the quiet one — the band is off the end of the
+     * blade there — because that is the frame every still context uses:
+     * reduced motion, an inventory list, a screenshot, the smith's preview. */
+    const core = Math.max(1.6, edge.length / (FORGE_FRAMES * 2));
+    const halo = core * 2.2;
+    const p = -halo - 1 + (f / FORGE_FRAMES) * (edge.length + 2 * halo + 2);
+    for (let i = 0; i < edge.length; i++) {
+      const dist = Math.abs(i - p);
+      const [y, x] = edge[i];
+      if (dist <= core) cells[y][x] = 'W';
+      else if (dist <= halo && cells[y][x] !== 'W') {
+        const c = cells[y][x];
+        if (c === 'B' || c === 'L' || c === 'd') cells[y][x] = 'H';
+      }
+    }
+  }
+
+  /* The built-in motes stand down when the rung carries an authored aura. Both
+   * of them are things happening in the air beside the object, and two lots of
+   * that at once is not twice the atmosphere, it is noise — which at 32px
+   * reads as dirt on the screen rather than as heat off metal. */
+  if (def.rung >= 6 && !hasAura) {
+    /* Motes. Hot at rung 8, cooler below; six of them, lifting from the lower
+     * half where the light source is. Embers that fall out of the top of the
+     * frame contradict a low key light, so they climb and stop. */
+    const hot = def.rung >= 8;
+    const count = hot ? 7 : 4;
+    const lift = hot ? FN - 2 : Math.floor(FN * 0.7);
+    /* Motes belong to the object, so they spawn in the columns the object
+     * occupies plus three either side. Scattered across the whole box they
+     * stop reading as heat coming off metal and start reading as dust on the
+     * screen — and a bow, which lives in the left third of its box, had embers
+     * rising out of empty space on the right. */
+    let bx0 = FN, bx1 = -1;
+    for (let y = 0; y < FN; y++) {
+      for (let x = 0; x < FN; x++) {
+        if (cells[y][x] === '.' || cells[y][x] === ' ') continue;
+        if (x < bx0) bx0 = x;
+        if (x > bx1) bx1 = x;
+      }
+    }
+    if (bx1 < 0) { bx0 = 2; bx1 = FN - 3; }
+    const lo = Math.max(1, bx0 - 3), span = Math.max(1, Math.min(FN - 2, bx1 + 3) - lo);
+    for (let i = 0; i < count; i++) {
+      const col = lo + Math.floor(rand() * span);
+      const phase = rand();
+      const t = ((f / FORGE_FRAMES) + phase) % 1;
+      const y = Math.floor((FN - 2) - t * lift);
+      if (!inBox(y, col) || cells[y][col] !== '.') continue;
+      cells[y][col] = ((f + i) & 1) ? 'R' : 'r';
+      if (hot && inBox(y + 1, col) && cells[y + 1][col] === '.') cells[y + 1][col] = 'r';
+    }
+  }
+
+  if (def.rung >= 7) {
+    /* The inlay pulses along its own length: phase by row, so the light runs
+     * up the inscription instead of the whole thing blinking. */
+    for (let y = 0; y < FN; y++) {
+      for (let x = 0; x < FN; x++) {
+        if (cells[y][x] !== 'r') continue;
+        if (((f + (y >> 1)) % FORGE_FRAMES) < FORGE_FRAMES / 2) cells[y][x] = 'R';
+      }
+    }
+  }
+
+  if (def.rung >= 8) {
+    /* Subsurface: a spark descending through the facets. A gem that only
+     * catches the surface highlight is a shiny pebble. */
+    for (let y = 0; y < FN; y++) {
+      for (let x = 0; x < FN; x++) {
+        const ch = cells[y][x];
+        if (ch !== 'm' && ch !== 'M' && ch !== 'n') continue;
+        if (((x + y * 2 + f * 2) % 10) >= 3) continue;
+        cells[y][x] = ch === 'M' ? 'W' : ch === 'm' ? 'M' : 'm';
+      }
+    }
+  }
+  return toRows(cells);
+}
+
+/* ---------------- the spec, and the pipeline ----------------
+ * One normalised value in, one grid out. forgeSpec() is where every spelling
+ * the backend might use is flattened, and it is the only place that needs to
+ * change when gauntlet/forge.py settles on its field names.
+ */
+/* How far the grow stage is allowed to go, given the hint. `narrow | standard
+ * | broad` is gauntlet/forge.py's word for the shape of the LINE rather than
+ * of the rung: the Tracing Needle stays narrow at rung nine and the Boundary
+ * Maul is broad at rung one, because — the art brief's words — "a line that
+ * gets wider every rung ends as a rectangle".
+ *
+ * Note what it does NOT do: narrow never reduces a widen of one to zero. A
+ * hint that removed a rung's only move would trade one failure for another,
+ * and forgeSpread() would catch it, so it is easier to not do it. */
+function widenFor(def, silhouette) {
+  if (silhouette === 'broad') return Math.min(3, def.widen + 1);
+  if (silhouette === 'narrow') return def.widen > 1 ? def.widen - 1 : def.widen;
+  return def.widen;
+}
+
+export function forgeSpec(spec) {
+  let s = (spec && typeof spec === 'object') ? spec : {};
+  /* An item dict carries its forge state in a nested object. Reading through
+   * it here rather than only in forgeOf() means forgeInfo(item) and
+   * forgeSprite(item) answer about the item the caller actually holds, instead
+   * of quietly answering about a rung-1 blade. */
+  if (s.forge && typeof s.forge === 'object') {
+    const f = s.forge;
+    s = {
+      weapon: f.weapon || f.family || f.blade || f.shape || s.icon || s.id,
+      blade: f.blade || s.id,
+      tier: f.tier != null ? f.tier : f.rung,
+      metal: f.metal,
+      /* forge.art_at()'s dict, passed through whole when it is there. */
+      material: f.material, accent: f.accent, motif: f.motif,
+      aura: f.aura, silhouette: f.silhouette, frames: f.frames,
+    };
+  } else if (s.forge_tier != null || s.forgeTier != null) {
+    s = {
+      weapon: s.forge_weapon || s.weapon || s.icon || s.id,
+      tier: s.forge_tier != null ? s.forge_tier : s.forgeTier,
+      metal: s.forge_metal || s.metal,
+    };
+  }
+  const rawTier = s.tier != null ? s.tier
+    : s.rung != null ? s.rung
+    : s.level != null ? s.level
+    : s.forge_tier != null ? s.forge_tier : 1;
+  const tier = clampTier(rawTier);
+  /* Order is intent first. A blade id names one of the six lines and beats
+   * everything else; `shape` is the art dict's word and beats an icon, which
+   * is the catalogue's. Reading `shape` before `id` is what stops the
+   * Calipers' art dict — which says relic — being resolved off a field nobody
+   * filled in and coming back a sword. */
+  const weapon = forgeWeaponKey(
+    (s.blade != null && FORGE_BLADES[s.blade]) ? s.blade
+    : (s.id != null && FORGE_BLADES[s.id]) ? s.id
+    : s.weapon != null ? s.weapon
+    : s.family != null ? s.family
+    : s.shape != null ? s.shape
+    : s.icon != null ? s.icon
+    : s.id != null ? s.id
+    : spec);
+  /* `material` is deliberately NOT read as a metal. forge.art_at() sends both
+   * words and they mean different things — "steel" is how finished the object
+   * is, "marshsilver" is what the player carried out of the marsh — and
+   * collapsing the two would silently repaint every rung. */
+  const metalRaw = s.metal != null ? s.metal : (s.ore != null ? s.ore : null);
+  const metal = metalRaw == null ? '' : forgeMetalKey(metalRaw, tier);
+  const blade = (s.blade && FORGE_BLADES[s.blade]) ? s.blade
+    : (s.id && FORGE_BLADES[s.id]) ? s.id : '';
+  const material = typeof s.material === 'string' ? s.material : '';
+  const accent = typeof s.accent === 'string' ? s.accent
+    : (blade ? FORGE_BLADES[blade].tint : '');
+  const motif = (typeof s.motif === 'string' && FORGE_MOTIFS[s.motif]) ? s.motif : '';
+  const aura = (typeof s.aura === 'string' && FORGE_AURAS[s.aura]) ? s.aura : '';
+  const sil = (s.silhouette === 'narrow' || s.silhouette === 'broad') ? s.silhouette : 'standard';
+  const frames = s.frames === 1 ? 1 : 0;
+  return {
+    weapon, tier, metal, blade, material, accent, motif, aura,
+    silhouette: sil, frames,
+    key: `${weapon}:${tier}:${metal}:${material}:${accent}:${motif}:${aura}:${sil}:${frames}`,
+  };
+}
+
+/* Everything the smith's UI needs to caption a blade, with no game rules in
+ * it: what it is, what rung it is on, what it is made of, and whether the
+ * upgrade the player is about to pay for will make it move. */
+export function forgeInfo(spec) {
+  const s = forgeSpec(spec);
+  const def = forgeRung(s.tier);
+  const m = s.metal ? FORGE_METALS[s.metal] : null;
+  const frames = forgeFrameCount(s.tier, s);
+  return {
+    blade: s.blade, weapon: s.weapon, family: FORGE_WEAPONS[s.weapon].label,
+    tier: s.tier, rung: def.name,
+    material: s.material, accent: s.accent || (m ? (m.energy || RAMPS[m.trim][SHADE.SPEC]) : ''),
+    motif: s.motif, aura: s.aura, silhouette: s.silhouette,
+    metal: s.metal, metalLabel: m ? m.label : '', metalRung: m ? m.rung : 0,
+    region: m ? m.region : '', ramp: m ? m.ramp : (MATERIAL_RAMP[s.material] || ''),
+    animated: frames > 1, motion: frames > 1 ? def.motion : 'still', frames,
+  };
+}
+
+const forgeGridCache = cappedCache(768);
+const forgeSpriteCache = cappedCache(768);
+
+function buildForgeGrid(s, f) {
+  const fam = FORGE_WEAPONS[s.weapon];
+  const def = forgeRung(s.tier);
+  const seed = hash(`${s.weapon}:${s.metal}:${s.blade}:${s.motif}`) || 1;
+  const cells = toCells(fam.grid);
+  /* Order is the design, and every pair of these is wrong the other way round:
+   * broaden before grooving or the groove is cut where the blade used to be;
+   * authored character before teeth so the teeth grow on the guard the
+   * character left; stones and crest before the shear so they ride the sweep;
+   * rim after all of it so added matter is lit by the same pass as authored
+   * matter and there is no seam where the growth starts. */
+  forgeWiden(cells, fam, widenFor(def, s.silhouette));
+  if (fam.growth) for (let lv = 2; lv <= s.tier; lv++) stamp(cells, fam.growth[lv]);
+  forgeFuller(cells, fam, def, s.tier);
+  forgeTeeth(cells, fam, def.teeth, s.silhouette);
+  forgeInlay(cells, fam, def.inlay);
+  /* A family that did not author a seat still gets one, centred on its own
+   * axis at its own counterweight. The authored list exists because a stone
+   * placed by an algorithm always lands in the wrong hole — not because the
+   * algorithm is allowed to decline. */
+  const seats = fam.stones
+    || (fam.pommel != null ? [{ y: fam.pommel, x: fam.axis - 3 }] : []);
+  for (const seat of seats) forgeStone(cells, seat, def.stone);
+  /* The shear runs BEFORE the crest, not after. A crest is placed off the
+   * crown row, and a crown row that has just moved two columns leaves the
+   * crest behind in mid-air — which is exactly what a spear did until the
+   * order was swapped. */
+  forgeCurve(cells, fam, def.curve);
+  forgeCrest(cells, fam.crest, def.crest);
+  forgeCrest(cells, fam.crest2, def.crest);
+  /* motif -> rim -> animate -> aura. The first two are the order the art brief
+   * specifies and the reason is visible either way round: a mark cut before
+   * the rim is lit like the metal it is cut into, and a mark added after it is
+   * a sticker. The aura comes last because it is not part of the object. */
+  const animated = forgeFrameCount(s.tier, s) > 1;
+  let g = toRows(cells);
+  if (s.motif) g = applyMotif(g, s.motif, { tier: s.tier, seed, frame: f, animated });
+  g = applyRim(g);
+  g = forgeAnimate(g, def, f, seed, !!s.aura);
+  if (s.aura) g = applyAura(g, s.aura, { tier: s.tier, seed, frame: f });
+  return g;
+}
+
+export function forgeGrid(spec, frame = 0) {
+  const s = forgeSpec(spec);
+  const frames = forgeFrameCount(s.tier, s);
+  const f = ((frame % frames) + frames) % frames;
+  return forgeGridCache.get(`${s.key}:${f}`, () => buildForgeGrid(s, f));
+}
+
+/* A finished 32x32 canvas. */
+export function forgeSprite(spec, frame = 0) {
+  const s = forgeSpec(spec);
+  const frames = forgeFrameCount(s.tier, s);
+  const f = ((frame % frames) + frames) % frames;
+  return forgeSpriteCache.get(`${s.key}:${f}`, () => gridSprite(
+    forgeGrid(s, f), forgePalette(s.metal, s.tier, s.material, s.accent), FN, FN));
+}
+
+export function forgeFrames(spec) {
+  const s = forgeSpec(spec);
+  const n = forgeFrameCount(s.tier, s);
+  const out = new Array(n);
+  for (let i = 0; i < n; i++) out[i] = forgeSprite(s, i);
+  return out;
+}
+
+export function forgeFrameFor(spec, opts = {}) {
+  const s = forgeSpec(spec);
+  const frames = forgeFrameCount(s.tier, s);
+  if (frames <= 1 || isReduced(opts)) return 0;
+  if (opts.frame !== undefined && opts.frame !== null) {
+    return ((opts.frame % frames) + frames) % frames;
+  }
+  if (opts.time !== undefined && opts.time !== null) {
+    return Math.floor(opts.time / FRAME_MS) % frames;
+  }
+  return 0;
+}
+
+/* The one call the smith screen, the battle scene and the inventory need.
+ *
+ *   lootart.drawForgeWeapon(ctx, { blade: 'recall_chain', tier: 6, metal: 'nullsteel' },
+ *                           x, y, { scale: 3, time: performance.now() });
+ */
+export function drawForgeWeapon(ctx, spec, x, y, opts = {}) {
+  const scale = Math.max(1, opts.scale || 1);
+  const img = forgeSprite(spec, forgeFrameFor(spec, opts));
+  const px = Math.round(x), py = Math.round(y);
+  if (opts.shadow) {
+    drawGroundShadow(ctx, px + (FN * scale) / 2, py + FN * scale - 2 * scale,
+      Math.round(8 * scale), Math.round(3 * scale), 0.36);
+  }
+  if (Number.isInteger(scale)) {
+    ctx.drawImage(scaleSprite(img, scale), px, py);
+  } else {
+    const smooth = ctx.imageSmoothingEnabled;
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(img, px, py, FN * scale, FN * scale);
+    ctx.imageSmoothingEnabled = smooth;
+  }
+  return img;
+}
+
+/* ---------------- the measurement ----------------
+ * "You can name the rung from across the room" is a claim about pixels, so it
+ * is measured rather than asserted. Two numbers per step, both off the binary
+ * mask with colour thrown away entirely:
+ *
+ *   steps   pixels of silhouette that differ between rung N and rung N+1
+ *   total   between rung 1 and rung 8
+ *
+ * A zero anywhere in `steps` is a bug and scripts/verify/forge.mjs fails on
+ * it: it means two rungs of that family have the same outline, and an upgrade
+ * the player cannot see is an upgrade they did not get.
+ */
+export function forgeSpread(weapon, metal) {
+  const key = forgeWeaponKey(weapon);
+  const mask = (t) => forgeGrid({ weapon: key, tier: t, metal }, 0)
+    .map(r => r.padEnd(FN, '.').split('')
+      .map(c => (c === '.' || c === ' ' || c === 'r' || c === 'R') ? 0 : 1).join('')).join('');
+  const masks = [];
+  for (let t = 1; t <= FORGE_TIER_COUNT; t++) masks.push(mask(t));
+  const steps = [];
+  for (let i = 0; i + 1 < masks.length; i++) {
+    let d = 0;
+    for (let k = 0; k < masks[i].length; k++) if (masks[i][k] !== masks[i + 1][k]) d++;
+    steps.push(d);
+  }
+  let total = 0;
+  for (let k = 0; k < masks[0].length; k++) if (masks[0][k] !== masks[masks.length - 1][k]) total++;
+  const ink = (s) => { let n = 0; for (const c of s) if (c === '1') n++; return n; };
+  return {
+    weapon: key, steps, min: Math.min(...steps), total,
+    ink: masks.map(ink),
+  };
+}
+
+/* The whole vocabulary, as data. gauntlet/forge.py can diff its own lists
+ * against this in a test rather than the two files drifting for a week and the
+ * player finding out. */
+export function forgeVocabulary() {
+  return {
+    size: FN, tiers: FORGE_TIER_COUNT, frames: FORGE_FRAMES,
+    firstAnimated: FORGE_FIRST_ANIMATED,
+    rungs: FORGE_RUNGS.slice(1).map(r => ({
+      tier: r.rung, name: r.name, motion: r.motion,
+      animated: r.rung >= FORGE_FIRST_ANIMATED,
+    })),
+    blades: FORGE_BLADE_KEYS.map(k => ({ id: k, family: FORGE_BLADES[k].family, tint: FORGE_BLADES[k].tint })),
+    weapons: FORGE_WEAPON_KEYS.map(k => ({ key: k, label: FORGE_WEAPONS[k].label, kind: FORGE_WEAPONS[k].kind })),
+    metals: FORGE_METAL_KEYS.map(k => ({
+      key: k, label: FORGE_METALS[k].label, rung: FORGE_METALS[k].rung,
+      region: FORGE_METALS[k].region, ramp: FORGE_METALS[k].ramp,
+      colour: FORGE_METALS[k].colour,
+    })),
+    motifs: FORGE_MOTIF_KEYS,
+    auras: FORGE_AURA_KEYS,
+    materials: Object.keys(MATERIAL_RAMP),
+    silhouettes: ['narrow', 'standard', 'broad'],
+    aliases: { weapons: Object.keys(WEAPON_ALIAS).length, metals: Object.keys(METAL_ALIAS).length },
+  };
+}
+
+/* ---------------- reading a forged item off the backend ----------------
+ * Strict on purpose. An item is forge art only if it SAYS it is: a `forge`
+ * object, or a forge_tier/forgeTier alongside a weapon slot. Sniffing for a
+ * metal-sounding word would repaint half the existing catalogue the first time
+ * somebody names an item "Iron Circlet".
+ */
+export function forgeOf(item) {
+  if (!item || typeof item !== 'object') return null;
+  const declared = (item.forge && typeof item.forge === 'object')
+    || item.forge_tier != null || item.forgeTier != null;
+  return declared ? forgeSpec(item) : null;
+}
+
+export function isForged(item) { return forgeOf(item) !== null; }
+
+/* ---------------- the blade in the hand ----------------
+ * The inventory icon is where a weapon is ADMIRED; the hero's hand is where it
+ * is SEEN, for fifty hours, at 3x, in every frame of the overworld. A forge
+ * ladder that is unmistakable in a 32-pixel icon and identical to slag iron in
+ * the field has put its effort in exactly the wrong place.
+ *
+ * So the ladder is authored a second time inside the 6x12 box HERO_WEAPONS
+ * uses, at the anchor sprites.js already publishes — which is not moved, not
+ * mirrored and not re-registered here. Six pixels of extra guard at 16px is a
+ * lot of guard.
+ *
+ * Eight rungs in seventy-two pixels is tight and the table below is what
+ * honesty about that looks like: every rung moves at least two pixels of
+ * outline, and scripts/verify/forge.mjs counts them rather than taking my word
+ * for it. The metal carries the rest, and the metal is the half of the
+ * escalation that survives being small.
+ */
+const FORGE_HAND_ART = {
+  sword: ['..o...', '.oBo..', '.oBo..', '.oBo..', '.oBo..', '.oBo..',
+          '.oBo..', '.oBo..', '.oggo.', '..s...', '..s...', '..o...'],
+  sabers: ['......', '..o...', '.oBo..', '.oBo..', '.oBo..', '.oBo..',
+           '.oBo..', '.oggo.', '..s...', '..o...', '......', '......'],
+  dagger: ['......', '......', '..o...', '.oBo..', '.oBo..', '.oBo..',
+           '.oBo..', '.oggo.', '..s...', '..s...', '..o...', '......'],
+  axe:    ['..oo..', '.oBBo.', '.oBBo.', '..oo..', '.oso..', '.oso..',
+           '.oso..', '.oso..', '.oso..', '.oso..', '.ooo..', '......'],
+  hammer: ['..oo..', '.oBBo.', '.oBBo.', '..oo..', '..os..', '..os..',
+           '..os..', '..os..', '..os..', '..os..', '..oo..', '......'],
+  spear:  ['..o...', '.oBo..', '.oBo..', '..o...', '..s...', '..s...',
+           '..s...', '..s...', '..s...', '..s...', '..s...', '..o...'],
+  lance:  ['..o...', '.oBo..', '.oBo..', '.oBo..', '.oggo.', '..s...',
+           '..s...', '..s...', '..s...', '..s...', '..s...', '..o...'],
+  staff:  ['..o...', '.omo..', '.omo..', '..o...', '..s...', '..s...',
+           '..s...', '..s...', '..s...', '..s...', '..s...', '..o...'],
+  bow:    ['..o...', '.os...', '.os.w.', '.os.w.', '.os.w.', '.os.w.',
+           '.os.w.', '.os.w.', '.os.w.', '.os...', '..o...', '......'],
+  focus:  ['......', '..oo..', '.ommo.', '.ommo.', '..oo..', '..s...',
+           '..s...', '..s...', '..s...', '..s...', '..o...', '......'],
+  /* The three the art brief asked for by name. In six columns the Calipers are
+   * the only thing in the game with a hole down the middle of them, which is
+   * all the legibility they need. */
+  calipers: ['.o..o.', '.g..g.', '.g..g.', '.g..g.', '.g..g.', '.oggo.',
+             '.ommo.', '.oggo.', '..s...', '..s...', '..o...', '......'],
+  chain:   ['.oooo.', '.oBBo.', '.oooo.', '..oo..', '.oooo.', '.oBBo.',
+            '.oooo.', '..gg..', '..s...', '..s...', '..o...', '......'],
+  spanner: ['oo..oo', 'oB..Bo', 'oBBBBo', '.oBBo.', '..oo..', '..s...',
+            '..s...', '..s...', '..s...', '..s...', '..o...', '......'],
+};
+
+/* Read alongside the map of what is actually VISIBLE. A weapon held in front
+ * of a 16x24 body is, for most of its length, INSIDE that body's outline: of
+ * the seventy-two cells in this box, nineteen are transparent on the bare hero
+ * facing the camera and as few as four facing left. So a rung that grows only
+ * on the inboard side measures as a change to the weapon sprite and changes
+ * nothing the player can see once it is in a hand.
+ *
+ * Every step below therefore also touches the outboard band — the top-right
+ * and bottom-right corners of the box — and scripts/verify/forge.mjs checks
+ * the composited hero rather than the overlay, at every facing, because that
+ * is where the claim actually has to hold. */
+const FORGE_HAND_GROWTH = {
+  sword: {
+    2: [[8, 0, 'og'], [8, 4, 'go']],
+    3: [[3, 1, 'oBBo'], [4, 1, 'oBBo'], [5, 1, 'oBBo'], [6, 1, 'oBBo'], [7, 1, 'oBBo']],
+    4: [[11, 1, 'oggo']],
+    5: [[7, 0, 'o'], [7, 5, 'o']],
+    6: [[6, 0, 'o'], [6, 5, 'o'], [10, 1, 'o'], [10, 4, 'o']],
+    7: [[5, 0, 'o'], [5, 5, 'o'], [9, 1, 'o'], [9, 4, 'o']],
+    8: [[0, 1, 'o'], [0, 3, 'o'], [0, 4, 'o'], [4, 0, 'o'], [4, 5, 'o']],
+    9: [[2, 1, 'oBBo'], [1, 1, 'oBBo'], [3, 0, 'o'], [3, 5, 'o']],
+  },
+  sabers: {
+    2: [[7, 0, 'og'], [7, 4, 'go']],
+    3: [[3, 1, 'oBBo'], [4, 1, 'oBBo'], [5, 1, 'oBBo'], [6, 1, 'oBBo']],
+    4: [[9, 1, 'oggo']],
+    5: [[6, 0, 'o'], [6, 5, 'o'], [2, 4, 'o']],
+    6: [[5, 0, 'o'], [5, 5, 'o'], [8, 1, 'o'], [8, 4, 'o']],
+    7: [[1, 1, 'o'], [1, 3, 'o'], [1, 4, 'o'], [10, 2, 'oo']],
+    8: [[0, 2, 'oo'], [0, 4, 'o'], [4, 0, 'o'], [4, 5, 'o']],
+    9: [[3, 0, 'o'], [3, 5, 'o'], [9, 2, 'oo']],
+  },
+  dagger: {
+    2: [[7, 0, 'og'], [7, 4, 'go']],
+    3: [[3, 1, 'oBBo'], [4, 1, 'oBBo'], [5, 1, 'oBBo'], [6, 1, 'oBBo']],
+    4: [[10, 1, 'oggo']],
+    5: [[6, 0, 'o'], [6, 5, 'o'], [2, 4, 'o']],
+    6: [[5, 0, 'o'], [5, 5, 'o'], [9, 1, 'o'], [9, 4, 'o']],
+    7: [[2, 1, 'o'], [2, 3, 'o'], [11, 2, 'oo']],
+    8: [[1, 2, 'oo'], [4, 0, 'o'], [4, 5, 'o'], [10, 5, 'o']],
+    9: [[3, 0, 'o'], [3, 5, 'o'], [8, 1, 'o'], [8, 4, 'o']],
+  },
+  axe: {
+    2: [[0, 4, 'o'], [1, 4, 'Bo'], [2, 4, 'Bo'], [3, 4, 'o']],
+    3: [[0, 0, 'o'], [1, 0, 'oB'], [2, 0, 'oB'], [3, 0, 'o'], [0, 5, 'o']],
+    4: [[4, 0, 'o'], [4, 4, 'o'], [8, 0, 'o']],
+    5: [[3, 1, 'oBBBo'], [4, 2, 'oo'], [9, 0, 'o']],
+    6: [[10, 1, 'oggo'], [11, 2, 'oo']],
+    7: [[0, 0, 'oooooo'], [10, 5, 'o']],
+    8: [[5, 0, 'o'], [5, 5, 'o'], [9, 1, 'o'], [9, 4, 'o']],
+    9: [[11, 2, 'oo'], [10, 0, 'o'], [10, 5, 'o']],
+  },
+  hammer: {
+    2: [[1, 0, 'oB'], [1, 4, 'Bo'], [2, 0, 'oB'], [2, 4, 'Bo']],
+    3: [[0, 1, 'oooo'], [3, 1, 'oooo']],
+    4: [[4, 1, 'o'], [4, 4, 'o'], [8, 1, 'o']],
+    5: [[0, 0, 'o'], [0, 5, 'o'], [3, 0, 'o'], [3, 5, 'o']],
+    6: [[10, 1, 'oggo'], [11, 2, 'oo']],
+    7: [[5, 1, 'o'], [5, 4, 'o'], [9, 1, 'o'], [9, 4, 'o']],
+    8: [[6, 1, 'o'], [6, 4, 'o'], [8, 1, 'o'], [8, 4, 'o']],
+    9: [[11, 2, 'oo'], [9, 0, 'o'], [9, 5, 'o']],
+  },
+  spear: {
+    2: [[3, 1, 'oggo']],
+    3: [[1, 1, 'oBBo'], [2, 1, 'oBBo']],
+    4: [[3, 0, 'o'], [3, 5, 'o']],
+    5: [[0, 1, 'o'], [0, 3, 'o'], [0, 4, 'o']],
+    6: [[2, 0, 'o'], [2, 5, 'o']],
+    7: [[11, 1, 'ogo'], [11, 3, 'go']],
+    8: [[1, 0, 'o'], [1, 5, 'o'], [4, 1, 'o'], [4, 4, 'o']],
+    9: [[10, 1, 'o'], [10, 4, 'o'], [0, 0, 'o'], [0, 4, 'o']],
+  },
+  lance: {
+    2: [[4, 0, 'og'], [4, 4, 'go'], [3, 4, 'o']],
+    3: [[2, 1, 'oBBo'], [3, 1, 'oBBo']],
+    4: [[5, 1, 'o'], [5, 4, 'o'], [1, 4, 'o']],
+    5: [[3, 0, 'o'], [3, 5, 'o']],
+    6: [[11, 1, 'oggo']],
+    7: [[0, 1, 'o'], [0, 3, 'o'], [2, 0, 'o'], [2, 5, 'o']],
+    8: [[1, 0, 'o'], [1, 5, 'o'], [10, 1, 'o'], [10, 4, 'o']],
+    9: [[0, 0, 'o'], [0, 4, 'o'], [9, 1, 'o'], [9, 4, 'o']],
+  },
+  staff: {
+    2: [[1, 1, 'ommo'], [2, 1, 'ommo']],
+    3: [[0, 1, 'ogo'], [0, 4, 'o'], [3, 1, 'ogo']],
+    4: [[1, 0, 'o'], [1, 5, 'o']],
+    5: [[2, 0, 'o'], [2, 5, 'o']],
+    6: [[0, 0, 'o'], [0, 5, 'o'], [3, 0, 'o'], [3, 5, 'o']],
+    7: [[11, 1, 'oggo']],
+    8: [[4, 1, 'o'], [4, 4, 'o'], [10, 1, 'o'], [10, 4, 'o']],
+    9: [[5, 1, 'o'], [5, 4, 'o'], [9, 1, 'o'], [9, 4, 'o']],
+  },
+  bow: {
+    2: [[0, 1, 'oo'], [10, 1, 'oo'], [0, 3, 'o']],
+    3: [[4, 0, 'os'], [5, 0, 'os'], [6, 0, 'os'], [1, 4, 'w']],
+    4: [[3, 0, 'os'], [7, 0, 'os'], [9, 4, 'w']],
+    5: [[2, 0, 'o'], [8, 0, 'o'], [0, 4, 'o']],
+    6: [[11, 2, 'oo'], [11, 3, 'o']],
+    7: [[4, 5, 'o'], [5, 5, 'o'], [6, 5, 'o'], [10, 4, 'o']],
+    8: [[1, 0, 'o'], [9, 0, 'o'], [0, 0, 'o'], [10, 0, 'o'], [2, 5, 'o']],
+    9: [[3, 5, 'o'], [7, 5, 'o'], [11, 1, 'o']],
+  },
+  focus: {
+    2: [[2, 0, 'om'], [3, 0, 'om'], [2, 4, 'mo'], [3, 4, 'mo']],
+    3: [[1, 1, 'oooo'], [4, 1, 'oooo']],
+    4: [[1, 0, 'o'], [4, 0, 'o'], [1, 5, 'o'], [4, 5, 'o']],
+    5: [[0, 2, 'oo'], [0, 4, 'o'], [5, 1, 'o'], [5, 4, 'o']],
+    6: [[10, 1, 'oggo']],
+    7: [[6, 1, 'o'], [6, 4, 'o'], [9, 1, 'o'], [9, 4, 'o']],
+    8: [[0, 1, 'o'], [0, 4, 'o'], [11, 2, 'oo']],
+    9: [[7, 1, 'o'], [7, 4, 'o'], [8, 1, 'o'], [8, 4, 'o']],
+  },
+  calipers: {
+    2: [[5, 0, 'oggggo'], [0, 5, 'o']],
+    3: [[0, 0, 'o'], [1, 5, 'o']],
+    4: [[10, 1, 'oggo']],
+    5: [[6, 0, 'o'], [6, 5, 'o'], [7, 5, 'o']],
+    6: [[7, 0, 'o'], [7, 5, 'o'], [9, 1, 'o'], [9, 4, 'o']],
+    7: [[1, 0, 'o'], [2, 5, 'o']],
+    8: [[2, 0, 'o'], [3, 5, 'o'], [11, 2, 'oo']],
+    9: [[3, 0, 'o'], [3, 5, 'o'], [8, 1, 'o'], [8, 4, 'o']],
+  },
+  chain: {
+    2: [[7, 1, 'oggo'], [7, 5, 'o']],
+    3: [[0, 0, 'oooooo'], [1, 0, 'oBBBBo'], [2, 0, 'oooooo']],
+    4: [[10, 1, 'oggo']],
+    5: [[4, 0, 'oooooo'], [5, 0, 'oBBBBo'], [6, 0, 'oooooo'], [3, 4, 'o']],
+    6: [[3, 1, 'oooo'], [3, 5, 'o'], [8, 1, 'o']],
+    7: [[8, 1, 'o'], [8, 4, 'o']],
+    8: [[9, 1, 'o'], [9, 4, 'o'], [11, 2, 'oo']],
+    9: [[3, 0, 'o'], [7, 0, 'o'], [9, 5, 'o']],
+  },
+  spanner: {
+    2: [[4, 1, 'oggo'], [7, 1, 'o']],
+    3: [[3, 0, 'oBBBBo']],
+    4: [[10, 1, 'oggo']],
+    5: [[5, 1, 'o'], [5, 4, 'o'], [10, 5, 'o']],
+    6: [[9, 1, 'o'], [9, 4, 'o'], [11, 2, 'oo']],
+    7: [[6, 1, 'o'], [6, 4, 'o'], [9, 5, 'o']],
+    8: [[8, 1, 'o'], [8, 4, 'o']],
+    9: [[7, 1, 'o'], [7, 4, 'o'], [4, 0, 'o'], [4, 5, 'o'], [11, 5, 'o']],
+  },
+};
+
+const forgeHandCache = cappedCache(512);
+
+/* The compact motion. A drifting specular survives seventy-two pixels; motes
+ * beside a 6-wide sprite do not — at 3x they land on the hero's arm and read
+ * as damage. So the hand keeps the glint and the rune pulse and drops the
+ * rest, which is the same clamp compactStyle() applies to the rarity ladder
+ * and for the same reason. */
+function forgeHandAnimate(grid, def, frame) {
+  if (def.rung < FORGE_FIRST_ANIMATED) return grid;
+  const cells = toCells(grid);
+  const h = cells.length, w = widthOf(cells);
+  const f = ((frame % FORGE_FRAMES) + FORGE_FRAMES) % FORGE_FRAMES;
+  const edge = [];
+  for (let y = h - 1; y >= 0; y--) {
+    for (let x = 0; x < w; x++) {
+      if (!HARD.has(cells[y][x])) continue;
+      const up = y > 0 ? cells[y - 1][x] : '.';
+      const left = x > 0 ? cells[y][x - 1] : '.';
+      const bare = (c) => c === '.' || c === ' ' || c === 'o' || c === 'O';
+      if (bare(up) || bare(left)) edge.push([y, x]);
+    }
+  }
+  if (edge.length) {
+    const core = Math.max(1.1, edge.length / (FORGE_FRAMES * 2));
+    const p = -core - 1 + (f / FORGE_FRAMES) * (edge.length + 2 * core + 2);
+    for (let i = 0; i < edge.length; i++) {
+      if (Math.abs(i - p) > core) continue;
+      const [y, x] = edge[i];
+      cells[y][x] = 'W';
+    }
+  }
+  if (def.rung >= 7) {
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (cells[y][x] !== 'm') continue;
+        if (((f + y) % FORGE_FRAMES) < FORGE_FRAMES / 2) cells[y][x] = 'M';
+      }
+    }
+  }
+  return toRows(cells);
+}
+
+/* { canvas, ox, oy } in hero-sprite coordinates, exactly like the rarity
+ * overlays, so heroGearLayers() can treat a forged weapon and a rolled one the
+ * same way and no call site downstream learns a new shape. */
+export function forgeWeaponOverlay(spec, opts = {}) {
+  const s = forgeSpec(spec);
+  const facing = HERO_WEAPON_ANCHOR[opts.facing] ? opts.facing : 'down';
+  const frames = forgeFrameCount(s.tier, s);
+  const frame = isReduced(opts) ? 0 : forgeFrameFor(s, opts);
+  const f = ((frame % frames) + frames) % frames;
+  const [ax, ay] = HERO_WEAPON_ANCHOR[facing];
+  const { weaponDY } = poseOffsets(facing, opts.pose || 'walk', opts.frameIndex || 0);
+  const key = `${s.key}:${f}`;
+  const canvas = forgeHandCache.get(key, () => {
+    const art = FORGE_HAND_ART[s.weapon] || FORGE_HAND_ART.sword;
+    const growth = FORGE_HAND_GROWTH[s.weapon] || FORGE_HAND_GROWTH.sword;
+    const def = forgeRung(s.tier);
+    const cells = toCells(art);
+    for (let lv = 2; lv <= s.tier; lv++) stamp(cells, growth[lv]);
+    return gridSprite(forgeHandAnimate(applyRim(toRows(cells)), def, f),
+      forgePalette(s.metal, s.tier, s.material, s.accent, HAND_BUDGET), 6, 12);
+  });
+  return { canvas, ox: ax, oy: ay + weaponDY };
+}
+
+/* The same measurement as forgeSpread(), on the hand art. Reported separately
+ * and deliberately: seventy-two pixels is a smaller budget than a thousand and
+ * a number that looks thin here is thin honestly rather than by being averaged
+ * into the icon's. */
+export function forgeHandSpread(weapon) {
+  const key = forgeWeaponKey(weapon);
+  const art = FORGE_HAND_ART[key] || FORGE_HAND_ART.sword;
+  const growth = FORGE_HAND_GROWTH[key] || FORGE_HAND_GROWTH.sword;
+  const mask = (t) => {
+    const cells = toCells(art);
+    for (let lv = 2; lv <= t; lv++) stamp(cells, growth[lv]);
+    return toRows(cells).map(r => r.padEnd(6, '.').split('')
+      .map(c => (c === '.' || c === ' ') ? 0 : 1).join('')).join('');
+  };
+  const masks = [];
+  for (let t = 1; t <= FORGE_TIER_COUNT; t++) masks.push(mask(t));
+  const steps = [];
+  for (let i = 0; i + 1 < masks.length; i++) {
+    let d = 0;
+    for (let k = 0; k < masks[i].length; k++) if (masks[i][k] !== masks[i + 1][k]) d++;
+    steps.push(d);
+  }
+  let total = 0;
+  for (let k = 0; k < masks[0].length; k++) if (masks[0][k] !== masks[masks.length - 1][k]) total++;
+  return { weapon: key, steps, min: Math.min(...steps), total };
+}
+
+/* ================================================================
  * HOUSEKEEPING
  * ================================================================ */
 export function clearLootArtCache() {
@@ -3500,6 +6230,8 @@ export function clearLootArtCache() {
   burstCache.clear(); cardCache.clear(); overlayCache.clear();
   impactCache.clear(); poolCache.clear(); equippedCache.clear();
   paletteCache.clear();
+  forgeGridCache.clear(); forgeSpriteCache.clear(); forgeHandCache.clear();
+  forgePaletteCache.clear();
 }
 
 export function lootArtStats() {
@@ -3511,6 +6243,11 @@ export function lootArtStats() {
     overlays: overlayCache.size,
     heroes: equippedCache.size,
     drop: beamCache.size + burstCache.size + impactCache.size + poolCache.size,
+    forgeWeapons: FORGE_WEAPON_KEYS.length,
+    forgeMetals: FORGE_METAL_KEYS.length,
+    forgeTiers: FORGE_TIER_COUNT,
+    forgeGrids: forgeGridCache.size,
+    forgeSprites: forgeSpriteCache.size + forgeHandCache.size,
   };
 }
 
@@ -3580,6 +6317,70 @@ export function lootArtStats() {
  *
  *      const img = lootart.equippedHeroFrame('down', 1, G.equipped, null, 'idle');
  *      ctx.drawImage(sprites.scaleSprite(img, 4), x, y);
+ *
+ * 3b) THE FORGE. gauntlet/forge.py ships six lines of nine rungs, and the art
+ *    side needs exactly two values from it per rung: the blade id and
+ *    `forge.art_at(blade_id, tier)`. Three ways in, all one line:
+ *
+ *    a) The smith's screen, the upgrade preview, anywhere a rung is shown:
+ *
+ *         const art = artFromServer;            // forge.art_at(id, tier)
+ *         lootart.drawForgeWeapon(ctx, { blade: 'recall_chain', tier: 7, ...art },
+ *                                 x, y, { scale: 3, time: performance.now() });
+ *
+ *       32x32, not 24 — `lootart.FORGE_SIZE`. Rungs 1-4 are still and cost one
+ *       canvas; 5-9 run `lootart.FORGE_FRAMES` frames at FRAME_MS and are
+ *       cached, so passing `time` every frame allocates nothing after the first
+ *       cycle. The art dict's `frames: 1` and the `stillness` aura both pin a
+ *       rung that would otherwise move, which is the override the brief asked
+ *       for. `lootart.forgeInfo(spec)` returns the caption: rung name, family,
+ *       material, accent, motif, aura, and whether this rung moves.
+ *
+ *    b) The inventory, the loot card, the battle scene: NOTHING TO WIRE. Put
+ *       the art dict on the item under `forge` and drawItem() routes itself:
+ *
+ *         { id: 'recall_chain', name: '...', slot: 'weapon', rarity: 'EPIC',
+ *           forge: { tier: 7, ...forge.art_at('recall_chain', 7) } }
+ *
+ *       `forge_tier` / `forge_metal` as flat fields work too. Detection is
+ *       strict — see forgeOf() — so an item without those fields is drawn by
+ *       the rarity ladder exactly as before, and every existing sprite in the
+ *       catalogue is byte-identical to what it was.
+ *
+ *    c) In the hand. Also nothing to wire: heroWeaponOverlay() checks the same
+ *       field, so `equippedHeroSprites(G.equipped)` puts the forged blade at
+ *       the rung the player has earned, at the anchor sprites.js publishes.
+ *       HERO_WEAPON_ANCHOR is not moved and sprites.js is not touched.
+ *
+ *    THE METAL is optional and separate from the material. Pass `metal` (any
+ *    of forge.py's eleven ids, or the noun a designer typed) and the body ramp
+ *    becomes that metal's; leave it out and the art dict's `material` picks
+ *    the ramp. Both paths are inside the colour budget.
+ *
+ *    MOTIFS AND AURAS. FORGE_MOTIF_KEYS and FORGE_AURA_KEYS are the merged
+ *    tables legendaries.py and forge.py both asked for, implemented once.
+ *    applyMotif() and applyAura() are exported so an artifact that was never
+ *    forged can carry the same marks, and applyRarity() takes `motif` and
+ *    `aura` in its options for exactly that.
+ *
+ *    `lootart.forgeVocabulary()` returns the whole art-side vocabulary — nine
+ *    rungs, six lines, eleven metals with the region each drops in, eighteen
+ *    motifs, twelve auras, three silhouette hints — so a test in forge.py can
+ *    assert against it rather than the two files drifting for a week and the
+ *    player finding out. scripts/verify/forge.mjs already does that from this
+ *    side, against a forgeart.json generated from that module.
+ *
+ *    ONE THING THIS MODULE CANNOT FIX, for whoever owns sprites.js.
+ *    scripts/verify/forgehero.mjs measures the OTHER hero path — heroFrame()'s
+ *    own HERO_WEAPONS grid, driven by forge.hero_weapon_look() — and reports
+ *    zero outline changes across the six hero rungs on every line. That is
+ *    still true and it is not fixed here, because sprites.js is not this
+ *    module's file and HERO_WEAPON_ANCHOR must not move. What IS fixed is the
+ *    path the three call sites above actually use: through
+ *    equippedHeroSprites(), every one of the nine rungs moves the composited
+ *    hero's outline on every line, measured in scripts/verify/forge.mjs §6b.
+ *    Wiring item 3 is therefore also the fix for that finding, and the two
+ *    harnesses disagreeing is the two paths disagreeing, not a flaky number.
  *
  * 4) Reduced motion. Call `lootart.setReducedMotion(v)` from the same place
  *    that calls `BattleFX.setReducedMotion(v)`. Every animated path here also

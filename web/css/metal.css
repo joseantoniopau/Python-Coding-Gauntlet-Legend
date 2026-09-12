@@ -1091,6 +1091,7 @@ textarea.explain:focus {
 .rung.done    { color: var(--green); }
 .rung.current { color: var(--gold-hi); text-shadow: 0 0 8px rgba(216,169,75,.4); }
 .rung.next    { color: var(--ink-dim); }
+.rung.skipped { color: var(--ink-dim); }
 .rung.locked  { color: #4a4a56; }
 
 .beat {

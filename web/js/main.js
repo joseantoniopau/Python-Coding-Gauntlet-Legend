@@ -9,10 +9,19 @@ import * as puzzleui from './puzzleui.js';
 import { IncantationUI } from './incantui.js';
 import { TitleScreen } from './title.js';
 import { Editor, BLANK } from './editor.js';
+import { RepoUI } from './repoui.js';
 import { Overworld } from './overworld.js';
 import { Visualiser, hasViz } from './viz.js';
 import { WorldUI } from './worldui.js';
 import * as partyui from './partyui.js';
+/* The ten systems that had no door. Each one owns its own screens, its own
+ * styling and its own timers, and borrows this file's chrome through uikit's
+ * HOST — the same bargain partyui.js already makes. */
+import * as uikit from './uikit.js';
+import * as townui from './townui.js';
+import * as huntui from './huntui.js';
+import * as legendui from './legendui.js';
+import * as finaleui from './finaleui.js';
 
 const $ = (sel) => document.querySelector(sel);
 const el = (tag, cls, html) => {
@@ -49,6 +58,18 @@ const G = {
   lastResult: null,
   // What the current encounter has had taken off it. finalexam.Seal, as sent.
   seal: null,
+  // The wheel: elements, statuses, hazards, boots, region affinities and the
+  // potion catalogue, fetched once from /api/wheel. Static for the life of the
+  // server, and the ONLY copy of any of it on this side — a status's duration
+  // with two homes is a tooltip that eventually disagrees with the fight.
+  wheel: null,
+  // The last thing the combat HUD was told. Kept so drinking a potion can
+  // repaint the strip without refetching an encounter.
+  hud: null,
+  // { region, data } — one region's affinity, hazard and what a step across it
+  // costs in the boots actually on the player's feet. Cached because the
+  // overworld repaints its side panel far more often than the ground changes.
+  regionElement: null,
   // The live IncantationUI. It owns #puzzle-host while it exists, which is why
   // every path that wants that node destroys this first.
   incant: null,
@@ -56,6 +77,25 @@ const G = {
   incantCards: [],
   // The worldui/partyui instance currently mounted in #panel-body.
   child: null,
+  // The live Mini-Repo. It owns #repo-host and a clock, which is why every
+  // path that leaves the fight destroys it first.
+  repo: null,
+  repoPayload: null,
+  // Whether the NEXT repository is opened measured. Off by default: Adventure
+  // Mode teaches, and this is the switch that says "not this time".
+  repoMeasured: false,
+  // -- the low-health alarm ------------------------------------------------
+  // upkeep.alarm() as the SERVER last sent it, and nothing else. Every graded
+  // submission carries one; so do heal(), rest() and the town square. This
+  // client never works one out for itself — a threshold with two homes is a
+  // sprite that flashes at one health and a heartbeat that starts at another.
+  alarm: null,
+  alarmNode: null,     // the red wash over the hero, while it is up
+  alarmBeat: null,     // the heartbeat interval, at upkeep's own BPM
+  alarmBand: '',       // latched: the band the player has already been TOLD
+  // The region the player is standing in as far as the hunt is concerned, so a
+  // fight's casts are only counted against the apex of the place they happened.
+  huntRegion: '',
 };
 
 /* ---------------- chrome helpers ---------------- */
@@ -155,10 +195,21 @@ function show(screen) {
   } else if (screen === 'battle') {
     $('#screen-battle').classList.add('active');
     G.overworld && G.overworld.stop();
+  } else if (screen === 'repo') {
+    ensureRepoScreen().classList.add('active');
+    G.overworld && G.overworld.stop();
   } else {
     $('#screen-panel').classList.add('active');
     G.overworld && G.overworld.stop();
   }
+  // The alarm belongs to the battle screen and is drawn from here rather than
+  // from enterBattle, because enterBattle paints the strip BEFORE it shows the
+  // screen and a pulse that checks `G.screen` would have been asking the
+  // question one line too early. Deferred once as well: the stage has no
+  // geometry until the browser has laid the newly-shown screen out, and an
+  // overlay positioned against a zero-size box is an overlay nobody sees.
+  paintAlarm();
+  if (screen === 'battle') setTimeout(paintAlarm, 60);
 }
 
 /* ---------------- vitals ---------------- */
@@ -188,6 +239,16 @@ async function refresh() {
     return G.state;
   }
   G.state = next;
+  // Equipment changes the sprite. hero_look() has been computed and shipped on
+  // every state payload since the armour system landed and nothing ever read it,
+  // so the player's gear was invisible on the character they were playing.
+  if (G.overworld && next.hero) {
+    const stamp = JSON.stringify(next.hero);
+    if (stamp !== G._heroStamp) {
+      G._heroStamp = stamp;
+      G.overworld.setEquipment(next.hero);
+    }
+  }
   paintVitals();
   applySettings();
   return G.state;
@@ -222,7 +283,27 @@ function loadRegion(regionId, spawn) {
   $('#region-name').textContent = (region.numeral ? `${region.numeral} · ` : '')
     + region.name.toUpperCase();
   $('#region-blurb').textContent = region.blurb + ' ' + region.physical;
-  audio.play(region.music || 'overworld');
+
+  // Arriving somewhere for the first time gets its own track, once. Walking
+  // back later is ordinary overworld music — the fanfare is for the discovery,
+  // not for the place.
+  const seenKey = 'gauntlet-seen-regions';
+  let seen;
+  try { seen = new Set(JSON.parse(localStorage.getItem(seenKey) || '[]')); }
+  catch (e) { seen = new Set(); }
+  const firstVisit = !seen.has(region.id);
+  if (firstVisit) {
+    seen.add(region.id);
+    try { localStorage.setItem(seenKey, JSON.stringify([...seen])); } catch (e) { /* full */ }
+  }
+  audio.play(firstVisit ? 'newarea' : (region.music || 'overworld'));
+  // What roams here. One call per region: the Hunt row is per-region and the
+  // forty-kilobyte client payload inside it is adopted once and ignored
+  // thereafter, exactly as api.js asks.
+  huntui.read(region.id).then((r) => {
+    if (!r || r.error) return;
+    if (currentRegion().id === region.id && G.screen === 'world') paintWorldSide();
+  }).catch(() => { /* a region without a readout still walks */ });
   paintWorldSide();
 }
 
@@ -280,8 +361,66 @@ function paintWorldSide() {
   btnForge.onclick = () => startNext({ kind: 'DEBUG_BATTLE' });
   const btnIncant = el('button', 'btn', 'SPEAK AN INCANTATION');
   btnIncant.onclick = () => showIncantList();
-  actions.append(btnNext, btnBoss, btnShrine, btnForge, btnIncant);
+  // The square. Health is free there and the player should never have to
+  // wonder whether they can afford to keep going.
+  const btnTown = el('button', 'btn good', 'THE TOWN SQUARE');
+  btnTown.onclick = () => go('town');
+  // The forty-seven voices, one call, identity first.
+  const btnTalk = el('button', 'btn', 'TALK TO PEOPLE HERE');
+  btnTalk.onclick = () => townui.talkOnTheOverworld(region.id);
+  actions.append(btnNext, btnTown, btnBoss, btnShrine, btnForge, btnIncant, btnTalk);
+  // Vess works in exactly one place. The button appears where she is standing
+  // and nowhere else, which is the whole reason the map is an economy: you have
+  // to carry the metal back.
+  // `btnForge` above is the Armorer's DEBUG battle and has nothing to do with
+  // this; the smith is a different person in a different building.
+  const bench = s.forge || {};
+  if (bench.smith && region.id === bench.smith.region) {
+    const btnSmith = el('button', 'btn good',
+      bench.ready ? '✦ VESS — SHE CAN WORK IT NOW' : 'VESS, THE VILLAGE SMITH');
+    btnSmith.onclick = () => showSmith();
+    actions.appendChild(btnSmith);
+  } else if (bench.blade && bench.smith) {
+    const hint = el('div', 'small muted',
+      `The bench is in ${(G.state.regions.find(r =>
+        r.id === bench.smith.region) || {}).name || 'the village'}. `
+      + `${bench.held_total} bar(s) in the bag.`);
+    actions.appendChild(hint);
+  }
   side.appendChild(actions);
+
+  // WHAT ROAMS HERE. Drawn from the readout the region load already fetched, so
+  // this costs nothing, and it is a link to the whole thing rather than a
+  // summary of it — hunters.py's own argument is that the readout is the
+  // feature, and the readout does not fit in a sidebar.
+  const hunted = huntui.view();
+  if (hunted && hunted.apex && hunted.region === region.id) {
+    side.appendChild(el('div', 'section-title', 'WHAT ROAMS HERE'));
+    const h = hunted.hunt || {};
+    const sc = hunted.scaling || {};
+    const rd = hunted.readiness || {};
+    const row = el('div', 'list-item',
+      `<span class="t" style="color:${hunted.apex.colour}">${
+         hunted.apex.name.toUpperCase()}
+        <span class="tag">${h.state || 'DORMANT'}</span>
+        <span class="tag ${rd.score >= 60 ? 'green' : 'orange'}">READY ${
+          rd.score || 0}%</span></span>
+       <span class="d">${sc.blurb || ''}<br>
+         <span class="muted small">${sc.target_casts || '—'} cast(s) at your
+         current preparation${hunted.kills
+           ? ` · killed ${hunted.kills} time(s)` : ''}</span></span>`);
+    row.onclick = () => go('hunt');
+    side.appendChild(row);
+  }
+
+  // THE WEATHER HERE. Every region's element is derived from the biome it
+  // already declares — elements.BIOME_AFFINITY — so this is a reading of what
+  // the place physically is rather than a label somebody hung on it. Five of
+  // the seventeen are neutral on purpose and say so: they are the baseline the
+  // other twelve are felt against, and a map where everywhere has weather is a
+  // map with no contrast in it.
+  side.appendChild(el('div', 'section-title', 'THE WEATHER HERE'));
+  side.appendChild(affinityPanel(region));
 
   side.appendChild(el('div', 'section-title', 'ARMOUR'));
   const armour = el('div');
@@ -308,6 +447,82 @@ function paintWorldSide() {
   seeMap.onclick = () => go('map');
   travel.appendChild(seeMap);
   side.appendChild(travel);
+}
+
+/* What this region is made of, what it does to your feet, and whether the boots
+ * you are standing in answer it. All of it comes from /api/region — which calls
+ * elements.hazard_step with roll pinned at 1.0, so it is a PREVIEW and cannot
+ * inflict anything. Nothing here is a hint about any problem: it is the room. */
+function affinityPanel(region) {
+  const host = el('div');
+  const cached = G.regionElement;
+  if (!cached || cached.region !== region.id) {
+    host.appendChild(el('div', 'small muted', 'Reading the ground…'));
+    ensureRegionElement(region.id);
+    return host;
+  }
+  const e = cached.data || {};
+  const art = e.view || {};
+  const hazard = e.hazard || {};
+  const step = e.step || {};
+  const boot = e.boots ? ((G.wheel && (G.wheel.boots || [])
+    .find(b => b.id === e.boots)) || null) : null;
+  if (!art.id) {
+    host.appendChild(el('div', 'small muted',
+      `<span style="color:var(--ink-dim)">NEUTRAL</span> — ${art.blurb
+        || 'Weather-free. Whatever happens here, happens because you did it.'}`));
+    return host;
+  }
+  const pct = Math.round((step.speed !== undefined ? step.speed : 1) * 100);
+  host.appendChild(el('div', 'list-item',
+    `<span class="t" style="color:${art.colour}">${art.rune || ''} ${
+       art.name.toUpperCase()}</span>
+     <span class="d">${art.blurb}
+       ${art.opposed ? `<br><span class="muted">Countered by ${
+         (wheelElement(art.opposed) || {}).name || art.opposed}. Carry that and
+         the fights here are two thirds as long.</span>` : ''}</span>`));
+  if (hazard.name) {
+    // The RISK, not the roll. `step` is a preview taken with the die pinned, so
+    // its `status` is empty by construction and reading it would report every
+    // hazard as harmless. What the ground can do to you is the hazard's own
+    // entry in elements.HAZARDS, which is what the wheel ships.
+    const spec = (G.wheel && (G.wheel.hazards || [])
+      .find(h => h.id === hazard.id)) || {};
+    const risk = spec.status ? (wheelStatus(spec.status) || {}) : null;
+    const cost = [];
+    if (pct !== 100) cost.push(`you move at ${pct}% of your pace`);
+    if (risk) {
+      cost.push(`roughly one step in ${Math.max(1,
+        Math.round(1 / (spec.chance || 1)))} leaves you
+        ${(risk.name || spec.status).toLowerCase()}`);
+    }
+    host.appendChild(el('div', 'list-item',
+      `<span class="t" style="color:${step.protected
+         ? 'var(--green)' : 'var(--orange)'}">${hazard.name.toUpperCase()}</span>
+       <span class="d">${hazard.blurb}<br><span class="muted">${
+         step.protected
+           ? `${boot ? boot.name : 'Your boots'} answer it. Full speed, and the
+              ground cannot touch you.`
+           : `Unprotected — ${cost.length ? cost.join(', and ')
+               : 'it costs you nothing you can measure'}. ${
+               boot ? `${boot.name} do not cover this.`
+                    : 'Nothing on your feet answers it.'}`}</span></span>`));
+  }
+  return host;
+}
+
+/* One fetch per region, cached. The overworld repaints its side panel often and
+ * a request per repaint would be a request per keystroke. */
+function ensureRegionElement(regionId) {
+  if (G._regionElementPending === regionId) return;
+  G._regionElementPending = regionId;
+  api.region(regionId).then((view) => {
+    G._regionElementPending = null;
+    if (!view || view.error) return;
+    G.regionElement = { region: regionId, data: view.element || {} };
+    // Only if the player is still standing where the answer is about.
+    if (G.screen === 'world' && currentRegion().id === regionId) paintWorldSide();
+  }).catch(() => { G._regionElementPending = null; });
 }
 
 /* Every road leaving the region the server says you are standing in. Sorted
@@ -406,7 +621,11 @@ function onNodeEnter(marker) {
   G.pendingNode = marker;
   if (marker.kind === 'shrine') return doShrine();
   if (marker.kind === 'chest') return openChest(marker);
-  if (marker.kind === 'npc') return mentorTalk();
+  // A person. The mentor is one voice and banter.py has forty-seven more, so
+  // the mentor opens and whoever else is standing here speaks after them —
+  // ONE townTalk() call for all of them, never a speak() per face, or the town
+  // disagrees with itself about the weather.
+  if (marker.kind === 'npc') { mentorTalk(); return; }
   if (marker.kind === 'boss') return showBossList(currentRegion().id);
   if (marker.kind === 'exit') return showTravel();
   if (marker.kind === 'elite') return startNext({ elite: true });
@@ -456,6 +675,11 @@ function mentorTalk() {
       + 'It will not arrive wearing the same face.');
   }
   say(mentor.name, lines, mentor.sprite);
+  // And then everybody else who is standing here. Queued behind the mentor
+  // rather than spoken over them, and drawn IDENTITY FIRST — the sentence that
+  // says who this person is comes before the one that says what they noticed,
+  // which is the difference between a town and an advice kiosk.
+  G.afterStory = () => townui.talkOnTheOverworld(region.id);
 }
 
 /* The signpost at the edge of a region. Same roads as the side panel, same
@@ -502,6 +726,8 @@ function enterBattle(payload) {
   // An IncantationUI from a previous fight owns #puzzle-host until it is told
   // otherwise, and renderPuzzle is about to want that node.
   destroyIncant();
+  // A Mini-Repo left mounted keeps a clock running behind the battle screen.
+  destroyRepo();
   // A companion card from the last fight is about to be describing the wrong
   // problem, and the once-per-run sealed notice has to be re-armed.
   partyui.beginEncounter();
@@ -594,7 +820,19 @@ function enterBattle(payload) {
     $('#btn-submit').textContent = p.entry.kind === 'test_forge' ? 'FORGE ✦' : 'CAST ✦';
   }
 
+  // Which region's apex this fight's casts count against. Read off the
+  // encounter rather than off the player, because a memory ambush can be set
+  // somewhere the player is not standing.
+  G.huntRegion = (payload.encounter && payload.encounter.region)
+    || (payload.region || {}).id || currentRegion().id;
+
   startTimer();
+  // The alarm BEFORE the strip, so a player who walked into this fight already
+  // hurt is told on the frame the fight appears rather than one cast later.
+  noteAlarm(payload.alarm);
+  // The turn, both pairs of bars, the statuses and the belt. Drawn before the
+  // screen is shown so the fight never appears without its own state on it.
+  paintCombatHud(hudFromPayload(payload));
   setTab(visibleTab(interview ? 'approach' : 'trials'));
   show('battle');
   audio.play(enemy.boss ? 'boss' : 'battle');
@@ -653,10 +891,826 @@ function setEnemyScene(payload) {
     region: (payload.region || {}).palette || 'spring',
     enemy: payload.enemy,
     pattern: payload.problem.pattern,
+    heroLook: G.state && G.state.hero,
+    // The rung the player actually paid for, in the hand, on the stage. The
+    // server ships it inside hero_look because that is the one place that
+    // already knows what is equipped.
+    gear: G.state && G.state.hero && G.state.hero._gear,
   });
   fx.setEnemyHp(payload.enemy.hp, payload.enemy.hp_max);
+  // The ground this is being fought on. `element.region` is the region's biome
+  // pushed through elements.BIOME_AFFINITY, so a cold place reads cold because
+  // of what it physically is — and a neutral region gets nothing added, which
+  // is what makes the other twelve feel like somewhere. Sealed runs send an
+  // empty string here and the stage stays plain; that is the crutch going, not
+  // the mechanic.
+  const elt = payload.element || {};
+  fx.setAffinity(elt.region || '', { hazard: (elt.hazard || {}).id || '' });
   fx.start();
   return fx;
+}
+
+/* ======================================================================
+ * THE TURN, THE BARS, THE STATUSES AND THE BELT
+ * ======================================================================
+ *
+ * One strip between the stage and the editor, and it is the only place in this
+ * client that draws the tactical layer. Everything on it is read off the
+ * server's own payload — engine._encounter_payload and the result of a graded
+ * submission ship the same keys — so nothing here recomputes a number the
+ * engine already decided, and nothing here decides one.
+ *
+ * WHY IT EXISTS AT ALL. A player losing a fight has to be able to see WHY. An
+ * elemental multiplier that only ever appears as a smaller number is not a
+ * mechanic, it is a rumour; a poison tick with nothing on screen is the game
+ * appearing to cheat. Everything below is the difference between a tactical
+ * layer and noise with numbers in it.
+ *
+ * WHAT IT IS NOT. It is not a way to win a fight. The attack in this game is
+ * the line of Python in the editor to the right of it, and the loudest thing on
+ * this strip — the belt — is deliberately the thing that cannot end a turn.
+ */
+
+/* The rulebook, fetched once at boot from /api/wheel. Every status name, every
+ * duration, every hazard and every matchup label lives in elements.py; this is
+ * the lookup side of that and it holds no opinions of its own. Empty until the
+ * fetch lands, and every reader below tolerates that, because a HUD that throws
+ * because a codex has not arrived is worse than a HUD with fewer words on it. */
+/* Everything below builds title= attributes out of prose that comes from
+ * elements.py, potions.py and bestiary.py. None of it is player input, but a
+ * module author writing an apostrophe or a quote in a blurb should not be able
+ * to break a tooltip, so it goes through here rather than being trusted. */
+function attr(text) {
+  return String(text === undefined || text === null ? '' : text)
+    .replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function wheelStatus(id) {
+  const w = G.wheel || {};
+  return (w.statuses || []).find(s => s.id === id) || null;
+}
+
+function wheelElement(id) {
+  const w = G.wheel || {};
+  if (!id) return w.neutral || null;
+  return (w.elements || []).find(e => e.id === id) || w.neutral || null;
+}
+
+function wheelMatchup(kind) {
+  const w = G.wheel || {};
+  return ((w.matchups || {})[kind]) || null;
+}
+
+function wheelSpecial(id) {
+  const w = G.wheel || {};
+  return (w.specials || []).find(sp => sp.id === id) || null;
+}
+
+function ensureCombatStyle() {
+  if (document.getElementById('combat-style')) return;
+  const node = document.createElement('style');
+  node.id = 'combat-style';
+  node.textContent = `
+#combat-hud {
+  flex: 0 0 auto; display: none; gap: 10px;
+  padding: 8px 14px; background: var(--panel-2);
+  border-bottom: 3px solid var(--line); flex-direction: column;
+}
+#combat-hud.on { display: flex; }
+.chud-top { display: flex; gap: 12px; align-items: stretch; }
+.chud-side { flex: 1 1 0; min-width: 0; }
+.chud-side.them { text-align: right; }
+.chud-name {
+  font-family: 'Press Start 2P', monospace; font-size: calc(8px * var(--scale));
+  color: var(--ink-dim); margin-bottom: 5px; letter-spacing: 1px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.chud-el {
+  display: inline-block; padding: 1px 5px; margin-left: 6px;
+  border: 1px solid currentColor; font-size: calc(7px * var(--scale));
+}
+.chud-bar { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
+.chud-side.them .chud-bar { flex-direction: row-reverse; }
+.chud-bar .lb {
+  flex: 0 0 30px; font-family: 'Press Start 2P', monospace;
+  font-size: calc(6px * var(--scale)); color: var(--ink-faint);
+}
+.chud-bar .bar { flex: 1 1 auto; height: 10px; }
+.chud-bar .vv {
+  flex: 0 0 62px; font-size: calc(10px * var(--scale)); color: var(--ink-dim);
+  text-align: right; font-variant-numeric: tabular-nums;
+}
+.chud-side.them .chud-bar .vv { text-align: left; }
+.bar.focus > i { background: linear-gradient(90deg,#5a4f95,#a89aff); }
+/* The mark on the enemy's focus bar is where its cheapest special becomes
+   affordable. A gauge filling toward nothing in particular teaches nothing;
+   a gauge filling toward a line teaches the player to watch it. */
+.chud-bar .bar .mk {
+  position: absolute; top: -2px; bottom: -2px; width: 2px;
+  background: var(--gold-hi); opacity: .85;
+}
+.chud-stats { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.chud-side.them .chud-stats { justify-content: flex-end; }
+.chud-stat {
+  display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px;
+  border: 1px solid currentColor; font-size: calc(9px * var(--scale));
+  cursor: help;
+}
+.chud-stat b { font-variant-numeric: tabular-nums; }
+.chud-turn {
+  flex: 0 0 148px; text-align: center; border-left: 2px solid var(--line);
+  border-right: 2px solid var(--line); padding: 0 10px;
+}
+.chud-turn .tn {
+  font-family: 'Press Start 2P', monospace; font-size: calc(12px * var(--scale));
+  color: var(--gold-hi);
+}
+.chud-turn .tw {
+  font-family: 'Press Start 2P', monospace; font-size: calc(7px * var(--scale));
+  color: var(--green); margin-top: 5px; letter-spacing: 1px;
+}
+.chud-turn .tm {
+  font-size: calc(10px * var(--scale)); margin-top: 5px; line-height: 1.5;
+}
+.chud-said {
+  border-left: 3px solid var(--orange); background: var(--panel);
+  padding: 5px 9px; font-size: calc(11px * var(--scale));
+  color: var(--ink-dim); line-height: 1.6;
+}
+.chud-said b { color: var(--orange); }
+.chud-belt { display: flex; gap: 6px; align-items: stretch; flex-wrap: wrap; }
+.potion {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  min-width: 74px; padding: 5px 7px; background: var(--panel);
+  border: 2px solid var(--line); cursor: pointer; color: var(--ink-dim);
+  font-size: calc(9px * var(--scale)); line-height: 1.4; text-align: center;
+}
+.potion:hover:not(.off) { border-color: var(--line-hi); background: var(--panel-3); }
+.potion .pn {
+  font-family: 'Press Start 2P', monospace; font-size: calc(6px * var(--scale));
+  letter-spacing: .5px;
+}
+.potion .pv { font-size: calc(10px * var(--scale)); }
+.potion .ph { color: var(--gold-hi); font-variant-numeric: tabular-nums; }
+.potion.off { opacity: .42; cursor: not-allowed; }
+.chud-rule {
+  font-size: calc(10px * var(--scale)); color: var(--ink-faint);
+  font-style: italic; line-height: 1.6;
+}
+.chud-rule b { color: var(--green); font-style: normal; }
+.chud-empty { font-size: calc(10px * var(--scale)); color: var(--ink-faint); }
+`;
+  document.head.appendChild(node);
+}
+
+/* Built here rather than in index.html because it belongs to the fight and not
+ * to the page: every screen that is not a battle hides it, and a node that only
+ * one screen uses is a node that screen should own. */
+function ensureCombatHud() {
+  ensureCombatStyle();
+  let node = $('#combat-hud');
+  if (node) return node;
+  node = el('div', '');
+  node.id = 'combat-hud';
+  node.innerHTML = `
+    <div class="chud-top">
+      <div class="chud-side you">
+        <div class="chud-name" id="chud-you-name">YOU</div>
+        <div class="chud-bar"><span class="lb">HP</span>
+          <div class="bar hp"><i id="chud-you-hp" style="width:100%"></i></div>
+          <span class="vv" id="chud-you-hp-v">—</span></div>
+        <div class="chud-bar"><span class="lb">FOCUS</span>
+          <div class="bar focus"><i id="chud-you-fp" style="width:100%"></i></div>
+          <span class="vv" id="chud-you-fp-v">—</span></div>
+        <div class="chud-stats" id="chud-you-stats"></div>
+      </div>
+      <div class="chud-turn">
+        <div class="tn" id="chud-turn-n">TURN 1</div>
+        <div class="tw" id="chud-turn-w">YOURS</div>
+        <div class="tm" id="chud-match"></div>
+      </div>
+      <div class="chud-side them">
+        <div class="chud-name" id="chud-them-name">—</div>
+        <div class="chud-bar"><span class="lb">HP</span>
+          <div class="bar hp"><i id="chud-them-hp" style="width:100%"></i></div>
+          <span class="vv" id="chud-them-hp-v">—</span></div>
+        <div class="chud-bar"><span class="lb">FOCUS</span>
+          <div class="bar focus"><i id="chud-them-fp" style="width:0%"></i></div>
+          <span class="vv" id="chud-them-fp-v">—</span></div>
+        <div class="chud-stats" id="chud-them-stats"></div>
+      </div>
+    </div>
+    <div class="chud-said" id="chud-said" style="display:none"></div>
+    <div class="chud-belt" id="chud-belt"></div>
+    <div class="chud-rule" id="chud-rule"></div>`;
+  const main = $('#battle-main');
+  main.parentNode.insertBefore(node, main);
+  return node;
+}
+
+function hideCombatHud() {
+  const node = $('#combat-hud');
+  if (node) node.classList.remove('on');
+  G.hud = null;
+  stopAlarm();
+}
+
+/* ======================================================================
+ * THE LOW-HEALTH ALARM
+ * ======================================================================
+ *
+ * upkeep.py's brief, in its own words: "At low health the player sprite blinks
+ * red with a heartbeat so it is impossible to miss." Two channels, ONE CLOCK —
+ * `pulse_hz` is literally `bpm / 60` — because a sprite flashing at one speed
+ * over a heart thumping at another reads as two unrelated warnings and a player
+ * tunes both out.
+ *
+ * WHERE THE NUMBERS COME FROM, and this is the whole of the design here: the
+ * server. `upkeep.alarm_for` ships the band, the colour, the two alphas, the
+ * rate and the advice, and every door that can change a player's health hands
+ * one back — a graded submission, the Mender, a hidden healer, the square. This
+ * file stores the last one and draws it. It does NOT hold a copy of
+ * ALARM_BANDS: WORN is at 0.50 and CRITICAL at 0.35 in exactly one file, and a
+ * second copy here is how the pulse and the bar end up disagreeing about when
+ * things got bad.
+ *
+ * WORN does not pulse, on purpose. An alarm that starts at half health runs for
+ * most of every fight, and an alarm that is always on is decoration.
+ */
+/* The wash sits over the hero on the battle stage. fx.js places the sprite at
+ * STAGE.heroX on a letterboxed, whole-number-scaled canvas and publishes `px`,
+ * `ox` and `oy` for exactly this kind of question, so the overlay is positioned
+ * off those rather than guessed at in percentages. If the stage has not been
+ * built yet the fallback is the proportion, which is close enough to be
+ * unmistakable and is never wrong by more than a letterbox. */
+function placeAlarm(node) {
+  const stage = $('#battle-stage');
+  if (!stage) return;
+  const rect = stage.getBoundingClientRect();
+  let cx = rect.width * (46 / 192);
+  let cy = rect.height * (100 / 128) - rect.height * 0.16;
+  let size = Math.min(rect.width, rect.height) * 0.42;
+  const fx = G.fx;
+  if (fx && fx.canvas && fx.px) {
+    const dpr = fx.canvas.width / Math.max(1, parseFloat(fx.canvas.style.width) || 1);
+    const scale = fx.px / (dpr || 1);
+    // STAGE.heroX is 46 and STAGE.ground is 100, in fx.js's 192x128 stage
+    // space. The hero is sixteen by twenty-four source pixels drawn at 3x, so
+    // its body runs from y=28 to the ground; centring 36 above the ground and
+    // covering 66 puts the wash on the torso rather than on the shadow.
+    cx = ((fx.ox / (dpr || 1)) + 46 * scale);
+    cy = ((fx.oy / (dpr || 1)) + (100 - 36) * scale);
+    size = 66 * scale;
+  }
+  node.style.left = `${Math.round(cx - size / 2)}px`;
+  node.style.top = `${Math.round(cy - size / 2)}px`;
+  node.style.width = `${Math.round(size)}px`;
+  node.style.height = `${Math.round(size)}px`;
+}
+
+function paintAlarm() {
+  const alarm = G.alarm;
+  const on = !!(alarm && alarm.pulse && G.screen === 'battle');
+  const label = $('#chud-you-hp-v');
+  if (label) label.classList.toggle('alarming', !!(alarm && alarm.pulse));
+  if (!on) { stopAlarm(); return; }
+  const stage = $('#battle-stage');
+  if (!stage) return;
+  if (getComputedStyle(stage).position === 'static') stage.style.position = 'relative';
+  if (!G.alarmNode || !G.alarmNode.isConnected) {
+    G.alarmNode = el('div', '');
+    G.alarmNode.id = 'hero-alarm';
+    stage.appendChild(G.alarmNode);
+  }
+  const node = G.alarmNode;
+  placeAlarm(node);
+  node.style.background = `radial-gradient(circle, ${alarm.colour} 0%, `
+    + `${alarm.colour}00 70%)`;
+
+  const reduced = !!(G.state && G.state.settings.reduced_motion);
+  if (reduced) {
+    // A player who turned the movement off still has to be told. The colour
+    // holds at the top of the band instead of blinking, which is the same
+    // warning without the flashing — and flashing is the accessibility problem
+    // this setting exists to answer.
+    node.style.animation = 'none';
+    node.style.opacity = String(alarm.alpha_max);
+  } else {
+    const period = alarm.pulse_hz ? 1 / alarm.pulse_hz : 1;
+    node.style.animation = `heroalarm ${period.toFixed(3)}s ease-in-out infinite`;
+    node.style.setProperty('--a0', String(alarm.alpha_min));
+    node.style.setProperty('--a1', String(alarm.alpha_max));
+  }
+
+  // The sound, on the SAME clock, and that is the whole of upkeep's design
+  // here: `pulse_hz` is literally `bpm / 60`, so a sprite blinking at one rate
+  // over a heart thumping at another reads as two unrelated warnings and gets
+  // tuned out. The interval comes off the server's own `bpm` rather than out of
+  // audio.heartbeatInterval — that function re-derives the tempo from severity
+  // and lands two milliseconds away, which is nothing to hear and is still two
+  // places deciding one number. The severity is passed on for the SHAPE of the
+  // thump, which is audio's business.
+  const sev = Number(alarm.severity) || 0;
+  const bpm = Number(alarm.bpm) || 0;
+  const wanted = (alarm.heartbeat && bpm)
+    ? Math.round(60000 / bpm)
+    : (alarm.heartbeat ? audio.heartbeatInterval(sev) : 0);
+  if (!wanted) { stopBeat(); return; }
+  if (G.alarmBeat && G.alarmBeat.ms === wanted) return;
+  stopBeat();
+  const id = setInterval(() => {
+    // Every tick re-checks its own reason for existing: a heartbeat that
+    // outlives the fight is the sixth leak this file is not going to have.
+    if (G.screen !== 'battle' || !G.alarm || !G.alarm.heartbeat) { stopBeat(); return; }
+    audio.heartbeat(Number(G.alarm.severity) || 0);
+  }, wanted);
+  G.alarmBeat = { id, ms: wanted };
+  audio.heartbeat(sev);
+}
+
+function stopBeat() {
+  if (G.alarmBeat) clearInterval(G.alarmBeat.id);
+  G.alarmBeat = null;
+}
+
+function stopAlarm() {
+  stopBeat();
+  if (G.alarmNode && G.alarmNode.isConnected) G.alarmNode.remove();
+  G.alarmNode = null;
+}
+
+/* One alarm, from wherever the server just sent one. The band is latched and
+ * spoken only on a transition DOWNWARD, which is upkeep.py's own instruction:
+ * an advice line every frame is an advice line nobody reads. */
+function noteAlarm(alarm) {
+  if (!alarm || !alarm.band) return;
+  G.alarm = alarm;
+  const order = ['DIRE', 'CRITICAL', 'WORN', 'STEADY'];
+  const worse = order.indexOf(alarm.band) < order.indexOf(G.alarmBand || 'STEADY');
+  if (alarm.band !== G.alarmBand) {
+    G.alarmBand = alarm.band;
+    if (worse && alarm.advice) {
+      toast(alarm.name.toUpperCase(), alarm.advice,
+            alarm.band === 'DIRE' ? 'red' : 'violet');
+    }
+  }
+  paintAlarm();
+}
+
+/* THE ONE THING THIS MUST NOT DO IS FETCH.
+ *
+ * The obvious source for an alarm is `api.town()`, and it is a trap: reading the
+ * square is `upkeep.town_visit`, which HEALS FOR FREE and resets the since-town
+ * counters. Walking into town is supposed to do both of those; a battle screen
+ * quietly doing it to light up a sprite would heal the player at the start of
+ * every fight and flatten the whole upkeep loop. The encounter payload now
+ * carries `alarm` for exactly this reason.
+ *
+ * So every alarm this client draws was handed to it by a door the player
+ * actually opened: entering an encounter, a graded submission, the Mender, a
+ * hidden healer, the square. When the last one it was given does not describe
+ * the health on screen — a reload at low health, before the first cast — it
+ * draws nothing rather than guessing, because guessing means a copy of
+ * ALARM_BANDS living here, and then the pulse and the bar have two opinions
+ * about when things got bad. */
+function ensureAlarm() {
+  const p = (G.state || {}).player;
+  const a = G.alarm;
+  if (!p || !a) { paintAlarm(); return; }
+  if (a.health !== p.stamina || a.health_max !== p.stamina_max) {
+    // Stale. Health only moves through doors that hand one of these back, so
+    // the next cast replaces it; until then the sprite says nothing, which is
+    // the honest reading of "nobody has told us".
+    G.alarm = null;
+  }
+  paintAlarm();
+}
+
+/* One status, with the turns it has left. The name, the duration and the
+ * sentence under it are elements.py's; this adds nothing to them. */
+function statusChip(row) {
+  const spec = wheelStatus(row.id) || {};
+  const art = wheelElement(spec.element) || {};
+  const colour = art.colour || 'var(--ink-dim)';
+  const stacks = (row.stacks || 1) > 1 ? ` ×${row.stacks}` : '';
+  const title = spec.blurb
+    ? `${spec.name} — ${spec.blurb} ${row.turns} turn(s) left.`
+    : `${row.id} · ${row.turns} turn(s) left`;
+  return `<span class="chud-stat" style="color:${colour}" title="${attr(title)}">
+    ${(spec.name || row.id).toUpperCase()}${stacks} <b>${row.turns}</b></span>`;
+}
+
+/* The single fact the player has to be able to read off this strip: how much of
+ * the fight is their element's doing. The label is the server's word for the
+ * matchup — elements.MATCHUP_LABEL — and the multiplier is its own number. */
+function matchupHtml(elt, sealed) {
+  if (!elt) return '';
+  const mine = wheelElement(elt.player);
+  const theirs = elt.enemy ? wheelElement(elt.enemy) : null;
+  const kind = elt.matchup || '';
+  const m = wheelMatchup(kind);
+  if (!theirs || !theirs.id) {
+    // Two different silences again. Under the seal the element is still there
+    // and still multiplying — the reading is what was taken, not the mechanic —
+    // and saying "nothing here to read" instead would be the interface telling
+    // the player the fight got simpler when it did not.
+    if (sealed) {
+      return '<span class="muted">It is made of something. You are not being '
+        + 'told what, and it still counts.</span>';
+    }
+    return `<span class="muted">${mine && mine.id
+      ? `${mine.name} · nothing here to read` : 'no element'}</span>`;
+  }
+  const colour = m && (kind === 'OPPOSED' ? 'var(--green)'
+    : kind === 'SAME' ? 'var(--red)'
+    : kind === 'SECONDARY' ? 'var(--blue)'
+    : kind === 'WEAK_INTO' ? 'var(--orange)' : 'var(--ink-dim)');
+  return `<span style="color:${mine.colour}">${mine.rune || ''} ${mine.name}</span>
+    <span class="muted"> into </span>
+    <span style="color:${theirs.colour}">${theirs.rune || ''} ${theirs.name}</span>
+    <br><span style="color:${colour}">${m ? m.label.toUpperCase() : kind}
+    ${m ? `×${m.multiplier.toFixed(2)}` : ''}</span>`;
+}
+
+/* The belt. Every potion the player is carrying, what it would restore RIGHT
+ * NOW — the falloff is already folded into `would_restore` by potions.py — and
+ * for anything greyed out, the sentence saying why. A disabled button with no
+ * reason is how a player concludes a mechanic is broken, which is why
+ * potions.pouch_view ships `reason` next to `usable` and why it is rendered
+ * here rather than inferred. */
+function paintBelt(host, pouch) {
+  host.innerHTML = '';
+  const rows = (pouch && pouch.potions) || [];
+  if (!rows.length) {
+    host.appendChild(el('span', 'chud-empty',
+      'Nothing on the belt. Monsters drop them and chests hold them; the '
+      + 'deeper the room, the deeper the vessel.'));
+    return;
+  }
+  for (const p of rows) {
+    const btn = el('button', `potion${p.usable ? '' : ' off'}`,
+      `<span class="pn" style="color:${p.colour}">${p.kind_label.toUpperCase()}</span>
+       <span class="pv">${p.strength}</span>
+       <span class="ph">×${p.held}${p.would_restore ? ` · +${p.would_restore}` : ''}</span>`);
+    btn.title = p.usable
+      ? `${p.name} — ${p.flavour || ''}${p.would_restore
+          ? `\nRestores ${p.would_restore} now.` : ''}`
+        + `\n${p.next_multiplier < 1
+          ? `The ${Math.round(p.next_multiplier * 100)}% band — you have had `
+            + 'one of these already this fight.' : 'Full band.'}`
+        + '\nDrinking does not spend your turn.'
+      : `${p.name} — ${p.reason}`;
+    btn.disabled = !p.usable;
+    if (p.usable) btn.onclick = () => drinkPotion(p, btn);
+    host.appendChild(btn);
+  }
+}
+
+/* Drink. THE WHOLE POINT OF THIS FUNCTION is what it does not do: it does not
+ * submit, it does not end the turn, and it does not re-enable the CAST button
+ * because the CAST button was never disabled. The server says so in two fields
+ * and both of them are shown rather than paraphrased. */
+async function drinkPotion(p, btn) {
+  btn.disabled = true;
+  let r;
+  try {
+    r = await api.potion(p.id);
+  } catch (e) {
+    btn.disabled = false;
+    toast('THE STOPPER STICKS', e.message, 'red');
+    return;
+  }
+  if (!r || !r.ok) {
+    // Every refusal has a sentence attached — sealed, already drunk this turn,
+    // nothing to cure, already full. Show the sentence.
+    toast(r && r.error === 'sealed' ? sealedTitle(r) : 'SHE KEEPS IT CORKED',
+          (r && r.message) || 'Not that one, not now.', 'red');
+    if (r && r.pouch) paintBelt($('#chud-belt'), r.pouch);
+    return;
+  }
+  audio.sfx('unlock');
+  if (G.fx) {
+    try {
+      G.fx.drink({ colour: p.colour, amount: r.restored || 0, name: p.kind_label });
+    } catch (e) { /* the draught still went down */ }
+  }
+  await refresh();
+  // `must_still_cast` is potions.drink's own field and this is the one line of
+  // interface the rule gets. It is a toast rather than a modal on purpose: a
+  // modal would be a pause, and a pause is the first half of an inventory game.
+  toast('DOWN IT GOES', `${r.prompt || ''} ${r.applied.join(' ')}`, 'green');
+  // The belt, the statuses and the dose pool all moved. Repaint from the
+  // server's answer rather than from what we think happened.
+  paintCombatHud({
+    ...(G.hud || {}),
+    pouch: r.pouch,
+    statuses: r.statuses || (G.hud || {}).statuses,
+    drunk: r.id,
+  });
+}
+
+/* Normalise the two payload shapes into one. An encounter payload and the
+ * result of a graded submission carry the same keys for all of this — the
+ * engine ships `turn`, `statuses`, `enemy_statuses`, `enemy_vitals`, `element`
+ * and `pouch` on both — which is what lets one painter serve the whole fight. */
+function paintCombatHud(view) {
+  if (!view) { hideCombatHud(); return; }
+  const node = ensureCombatHud();
+  node.classList.add('on');
+  G.hud = view;
+
+  const p = (G.state && G.state.player) || {};
+  const hp = Math.max(0, p.stamina || 0), hpMax = Math.max(1, p.stamina_max || 1);
+  const fp = Math.max(0, p.mana || 0), fpMax = Math.max(1, p.mana_max || 1);
+  const elt = view.element || {};
+  const mine = wheelElement(elt.player);
+
+  $('#chud-you-name').innerHTML = `YOU${mine && mine.id
+    ? `<span class="chud-el" style="color:${mine.colour}">${mine.rune || ''} ${
+        mine.name.toUpperCase()}</span>` : ''}`;
+  $('#chud-you-hp').style.width = `${(hp / hpMax) * 100}%`;
+  $('#chud-you-hp-v').textContent = `${hp} / ${hpMax}`;
+  $('#chud-you-fp').style.width = `${(fp / fpMax) * 100}%`;
+  $('#chud-you-fp-v').textContent = `${fp} / ${fpMax}`;
+  $('#chud-you-stats').innerHTML = (view.statuses || []).map(statusChip).join('')
+    || '<span class="chud-empty">nothing on you</span>';
+
+  // THEM. `enemy_vitals` is bestiary.vitals(): a real health pool and a real
+  // focus pool, which are what the fight looks like — neither is sealed, because
+  // neither is a reading of the answer. The element beside the name IS sealed,
+  // and the engine has already emptied it when it is.
+  const v = view.enemy_vitals || {};
+  // An empty element means one of two different things and they must not read
+  // alike: either this creature is not made of anything — five of the seventeen
+  // regions are neutral on purpose — or the run is measured and the reading has
+  // been taken away. The engine empties the field in both cases; the seal is
+  // what tells them apart.
+  const theirs = elt.enemy ? wheelElement(elt.enemy)
+    : (view.sealed_element ? null : ((G.wheel || {}).neutral || null));
+  const ehp = Math.max(0, v.hp || 0), ehpMax = Math.max(1, v.hp_max || 1);
+  const efp = Math.max(0, v.focus || 0), efpMax = Math.max(1, v.focus_max || 1);
+  const name = (view.enemy_name || 'IT').toUpperCase();
+  $('#chud-them-name').innerHTML = `${name}${theirs
+    ? `<span class="chud-el" style="color:${theirs.colour}">${theirs.rune || ''} ${
+        theirs.name.toUpperCase()}</span>`
+    : '<span class="chud-el" style="color:var(--ink-faint)" title="A measured '
+      + 'run is not given readings. It still has an element and it still '
+      + 'multiplies; you are simply not told which.">? UNREADABLE</span>'}`;
+  $('#chud-them-hp').style.width = `${(ehp / ehpMax) * 100}%`;
+  $('#chud-them-hp-v').textContent = `${ehp} / ${ehpMax}`;
+  // A fight whose other side has no focus pool — an incantation field is names
+  // rather than a creature — says so rather than drawing an empty gauge and
+  // letting the player wonder what is meant to fill it.
+  const hasFocus = !!v.focus_max;
+  $('#chud-them-fp').style.width = hasFocus ? `${(efp / efpMax) * 100}%` : '0%';
+  $('#chud-them-fp-v').textContent = hasFocus ? `${efp} / ${efpMax}` : '—';
+  // What it is saving up for, and the line on the gauge where it can afford it.
+  // bestiary.take_turn will not always fire once it can — an enemy that always
+  // spent would be a metronome, and a metronome is something the player stops
+  // reading — so this is a warning rather than a countdown, which is the
+  // honest way to draw it.
+  const specials = (v.specials || []).map(wheelSpecial).filter(Boolean)
+    .sort((a, b) => a.cost - b.cost);
+  const saving = specials.find(sp => sp.cost > efp) || specials[0] || null;
+  const mark = $('#chud-them-fp').parentNode;
+  const oldMark = mark.querySelector('.mk');
+  if (oldMark) oldMark.remove();
+  if (saving && hasFocus && saving.cost <= efpMax) {
+    const pin = el('span', 'mk');
+    pin.style.left = `${(saving.cost / efpMax) * 100}%`;
+    pin.title = `${saving.name} costs ${saving.cost} focus.`;
+    mark.appendChild(pin);
+  }
+  $('#chud-them-stats').innerHTML =
+    ((view.enemy_statuses || []).map(statusChip).join('')
+      || '<span class="chud-empty">nothing on it</span>')
+    + (saving ? `<span class="chud-stat" style="color:${
+        (wheelElement(saving.element) || {}).colour || 'var(--gold-hi)'}"
+        title="${attr(saving.line.replace('{who}', name) + ' ' + saving.why)}">${
+        efp >= saving.cost ? 'CAN AFFORD' : 'SAVING FOR'} ${
+        saving.name.toUpperCase()} <b>${saving.cost}</b></span>` : '');
+
+  // `turn` is already the CURRENT turn on both payloads — Encounter.turn starts
+  // at one and potions.cast_resolved is the only thing that moves it. The
+  // pouch's own copy is preferred because it is the counter the belt's one-per-
+  // turn rule is measured against, and those two must never disagree on screen.
+  $('#chud-turn-n').textContent =
+    `TURN ${(view.pouch || {}).turn || view.turn || 1}`;
+  // Whose turn it is, and it is almost always the player's: the enemy acts once,
+  // in response to a missed cast, and then the turn comes straight back. Saying
+  // so is how a player learns that the fight waits for them and the clock does
+  // not — which is the difference between pressure and panic.
+  const drunk = (view.pouch || {}).may_drink === false;
+  $('#chud-turn-w').textContent = view.theirs ? 'THEIRS' : 'YOURS — CAST';
+  $('#chud-turn-w').style.color = view.theirs ? 'var(--orange)' : 'var(--green)';
+  $('#chud-match').innerHTML = matchupHtml(elt, view.sealed_element);
+
+  // What the enemy just did. Without this a player watching their own bar drop
+  // has no way to tell a special from a status from an ordinary swing, and
+  // "it just kills me sometimes" is the review that follows.
+  const said = $('#chud-said');
+  const lines = view.said || [];
+  if (lines.length) {
+    said.style.display = '';
+    said.innerHTML = lines.map(l => `<div>${l}</div>`).join('');
+  } else {
+    said.style.display = 'none';
+    said.innerHTML = '';
+  }
+
+  // The alarm rides on the same repaint as the bars, because it is a reading of
+  // the same number. `ensureAlarm` only reaches for the wire when the health it
+  // was last told about is not the health on screen.
+  ensureAlarm();
+
+  paintBelt($('#chud-belt'), view.pouch);
+  const pouch = view.pouch || {};
+  $('#chud-rule').innerHTML = pouch.sealed
+    ? 'The belt is sealed for this run. What you can survive is what you '
+      + 'brought in your head.'
+    : `<b>${pouch.rule || 'A draught is free. A second draught costs a cast.'}</b>
+       ${drunk ? ' You have drunk this turn — the cast is still yours.'
+               : ' Drinking does not spend your turn; only a graded cast does.'}
+       ${(view.hazard && view.hazard.name)
+         ? `<br>${view.hazard.name}: ${view.hazard.blurb}` : ''}`;
+}
+
+/* The encounter payload, as the HUD reads it. */
+function hudFromPayload(payload) {
+  const elt = payload.element || {};
+  return {
+    turn: payload.turn || 0,
+    statuses: payload.statuses || [],
+    enemy_statuses: payload.enemy_statuses || [],
+    enemy_vitals: payload.enemy_vitals || {},
+    enemy_name: (payload.enemy || {}).name || '',
+    element: {
+      player: elt.player || '',
+      enemy: elt.enemy || '',
+      region: elt.region || '',
+      // The encounter payload ships the enemy's element but not the matchup —
+      // it is the one number the client can work out for itself, from a table
+      // the server also sent. Anything else would be a second opinion.
+      matchup: matchupKind(elt.player, elt.enemy),
+    },
+    sealed_element: !!(payload.seal && (payload.seal.sealed || []).includes('WEAKNESS_MAP')),
+    hazard: (elt.hazard && elt.hazard.id) ? elt.hazard : null,
+    pouch: payload.pouch || {},
+    said: [],
+    theirs: false,
+  };
+}
+
+/* elements.matchup, client side, off the table the server sent. The five kinds
+ * and the three pairs are elements.py's; this walks them and invents nothing.
+ * Unknown and empty both resolve to NEUTRAL rather than throwing, for the same
+ * reason elements.matchup does: an unelemented enemy is a normal thing and a
+ * crash mid-fight is not. */
+function matchupKind(attacker, defender) {
+  const w = G.wheel || {};
+  const a = attacker && (w.opposed || {})[attacker] !== undefined ? attacker : '';
+  const d = defender && (w.opposed || {})[defender] !== undefined ? defender : '';
+  if (!a || !d) return 'NEUTRAL';
+  if ((w.opposed || {})[a] === d) return 'OPPOSED';
+  if (a === d) return 'SAME';
+  if ((w.secondary || {})[a] === d) return 'SECONDARY';
+  if ((w.secondary || {})[d] === a) return 'WEAK_INTO';
+  return 'NEUTRAL';
+}
+
+/* The result of a graded submission, as the HUD reads it. The difference from
+ * the payload is the narration: `enemy_turn` and `turn_open` say what the other
+ * side did and what the player's new turn opened with, and both go in `said`. */
+function hudFromResult(result) {
+  const elt = result.element || {};
+  const et = result.enemy_turn || null;
+  const open = result.turn_open || null;
+  const said = [];
+  if (et) {
+    if (et.special) {
+      said.push(`<b>${et.special.name.toUpperCase()}</b> — ${
+        et.special.line.replace('{who}', (result.enemy || {}).name || 'It')}
+        <span class="muted">(${et.special.cost} focus)</span>`);
+    }
+    if (et.cured) {
+      said.push(`<b>IT DRANK</b> — ${et.cured.line} <span class="muted">${
+        et.cured.aside || ''}</span>`);
+    }
+    // Everything the turn said EXCEPT the blow's own line, which is
+    // elements._damage_line and opens with the bare number — printed as-is it
+    // reads as a stray "2." above a sentence that says two again.
+    const hitLine = (et.hit || {}).line || '';
+    for (const line of et.lines || []) {
+      if (line !== hitLine) said.push(line);
+    }
+    if (et.damage) {
+      // The number, then whatever the wheel and the armour had to say about it:
+      // "4 off your health — a counter, 2 stopped by plate, burning."
+      const extra = hitLine.replace(/^\d+,?\s*/, '').replace(/\.$/, '').trim();
+      said.push(`<b>${et.damage}</b> off your health${extra ? ` — ${extra}` : ''}.`);
+    }
+  }
+  if (open) {
+    for (const line of open.lines || []) said.push(line);
+    if (open.regen_blocked) {
+      said.push('<b>No focus returned</b> — something is holding it shut.');
+    } else if (open.focus_regained) {
+      said.push(`+${open.focus_regained} focus as your turn opened.`);
+    }
+  }
+  return {
+    turn: result.turn || 0,
+    statuses: result.statuses || [],
+    enemy_statuses: result.enemy_statuses || [],
+    enemy_vitals: result.enemy_vitals || {},
+    enemy_name: (result.enemy || {}).name || (G.hud || {}).enemy_name || '',
+    element: {
+      player: elt.player || '',
+      enemy: elt.enemy || '',
+      region: elt.region || '',
+      // The engine names the matchup itself on the way out. Preferred over the
+      // client's own walk of the table, because on a sealed run it is the one
+      // that knows what was withheld.
+      matchup: elt.matchup || matchupKind(elt.player, elt.enemy),
+    },
+    sealed_element: !!(G.hud || {}).sealed_element,
+    hazard: (G.hud || {}).hazard || null,
+    pouch: result.pouch || (G.hud || {}).pouch || {},
+    said,
+    theirs: false,
+  };
+}
+
+/* The exchange, on the stage. Everything below is playback: the numbers were
+ * decided by elements.resolve_damage before this function was called, and a
+ * cast that landed nothing plays as nothing landing. */
+async function playElementalExchange(result, fb) {
+  if (!G.fx) return;
+  // The beats between the fx module's own awaits. Short, and shorter still when
+  // the player has asked for less movement — a pause is movement's pacing, and
+  // holding one for somebody who turned the movement off is just a delay.
+  const reduced = !!(G.state && G.state.settings.reduced_motion);
+  const beat = (ms) => new Promise(r => setTimeout(r, reduced ? 0 : ms));
+  const elt = result.element || {};
+  const kind = elt.matchup || matchupKind(elt.player, elt.enemy);
+  const m = wheelMatchup(kind);
+
+  // The player's blow, with the element on it. No damage number — the trials
+  // have already counted the hits and a second total would be two truths about
+  // one exchange. What this adds is the READING: what the element did, in the
+  // element's own motion, scaled by the multiplier the server applied.
+  if (fb.passed > 0 && elt.player && elt.enemy) {
+    await G.fx.elemental({
+      element: elt.player,
+      multiplier: m ? m.multiplier : 1,
+      kind, damage: 0, side: 'enemy',
+      label: m ? m.label : '',
+    });
+  }
+
+  // Its turn. `hit` is elements.DamageResult.to_dict() straight off the wire,
+  // which is every number this needs and none it has to work out.
+  const et = result.enemy_turn;
+  if (et && et.acted) {
+    if (et.special) {
+      G.fx.statusTick({ status: et.special.name, element: et.special.element,
+                        damage: 0, side: 'enemy', label: et.special.name });
+      await beat(220);
+    }
+    const hit = et.hit || {};
+    if (et.damage || hit.damage) {
+      await G.fx.elemental({
+        element: hit.attacker_element || (result.enemy_vitals || {}).element || '',
+        multiplier: hit.multiplier !== undefined ? hit.multiplier : 1,
+        kind: hit.kind || 'NEUTRAL',
+        damage: et.damage || hit.damage || 0,
+        label: hit.label || '',
+        side: 'hero',
+        absorbed: hit.armour_absorbed || 0,
+        resisted: hit.resisted || 0,
+      });
+    }
+    if (et.inflicted) {
+      const spec = wheelStatus(et.inflicted) || {};
+      G.fx.statusTick({ status: et.inflicted, element: spec.element,
+                        damage: 0, side: 'hero', label: spec.name || et.inflicted });
+    }
+  }
+
+  // The tick that opens the player's next turn. Poison has to be VISIBLE on the
+  // victim or the bar appears to drop on its own, and a bar that drops on its
+  // own is a game that appears to cheat.
+  const open = result.turn_open;
+  if (open && open.damage) {
+    const carried = (result.statuses || [])[0] || {};
+    const spec = wheelStatus(carried.id) || {};
+    G.fx.statusTick({ status: carried.id || 'POISONED',
+                      element: spec.element || 'POISON',
+                      damage: open.damage, side: 'hero',
+                      label: spec.name || '' });
+    await beat(260);
+  }
 }
 
 function renderPuzzle(p) {
@@ -828,14 +1882,21 @@ function paintTrials(body, report) {
  * rarity — not a tinted glyph. Epic and above animate. */
 function itemIcon(item, size = 48) {
   const canvas = document.createElement('canvas');
-  canvas.width = lootart.ITEM_SIZE;
-  canvas.height = lootart.ITEM_SIZE;
+  /* A forged blade is drawn from a different table at a different size —
+   * lootart.drawItem routes it there on its own, and a 24-pixel canvas would
+   * clip the top quarter off every rung above five. */
+  const px = lootart.isForged(item) ? lootart.FORGE_SIZE : lootart.ITEM_SIZE;
+  canvas.width = px;
+  canvas.height = px;
   canvas.style.width = size + 'px';
   canvas.style.height = size + 'px';
   canvas.style.imageRendering = 'pixelated';
   const ctx = canvas.getContext('2d');
   ctx.imageSmoothingEnabled = false;
-  const frames = lootart.itemFrameCount(item);
+  const forged = lootart.forgeOf(item);
+  const frames = forged
+    ? lootart.forgeFrameCount(forged.tier, forged)
+    : lootart.itemFrameCount(item);
   const paint = () => {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     lootart.drawItem(ctx, item, 0, 0, { scale: 1, time: performance.now() });
@@ -857,8 +1918,9 @@ function paintTactics(body) {
   if (G.encounter.mode === 'interview') {
     body.appendChild(el('div', 'frame', `<div style="padding:14px;line-height:1.7">
       <b style="color:var(--red)">SEALED.</b><br><br>
-      Probes, items and gear effects are all withheld in Interview Mode. What you
-      bring to a real screen is what you know.</div>`));
+      Probes, items and gear effects are all withheld in Interview Mode — the
+      forged blade among them, technique and all. What you bring to a real
+      screen is what you know.</div>`));
     return;
   }
 
@@ -867,6 +1929,24 @@ function paintTactics(body) {
     ? G.probeCharges : (G.encounter.probe_charges || 0);
 
   body.appendChild(el('div', 'muted small', t.advice || ''));
+
+  // The blade in your hand, and what its technique is buying you in THIS fight.
+  // It is stated here rather than only on the gear screen because this is the
+  // panel a player reads while deciding how to open, and a technique that
+  // changes how you engage is no use if you find out about it afterwards.
+  const blade = (G.state && G.state.forge) || {};
+  if (blade.tier && blade.technique) {
+    ensureForgeStyle();
+    body.appendChild(el('div', 'section-title', 'YOUR BLADE'));
+    body.appendChild(el('div', 'frame', `<div style="padding:10px">
+      <div class="forge-tech">${blade.technique.rank}</div>
+      <div class="small" style="color:var(--green);line-height:1.6">
+        ${blade.technique.text}</div>
+      <div class="small muted" style="margin-top:6px">${
+        (blade.item && blade.item.name) || ''} · rung ${blade.tier} of 9.
+        It changes what you can ask and how long you have. It does not know the
+        answer and never will.</div></div>`));
+  }
 
   body.appendChild(el('div', 'section-title', 'WHAT IT GUARDS'));
   if (!(t.weaknesses || []).length) {
@@ -1019,6 +2099,11 @@ function paintSpells(body) {
       if (cast) return;
       try {
         const r = await api.hint(rung.level);
+        // A rung the companion in the field cannot read is NOT a seal and NOT
+        // an empty focus bar, and toasting it as either would teach the player
+        // the wrong thing about a system whose entire point is the distinction.
+        // partyui draws the refusal with the roads out attached.
+        if (r.error === 'above_tier') { partyui.showHintRefusal(r); return; }
         if (r.error) { toast('NOT ENOUGH FOCUS', r.message || r.error, 'red'); return; }
         // Keep the body, not just the level. setTab repaints from scratch, and a
         // hint you paid focus for should survive a trip to TRIALS and back.
@@ -1243,13 +2328,55 @@ async function showResult(result) {
     try {
       G.fx.setCombo(G.state.player.combo,
                     result.combo_multiplier || 1);
+      // The technique opens the exchange, because the technique IS the cast.
+      // What it BUYS — another probe, a longer clock, a ward — was resolved
+      // server-side through the same effect path items and class nodes already
+      // use, and none of that is rendered here. What is rendered is the swing,
+      // and the swing is scaled entirely by the rung: a tier-eight blade is
+      // bigger, brighter, shakes harder and holds the impact frame four times
+      // as long as a tier-one one.
+      const blade = (G.state && G.state.forge) || {};
+      if (blade.tier && blade.item && G.encounter.mode !== 'interview') {
+        await G.fx.technique({
+          tier: blade.tier,
+          // The name only slams up when the blow actually landed on something.
+          // A technique announcing itself over a cast that passed no trial at
+          // all is the game congratulating you for nothing.
+          name: fb.passed > 0 ? ((blade.technique || {}).name || '') : '',
+          rank: (blade.technique || {}).rank || '',
+          colour: (blade.item.forge || {}).accent || blade.item.rarity_colour,
+          accent: blade.item.rarity_colour,
+          crit: !!(result.combat && result.combat.crits.length),
+        });
+      }
       await G.fx.resolveTrials(trialsFromFeedback(fb, result.combat), {});
       G.fx.setEnemyHp(Math.max(0, fb.total - fb.passed), fb.total);
+      // The wheel's half of the exchange, after the trials and before the
+      // close: what the element did to the blow, what the enemy spent its focus
+      // on, and the tick that opened the next turn. Playback only — every one
+      // of those numbers was decided server-side before this ran.
+      await playElementalExchange(result, fb);
       if (result.solved) await G.fx.victory({ rank: result.rank, xp: result.xp,
                                               loot: result.loot });
       else await G.fx.defeat({ cause: (result.analysis || {}).root_cause });
     } catch (err) { /* the report must appear even if the animation cannot */ }
   }
+  // Outside the try: the numbers must land on the strip whether or not the
+  // stage managed to animate them. This is the screen a player reads to find
+  // out why they are losing, and an exception in a particle effect is not a
+  // reason to withhold it.
+  if (G.encounter) paintCombatHud(hudFromResult(result));
+
+  // -- upkeep, the hunt, and the six systems that pay out on a clear --------
+  //
+  // Every one of these arrived on the result payload the engine already built.
+  // None of them is a second request and none of them is a second opinion: the
+  // alarm is upkeep's, the hunt row is the chase's own next state, and the
+  // rest are discoveries the engine made while resolving this encounter.
+  noteAlarm(result.alarm);
+  huntui.noteResult(result, G.huntRegion,
+    (G.encounter || {}).mode === 'interview');
+  noteWorldSpoils(result);
 
   if (result.solved) {
     audio.sfx(result.rank === 'S' ? 'victory' : 'crit');
@@ -1345,6 +2472,7 @@ async function showResult(result) {
       Your gear absorbed the break. The streak survives.</p>`;
   }
   html += lootHtml(result.loot);
+  html += metalHtml(result.metal);
   if (result.secrets && result.secrets.length) {
     for (const sec of result.secrets) {
       html += `<h3 style="color:var(--red)">★ SECRET — ${sec.name.toUpperCase()}</h3>
@@ -1425,7 +2553,19 @@ async function showResult(result) {
    * report is currently sitting in, so each meeting waits for the report to be
    * dismissed and then for the meeting before it. */
   const meetings = (result.found_pets || []).slice();
+  /* The barrow goes FIRST, before any meeting. It is the only thing this game
+   * takes away, it happens inside the fight the report is describing, and it
+   * has to be the next thing on screen rather than something the player finds
+   * out about later on the companion page. If it is missed anyway — a refresh
+   * between the fight and the modal — the server hands it back on every
+   * catalogue read until partyui acknowledges it, so it cannot be lost. */
+  let fall = result.companion_fell || null;
   const afterReport = (then) => {
+    if (fall) {
+      const scene = fall; fall = null;
+      partyui.showTheFall(scene, { onClose: () => afterReport(then) });
+      return;
+    }
     const row = meetings.shift();
     if (!row) { then(); return; }
     audio.sfx('unlock');
@@ -1472,6 +2612,11 @@ async function showResult(result) {
     audio.sfx('loot');
     toast('LOOT', result.loot.name, result.loot.kind === 'consumable' ? '' : 'gold');
   }
+  if (result.metal) {
+    audio.sfx('unlock');
+    toast('METAL', `${result.metal.units} ${result.metal.name} — ${
+      result.metal.held} in the bag.`, 'gold');
+  }
   if (result.secrets && result.secrets.length) {
     audio.sfx('levelup');
     for (const sec of result.secrets) {
@@ -1490,6 +2635,39 @@ async function showResult(result) {
       else toast('LEVEL UP', `Level ${G.state.player.level} — ${points} point(s) `
         + 'waiting in GEAR.', 'gold');
     }, 400);
+  }
+}
+
+/* What this encounter paid into the world that nothing was drawing. All six
+ * arrive on the result the engine already built; none of them costs a request,
+ * and none of them is worth a modal — a modal here is a pause between the
+ * player and the next problem, and the next problem is the game. */
+function noteWorldSpoils(result) {
+  const trial = result.trial;
+  if (trial && trial.counted) {
+    toast('ORIN TALLOW WEIGHS IT',
+      `${trial.done || 0} of ${trial.need || 0} on the contract.${
+        trial.failed ? ' That one went against you.' : ''}`,
+      trial.failed ? 'red' : 'gold');
+  }
+  for (const row of (result.found_regalia || [])) {
+    audio.sfx('unlock');
+    toast('★ REGALIA', `${row.name || row.regalia} — it buys how soon and how `
+      + 'often, never how deep.', 'violet');
+  }
+  for (const row of (result.found_sages || [])) {
+    audio.sfx('levelup');
+    toast('SOMEBODY WAS WATCHING',
+      `${row.name || row.sage} will see you now. Their trial is a ladder of `
+      + 'real problems and the art is behind the last rung.', 'violet');
+  }
+  // The overworld sanctuary tell: two regions have no dungeon to hide a healer
+  // in, so out there a hurt traveller simply finds the tent. `tell` is the only
+  // field that means anything — the blank row comes back everywhere else.
+  const tent = result.sanctuary;
+  if (tent && tent.tell) {
+    toast('SOMETHING IN THE TREE LINE', tent.tell, 'green');
+    G.sanctuaryTell = tent;
   }
 }
 
@@ -1548,9 +2726,18 @@ function returnToWorld() {
   // clock. Leaving the screen without destroying it leaks all three.
   destroyIncant();
   destroyChild();
+  destroyRepo();
   // The companion card belongs to the fight, not to the screen behind it.
   partyui.clearIntervention();
   if (G.fx) G.fx.stop();
+  // The strip belongs to the fight. Left up, it goes on showing the last
+  // enemy's focus bar over an overworld screen. hideCombatHud also stops the
+  // heartbeat and takes the red wash off the sprite.
+  hideCombatHud();
+  // A rung of a sage's gauntlet that was opened from the trial screen is
+  // settled HERE, on the way out, and it is settled by asking the server what
+  // the record says. The client does not get to assert that it passed.
+  legendui.settlePendingRung().catch(() => {});
   document.body.classList.remove('interview-mode');
   G.encounter = null;
   G.interview = null;
@@ -1754,9 +2941,49 @@ function enterIncantation(payload) {
   });
 
   startTimer();
+  paintCombatHud(hudFromIncant(payload));
   setTab('trials');
   show('battle');
   audio.play('battle');
+}
+
+/* An incantation field, as the HUD reads it. The same strip, because it is the
+ * same fight: the enemy is a bound name instead of a creature, but the player's
+ * two bars, the statuses riding on them and the belt are identical — and the
+ * turn rule is identical too, which is the reason not to build a second one. */
+function hudFromIncant(payload) {
+  const inc = payload.incantation || {};
+  const elt = inc.element || {};
+  const alive = (inc.enemies || []).filter(e => e.alive);
+  return {
+    // ctx.turn counts resolved casts from zero; every other turn number in this
+    // client is one-based. Normalised here so the strip never has two rules.
+    turn: (inc.turn || 0) + 1,
+    statuses: inc.statuses || [],
+    enemy_statuses: [],
+    // The field, as one health pool. Every name on it is a separate target and
+    // the side panel lists them individually; this is the "how much is left"
+    // number, which is the one a bar is for.
+    enemy_vitals: {
+      hp: alive.reduce((a, e) => a + (e.hp || 0), 0),
+      hp_max: (inc.enemies || []).reduce((a, e) => a + (e.hp_max || 0), 0) || 1,
+      focus: 0, focus_max: 0,
+    },
+    enemy_name: `THE FIELD · ${alive.length} STANDING`,
+    element: {
+      player: elt.player || '',
+      // A name is not made of anything. The region still is, and that is what
+      // the strip reports here rather than inventing an element for a variable.
+      enemy: '',
+      region: elt.region || '',
+      matchup: 'NEUTRAL',
+    },
+    sealed_element: false,
+    hazard: null,
+    pouch: payload.pouch || {},
+    said: (inc.log || []).slice(-3),
+    theirs: false,
+  };
 }
 
 /* IncantationUI hands back its own payload; the server door already speaks it.
@@ -1790,6 +3017,9 @@ async function sendCast(payload) {
   const hpMax = enemies.reduce((a, e) => a + e.hp_max, 0) || 1;
   $('#enemy-hp').querySelector('i').style.width = `${(hp / hpMax) * 100}%`;
   $('#enemy-hp-label').textContent = `${hp} / ${hpMax}`;
+  // The strip moves with the fight: the field's log is what the other side just
+  // did, and the belt's lock cleared the moment this cast resolved.
+  paintCombatHud(hudFromIncant({ incantation: inc, pouch: r.pouch }));
 
   // Let the last hit land before the report. If the player walked out inside
   // those nine hundred milliseconds, there is nothing left to report on.
@@ -1892,6 +3122,340 @@ function paintIncantSide(body) {
       'Anything here can be typed. Only the ones above can be hit.'));
     body.appendChild(el('pre', 'spell-body',
       names.map(n => `${n} = ${inc.bindings[n]}`).join('\n')));
+  }
+}
+
+/* ---------------- mini-repo battles ---------------- */
+
+/* The screen is built here rather than in index.html because the Mini-Repo owns
+ * the whole viewport while it is running — a tree, tabs, an editor and a suite
+ * do not fit in the battle screen's side panel, and pretending otherwise is how
+ * this ends up feeling like a quiz again. */
+function ensureRepoScreen() {
+  let node = $('#screen-repo');
+  if (node) return node;
+  node = el('section', 'screen');
+  node.id = 'screen-repo';
+  node.innerHTML = '<div id="repo-host" style="display:flex;flex:1;min-height:0"></div>';
+  $('#app').appendChild(node);
+  return node;
+}
+
+function destroyRepo() {
+  if (!G.repo) return;
+  const ui = G.repo;
+  G.repo = null;
+  G.repoPayload = null;
+  try { ui.destroy(); } catch (e) { /* a destroyed panel is still destroyed */ }
+}
+
+/* The board. Sixteen repositories, what each one costs in minutes, and which
+ * ones have already been handed back green. */
+async function paintRepos() {
+  const board = (G.state.mini_repos || { repos: [] });
+  const openId = G.state.active_encounter && G.state.active_encounter.repo_id;
+  const open = openId
+    && ((board.repos || []).find(r => r.id === openId) || { title: openId }).title;
+  panel('MINI-REPO BATTLES', `
+    <p class="small muted">${board.blurb || ''}</p>
+    ${open ? `<div class="frame" style="padding:12px;margin-bottom:12px">
+      <div class="section-title">A REPOSITORY IS OPEN</div>
+      <p class="small">You are part-way through <b>${open}</b>. The clock has not
+      stopped and your edits are where you left them.</p>
+      <button class="btn primary" id="repo-resume">GO BACK TO IT</button>
+      <button class="btn" id="repo-abandon">PUT IT DOWN</button>
+    </div>` : ''}
+    <div class="list-item" id="repo-measured" style="margin-bottom:10px">
+      <span class="t">MEASURED: <b id="repo-measured-state">OFF</b></span>
+      <span class="d">Turn this on and the next repository you open is a
+        practical rather than a lesson: no pointer at the file to start in, no
+        task shapes, no list of which tests are the targets, no companion, and
+        a clock that is running whether or not you are typing. Nothing is
+        taught while it is on — which is what makes the result mean something.
+      </span>
+    </div>
+    <div class="grid2" id="repo-list"></div>
+    <p class="small muted" style="margin-top:12px">A Mini-Repo has no spells, no
+    probes and no worked solution while it is running. It does not need them:
+    nothing is hidden from you, the suite can be run as often as you like, and
+    the debrief afterwards always names the lesson and the file it lived in —
+    including when the attempt fails.</p>`);
+  const host = $('#repo-list');
+  for (const card of board.repos || []) {
+    const row = el('div', 'list-item',
+      `<span class="t">${card.cleared ? '✔ ' : ''}${card.title}</span>
+       <span class="d">${(card.shapes || []).join(' · ').replace(/_/g, ' ').toLowerCase()}
+         <br><span class="muted small">${card.difficulty} · ${card.files} files ·
+         ${Math.round(card.target_seconds / 60)} min · ${(card.tags || []).join(', ')}</span>
+       </span>`);
+    row.onclick = () => startRepo(card.id, G.repoMeasured ? 'interview' : 'adventure');
+    host.appendChild(row);
+  }
+  const measured = $('#repo-measured');
+  const state = $('#repo-measured-state');
+  state.textContent = G.repoMeasured ? 'ON' : 'OFF';
+  state.style.color = G.repoMeasured ? 'var(--red)' : '';
+  measured.onclick = () => {
+    G.repoMeasured = !G.repoMeasured;
+    state.textContent = G.repoMeasured ? 'ON' : 'OFF';
+    state.style.color = G.repoMeasured ? 'var(--red)' : '';
+    audio.sfx('select');
+  };
+  const resume = $('#repo-resume');
+  if (resume) resume.onclick = () => openRepo();
+  const abandon = $('#repo-abandon');
+  if (abandon) {
+    abandon.onclick = async () => {
+      const r = await api.leaveRepo();
+      toast('PUT DOWN', r.message || 'Nothing was graded.', '');
+      await refresh();
+      paintRepos();
+    };
+  }
+}
+
+/* Open one. `mode` is 'adventure' unless the player deliberately asks to be
+ * measured, in which case the server takes the pointer, the shapes, the target
+ * list and the companion away — through finalexam.sealed(), like everything
+ * else that Interview Mode takes. */
+async function startRepo(repoId, mode = 'adventure') {
+  const payload = await api.startRepo(repoId, mode);
+  if (payload.error) {
+    toast('NOT THIS ONE', payload.message || payload.error, 'red');
+    // A repository already open is not a refusal to be stared at: the board is
+    // where it can be gone back to or put down, so that is where this lands.
+    if (payload.error === 'a mini-repo is already open') go('repos');
+    return;
+  }
+  enterRepo(payload);
+}
+
+/* Resume the repository already open on the server, with the edits it kept. */
+async function openRepo() {
+  const payload = await api.repo();
+  if (payload.error) {
+    toast('NOTHING OPEN', payload.message || payload.error, 'red');
+    return;
+  }
+  enterRepo(payload);
+}
+
+function enterRepo(payload) {
+  destroyIncant();
+  destroyChild();
+  destroyRepo();
+  clearInterval(G.timer);
+  stopViz();
+  partyui.beginEncounter();
+  G.encounter = payload;
+  G.problem = null;
+  G.repoPayload = payload;
+  G.seal = payload.seal || null;
+  document.body.classList.toggle('interview-mode', payload.mode === 'interview');
+  ensureRepoScreen();
+  G.repo = new RepoUI($('#repo-host'), payload, {
+    onRun: repoRun,
+    onSubmit: repoSubmit,
+    onLeave: leaveRepo,
+    /* The banner across the top says INTERVIEW MODE and carries a clock. It is
+     * the shell's, not the repo's, so the repo tells it what time it is rather
+     * than letting it show the last fight's. */
+    onTick: (elapsed, limit) => {
+      if (payload.mode !== 'interview') return;
+      const node = $('#interview-timer');
+      if (!node) return;
+      const left = (limit || payload.target_seconds || 0) - elapsed;
+      node.textContent = fmtTime(left);
+      node.classList.toggle('critical', left < 300);
+    },
+  });
+  show('repo');
+  audio.play('battle');
+  const mentor = payload.mentor;
+  if (mentor && payload.reason !== 'RESUME') {
+    say(mentor.name, [
+      'Somebody else wrote this, and they are not here to ask.',
+      'Read it before you change it. The tests that are green now are green '
+      + 'when you hand it back, or you have broken something that already shipped.',
+    ], mentor.sprite);
+  }
+}
+
+/* Ungraded. The server runs the project's own suite with the pristine test
+ * files laid down last, so this cannot be used to find out what a weakened
+ * test would say. */
+async function repoRun(files) {
+  const report = await api.repoRun(files);
+  if (!report.tests) {
+    // A refusal or a project that did not survive its own import. Say it out
+    // loud AND hand it back, so the suite panel says what happened rather than
+    // going on showing the run before it.
+    toast('THE SUITE DID NOT RUN', report.message || report.error
+      || 'nothing came back', 'red');
+    return report;
+  }
+  audio.sfx(report.all_passed ? 'select' : 'hit');
+  return report;
+}
+
+/* The attempt. The whole working tree goes; the server refuses it outright if
+ * the suite is not the suite it handed out. */
+async function repoSubmit(files) {
+  const result = await api.repoSubmit(files);
+  if (result.error) {
+    toast('REFUSED', result.message || result.error, 'red');
+    return;
+  }
+  await showRepoResult(result);
+}
+
+async function leaveRepo() {
+  const r = await api.leaveRepo();
+  destroyRepo();
+  say('PUT IT DOWN', [r.message || 'Nothing was graded, so nothing was earned.'],
+      'scholar');
+  await refresh();
+  returnToWorld();
+}
+
+const REPO_HEADLINE = {
+  SOLVED: 'GREEN, ALL OF IT',
+  INCOMPLETE: 'NOT DONE YET',
+  REGRESSED: 'YOU BROKE SOMETHING THAT WORKED',
+  BROKEN: 'THE PROJECT DOES NOT RUN',
+  TAMPERED: 'THE ATTEMPT IS VOID',
+};
+
+async function showRepoResult(result) {
+  G.lastResult = result;
+  await refresh();
+  const mr = result.mini_repo || {};
+  const verdict = mr.verdict || {};
+  const debrief = mr.debrief || {};
+  const rankColour = { S: 'var(--gold-hi)', A: 'var(--green)', B: 'var(--blue)',
+    C: 'var(--orange)', LEARNING_CLEAR: 'var(--violet)' }[result.rank] || 'var(--red)';
+  audio.sfx(result.solved ? (result.rank === 'S' ? 'victory' : 'crit') : 'fail');
+
+  let html = `<h2 style="color:${result.solved ? rankColour : 'var(--red)'}">
+      ${REPO_HEADLINE[verdict.outcome] || 'HANDED BACK'}${
+        result.solved ? ` — RANK ${result.rank}` : ''}</h2>
+    <div class="row" style="flex-wrap:wrap;gap:6px;margin-bottom:12px">
+      <span class="tag gold">+${result.xp} XP</span>
+      <span class="tag blue">${fmtTime(result.seconds)} / target
+        ${fmtTime(result.target_seconds)}</span>
+      <span class="tag ${verdict.passed === verdict.total && verdict.total
+        ? 'green' : 'red'}">${verdict.passed || 0} / ${verdict.total || 0} TESTS</span>
+      ${result.skill ? `<span class="tag violet">${result.skill.replace(/_/g, ' ')}
+        → ${result.skill_state ? Math.round(result.skill_state.mastery) : '—'}</span>` : ''}
+      ${verdict.in_time === false ? '<span class="tag red">OVER THE CLOCK</span>' : ''}
+    </div>
+    <p>${markdownish(verdict.message || '')}</p>`;
+
+  if ((verdict.tests || []).length) {
+    html += '<h3>THE SUITE</h3>';
+    for (const row of verdict.tests) {
+      const icon = row.status === 'pass' ? '✔' : row.status === 'timeout' ? '⧗'
+        : row.status === 'missing' ? '∅' : '✖';
+      const colour = row.status === 'pass' ? 'var(--green)' : 'var(--red)';
+      html += `<div class="small" style="line-height:1.7">
+        <span style="color:${colour}">${icon}</span>
+        <span class="muted">${row.id.split('::')[0]} ::</span>
+        ${row.id.split('::')[1] || ''}
+        ${row.target ? '<span class="tag gold">TARGET</span>' : ''}
+        ${row.message ? `<br><span class="muted" style="margin-left:18px">${
+          markdownish(row.message)}</span>` : ''}</div>`;
+    }
+  }
+  if ((verdict.regressions || []).length) {
+    html += `<p class="small" style="color:var(--red)">⛊ ${verdict.regressions.length}
+      test(s) that were green when you arrived are not green now. That is the
+      whole of what PRESERVE CONTRACT means.</p>`;
+  }
+
+  /* Learning never dead-ends, including here. The lesson and the file the cause
+   * lived in arrive even after a tampered attempt; the reference patch is the
+   * worked solution and follows the same rule worked solutions always do. */
+  if (debrief.lesson) {
+    html += `<h3>WHAT THIS WAS ABOUT</h3><p>${markdownish(debrief.lesson)}</p>`;
+  }
+  if (debrief.where) {
+    html += `<p class="small muted">The cause lived in
+      <code>${debrief.where}</code>.</p>`;
+  }
+  if ((debrief.solution || []).length) {
+    html += '<h3>THE REFERENCE PATCH</h3>';
+    for (const fix of debrief.solution) {
+      html += `<p class="small"><b>${fix.path}</b></p>
+        <pre class="spell-body" style="color:var(--red)">${
+          (fix.old || '(new file)').replace(/&/g, '&amp;').replace(/</g, '&lt;')}</pre>
+        <pre class="spell-body" style="color:var(--green)">${
+          (fix.new || '').replace(/&/g, '&amp;').replace(/</g, '&lt;')}</pre>
+        ${fix.why ? `<p class="small muted">${markdownish(fix.why)}</p>` : ''}`;
+    }
+    html += `<p class="small muted">That is one way, not the only one. A suite
+      that goes green on your version is your version passing, not this one.</p>`;
+  }
+
+  if (result.coach && result.coach.available) {
+    if (result.coach.questions.length) {
+      html += '<h3>THE COACH ASKS</h3><ul style="line-height:1.9;color:var(--ink-dim)">'
+        + result.coach.questions.map(q => `<li>${q}</li>`).join('') + '</ul>';
+    }
+    if (result.coach.analysis) html += `<p>${markdownish(result.coach.analysis)}</p>`;
+  }
+  if (result.training_camp && !result.solved) {
+    html += `<h3>TRAINING CAMP — ${result.training_camp.name.toUpperCase()}</h3>
+      <p>${result.training_camp.why}</p>`;
+  }
+  html += lootHtml(result.loot);
+  // A Mini-Repo resolves through the same outcome path, so it pays metal too.
+  html += metalHtml(result.metal);
+  if (result.achievements && result.achievements.length) {
+    html += result.achievements.map(a =>
+      `<p class="small"><span class="tag gold">ACHIEVEMENT</span> ${a.name} —
+        ${a.desc}</p>`).join('');
+  }
+  if (result.companion_line) {
+    html += `<p class="small" style="color:var(--violet)">${result.companion_line}</p>`;
+  }
+
+  // The server closes the encounter on a clear, and on any result in a
+  // measured run. When it has, the working surface behind this report has
+  // nothing left to run against and says so.
+  const retryable = !!(G.state.active_encounter
+    && G.state.active_encounter.repo_id);
+  if (!retryable && G.repo) {
+    G.repo.finish(result.solved ? 'HANDED BACK — GREEN' : 'HANDED BACK');
+  }
+  html += `<div class="actions">
+      ${retryable ? '<button class="btn primary" id="rr-retry">BACK TO THE CODE</button>' : ''}
+      ${retryable ? '' : '<button class="btn primary" id="rr-next">ANOTHER REPOSITORY</button>'}
+      <button class="btn" id="rr-world">RETURN TO THE WORLD</button>
+    </div>`;
+
+  const m = modal(html, { wide: true });
+  const bind = (id, fn) => { const b = m.querySelector('#' + id); if (b) b.onclick = fn; };
+  // The clock never restarted: the server grades on enc.started_at, so closing
+  // this and carrying on is exactly what it looks like.
+  bind('rr-retry', () => closeModal());
+  bind('rr-next', () => { closeModal(); destroyRepo(); go('repos'); });
+  bind('rr-world', () => {
+    closeModal();
+    destroyRepo();
+    returnToWorld();
+    playStoryQueue();
+  });
+
+  if (result.loot) {
+    showLootDrop(result.loot);
+    audio.sfx('loot');
+  }
+  if (result.story && result.story.length) {
+    G.storyQueue = (G.storyQueue || []).concat(result.story);
+  }
+  if (result.levels_gained) {
+    toast('LEVEL UP', `Level ${G.state.player.level} — `
+      + `${result.unspent_points} point(s) waiting in GEAR.`, 'gold');
   }
 }
 
@@ -2174,8 +3738,12 @@ function paintQuests() {
       <span class="grow"><b>${r.title}</b> — ${r.goal}
         ${r.state === 'current'
           ? `<br><span class="muted small">${r.progress.clears}/${r.progress.clears_target} cleared · mastery ${r.progress.mastery}/${r.progress.mastery_target}</span>`
+          : r.state === 'skipped'
+          ? `<br><span class="muted small">The Trial placed you past this one. It is open, not finished — everything in it is still served.</span>`
           : ''}</span>
-      <span>${r.state === 'done' ? '✔' : r.state === 'current' ? `${r.progress.percent}%` : ''}</span>
+      <span>${r.state === 'done' ? '✔'
+        : r.state === 'skipped' ? 'SKIPPED'
+        : r.state === 'current' ? `${r.progress.percent}%` : ''}</span>
     </div>`).join('');
 
   panel('QUEST LOG', `
@@ -2589,7 +4157,7 @@ function paintInterview() {
     <div class="frame" style="padding:14px;margin-bottom:12px;border-color:var(--red)">
       <div class="section-title">A RUN IS OPEN</div>
       <p class="small">${run.format.replace(/_/g, ' ')} · question ${
-        (run.index || 0) + 1} of ${(run.problem_ids || []).length} ·
+        (run.index || 0) + 1} of ${run.total || 0} ·
         ${run.minutes} minutes on the clock, and it has not stopped.</p>
       <div class="row">
         <button class="btn primary" id="iv-resume">BACK TO THE QUESTION</button>
@@ -2699,13 +4267,25 @@ function showInterviewReport(report) {
     <p style="color:var(--violet)">${report.verdict}</p>
     ${examDebriefHtml(report.debrief)}
     <p class="small muted">The coach is available again now.</p>
-    <div class="actions"><button class="btn primary" id="iv-done">RETURN</button></div>`,
+    <div class="actions">
+      <button class="btn primary" id="iv-done">RETURN</button>
+      ${report.debrief && !report.debrief.unavailable
+        ? '<button class="btn" id="iv-finale">THE LAST SCENE</button>' : ''}
+    </div>`,
     { wide: true });
   $('#iv-done').onclick = () => {
     closeModal();
     returnToWorld();
     refresh().then(paintWorldSide).catch(() => { /* refresh already said so */ });
   };
+  /* STAGED AFTER THE PRACTICAL IS SCORED AND NEVER BEFORE, and offered rather
+   * than forced: the practical gates the finale and the finale does not gate
+   * the practical. A player who freed nobody gets the same scene with an empty
+   * gallery behind them, which is the honest version of it. The report that was
+   * just handed over is passed straight through — finale.py reads it, this file
+   * does not. */
+  const fin = $('#iv-finale');
+  if (fin) fin.onclick = () => { closeModal(); finaleui.play(report); };
 }
 
 /* The Practical Test's own debrief: segment by segment against its clock, what
@@ -2843,6 +4423,7 @@ function paintCharacter() {
         </div>
       </div>
     </div>
+    <div id="forge-panel-host" style="margin-top:12px"></div>
     <div class="frame" style="padding:14px;margin-top:12px">
       <div class="section-title">INVENTORY (${lo.inventory.length})</div>
       ${inventory}
@@ -2856,6 +4437,12 @@ function paintCharacter() {
         ${secrets}
       </div>
     </div>`);
+  // The blade, its rung, its technique, the bag and the next rung's cost. It
+  // reads directly under what you are wearing, because "what am I carrying" and
+  // "what am I working toward" are one question and this feature only means
+  // anything if the answer to the second one is visible without a click.
+  const forgeHost = $('#forge-panel-host');
+  if (forgeHost) forgePanel(forgeHost);
 
   // The art placeholders are filled after the panel exists, so each card gets a
   // live canvas rather than a data URL baked into the HTML string.
@@ -2874,6 +4461,10 @@ function paintCharacter() {
       } catch (e) { toast('CANNOT EQUIP', e.message, 'red'); return; }
       if (r.error) { toast('CANNOT EQUIP', r.error, 'red'); return; }
       audio.sfx('unlock');
+      // Boots are the answer to a hazard, so what the region costs to walk
+      // across has just changed. Drop the cached reading rather than showing
+      // the player a stale "nothing on your feet answers it".
+      G.regionElement = null;
       await refresh();
       paintCharacter();
     };
@@ -2885,6 +4476,7 @@ function paintCharacter() {
         await api.unequip(node.dataset.slot);
       } catch (e) { toast('CANNOT UNEQUIP', e.message, 'red'); return; }
       audio.sfx('select');
+      G.regionElement = null;
       await refresh();
       paintCharacter();
     };
@@ -2911,6 +4503,481 @@ function paintCharacter() {
     await refresh();
     paintCharacter();
   };
+}
+
+/* ======================================================================
+ * THE FORGE — Vess's counter, and the blade panel that points at it.
+ *
+ * The whole loop this feature exists for is: a metal only drops in one place,
+ * the only person who can work it stands in Python Village, and one object you
+ * have owned since Chapter I becomes something people recognise across a room.
+ * Two screens carry that. The PANEL says what you are carrying and what you are
+ * working toward; the COUNTER says what it costs, what you are short of, where
+ * that drops and how many fights it is.
+ *
+ * Everything below draws server data. There are no rules in here: the quote,
+ * the shortfall, the substitution and the refusals are all forge.py's, read off
+ * the payload rather than recomputed, so what the player was shown and what
+ * they then paid cannot disagree.
+ * ==================================================================== */
+
+/* The forge's own classes, injected once rather than added to game.css, for the
+ * same reason BattleFX._ensureStyle() does it: this is one screen's furniture
+ * and it should arrive with the screen. Everything else on the counter is the
+ * existing vocabulary — .frame, .list-item, .item-card, .tag, .section-title —
+ * so a theme change reaches it without being told. */
+function ensureForgeStyle() {
+  if (document.getElementById('forge-style')) return;
+  const node = document.createElement('style');
+  node.id = 'forge-style';
+  node.textContent = `
+.metal-bag { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 10px; }
+.metal-chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px;
+  border: 2px solid var(--line); background: var(--panel-2);
+  font-size: calc(11px * var(--scale)); color: var(--ink-dim);
+}
+.metal-chip i { width: 10px; height: 10px; display: inline-block; }
+.metal-chip b { color: var(--gold-hi); font-size: calc(11px * var(--scale)); }
+.blade-card {
+  display: flex; gap: 12px; align-items: flex-start; padding: 10px;
+  border: 2px solid var(--line); background: var(--panel-2); margin-bottom: 10px;
+}
+.blade-card .blade-art { flex: 0 0 auto; line-height: 0; }
+.blade-card .blade-art canvas { image-rendering: pixelated; }
+.blade-card .in { font-family: 'Press Start 2P', monospace;
+  font-size: calc(9px * var(--scale)); line-height: 1.6; }
+.blade-card .ie { font-size: calc(11px * var(--scale)); color: var(--green);
+  line-height: 1.6; margin-top: 5px; }
+.blade-card .if { font-size: calc(11px * var(--scale)); color: var(--ink-faint);
+  font-style: italic; margin-top: 5px; line-height: 1.6; }
+.forge-tech { font-family: 'Press Start 2P', monospace; font-size: calc(8px * var(--scale));
+  color: var(--gold-hi); margin-top: 6px; }
+.cost-list { margin: 6px 0 10px; }
+.cost-row {
+  display: flex; align-items: center; gap: 8px; padding: 5px 8px;
+  border-left: 3px solid var(--red); background: var(--panel-2);
+  margin-bottom: 4px; font-size: calc(11px * var(--scale));
+}
+.cost-row.met { border-left-color: var(--green); }
+.cost-row i { width: 10px; height: 10px; flex: 0 0 10px; }
+.cost-row .cn { flex: 1 1 auto; color: var(--ink-dim); }
+.cost-row .cv { flex: 0 0 70px; text-align: right; color: var(--gold-hi); }
+.cost-row .cw { flex: 0 0 45%; color: var(--ink-faint); text-align: right; }
+.rank-row { display: flex; gap: 10px; padding: 5px 0;
+  border-bottom: 1px solid var(--line); }
+.rank-row .rn { flex: 0 0 40%; font-family: 'Press Start 2P', monospace;
+  font-size: calc(8px * var(--scale)); color: var(--ink-faint); line-height: 1.7; }
+.rank-row .rd { flex: 1 1 auto; font-size: calc(11px * var(--scale));
+  color: var(--ink-faint); line-height: 1.6; }
+.rank-row.got .rn { color: var(--gold-hi); }
+.rank-row.got .rd { color: var(--ink-dim); }
+.forge-anvil { display: flex; align-items: center; justify-content: center;
+  min-height: 200px; }
+.forge-anvil canvas { image-rendering: pixelated; }
+.forge-panel .metal-bag { margin-bottom: 10px; }
+.cost-row .forge-met, .list-item .forge-met { color: var(--green); }
+`;
+  document.head.appendChild(node);
+}
+
+/* One metal in the bag, as a chip. What a rung WANTS is the cost list's job;
+ * this is only ever "what am I carrying", which is the question a player asks
+ * halfway across the map. */
+function metalChip(row) {
+  return `<span class="metal-chip" title="${row.name} — rung ${row.rung || '?'}">
+    <i style="background:${row.colour}"></i>${row.name}
+    <b>${row.held}</b></span>`;
+}
+
+function metalBag(bag, { empty = 'Nothing in the bag yet.' } = {}) {
+  const rows = (bag || []).filter(r => r.held > 0);
+  if (!rows.length) return `<p class="small muted">${empty}</p>`;
+  return `<div class="metal-bag">${rows.map(r => metalChip(r)).join('')}</div>`;
+}
+
+/* The blade, drawn from its own pipeline. lootart.drawItem routes a forged item
+ * to the forge table on its own, so this is itemIcon with the caption a rung
+ * wants: the line, the rung, and the one sentence that says what changed. */
+function bladeCard(item, { size = 88, note = '' } = {}) {
+  // Always a node. Every caller appends the result, and a function that
+  // sometimes hands back a string is a function that throws on the one path
+  // nobody tested.
+  if (!item) return el('div', 'small muted', 'Nothing on the bench.');
+  const card = el('div', 'blade-card');
+  const art = el('span', 'blade-art');
+  art.appendChild(itemIcon(item, size));
+  card.appendChild(art);
+  card.appendChild(el('div', 'grow',
+    `<div class="in" style="color:${item.rarity_colour}">${item.name}
+       <span class="muted">· ${item.rarity}</span></div>
+     ${item.technique ? `<div class="forge-tech">${item.technique.rank}</div>
+       <div class="small" style="color:var(--green)">${item.technique.text}</div>` : ''}
+     <div class="ie">${(item.effect_text || []).join(' · ')}</div>
+     <div class="if">${item.look || item.flavour || ''}</div>
+     ${note ? `<div class="small muted">${note}</div>` : ''}`));
+  return card;
+}
+
+/* The at-a-glance panel. Lives on the GEAR screen next to the slots, because
+ * that is where a player goes to ask what they are wearing, and the answer to
+ * "what am I working toward" belongs in the same breath. */
+function forgePanel(host) {
+  ensureForgeStyle();
+  const f = (G.state && G.state.forge) || {};
+  const frame = el('div', 'frame forge-panel');
+  frame.style.padding = '14px';
+  frame.appendChild(el('div', 'section-title', 'THE BLADE'));
+
+  if (!f.blade) {
+    frame.appendChild(el('p', 'small muted',
+      'No line has been issued to you yet. Choose a discipline and your order '
+      + 'will hand you something with your name on it — rung one of nine.'));
+    host.appendChild(frame);
+    return;
+  }
+  if (!f.tier) {
+    frame.appendChild(el('p', 'small muted', 'Your line is waiting on the bench.'));
+    host.appendChild(frame);
+    return;
+  }
+
+  frame.appendChild(bladeCard(f.item,
+    { note: f.equipped ? '' : 'Not in your hand right now.' }));
+
+  const here = (G.state.player || {}).region;
+  const atBench = !!(f.smith && here === f.smith.region);
+  const q = f.quote || {};
+  if (q.at_top) {
+    frame.appendChild(el('p', 'small',
+      `<span class="tag gold">RUNG ${f.tier} OF 9</span> ${q.text || ''}`));
+  } else if (q.next) {
+    const rows = (q.cost || []).map(row => `
+      <div class="cost-row${row.met ? ' met' : ''}">
+        <i style="background:${row.colour}"></i>
+        <span class="cn">${row.name}</span>
+        <span class="cv">${row.have}<span class="muted">/${row.need}</span></span>
+        <span class="cw">${row.met ? '✔' : row.regions.join(' · ')}</span>
+      </div>`).join('');
+    frame.appendChild(el('div', '',
+      `<div class="section-title">NEXT — RUNG ${q.next_tier}: ${q.next.name}</div>
+       <div class="cost-list">${rows}</div>
+       <div class="cost-row${q.gold_short ? '' : ' met'}">
+         <i style="background:var(--gold)"></i><span class="cn">Gold</span>
+         <span class="cv">${G.state.player.gold}<span class="muted">/${q.gold}</span></span>
+         <span class="cw">${q.gold_short ? `${q.gold_short} short` : '✔'}</span></div>
+       <div class="forge-tech" style="margin-top:8px">${
+         (q.changes && q.changes.technique) ? q.changes.technique.rank[1] : ''}</div>
+       <p class="small muted">${q.next.look || ''}</p>
+       <p class="small ${q.ready ? '' : 'muted'}" style="${
+         q.ready ? 'color:var(--green)' : ''}">${q.ready
+           ? (atBench
+              ? 'That is the full weight. Vess will take it.'
+              : `That is the full weight. Carry it back to ${
+                  (f.smith && f.smith.region === 'python_village')
+                    ? 'Python Village' : 'the village'}.`)
+           : 'Fight where the metal is. Vess will tell you where that is.'}</p>`));
+  }
+
+  frame.appendChild(el('div', 'section-title', 'THE BAG'));
+  frame.appendChild(el('div', '', metalBag(f.bag,
+    { empty: 'No metal yet. Every region but the village gives up one kind, '
+             + 'and only one kind.' })));
+
+  const go = el('button', atBench ? 'btn good' : 'btn',
+                atBench ? 'TAKE IT TO THE SMITH' : 'READ THE BENCH FROM HERE');
+  go.onclick = () => showSmith();
+  frame.appendChild(go);
+  host.appendChild(frame);
+}
+
+/* ---------------- the counter ---------------- */
+
+/* Where a shortfall drops, how hard it hits there, and roughly how many fights
+ * a bar is. This is the half of the screen that stops a player deciding a rung
+ * is a wall rather than a walk. */
+function counselRows(counsel) {
+  if (!counsel || !counsel.length) return '';
+  return `<div class="section-title">WHERE THAT COMES FROM</div>`
+    + counsel.map(c => `<div class="list-item">
+        <span class="t" style="color:${c.colour}">${c.name.toUpperCase()}</span>
+        <span class="d">${c.line}<br>
+          <span class="muted">${c.tell}</span></span></div>`).join('');
+}
+
+function techniqueLadder(tech) {
+  if (!tech || !tech.ranks) return '';
+  return `<div class="section-title">${tech.name} — RANK ${tech.at} OF 9</div>
+    <p class="small muted">${tech.blurb || ''}</p>
+    ${tech.ranks.map(r => `<div class="rank-row ${r.reached ? 'got' : ''}">
+      <span class="rn">${r.rank}</span>
+      <span class="rd">${r.reached ? r.text
+        : `<span class="muted">${r.cost_text.join(' · ')}</span>`}</span>
+    </div>`).join('')}`;
+}
+
+function swapPanel(swap) {
+  if (!swap || !swap.mine) return '';
+  return `<div class="section-title">OR CARRY SOMETHING YOU FOUND</div>
+    <p class="small muted">${swap.trade}</p>
+    <div class="list-item"><span class="t" style="color:var(--gold-hi)">
+      ${swap.mine.name} — ${swap.mine.technique}</span>
+      <span class="d">${swap.mine.effect_text.join(' · ')}<br>
+        <span class="muted">raw rate ${Math.round(swap.mine.rate_total * 100)}
+        · ${swap.mine.capabilities} capability(ies)${
+          swap.mine.upgrades ? ' · grows' : ''}</span></span></div>
+    ${swap.rivals.slice(0, 3).map(r => `<div class="list-item">
+      <span class="t">${r.name}</span>
+      <span class="d">${r.effect_text.join(' · ')}<br>
+        <span class="muted">raw rate ${Math.round(r.rate_total * 100)}
+        · ${r.capabilities} capability(ies) · finished</span></span></div>`).join('')}
+    <p class="small">${swap.verdict}</p>`;
+}
+
+function routePanel(route) {
+  if (!route || !route.length) return '';
+  return `<div class="section-title">THE WHOLE ROAD</div>
+    <p class="small muted">Every rung left, what it costs and where that metal
+    lives. A player who can see the whole road can decide whether to walk it.</p>
+    ${route.map(r => `<div class="list-item">
+      <span class="t">RUNG ${r.tier} — ${r.name}
+        <span class="muted">· ${r.rarity} · ${r.gold} gold · ~${r.encounters} fights</span></span>
+      <span class="d">${r.technique_rank}<br>${r.cost.map(c =>
+        `<span class="${c.have >= c.units ? 'forge-met' : ''}">${c.units} ${c.name}
+          <span class="muted">(${c.have} held · ${c.where.join(', ')})</span></span>`
+        ).join(' · ')}</span></div>`).join('')}`;
+}
+
+async function showSmith() {
+  let view;
+  try {
+    view = await api.forge();
+  } catch (e) { toast('THE BENCH IS SHUT', e.message, 'red'); return; }
+  drawSmith(view);
+}
+
+function drawSmith(view) {
+  ensureForgeStyle();
+  if (!view || view.error === 'sealed') {
+    const m = modal(`<h2>THE BENCH IS SHUT</h2>
+      <p>${(view && view.message) || 'Not during a measured run.'}</p>
+      <div class="actions"><button class="btn" id="m-close">BACK</button></div>`);
+    m.querySelector('#m-close').onclick = closeModal;
+    return;
+  }
+  const smith = view.smith || {};
+  const q = view.quote || {};
+  const ready = !!q.ready;
+  const shortMetal = Object.keys(q.still_short || {}).length
+    ? q.still_short : (q.short || {});
+  const blocked = [];
+  if (Object.keys(shortMetal).length) {
+    blocked.push(Object.entries(shortMetal)
+      .map(([id, n]) => `${n} more ${(view.bag.find(b => b.metal === id) || {}).name || id}`)
+      .join(', '));
+  }
+  if (q.gold_short) blocked.push(`${q.gold_short} more gold`);
+
+  const m = modal(`
+    <h2 style="color:var(--gold)">${smith.name || 'VESS'} — ${smith.role || 'the smith'}</h2>
+    <p class="small muted">${smith.greeting || ''}</p>
+    <div class="grid2">
+      <div class="frame" style="padding:14px">
+        <div class="section-title">ON THE BENCH</div>
+        <div id="smith-blade"></div>
+        ${q.at_top
+          ? `<p class="small"><span class="tag gold">RUNG ${view.tier} OF 9</span>
+             ${q.text || ''}</p>`
+          : q.next ? `
+        <div class="section-title">RUNG ${q.next_tier} — ${q.next.name}</div>
+        <div id="smith-next"></div>
+        <div class="cost-list">${(q.cost || []).map(row => `
+          <div class="cost-row${row.met ? ' met' : ''}">
+            <i style="background:${row.colour}"></i>
+            <span class="cn">${row.name}</span>
+            <span class="cv">${row.have}<span class="muted">/${row.need}</span></span>
+            <span class="cw">${row.met ? '✔ enough'
+              : `${row.short} short · ${row.regions.join(' · ')}`}</span>
+          </div>`).join('')}
+          <div class="cost-row${q.gold_short ? '' : ' met'}">
+            <i style="background:var(--gold)"></i>
+            <span class="cn">Her labour</span>
+            <span class="cv">${view.gold}<span class="muted">/${q.gold}</span></span>
+            <span class="cw">${q.gold_short ? `${q.gold_short} short` : '✔ paid'}</span>
+          </div>
+        </div>
+        ${Object.keys(q.substitution || {}).length ? `
+          <p class="small" style="color:var(--orange)">She can beat
+          ${Object.entries(q.substitution).map(([id, n]) =>
+            `${n} ${(view.bag.find(b => b.metal === id) || {}).name || id}`).join(', ')}
+          down into what is missing. You lose some of it in the beating.
+          That is the trade, and it is always a bad one.</p>` : ''}
+        <div class="actions">
+          <button class="btn ${ready && view.at_the_bench ? 'primary' : ''}"
+            id="smith-forge" ${ready && view.at_the_bench ? '' : 'disabled'}>
+            ${!view.at_the_bench
+              ? `SHE IS IN ${String(view.bench_region_name || 'THE VILLAGE').toUpperCase()}`
+              : ready ? 'FORGE IT' : `STILL SHORT — ${blocked.join(' and ')}`}</button>
+        </div>
+        ${view.at_the_bench ? '' : `<p class="small muted">You can read the bench
+          from anywhere — that is how you know what you are short of. The metal
+          is worked in ${view.bench_region_name || 'the village'}, and nowhere
+          else.</p>`}` : ''}
+        <div class="section-title">THE BAG</div>
+        <div id="smith-bag"></div>
+      </div>
+      <div class="frame" style="padding:14px">
+        <div class="section-title">SHE SAYS</div>
+        ${(view.lines || []).map(l => `<p class="small">${l}</p>`).join('')}
+        ${counselRows(view.counsel)}
+      </div>
+    </div>
+    <div class="frame" style="padding:14px;margin-top:12px">
+      ${techniqueLadder(view.technique)}
+    </div>
+    <div class="grid2" style="margin-top:12px">
+      <div class="frame" style="padding:14px">${routePanel(view.route)}</div>
+      <div class="frame" style="padding:14px">${swapPanel(view.swap)}</div>
+    </div>
+    <div class="actions">
+      ${view.item ? (view.equipped
+        ? '<button class="btn" id="smith-rack">HANG IT ON THE WALL</button>'
+        : '<button class="btn good" id="smith-unrack">TAKE IT BACK</button>') : ''}
+      <button class="btn" id="smith-ore">WHERE EVERY METAL DROPS</button>
+      <button class="btn" id="m-close">LEAVE THE BENCH</button>
+    </div>`, { wide: true });
+
+  const blade = m.querySelector('#smith-blade');
+  if (blade && view.item) blade.appendChild(bladeCard(view.item));
+  const next = m.querySelector('#smith-next');
+  if (next && view.next_item) {
+    next.appendChild(bladeCard(view.next_item,
+      { size: 72, note: 'What it becomes. Nothing is lost — the metal goes in.' }));
+  }
+  const bag = m.querySelector('#smith-bag');
+  if (bag) bag.innerHTML = metalBag(view.bag);
+
+  m.querySelector('#m-close').onclick = closeModal;
+  m.querySelector('#smith-ore').onclick = () => showOreMap(view);
+  const forgeBtn = m.querySelector('#smith-forge');
+  if (forgeBtn && ready && view.at_the_bench) {
+    forgeBtn.onclick = () => doForge(view.blade, forgeBtn);
+  }
+  const rack = m.querySelector('#smith-rack');
+  if (rack) {
+    rack.onclick = async () => {
+      const r = await api.forgeRack(view.blade);
+      if (r.error) { toast('SHE DECLINES', r.message || r.error, 'red'); return; }
+      audio.sfx('select');
+      await refresh();
+      drawSmith(r.smith);
+    };
+  }
+  const unrack = m.querySelector('#smith-unrack');
+  if (unrack) {
+    unrack.onclick = async () => {
+      const r = await api.forgeUnrack();
+      if (r.error) { toast('SHE DECLINES', r.message || r.error, 'red'); return; }
+      audio.sfx('unlock');
+      await refresh();
+      drawSmith(r.smith);
+    };
+  }
+}
+
+/* Every metal, where it drops, how hard that region hits and roughly how many
+ * fights a bar is. Eleven metals over sixteen regions, so a player who has
+ * never been to the Graph Wastes can still find out that Wastes-iron is the
+ * thing standing between them and rung seven — which is the difference between
+ * a long walk and a wall. */
+async function showOreMap(back) {
+  let r;
+  try {
+    r = await api.forgeMetals();
+  } catch (e) { toast('CANNOT READ THE LEDGER', e.message, 'red'); return; }
+  const held = Object.create(null);
+  for (const row of r.bag || []) held[row.metal] = row.held;
+  const m = modal(`<h2>THE ELEVEN METALS</h2>
+    <p class="small muted">Every region but the village gives up exactly one
+    kind, and it gives up no other. That is the whole reason the map is an
+    economy: you go where the metal is, and you carry it back here.</p>
+    ${(r.metals || []).map(metal => `<div class="list-item">
+      <span class="t" style="color:${metal.colour}">
+        ${metal.name.toUpperCase()} <span class="muted">· rung ${metal.rung}
+        · ${held[metal.metal] || 0} held</span></span>
+      <span class="d">${metal.line}<br>
+        <span class="muted">${metal.blurb}</span><br>
+        <span class="muted">${metal.tell}</span></span></div>`).join('')}
+    <div class="actions">
+      <button class="btn primary" id="ore-back">BACK TO THE BENCH</button>
+      <button class="btn" id="m-close">OUT</button>
+    </div>`, { wide: true });
+  m.querySelector('#m-close').onclick = closeModal;
+  m.querySelector('#ore-back').onclick = () => drawSmith(back);
+}
+
+/* The upgrade. forge.upgrade() checks the quote before it touches the bag, so a
+ * refusal cannot have spent anything — and the screen is redrawn from the same
+ * state either way, so the player can see that for themselves rather than being
+ * told it. */
+async function doForge(bladeId, btn) {
+  btn.disabled = true;
+  btn.textContent = 'SHE IS WORKING…';
+  let r;
+  try {
+    r = await api.forgeUpgrade(bladeId);
+  } catch (e) {
+    btn.disabled = false;
+    toast('THE BENCH IS SHUT', e.message, 'red');
+    return;
+  }
+  if (r.error) {
+    toast('SHE DECLINES', r.message
+      || (r.error === 'gold' ? `${r.gold_short} gold short.`
+          : r.error === 'metal' ? 'Not enough metal.'
+          : r.error === 'at_top' ? 'There is no rung ten.'
+          : String(r.error)), 'red');
+    drawSmith(r.smith || r);
+    return;
+  }
+  audio.sfx('levelup');
+  await refresh();
+  showForged(r);
+}
+
+/* What a rung landing looks like. Three things changed at once and Vess names
+ * all three, because the player is about to look at the sprite. */
+function showForged(r) {
+  const m = modal(`
+    <h2 style="color:var(--gold-hi)">${r.rung.name.toUpperCase()} — RUNG ${r.tier}</h2>
+    <div class="grid2">
+      <div class="frame" style="padding:14px">
+        <div class="forge-anvil" id="forged-art"></div>
+      </div>
+      <div class="frame" style="padding:14px">
+        ${(r.lines || []).map(l => `<p class="small">${l}</p>`).join('')}
+        <div class="section-title">WHAT IT DOES NOW</div>
+        ${(r.changes.power.new || []).map(t =>
+          `<p class="small" style="color:var(--green)">+ ${t}</p>`).join('')}
+        ${(r.changes.power.grown || []).map(t =>
+          `<p class="small" style="color:var(--blue)">↑ ${t}</p>`).join('')}
+        <div class="section-title">${r.changes.technique.name} ·
+          ${r.changes.technique.rank[1]}</div>
+        <p class="small">${r.changes.technique.text}</p>
+        <p class="small muted">Paid: ${Object.entries(r.spent).map(([id, n]) =>
+          `${n} ${id.replace(/_/g, ' ')}`).join(', ')} · ${r.gold_spent} gold.
+          ${r.gold} gold left.</p>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn primary" id="f-back">BACK TO THE BENCH</button>
+      <button class="btn" id="m-close">OUT INTO THE WORLD</button>
+    </div>`, { wide: true });
+  const art = m.querySelector('#forged-art');
+  if (art && r.item) art.appendChild(itemIcon(r.item, 192));
+  m.querySelector('#m-close').onclick = closeModal;
+  m.querySelector('#f-back').onclick = () => showSmith();
+  toast('FORGED', `${r.rung.name} — rung ${r.tier}.`, 'gold');
 }
 
 function showLevelUp(levels, points) {
@@ -2983,6 +5050,30 @@ function showLootDrop(drop) {
     if (t < 1 || !reduced) requestAnimationFrame(step);
   };
   requestAnimationFrame(step);
+}
+
+/* What fell out of the monster that is not loot. A metal drops only in the
+ * regions it belongs to, which is the whole reason the map is an economy rather
+ * than a menu — so the line says what it is for as well as what it is. */
+function metalHtml(metal) {
+  if (!metal) return '';
+  ensureForgeStyle();
+  const f = (G.state && G.state.forge) || {};
+  const q = f.quote || {};
+  const wanted = (q.cost || []).find(row => row.metal === metal.metal);
+  return `<h3>METAL</h3>
+    <div class="item-card" style="border-color:${metal.colour};cursor:default">
+      <div class="grow">
+        <div class="in" style="color:${metal.colour}">
+          ${metal.units} × ${metal.name}
+          <span class="muted">· ${metal.held} in the bag</span></div>
+        <div class="ie">${wanted
+          ? (wanted.met
+             ? `Enough for rung ${q.next_tier}. Vess is waiting.`
+             : `Rung ${q.next_tier} wants ${wanted.need} — ${wanted.short} short.`)
+          : 'Not what the next rung asks for. It keeps; nothing in the bag spoils.'}</div>
+        <div class="if">${metal.tell || metal.blurb || ''}</div>
+      </div></div>`;
 }
 
 function lootHtml(drop) {
@@ -3554,7 +5645,7 @@ async function paintExam() {
         <button class="btn" id="ex-interview">PRACTISE IN INTERVIEW MODE</button>
       </div>
       ${inExam ? `<p class="small" style="color:var(--orange)">A run is open —
-        question ${(run.index || 0) + 1} of ${(run.problem_ids || []).length}.</p>` : ''}
+        question ${(run.index || 0) + 1} of ${run.total || 0}.</p>` : ''}
     </div>
     ${rungs}`;
 
@@ -3768,6 +5859,40 @@ function configureParty() {
   });
 }
 
+/* uikit's HOST, for the four modules that arrived with the world layer. Same
+ * bargain partyui makes: they draw into this file's chrome rather than growing
+ * their own, so one backdrop click closes every modal in the game and one
+ * destroyChild() tears down whatever is mounted. */
+function configureWorldScreens() {
+  uikit.configure({
+    panel,
+    modal,
+    closeModal,
+    toast,
+    say,
+    sfx: (kind) => audio.sfx(kind),
+    state: () => G.state,
+    refresh: async () => { await refresh(); return G.state; },
+    back: () => returnToWorld(),
+    go: (id) => go(id),
+    /* A screen that opened an encounter hands it straight back: main.js owns
+     * the battle screen, and a module that drew one would be the second one. */
+    onEncounter: (payload) => enterBattle(payload),
+  });
+}
+
+/* Every world-layer screen mounts the same way. The module's paint() calls
+ * HOST.panel synchronously, which is what destroys whatever was mounted before
+ * it; registering the new child straight afterwards is what makes the NEXT
+ * navigation tear this one down. */
+function mountWorldScreen(mod, paint, ...args) {
+  const pending = paint(...args);
+  G.child = { destroy: () => { try { mod.leave(); } catch (e) { /* done */ } } };
+  return Promise.resolve(pending).catch((e) => {
+    toast('THAT PANEL WILL NOT OPEN', e.message, 'red');
+  });
+}
+
 /* The tree is the party screen; its own strip carries the companions and the
  * codex. An unchosen class makes paintSkillTree hand over to the selection
  * screen, which is the screen that player needs anyway. */
@@ -3792,6 +5917,8 @@ const LEDGER = [
     blurb: 'Cards earned by demonstrated use, and the ones still unearned.' },
   { id: 'saves', label: 'SAVES',
     blurb: 'Sixteen slots, the autosaves, and one undo.' },
+  { id: 'repos', label: 'MINI-REPO BATTLES',
+    blurb: 'Somebody else\u2019s codebase, its own tests, and a clock.' },
   { id: 'exam', label: 'THE PRACTICAL TEST',
     blurb: 'The fourteen-rung ladder, and the exam at the top of it.' },
   { id: 'interview', label: 'INTERVIEW MODE',
@@ -3800,6 +5927,22 @@ const LEDGER = [
     blurb: 'The shareable world code, and the ground under it.' },
   { id: 'settings', label: 'MENU',
     blurb: 'Audio, accessibility, the sandbox, and your history.' },
+  { id: 'town', label: 'THE TOWN SQUARE',
+    blurb: 'The Mender, the smith, the shelf, and the assayer with her trials.' },
+  { id: 'hunt', label: 'THE HUNT',
+    blurb: 'What roams this region, what it examines, and how long it would take.' },
+  { id: 'sage', label: 'THE ONE WHO SITS HERE',
+    blurb: 'Sixteen hidden teachers, found by having done the work.' },
+  { id: 'arts', label: 'THE SECRET ARTS',
+    blurb: 'Lines of Python nobody sells you. Sixteen for your discipline.' },
+  { id: 'regalia', label: 'REGALIA',
+    blurb: 'Objects that buy a companion more help, and never deeper help.' },
+  { id: 'sanctuaries', label: 'THE HIDDEN HEALERS',
+    blurb: 'Seventeen of them, found by being hurt in the right place.' },
+  { id: 'rollcall', label: 'THE ROLL CALL',
+    blurb: 'Who each boss took, who walked out, and who is still held.' },
+  { id: 'finale', label: 'THE LAST SCENE',
+    blurb: 'Staged after the practical is scored, and never before.' },
 ];
 
 /* The eleven modules, each in one line, each pointing at the screen that owns
@@ -3865,6 +6008,40 @@ function worldLayerHtml() {
   ].join('');
 }
 
+function paintTransferCard() {
+  const host = $('#transfer-card');
+  if (!host) return;
+  api.transfer().then((t) => {
+    if (!t || !$('#transfer-card')) return;          // panel closed while we read
+    if (t.error) { host.innerHTML = ''; return; }
+    // The band matters more than the number. A percentage built from four
+    // attempts is not a percentage, so when it is not measurable yet we print
+    // the sentence instead and say what would make it measurable.
+    const head = t.measured
+      ? `<div class="section-title">TRANSFER READINESS
+           <span style="color:var(--gold)">${t.score}%</span>
+           <span class="small muted">${t.band.text} at ${t.band.confidence} · n=${t.sample}</span>
+         </div>`
+      : `<div class="section-title">TRANSFER READINESS
+           <span class="small muted">not yet measurable</span></div>`;
+    const skills = (t.by_skill || []).slice(0, 6).map(r =>
+      `<div class="row" style="gap:10px">
+         <span class="nm" style="width:150px">${r.skill}</span>
+         <span class="n" style="width:52px;text-align:right">${
+           r.score === null || r.score === undefined ? '—' : r.score + '%'}</span>
+         <span class="small muted">n=${r.sample}</span>
+       </div>`).join('');
+    host.innerHTML = head
+      + `<p class="small" style="margin:8px 0">${t.note}</p>`
+      + (t.verdict ? `<p class="small" style="color:var(--violet)">${t.verdict}</p>` : '')
+      + (skills ? `<div style="margin-top:10px">${skills}</div>` : '')
+      + `<p class="small muted" style="margin-top:10px">
+           ${t.remaining} unfamiliar hold-out problem(s) left of ${t.holdout_total}.
+           Nothing in Adventure Mode can move this number, which is the point of it.
+         </p>`;
+  }).catch(() => { host.innerHTML = ''; });
+}
+
 function paintLedger() {
   const s = G.state;
   const board = s.quests || {};
@@ -3874,14 +6051,28 @@ function paintLedger() {
     character: `${(s.loadout.inventory || []).length} items · ${s.unspent_points} unspent`,
     grimoire: `${(s.grimoire || []).length} card(s)`,
     saves: 'sixteen slots',
+    repos: `${((s.mini_repos || {}).cleared || []).length}/${
+      ((s.mini_repos || {}).repos || []).length} handed back green`,
     exam: `${(s.cleared_bosses || []).length}/14 rungs climbed`,
     interview: `profile ${s.player.profile}`,
     seed: s.seed || '',
     settings: `${s.playtime || ''} played`,
+    town: `${s.player.gold} gold in the purse`,
+    hunt: 'seventeen apexes, one to a region',
+    sage: 'sixteen sanctums, ninety-six arts',
+    arts: 'earned, never bought',
+    regalia: 'twenty-four objects',
+    sanctuaries: 'free, and they find you',
+    rollcall: 'twenty-five names',
+    finale: 'sixteen beats and a freeze frame',
   };
   panel('THE LEDGER', `
     <p class="small muted">Everything this game keeps about you, and every door
     that is not one of the five on the bar.</p>
+    <div id="transfer-card" class="frame" style="margin:14px 0;padding:16px">
+      <div class="section-title">TRANSFER READINESS</div>
+      <p class="small muted">reading the hold-out…</p>
+    </div>
     <div class="grid2">
       ${LEDGER.map(item => `<div class="list-item" data-ledger="${item.id}">
         <span class="t">${item.label}</span>
@@ -3922,7 +6113,7 @@ const SCREENS = {
   map: mountMap,
   party: mountParty,
   character: paintCharacter,
-  ledger: paintLedger,
+  ledger: () => { paintLedger(); paintTransferCard(); },
   status: paintStatus,
   grimoire: paintGrimoire,
   interview: paintInterview,
@@ -3930,6 +6121,16 @@ const SCREENS = {
   saves: paintSaves,
   exam: paintExam,
   seed: paintSeed,
+  repos: paintRepos,
+  // -- the world layer ---------------------------------------------------
+  town: () => mountWorldScreen(townui, townui.paintTown),
+  hunt: () => mountWorldScreen(huntui, huntui.paintHunt, currentRegion().id),
+  sage: () => mountWorldScreen(legendui, legendui.paintSage, currentRegion().id),
+  arts: () => mountWorldScreen(legendui, legendui.paintArts),
+  regalia: () => mountWorldScreen(legendui, legendui.paintRegalia),
+  sanctuaries: () => mountWorldScreen(legendui, legendui.paintSanctuaries),
+  rollcall: () => mountWorldScreen(legendui, legendui.paintRollCall),
+  finale: () => mountWorldScreen(finaleui, finaleui.paintFinaleCard),
 };
 
 function go(id) {
@@ -3949,6 +6150,10 @@ function go(id) {
  * of the noise, and the index is a screen that can say what each door is for. */
 const NAV = [
   { id: 'world', label: 'WORLD' },
+  // The town is the loop. It is on the bar rather than in the index because a
+  // player comes back to it between every second fight, and a door you use
+  // that often should not be two clicks deep.
+  { id: 'town', label: 'TOWN' },
   { id: 'quests', label: 'QUESTS' },
   { id: 'map', label: 'MAP' },
   { id: 'party', label: 'PARTY' },
@@ -3993,6 +6198,9 @@ window.addEventListener('keydown', (e) => {
 window.addEventListener('resize', () => {
   if (G.title) G.title.resize();
   if (G.overworld) G.overworld.resize();
+  // The wash is positioned in pixels against the stage, so it moves when the
+  // stage does.
+  if (G.alarmNode) paintAlarm();
   if (G.viz && G.vizCanvas && G.vizCanvas.isConnected) G.viz.render();
 });
 
@@ -4227,10 +6435,18 @@ async function boot() {
   }
   G.world = await api.world();
   await refresh();
+  // The wheel, once. It is the rulebook — element names, status durations, what
+  // cures what, which hazard a region wears, the potion catalogue — and it does
+  // not change while the server is up. Soft, and the HUD degrades to ids
+  // instead of names if it never lands: a codex that failed to fetch is not a
+  // reason to refuse to draw a fight.
+  api.wheel().then((w) => { if (w && !w.error) G.wheel = w; })
+    .catch(() => { /* the HUD reads ids instead of names */ });
 
   // partyui.js paints through the shell's own chrome — one modal node, one
   // toast rail, one panel body. Handed over once, before any door can open.
   configureParty();
+  configureWorldScreens();
 
   // Optional: prefer recorded audio where it exists. Absent samples are the
   // normal case and the rig synthesises everything instead.
@@ -4244,7 +6460,44 @@ async function boot() {
   }).catch(() => { /* synthesis covers it */ });
 
   G.overworld = new Overworld($('#world-canvas'));
+  // The overworld reads the companion out of the state we already hold, the
+  // same way partyui.js reads it — no second fetch, and no knowledge of pets
+  // in this file, so the pets rewrite lands without touching the shell.
+  //
+  // The apex rides on the same object. huntui.stateFor MUTATES it rather than
+  // spreading it into a new one, because this function is called every frame by
+  // two different consumers and a fresh object per frame in that path is the
+  // one thing overworld.js's budget is written to avoid.
+  G.overworld.stateSource = () => huntui.stateFor(G.state);
   G.overworld.onEnter = onNodeEnter;
+  /* The canvas draws the telegraph wordlessly, which is deliberate; this is the
+   * words, on the region card, where a number belongs. */
+  G.overworld.onApexStage = (stage, info) => {
+    huntui.onStage(stage, info);
+    // A creature that has just gone quiet is worth one line, because the
+    // player is owed the end of a thing that started with twenty seconds of
+    // warning. DORMANT on arrival is not news, so it is latched.
+    if ((stage === 'DORMANT' || stage === 'SPENT') && G._apexWasUp) {
+      G._apexWasUp = false;
+      toast('IT LOSES THE TRAIL', 'Whatever that was, it is not following you '
+        + 'any more.', '');
+    } else if (stage === 'TRACKING' || stage === 'CLOSING') {
+      G._apexWasUp = true;
+    }
+  };
+  G.overworld.onApexContact = (info) => huntui.onContact(info);
+  // A fight that was open when the page was closed. The server still holds the
+  // fight block, so the banner has to come back with it or the player is in a
+  // fight the interface has quietly forgotten about.
+  huntui.restore();
+  // Click the animal, the animal answers. Every species has its own voice and
+  // a legendary sounds like what it grew into.
+  G.overworld.onCompanionClick = (c) => {
+    if (!c) return;
+    audio.resume();
+    const spoke = audio.petSound(c.animal, { tier: c.tier, dead: c.dead });
+    if (spoke && c.line) toast(String(c.name || c.animal).toUpperCase(), c.line, 'violet');
+  };
   G.overworld.onMove = (x, y) => {
     clearTimeout(G._moveSave);
     G._moveSave = setTimeout(() => api.move(currentRegion().id, x, y), 900);
@@ -4273,6 +6526,19 @@ async function boot() {
     return;
   }
 
+  // #repo/<id> drops straight into a Mini-Repo, and #repos onto the board.
+  // Same purpose as #problem/<id>: linking somebody to the thing you are
+  // talking about, and reaching a screen from a tool that cannot click.
+  const repoLink = /^#repo\/([a-z0-9_-]+)$/.exec(location.hash || '');
+  if (repoLink || (location.hash || '') === '#repos') {
+    document.body.classList.remove('titling');
+    if (!G.state.build) await api.chooseBuild('ANALYST').catch(() => {});
+    await refresh();
+    if (repoLink) await startRepo(repoLink[1]);
+    else go('repos');
+    return;
+  }
+
   // #panel/<nav> opens any top-level screen directly. Useful for linking
   // someone to the thing you are talking about, and it is the only way to
   // reach a screen from a capture tool, which cannot click a nav button.
@@ -4295,6 +6561,9 @@ async function boot() {
 
 function showTitle() {
   document.body.classList.add('titling');
+  // The title screen gets its own track. Autoplay is usually blocked before the
+  // first gesture, so audio.resume() retries this on the first click or key.
+  audio.play('title');
   const started = !!(G.state.build && G.state.stats.encounters);
   G.title = new TitleScreen($('#title-canvas'), {
     hasSave: started,

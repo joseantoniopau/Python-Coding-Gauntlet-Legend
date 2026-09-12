@@ -1,0 +1,769 @@
+{
+ "max_tier": 9,
+ "min_tier": 1,
+ "motifs": [
+  "boundary",
+  "caliper_jaw",
+  "chain",
+  "dawn_line",
+  "eye",
+  "forge_mark",
+  "fracture",
+  "hairline",
+  "index_dot",
+  "keyward",
+  "link",
+  "open_hand",
+  "quench_line",
+  "rule_marks",
+  "seam",
+  "spiral",
+  "tally",
+  "thorn"
+ ],
+ "auras": [
+  "coldlight",
+  "emberfall",
+  "handshadow",
+  "heatglow",
+  "measure",
+  "quenchsteam",
+  "roadglow",
+  "slowbleed",
+  "stillness",
+  "tallylight",
+  "unlabelled",
+  "voidbite"
+ ],
+ "materials": [
+  "steel",
+  "iron",
+  "cloth",
+  "leather",
+  "wood",
+  "bone",
+  "paper",
+  "glass",
+  "gold"
+ ],
+ "shapes": [
+  "sword",
+  "sabers",
+  "dagger",
+  "staff",
+  "spear",
+  "lance",
+  "axe",
+  "hammer",
+  "bow",
+  "orb",
+  "relic",
+  "key",
+  "feather"
+ ],
+ "rarity_by_rung": {
+  "1": "COMMON",
+  "2": "UNCOMMON",
+  "3": "UNCOMMON",
+  "4": "RARE",
+  "5": "RARE",
+  "6": "EPIC",
+  "7": "EPIC",
+  "8": "LEGENDARY",
+  "9": "MYTHIC"
+ },
+ "region_metal": {
+  "fields_of_syntax": "fieldiron",
+  "hashmap_highlands": "keybrass",
+  "array_caverns": "keybrass",
+  "stringwood_labyrinth": "loomsteel",
+  "sliding_window_marsh": "marshsilver",
+  "twin_pointer_pass": "marshsilver",
+  "stack_queue_mines": "faultsteel",
+  "debugging_dungeon": "faultsteel",
+  "matrix_citadel": "quarterturn",
+  "recursive_forest": "heartwood_iron",
+  "binary_tree_canopy": "heartwood_iron",
+  "graph_wastes": "wastes_iron",
+  "dp_ruins": "tilegold",
+  "complexity_tower": "doubling_steel",
+  "coding_coliseum": "doubling_steel",
+  "null_kings_castle": "nullsteel"
+ },
+ "metals": [
+  {
+   "id": "fieldiron",
+   "name": "Fieldiron",
+   "rung": 1,
+   "colour": "#8a7f6a"
+  },
+  {
+   "id": "keybrass",
+   "name": "Keybrass",
+   "rung": 2,
+   "colour": "#c9a05a"
+  },
+  {
+   "id": "loomsteel",
+   "name": "Loomsteel",
+   "rung": 2,
+   "colour": "#9aa4b8"
+  },
+  {
+   "id": "marshsilver",
+   "name": "Marshsilver",
+   "rung": 3,
+   "colour": "#b9c8c0"
+  },
+  {
+   "id": "faultsteel",
+   "name": "Faultsteel",
+   "rung": 3,
+   "colour": "#7e6f66"
+  },
+  {
+   "id": "quarterturn",
+   "name": "Quarterturn Bronze",
+   "rung": 4,
+   "colour": "#b07a45"
+  },
+  {
+   "id": "heartwood_iron",
+   "name": "Heartwood Iron",
+   "rung": 4,
+   "colour": "#6f7a55"
+  },
+  {
+   "id": "wastes_iron",
+   "name": "Wastes-iron",
+   "rung": 4,
+   "colour": "#6a6470"
+  },
+  {
+   "id": "tilegold",
+   "name": "Tilegold",
+   "rung": 5,
+   "colour": "#e0b44a"
+  },
+  {
+   "id": "doubling_steel",
+   "name": "Doubling Steel",
+   "rung": 5,
+   "colour": "#8fa8c8"
+  },
+  {
+   "id": "nullsteel",
+   "name": "Nullsteel",
+   "rung": 6,
+   "colour": "#4a4458"
+  }
+ ],
+ "blades": [
+  {
+   "id": "analysts_calipers",
+   "class_id": "analyst",
+   "shape": "relic",
+   "hero_key": "relic",
+   "tint": "#7ec8ff",
+   "art": [
+    {
+     "shape": "relic",
+     "material": "iron",
+     "accent": "#6f8ba8",
+     "motif": "rule_marks",
+     "aura": "none",
+     "silhouette": "narrow",
+     "frames": 0
+    },
+    {
+     "shape": "relic",
+     "material": "iron",
+     "accent": "#8aa6c4",
+     "motif": "caliper_jaw",
+     "aura": "none",
+     "silhouette": "narrow",
+     "frames": 0
+    },
+    {
+     "shape": "relic",
+     "material": "steel",
+     "accent": "#c9a05a",
+     "motif": "caliper_jaw",
+     "aura": "measure",
+     "silhouette": "narrow",
+     "frames": 0
+    },
+    {
+     "shape": "relic",
+     "material": "steel",
+     "accent": "#a8b4d0",
+     "motif": "rule_marks",
+     "aura": "measure",
+     "silhouette": "standard",
+     "frames": 0
+    },
+    {
+     "shape": "relic",
+     "material": "steel",
+     "accent": "#b9c8c0",
+     "motif": "quench_line",
+     "aura": "measure",
+     "silhouette": "standard",
+     "frames": 0
+    },
+    {
+     "shape": "relic",
+     "material": "steel",
+     "accent": "#b07a45",
+     "motif": "caliper_jaw",
+     "aura": "coldlight",
+     "silhouette": "standard",
+     "frames": 0
+    },
+    {
+     "shape": "relic",
+     "material": "steel",
+     "accent": "#8fa8c8",
+     "motif": "boundary",
+     "aura": "coldlight",
+     "silhouette": "standard",
+     "frames": 0
+    },
+    {
+     "shape": "relic",
+     "material": "gold",
+     "accent": "#e0b44a",
+     "motif": "rule_marks",
+     "aura": "coldlight",
+     "silhouette": "broad",
+     "frames": 0
+    },
+    {
+     "shape": "relic",
+     "material": "gold",
+     "accent": "#cfd2e8",
+     "motif": "caliper_jaw",
+     "aura": "unlabelled",
+     "silhouette": "broad",
+     "frames": 0
+    }
+   ],
+   "names": [
+    "Student's Calipers",
+    "Trued Calipers",
+    "Brassbound Calipers",
+    "The Stated Cost",
+    "Calipers of the Held Guess",
+    "The Analyst's Calipers",
+    "Calipers of the Narrow Interval",
+    "The Proven Bound",
+    "THE STANDING HYPOTHESIS"
+   ]
+  },
+  {
+   "id": "draft_axe",
+   "class_id": "berserker",
+   "shape": "axe",
+   "hero_key": "axe",
+   "tint": "#ff7a4a",
+   "art": [
+    {
+     "shape": "axe",
+     "material": "iron",
+     "accent": "#a06a4a",
+     "motif": "hairline",
+     "aura": "none",
+     "silhouette": "broad",
+     "frames": 0
+    },
+    {
+     "shape": "axe",
+     "material": "iron",
+     "accent": "#b8784a",
+     "motif": "forge_mark",
+     "aura": "none",
+     "silhouette": "broad",
+     "frames": 0
+    },
+    {
+     "shape": "axe",
+     "material": "steel",
+     "accent": "#9aa4b8",
+     "motif": "seam",
+     "aura": "heatglow",
+     "silhouette": "broad",
+     "frames": 0
+    },
+    {
+     "shape": "axe",
+     "material": "steel",
+     "accent": "#7e6f66",
+     "motif": "hairline",
+     "aura": "heatglow",
+     "silhouette": "broad",
+     "frames": 0
+    },
+    {
+     "shape": "axe",
+     "material": "steel",
+     "accent": "#6f7a55",
+     "motif": "thorn",
+     "aura": "heatglow",
+     "silhouette": "broad",
+     "frames": 0
+    },
+    {
+     "shape": "axe",
+     "material": "steel",
+     "accent": "#b07a45",
+     "motif": "forge_mark",
+     "aura": "emberfall",
+     "silhouette": "broad",
+     "frames": 0
+    },
+    {
+     "shape": "axe",
+     "material": "steel",
+     "accent": "#8fa8c8",
+     "motif": "quench_line",
+     "aura": "emberfall",
+     "silhouette": "broad",
+     "frames": 0
+    },
+    {
+     "shape": "axe",
+     "material": "gold",
+     "accent": "#e0b44a",
+     "motif": "tally",
+     "aura": "emberfall",
+     "silhouette": "broad",
+     "frames": 0
+    },
+    {
+     "shape": "axe",
+     "material": "gold",
+     "accent": "#ff9d4a",
+     "motif": "forge_mark",
+     "aura": "unlabelled",
+     "silhouette": "broad",
+     "frames": 0
+    }
+   ],
+   "names": [
+    "Blunt Draft",
+    "Working Draft",
+    "Second Pass",
+    "The Revision",
+    "Draft of the Short Clock",
+    "The First Draft",
+    "The Unhesitating Draft",
+    "The Struck Line",
+    "THE DRAFT THAT SHIPPED"
+   ]
+  },
+  {
+   "id": "recall_chain",
+   "class_id": "archivist",
+   "shape": "relic",
+   "hero_key": "relic",
+   "tint": "#c8a8ff",
+   "art": [
+    {
+     "shape": "relic",
+     "material": "iron",
+     "accent": "#9a8fb8",
+     "motif": "link",
+     "aura": "none",
+     "silhouette": "narrow",
+     "frames": 0
+    },
+    {
+     "shape": "relic",
+     "material": "iron",
+     "accent": "#c9a05a",
+     "motif": "link",
+     "aura": "none",
+     "silhouette": "narrow",
+     "frames": 0
+    },
+    {
+     "shape": "relic",
+     "material": "steel",
+     "accent": "#a89aff",
+     "motif": "chain",
+     "aura": "coldlight",
+     "silhouette": "narrow",
+     "frames": 0
+    },
+    {
+     "shape": "relic",
+     "material": "steel",
+     "accent": "#7e6f66",
+     "motif": "chain",
+     "aura": "coldlight",
+     "silhouette": "narrow",
+     "frames": 0
+    },
+    {
+     "shape": "relic",
+     "material": "steel",
+     "accent": "#6a6470",
+     "motif": "index_dot",
+     "aura": "coldlight",
+     "silhouette": "standard",
+     "frames": 0
+    },
+    {
+     "shape": "relic",
+     "material": "steel",
+     "accent": "#6f7a55",
+     "motif": "chain",
+     "aura": "coldlight",
+     "silhouette": "standard",
+     "frames": 0
+    },
+    {
+     "shape": "relic",
+     "material": "gold",
+     "accent": "#e0b44a",
+     "motif": "spiral",
+     "aura": "tallylight",
+     "silhouette": "standard",
+     "frames": 0
+    },
+    {
+     "shape": "relic",
+     "material": "gold",
+     "accent": "#8fa8c8",
+     "motif": "tally",
+     "aura": "tallylight",
+     "silhouette": "broad",
+     "frames": 0
+    },
+    {
+     "shape": "relic",
+     "material": "gold",
+     "accent": "#c8a8ff",
+     "motif": "link",
+     "aura": "unlabelled",
+     "silhouette": "broad",
+     "frames": 0
+    }
+   ],
+   "names": [
+    "Short Chain",
+    "Linked Chain",
+    "Chain of Three Links",
+    "The Weighted Chain",
+    "Chain of the Second Asking",
+    "The Chain of Recall",
+    "Chain of the Long Interval",
+    "The Unerased Chain",
+    "NOTHING IS LEARNED ONCE"
+   ]
+  },
+  {
+   "id": "boundary_maul",
+   "class_id": "warden",
+   "shape": "hammer",
+   "hero_key": "hammer",
+   "tint": "#8fd07a",
+   "art": [
+    {
+     "shape": "hammer",
+     "material": "iron",
+     "accent": "#6f8a5a",
+     "motif": "boundary",
+     "aura": "none",
+     "silhouette": "broad",
+     "frames": 0
+    },
+    {
+     "shape": "hammer",
+     "material": "iron",
+     "accent": "#8fd07a",
+     "motif": "boundary",
+     "aura": "none",
+     "silhouette": "broad",
+     "frames": 0
+    },
+    {
+     "shape": "hammer",
+     "material": "steel",
+     "accent": "#9aa4b8",
+     "motif": "rule_marks",
+     "aura": "coldlight",
+     "silhouette": "broad",
+     "frames": 0
+    },
+    {
+     "shape": "hammer",
+     "material": "steel",
+     "accent": "#b9c8c0",
+     "motif": "boundary",
+     "aura": "coldlight",
+     "silhouette": "broad",
+     "frames": 0
+    },
+    {
+     "shape": "hammer",
+     "material": "steel",
+     "accent": "#6f7a55",
+     "motif": "thorn",
+     "aura": "coldlight",
+     "silhouette": "broad",
+     "frames": 0
+    },
+    {
+     "shape": "hammer",
+     "material": "steel",
+     "accent": "#6a6470",
+     "motif": "boundary",
+     "aura": "coldlight",
+     "silhouette": "broad",
+     "frames": 0
+    },
+    {
+     "shape": "hammer",
+     "material": "gold",
+     "accent": "#e0b44a",
+     "motif": "tally",
+     "aura": "tallylight",
+     "silhouette": "broad",
+     "frames": 0
+    },
+    {
+     "shape": "hammer",
+     "material": "gold",
+     "accent": "#8fa8c8",
+     "motif": "boundary",
+     "aura": "tallylight",
+     "silhouette": "broad",
+     "frames": 0
+    },
+    {
+     "shape": "hammer",
+     "material": "gold",
+     "accent": "#8fd07a",
+     "motif": "boundary",
+     "aura": "unlabelled",
+     "silhouette": "broad",
+     "frames": 0
+    }
+   ],
+   "names": [
+    "Split Maul",
+    "Bound Maul",
+    "Maul of the First Case",
+    "Maul of the Empty Input",
+    "The Named Edge",
+    "The Boundary Maul",
+    "Maul of the Nine Classes",
+    "The Perimeter",
+    "THE LAST ELEMENT"
+   ]
+  },
+  {
+   "id": "toolwrights_spanner",
+   "class_id": "artificer",
+   "shape": "hammer",
+   "hero_key": "hammer",
+   "tint": "#e8c37d",
+   "art": [
+    {
+     "shape": "hammer",
+     "material": "iron",
+     "accent": "#a08a52",
+     "motif": "forge_mark",
+     "aura": "none",
+     "silhouette": "narrow",
+     "frames": 0
+    },
+    {
+     "shape": "hammer",
+     "material": "iron",
+     "accent": "#c9a05a",
+     "motif": "seam",
+     "aura": "none",
+     "silhouette": "narrow",
+     "frames": 0
+    },
+    {
+     "shape": "hammer",
+     "material": "steel",
+     "accent": "#b8a893",
+     "motif": "seam",
+     "aura": "heatglow",
+     "silhouette": "narrow",
+     "frames": 0
+    },
+    {
+     "shape": "hammer",
+     "material": "steel",
+     "accent": "#7e6f66",
+     "motif": "hairline",
+     "aura": "heatglow",
+     "silhouette": "standard",
+     "frames": 0
+    },
+    {
+     "shape": "hammer",
+     "material": "steel",
+     "accent": "#b07a45",
+     "motif": "forge_mark",
+     "aura": "heatglow",
+     "silhouette": "standard",
+     "frames": 0
+    },
+    {
+     "shape": "hammer",
+     "material": "steel",
+     "accent": "#6f7a55",
+     "motif": "spiral",
+     "aura": "heatglow",
+     "silhouette": "standard",
+     "frames": 0
+    },
+    {
+     "shape": "hammer",
+     "material": "steel",
+     "accent": "#8fa8c8",
+     "motif": "rule_marks",
+     "aura": "quenchsteam",
+     "silhouette": "standard",
+     "frames": 0
+    },
+    {
+     "shape": "hammer",
+     "material": "gold",
+     "accent": "#e0b44a",
+     "motif": "chain",
+     "aura": "quenchsteam",
+     "silhouette": "broad",
+     "frames": 0
+    },
+    {
+     "shape": "hammer",
+     "material": "gold",
+     "accent": "#e8c37d",
+     "motif": "forge_mark",
+     "aura": "unlabelled",
+     "silhouette": "broad",
+     "frames": 0
+    }
+   ],
+   "names": [
+    "Loose Spanner",
+    "Fitted Spanner",
+    "Spanner and Shim",
+    "The Second Fitting",
+    "Spanner of the Kept Helper",
+    "The Toolwright's Spanner",
+    "Spanner of the Shared Bench",
+    "The Standing Toolkit",
+    "BUILT ONCE, PROPERLY"
+   ]
+  },
+  {
+   "id": "tracing_needle",
+   "class_id": "seer",
+   "shape": "dagger",
+   "hero_key": "dagger",
+   "tint": "#ff6a7a",
+   "art": [
+    {
+     "shape": "dagger",
+     "material": "iron",
+     "accent": "#a86a72",
+     "motif": "hairline",
+     "aura": "none",
+     "silhouette": "narrow",
+     "frames": 0
+    },
+    {
+     "shape": "dagger",
+     "material": "iron",
+     "accent": "#c07a86",
+     "motif": "eye",
+     "aura": "none",
+     "silhouette": "narrow",
+     "frames": 0
+    },
+    {
+     "shape": "dagger",
+     "material": "steel",
+     "accent": "#9aa4b8",
+     "motif": "eye",
+     "aura": "coldlight",
+     "silhouette": "narrow",
+     "frames": 0
+    },
+    {
+     "shape": "dagger",
+     "material": "steel",
+     "accent": "#7e6f66",
+     "motif": "hairline",
+     "aura": "coldlight",
+     "silhouette": "narrow",
+     "frames": 0
+    },
+    {
+     "shape": "dagger",
+     "material": "steel",
+     "accent": "#6a6470",
+     "motif": "eye",
+     "aura": "coldlight",
+     "silhouette": "standard",
+     "frames": 0
+    },
+    {
+     "shape": "dagger",
+     "material": "steel",
+     "accent": "#b07a45",
+     "motif": "eye",
+     "aura": "coldlight",
+     "silhouette": "standard",
+     "frames": 0
+    },
+    {
+     "shape": "dagger",
+     "material": "gold",
+     "accent": "#e0b44a",
+     "motif": "spiral",
+     "aura": "slowbleed",
+     "silhouette": "standard",
+     "frames": 0
+    },
+    {
+     "shape": "dagger",
+     "material": "gold",
+     "accent": "#8fa8c8",
+     "motif": "fracture",
+     "aura": "slowbleed",
+     "silhouette": "standard",
+     "frames": 0
+    },
+    {
+     "shape": "dagger",
+     "material": "gold",
+     "accent": "#ff6a7a",
+     "motif": "eye",
+     "aura": "unlabelled",
+     "silhouette": "standard",
+     "frames": 0
+    }
+   ],
+   "names": [
+    "Bent Needle",
+    "Trued Needle",
+    "Needle of the First Divergence",
+    "The Reading Needle",
+    "Needle of the Named Cause",
+    "The Tracing Needle",
+    "Needle of Four Frames",
+    "The Root Cause",
+    "IT IS ALREADY ON THE SCREEN"
+   ]
+  }
+ ]
+}

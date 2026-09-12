@@ -42,8 +42,11 @@ from dataclasses import dataclass, field, replace
 from . import config
 from . import curriculum
 from . import dungeons as dungeonmod
+from . import elements
+from . import forge
 from . import items
 from . import pets as petmod
+from . import potions
 from . import puzzles
 from . import skills as skillmod
 from . import story
@@ -222,6 +225,274 @@ def describe_need(gate: story.Trigger, ctx: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
+# The material layer
+# ---------------------------------------------------------------------------
+# The reward tiers below were authored before the forge, the elements and the
+# potion bands existed, so they paid in XP, gold and paper. Those are still the
+# spine of the curve. What follows is the part of a reward that tells you WHERE
+# YOU WERE: the metal that only comes out of this ground, the potion this band
+# of the map is allowed to brew, the ward that answers what this place does to
+# you, and regalia for the animal walking next to you.
+#
+# WHERE THE LINE IS, said once and enforced by validate().
+#
+#   A reward may change what the player CARRIES. Metal, potions, a ward against
+#   the local element, boots that answer the local hazard, credit at the local
+#   vendor, regalia that makes a companion speak sooner and more often. All of
+#   that is preparation and equipment, and equipment has never solved a problem
+#   in this game.
+#
+#   A reward may NEVER change what the player is TOLD about a problem. Not one
+#   key in items.EFFECT_LABELS that reads the encounter — every one of them is
+#   enumerated in pets.DEPTH_GATED_EFFECTS — may be granted by anything in this
+#   file. Depth of help belongs to the companion tier ladder, is paid for in
+#   rank, and is sealed in a measured run. `_regalia_grants_no_depth()` asserts
+#   this and is called from validate(), so the rule cannot rot quietly.
+#
+# Nothing here is authored twice. The band of the map, the metal of a region and
+# the gear that belongs to a place are all DERIVED from the modules that own
+# them, so a quest reward cannot drift away from the world it is paid in.
+
+# -- the band -----------------------------------------------------------------
+# How hard a region is, which is what decides the potions it may hand out.
+# Derived in story.py and re-exported here, not computed twice. story.py is the
+# lower of these two modules in the import graph — quests.py imports it and it
+# may never import back — so anything both files need has exactly one home, and
+# that is it. See story.RUNG_BAND for the reasoning about why the forge is the
+# authority on how hard a place is.
+RUNG_BAND = story.RUNG_BAND
+band_for = story.band_for
+REGION_BAND = story.REGION_BAND
+
+
+# -- the metal ----------------------------------------------------------------
+# forge.REGION_METAL already maps region to metal. A quest may only pay the
+# metal of the ground it is standing on, which is the whole of requirement B for
+# this reward kind: the ingot in the pack names the place it came out of.
+
+def metal_for(region_id: str) -> str:
+    """The metal id this region's quests may pay, or "" for the town."""
+    metal = forge.metal_for_region(region_id)
+    return metal.id if metal else ""
+
+
+# How much of it, by tier. An errand does not pay ingots at all — tier 1 is not
+# in the grant list for `metal` — and the counts stay small because forge.py
+# holds bundles at one unit until ELITE on purpose, and a quest that hands over
+# a week of drops would undo that in an afternoon.
+METAL_COUNT = {2: 1, 3: 2, 4: 3, 5: 5}
+
+
+# -- the gear -----------------------------------------------------------------
+# Armour and weapons are not minted here. items.CATALOGUE already carries an
+# `element` on every elemental piece, and elements.AFFINITY already says what a
+# region is. A quest may pay a piece whose element IS the region's affinity —
+# the ward that answers what this place does to you, the boots that answer its
+# hazard, the weapon its own people carry — because that is the piece that
+# tells you where you were.
+#
+# Neutral regions have no elemental gear and are not made to pretend otherwise.
+# They pay the two neutral boots, which is what a neutral region actually has.
+
+def gear_for(region_id: str, slot: str = "") -> list:
+    """Item ids whose element belongs to this region. Neutral regions fall back
+    to the plain boots, because a place with no weather still has roads."""
+    affinity = elements.affinity_for(region_id)
+    if affinity == elements.NEUTRAL:
+        # elements.BOOTS is the authority on what plain boots exist; worn_boots
+        # is the pair you start in and is not a reward.
+        neutral = {b.id for b in elements.BOOTS
+                   if b.element == elements.NEUTRAL and b.id != "worn_boots"}
+        rows = [i for i in items.CATALOGUE if i.id in neutral]
+    else:
+        rows = [i for i in items.CATALOGUE if i.element == affinity]
+    return [i.id for i in rows if not slot or i.slot == slot]
+
+
+# -- the vendor ---------------------------------------------------------------
+# `vendor_credit` is the thinnest shape that does the job: a region and an
+# amount. It names no vendor id, no stock list and no price, and it must stay
+# that way — economy.py imports this module, so this module can never import it
+# back. The region is the join, and economy.grant_credit() reads exactly this.
+#
+# That thinness was insurance when economy.py did not yet exist. It turned out to
+# be the right shape anyway, which is the argument for it: a reward that names
+# only what it means can be paid by whatever ends up doing the paying.
+#
+# The amount is by tier, like every other number in this file that decides how
+# much. The _MATERIAL table only says WHETHER a quest pays credit.
+VENDOR_CREDIT = {2: 40, 3: 90, 4: 170, 5: 300}
+
+
+# -- regalia ------------------------------------------------------------------
+# The brief asked for quests to reward "upgraded hints". There is exactly one
+# way to do that without building a second hint economy that quietly outranks
+# the companion tiers, and pets.py names it: bond buys EARLIER and MORE OFTEN,
+# and it never buys DEPTH.
+#
+#   pets.BondRank.threshold_scale   lower = the animal speaks sooner
+#   pets.BondRank.interventions     how many times it may speak in one encounter
+#
+# Regalia moves those two numbers and nothing else. It cannot raise a pet's
+# tier, so `pets.covers` is untouched and a tutorial pig in a legendary collar
+# is still a tutorial pig looking at a boss it cannot read. It carries no
+# items.EFFECT_LABELS key at all, which is the blunt way of guaranteeing it
+# carries no DEPTH_GATED_EFFECTS key.
+#
+# Bond itself is NOT granted. Bond is graded evidence in pets.py and it stays
+# that way; regalia is tack, not experience. An animal in a good collar is not
+# a better-travelled animal.
+#
+# ONE PIECE AT A TIME, and that number is not arbitrary: it is pets.ACTIVE_LIMIT.
+# One companion walks with you, and it wears one set of tack. Letting seven
+# pieces stack would turn the choice of regalia into an inventory-clearing
+# exercise and would need a clamp to stop it, and a clamp that silently eats a
+# reward is a reward the turn-in panel lied about. A choice is what pets.py says
+# this whole system exists to create, so regalia is a choice too.
+#
+# The two limits below are what a single piece plus the best bond rank in
+# pets.py is allowed to reach, and the table is tuned to land exactly on them:
+# the deepest piece is 0.82 and Storied bond is 0.5, which multiply to 0.41 —
+# just inside the floor. One extra intervention plus Storied's three is four —
+# exactly the cap. `_regalia_grants_no_depth` checks every piece against both,
+# so a new piece cannot be authored past the budget and rely on a clamp to hide
+# it.
+
+# THERE IS A SECOND BODY OF TACK, AND THE TWO ARE BRIDGED RATHER THAN MERGED.
+#
+# `gauntlet/regalia.py` owns twenty-four COMPANION-keyed objects earned by a
+# deed. These seven are REGION-keyed and quest-awarded. They are different
+# objects with the same name, and both were authored independently onto the same
+# two levers, with — by convergence, not by copying — the same floor (0.40) and
+# the same ceiling (4).
+#
+# Applied SIDE BY SIDE they reach 0.3075 and five interventions, past what both
+# files declare legal, because two systems that each clamp their own
+# contribution do not add up to a clamped total.
+# `regalia.self_check()["bounds"]["stacked_with_quests_regalia"]` measures that
+# exact case. The resolution is in `engine.Game.pet_intervention`, which is the
+# only path either system reaches combat through: this module's numbers are
+# handed to `regalia.schedule(also_scale=, also_interventions=)`, and
+# `regalia._clamp` applies ONE floor and ONE ceiling to the total.
+#
+# `companion_speech()` below therefore clamps for a caller that has ONLY this
+# module live. Do not call it alongside regalia.py — call regalia.view() or
+# regalia.party_intervention() with the pair folded in, as the engine does.
+REGALIA_ACTIVE_LIMIT = petmod.ACTIVE_LIMIT
+REGALIA_SCALE_FLOOR = 0.40      # earliest any companion may ever speak
+REGALIA_INTERVENTION_CAP = 4    # most times any companion may speak in a fight
+
+REGALIA = {
+    "field_collar": {
+        "name": "Fieldwork Collar", "region": "fields_of_syntax",
+        "threshold_scale": 0.92, "interventions": 0,
+        "blurb": "Speaks a little sooner.",
+        "tell": "Plain leather, a bog-iron ring, and the ring is the whole of "
+                "the craftsmanship. It was made for a working animal by "
+                "somebody who had one.",
+    },
+    "keyed_bell": {
+        "name": "Keyed Bell", "region": "hashmap_highlands",
+        "threshold_scale": 0.90, "interventions": 0,
+        "blurb": "Speaks sooner.",
+        "tell": "One note, and it is the note of the alcove you are standing "
+                "in front of. The animal hears it before you do.",
+    },
+    "sealed_muzzle": {
+        "name": "Sealed Muzzle", "region": "sliding_window_marsh",
+        "threshold_scale": 0.95, "interventions": 1,
+        "blurb": "Speaks once more per encounter, and slightly sooner.",
+        "tell": "It is not a muzzle. It is a filter, and it means the animal "
+                "can keep talking in air that would otherwise stop it.",
+    },
+    "lantern_harness": {
+        "name": "Lantern Harness", "region": "recursive_forest",
+        "threshold_scale": 0.88, "interventions": 0,
+        "blurb": "Speaks considerably sooner.",
+        "tell": "A light at the animal's shoulder rather than yours. It sees "
+                "the next clearing a beat before you walk into it.",
+    },
+    "lattice_tack": {
+        "name": "Lattice Tack", "region": "graph_wastes",
+        "threshold_scale": 0.95, "interventions": 1,
+        "blurb": "Speaks once more per encounter, and slightly sooner.",
+        "tell": "Braided the way the roads are braided. It drags, it earths, "
+                "and the animal stops flinching at the storms.",
+    },
+    "counted_barding": {
+        "name": "Counted Barding", "region": "dp_ruins",
+        "threshold_scale": 0.85, "interventions": 1,
+        "blurb": "Speaks once more per encounter, and much sooner.",
+        "tell": "Every plate is a tile that was already solved. The animal "
+                "walks on ground it has been over, and it shows.",
+    },
+    "unlabelled_collar": {
+        "name": "Unlabelled Collar", "region": "null_kings_castle",
+        "threshold_scale": 0.82, "interventions": 1,
+        "blurb": "Speaks once more per encounter, and far sooner.",
+        "tell": "Nullsteel with the maker's mark struck off, like everything "
+                "else down there. The animal wears it anyway.",
+    },
+}
+
+
+# -- what a rebuilt place then sells ------------------------------------------
+# Requirement: a quest's mark on the world and a quest's reward should be the
+# same fact where they can be. TOWN_UPGRADES already promises a building that
+# stays rebuilt; `stocks` is what that building then has on its shelves, so
+# "the levee holds" and "Wade now carries the good antidote" are one sentence
+# rather than two systems.
+#
+# Two things may be stocked and nothing else:
+#
+#   "potions": [ids]  the potions ONE BAND DEEPER than the region itself. Not a
+#                     new potion and not a better price — the same catalogue,
+#                     carried by somebody who could not carry it before. That is
+#                     the honest meaning of "this place got better".
+#   "metal":   id     the region's own metal, for a rebuilt forge or works. The
+#                     brief's own example, paid literally.
+#
+# The band rule is not relaxed here, it is spent. A region hands out potions at
+# its own band; a region whose shop you rebuilt SELLS one band deeper. The quest
+# reward and the shelf stay different numbers, and the difference is the work.
+#
+# validate() checks all of it: a stocked potion must be unavailable at the
+# region's own band and available one band up (so it is genuinely an upgrade and
+# not a restatement), and a stocked metal must be that region's metal.
+#
+# economy.py owns shelves and imports this module, so this is data it reads. It
+# is deliberately not a price, a count or a restock rate — those are the
+# economy's business and naming them here would be this file guessing.
+
+
+def next_band(region_id: str) -> str:
+    """The band one step deeper than this region's own. The deepest band is its
+    own successor, so the Castle has nothing to upgrade into rather than an
+    index error."""
+    order = potions.TIER_ORDER
+    index = order.index(REGION_BAND[region_id])
+    return order[min(index + 1, len(order) - 1)]
+
+
+def upgrade_stock(state: dict, region_id: str = "") -> dict:
+    """Everything the player's rebuilt buildings have put on local shelves.
+    region_id -> {"potions": [...], "metal": id}. Empty until something is built,
+    which is the point."""
+    out: dict = {}
+    for upgrade in built_upgrades(state, region_id):
+        stocks = upgrade.get("stocks")
+        if not stocks:
+            continue
+        room = out.setdefault(upgrade["region"], {"potions": [], "metal": ""})
+        for pid in stocks.get("potions", ()):
+            if pid not in room["potions"]:
+                room["potions"].append(pid)
+        if stocks.get("metal"):
+            room["metal"] = stocks["metal"]
+    return out
+
+
+# ---------------------------------------------------------------------------
 # The reward table
 # ---------------------------------------------------------------------------
 # A tier decides XP, gold and the rarity floor of whatever drops. It also
@@ -249,18 +520,39 @@ def describe_need(gate: story.Trigger, ctx: dict) -> str:
 #   pet           str   PET_DISCOVERIES id — the CONDITION, not the animal
 #   set_item      str   items.CATALOGUE id belonging to an items.SETS set
 #
-# Two of those need their pedantry stated out loud. A `pet` reward grants the
+# and the material layer above, which is the part of a reward that names a place:
+#
+#   metal         dict  {"id": forge.METAL_BY_ID key, "count": int} — and the id
+#                       must be the metal of the quest's own region
+#   potion        dict  {"id": potions.BY_ID key, "count": int} — and the potion
+#                       must be one this region's band is allowed to brew
+#   gear          str   items.BY_ID key whose element is the region's affinity —
+#                       a ward, boots, or the weapon that place carries
+#   regalia       str   REGALIA id — tack that makes a companion speak sooner and
+#                       more often, and that is the whole of what it may do
+#   vendor_credit dict  {"region": world.REGION_BY_ID key, "amount": int}
+#
+# Three of those need their pedantry stated out loud. A `pet` reward grants the
 # knowledge of where and how an animal can be found — the player still has to go
-# and do it, which is the only reason a hidden pet is worth finding. And a card
-# is a revision card: it names the shape of a question and never its answer.
+# and do it, which is the only reason a hidden pet is worth finding. A card is a
+# revision card: it names the shape of a question and never its answer. And
+# `regalia` is the brief's "upgraded hints", built the only safe way: it moves
+# pets.BondRank.threshold_scale and .interventions, so the companion speaks
+# EARLIER and MORE OFTEN, and it cannot touch the tier that decides how DEEP the
+# help goes. See the material layer above, and _regalia_grants_no_depth().
 
 REWARD_KEYS = ("xp", "gold", "rarity_floor", "card", "codex", "favor",
                "consumable", "shortcut", "incantation", "title", "town_upgrade",
-               "pet", "set_item")
+               "pet", "set_item", "metal", "potion", "gear", "regalia",
+               "vendor_credit")
 
-_T1 = ("card", "codex", "favor", "consumable")
-_T2 = _T1 + ("shortcut", "incantation")
-_T3 = _T2 + ("title", "town_upgrade", "pet")
+# Nested by construction, as before. The material kinds enter where they stop
+# being absurd: a potion is a reasonable thing to be handed for an hour's work,
+# an ingot is not, and a ward against an entire element is a thing you are given
+# after a place has genuinely changed because of you.
+_T1 = ("card", "codex", "favor", "consumable", "potion")
+_T2 = _T1 + ("shortcut", "incantation", "metal", "vendor_credit")
+_T3 = _T2 + ("title", "town_upgrade", "pet", "gear", "regalia")
 _T4 = _T3 + ("set_item",)
 
 REWARD_TIERS = {
@@ -288,7 +580,14 @@ def reward_for(tier: int, extras: dict | None = None) -> dict:
     row = REWARD_TIERS[tier]
     reward = {"tier": tier, "xp": row["xp"], "gold": row["gold"],
               "rarity_floor": row["rarity_floor"]}
-    reward.update(extras or {})
+    # Copied one level down, not shared. Several extras are dicts — metal,
+    # potion, vendor_credit, consumable, favor — and handing the caller the
+    # table's own dict would mean an engine that decrements a count while paying
+    # it out silently edits the quest for the rest of the process. Rule 1 of this
+    # module is that it mutates nothing; that has to survive contact with a
+    # caller that does.
+    for key, value in (extras or {}).items():
+        reward[key] = dict(value) if isinstance(value, dict) else value
     return reward
 
 
@@ -330,6 +629,34 @@ def reward_summary(reward: dict) -> list:
     if reward.get("favor"):
         mentor = world.MENTORS.get(reward["favor"]["mentor"], {})
         out.append(f"{mentor.get('name', 'They')} remembers this")
+    metal = reward.get("metal")
+    if metal:
+        row = forge.METAL_BY_ID.get(metal["id"])
+        name = row.name if row else metal["id"]
+        out.append(f"{name} x{metal['count']}")
+    potion = reward.get("potion")
+    if potion:
+        row = potions.BY_ID.get(potion["id"])
+        name = row.name if row else potion["id"]
+        out.append(f"{name} x{potion['count']}")
+    gear = reward.get("gear")
+    if gear:
+        item = items.BY_ID.get(gear)
+        if item:
+            element = item.element or elements.NEUTRAL
+            out.append(f"{item.name}"
+                       + (f" — warded, {element.title()}"
+                          if element != elements.NEUTRAL else ""))
+        else:
+            out.append(f"Gear: {gear}")
+    regalia = REGALIA.get(reward.get("regalia", ""))
+    if regalia:
+        out.append(f"Regalia: {regalia['name']} — {regalia['blurb']}")
+    credit = reward.get("vendor_credit")
+    if credit:
+        region = world.REGION_BY_ID.get(credit["region"], {})
+        out.append(f"{credit['amount']} credit with the trader at "
+                   f"{region.get('name', credit['region'])}")
     return out
 
 
@@ -581,6 +908,7 @@ TOWN_UPGRADES = {
     "village_workshop": {"name": "The Village Workshop", "region": "python_village",
                          "effect": "Armour repairs here mend more per session.",
                          "effects": {"armor_repair": 0.15},
+                        "stocks": {"potions": ["focus_minor"]},
                          "line": "Odile's workshop has a roof, a bench and a "
                                  "queue outside it most mornings."},
     "village_well": {"name": "The Deep Well", "region": "python_village",
@@ -590,32 +918,38 @@ TOWN_UPGRADES = {
     "fields_granary": {"name": "The Granary", "region": "fields_of_syntax",
                        "effect": "Rations for the road: more stamina.",
                        "effects": {"stamina_max": 2},
+                      "stocks": {"potions": ["health_small"]},
                        "line": "The granary is full and the warden has stopped "
                                "counting it twice a day."},
     "ledger_house": {"name": "The Ledger House", "region": "hashmap_highlands",
                      "effect": "Spoils from the Highlands roll better.",
                      "effects": {"loot_luck": 0.1},
+                    "stocks": {"potions": ["antidote_small"]},
                      "line": "Vela's ledger house is open. Every vault in the "
                              "Highlands is written down exactly once."},
     "marsh_levee": {"name": "The Mended Levee", "region": "sliding_window_marsh",
                     "effect": "The marsh no longer drains your stamina.",
                     "effects": {"stamina_max": 3},
+                   "stocks": {"potions": ["antidote_medium"]},
                     "line": "The levee holds. Fenn sleeps through the night for "
                             "the first time in two years."},
     "liftworks": {"name": "The Liftworks", "region": "stack_queue_mines",
                   "effect": "The mines run both ways: spells cost less here.",
                   "effects": {"hint_discount": 0.1},
+                 "stocks": {"potions": ["health_medium"], "metal": "faultsteel"},
                   "line": "Greave's liftworks turn all day. Nothing waits at the "
                           "bottom of a shaft any more."},
     "waystation": {"name": "Mira's Waystation", "region": "graph_wastes",
                    "effect": "A hot meal in the Wastes: more focus.",
                    "effects": {"mana_max": 6},
+                  "stocks": {"potions": ["health_hefty", "focus_hefty"]},
                    "line": "The waystation has smoke coming out of it, and "
                            "couriers in it, and a menu of one thing."},
     "annealing_room": {"name": "The Annealing Room",
                        "region": "debugging_dungeon",
                        "effect": "Repairs here mend more, and hold.",
                        "effects": {"armor_repair": 0.2},
+                      "stocks": {"potions": ["health_medium"], "metal": "faultsteel"},
                        "line": "Garrick runs the annealing room now. He reads "
                                "every crack aloud before he touches it."},
     "coliseum_stands": {"name": "The Restored Stands",
@@ -2965,7 +3299,258 @@ def _link(quests: list, chains: tuple) -> tuple:
     return tuple(linked)
 
 
-QUESTS = _link(_QUESTS, CHAINS)
+# ---------------------------------------------------------------------------
+# What each quest pays in kind
+# ---------------------------------------------------------------------------
+# The material half of every reward, in one table rather than sprinkled through
+# seventy-four authored blocks. That is the same reasoning REWARD_TIERS is built
+# on: a curve you can read top to bottom cannot drift one generous quest at a
+# time, and a reviewer can check "does the marsh pay marsh things" by reading one
+# screen instead of grepping.
+#
+# Three patterns run through it, and they are the answer to "relevant to the
+# area".
+#
+#   THE METAL IS THE GROUND. A quest pays the metal of its own region and no
+#   other. validate() enforces it against forge.REGION_METAL, so the Mines
+#   cannot start paying tilegold because somebody copied a line.
+#
+#   THE POTION IS THE WEATHER. Poison country pays antidotes, because poison
+#   country is the only place the antidote is the interesting item. Void country
+#   pays focus, because VOIDED stops focus coming back and a full pouch is the
+#   honest answer to that. Cold and stone country pay health. The strength is
+#   whatever that region's band is allowed to brew and never a drop more —
+#   potions.found_at() decides, not this table.
+#
+#   THE GEAR IS THE WEATHER TOO, WORN. A region hands over the ward, the boots
+#   or the weapon keyed to its own element: the thing that answers what that
+#   place does to you. Which is tactical, and is therefore allowed. None of it
+#   touches a problem, an assertion or a hint.
+#
+# Four regions pay no gear at all and that is deliberate rather than unfinished.
+# The Ruins, the Coliseum, the Village and the Fields are NEUTRAL — elements.py
+# gives them no affinity and no hazard, so there is no ward to hand over and
+# pretending otherwise would be the first lie in the table. They pay in metal,
+# in a deeper pouch and in credit instead. The Canopy is the one neutral region
+# that pays boots, because it is a place you cross rather than a place that
+# fights you, and the Debugging Dungeon pays no gear because it is a forge: what
+# it has to give is stock.
+#
+# Everything here is folded onto the authored quests by _pay_in_kind(), which
+# refuses to overwrite an extra the quest already declares. The prose stays where
+# the author put it.
+
+_MATERIAL = {
+
+    # -- Python Village: no metal, one potion, and the trader's goodwill. The
+    # town is GUIDED and the only thing it is allowed to brew is a thimble.
+    "village_beam_count":      {"potion": ("health_minor", 2)},
+    "village_mortar_weeds":    {"potion": ("health_minor", 2)},
+    "village_doorframe":       {"potion": ("health_minor", 3), "credit": True},
+    "village_raising":         {"potion": ("health_minor", 3), "credit": True},
+    "village_deep_well":       {"potion": ("health_minor", 3)},
+    "village_pels_route":      {"potion": ("health_minor", 2)},
+
+    # -- Fields of Syntax: the first ground that gives up metal at all, and it
+    # gives up the softest there is.
+    "fields_first_weeding":    {"potion": ("health_minor", 2)},
+    "fields_fence_line":       {"potion": ("focus_minor", 2), "metal": 1},
+    "fields_harvest_run":      {"potion": ("health_minor", 3), "metal": 2,
+                                "regalia": "field_collar"},
+    "fields_nils_gap":         {"potion": ("health_minor", 2)},
+    "fields_scarecrow":        {"potion": ("focus_minor", 2), "metal": 1},
+
+    # -- Hashmap Highlands: LIGHTNING. Focus, because the work here is holding a
+    # key and its place in your head at the same time.
+    "highlands_double_keys":   {"potion": ("focus_small", 2), "metal": 1,
+                                "credit": True},
+    "highlands_sunken_index":  {"potion": ("focus_small", 3), "metal": 2,
+                                "regalia": "keyed_bell"},
+    "highlands_ledger_closed": {"potion": ("health_small", 3), "metal": 3,
+                                "gear": "hashblade"},
+    "highlands_brants_wager":  {"potion": ("focus_small", 2)},
+    "highlands_lost_keyring":  {"potion": ("health_small", 3),
+                                "gear": "earthed_sabatons"},
+
+    # -- Stringwood Labyrinth: POISON, and the first place an antidote is worth
+    # carrying rather than reading about.
+    "stringwood_same_coat":    {"potion": ("antidote_minor", 2), "metal": 1},
+    "stringwood_letterfall":   {"potion": ("antidote_minor", 3), "metal": 2},
+    "stringwood_true_name":    {"potion": ("antidote_minor", 3),
+                                "gear": "ward_poison"},
+    "stringwood_moss_map":     {"potion": ("health_small", 2), "credit": True},
+
+    # -- Array Caverns: BRUTE. Stone and the weight above it, so: health, and
+    # the offhand ward, which is the only thing that helps against weight.
+    "caverns_off_by_one":      {"potion": ("health_minor", 2)},
+    "caverns_lamp_run":        {"potion": ("health_small", 2), "metal": 1,
+                                "credit": True},
+    "caverns_deeps":           {"potion": ("health_small", 3), "metal": 2,
+                                "gear": "ward_brute"},
+    "caverns_esk_count":       {"potion": ("health_minor", 2)},
+    "caverns_lost_lamp":       {"potion": ("health_small", 2), "credit": True},
+
+    # -- Sliding Window Marsh: POISON at a band that can finally brew the good
+    # antidote. This is the brief's example, paid literally.
+    "marsh_first_breach":      {"potion": ("antidote_small", 2), "metal": 1},
+    "marsh_never_restart":     {"potion": ("antidote_small", 3), "metal": 2,
+                                "regalia": "sealed_muzzle"},
+    "marsh_sluice_delve":      {"potion": ("antidote_small", 3),
+                                "gear": "marsh_waders"},
+    "marsh_levee_holds":       {"potion": ("antidote_small", 3), "metal": 3,
+                                "gear": "window_staff"},
+    "marsh_sables_ferry":      {"potion": ("health_small", 2), "credit": True},
+
+    # -- Twin Pointer Pass: COLD, at the snow line. Crampons are not a luxury
+    # here and the quest that pays them says so.
+    "pass_two_carts":          {"potion": ("health_small", 2), "metal": 1,
+                                "credit": True},
+    "pass_shorter_post":       {"potion": ("focus_small", 3), "metal": 2,
+                                "gear": "crampons"},
+    "pass_convoy_run":         {"potion": ("health_small", 3), "metal": 3,
+                                "gear": "twin_sabers"},
+    "pass_kell_riddle":        {"potion": ("focus_small", 2)},
+
+    # -- Stack & Queue Mines: FIRE. Boots first, then the ward, in that order,
+    # because the floor gets you long before anything else does.
+    "mines_top_first":         {"potion": ("health_small", 2), "metal": 1},
+    "mines_cart_shafts":       {"potion": ("health_small", 3), "metal": 2,
+                                "gear": "cinder_greaves"},
+    "mines_liftworks":         {"potion": ("health_small", 3), "metal": 3,
+                                "gear": "ward_fire", "credit": True},
+    "mines_pitch_nesting":     {"potion": ("focus_small", 2), "credit": True},
+
+    # -- Matrix Citadel: BRUTE, and the first band that can brew a Flask.
+    "citadel_plans":           {"potion": ("health_small", 2), "metal": 1,
+                                "credit": True},
+    "citadel_keep":            {"potion": ("health_medium", 2), "metal": 2,
+                                "gear": "matrix_bow"},
+    "citadel_true_north":      {"potion": ("focus_medium", 2), "metal": 3,
+                                "gear": "ward_brute"},
+    "citadel_night_watch":     {"potion": ("health_medium", 2), "credit": True},
+
+    # -- Recursive Forest: VOID. Focus throughout, because VOIDED is the status
+    # that stops focus returning and a deep pouch is the only answer to it.
+    "forest_smaller_forest":   {"potion": ("focus_medium", 2), "metal": 2},
+    "forest_unwind":           {"potion": ("focus_medium", 2),
+                                "gear": "lanternshoes"},
+    "forest_stopping_condition": {"potion": ("focus_medium", 2),
+                                  "regalia": "lantern_harness"},
+    "forest_inner_grove":      {"potion": ("focus_medium", 2), "metal": 3,
+                                "gear": "ward_void"},
+
+    # -- Binary Tree Canopy: NEUTRAL. Open air, no hazard, and the one neutral
+    # region that pays boots, because crossing it is the job.
+    "canopy_two_branches":     {"potion": ("health_medium", 2), "metal": 2},
+    "canopy_nest_order":       {"potion": ("focus_medium", 2)},
+    "canopy_rookery_spine":    {"potion": ("health_medium", 2), "metal": 2,
+                                "gear": "wayfarers"},
+    "canopy_lost_fledgling":   {"potion": ("health_medium", 2)},
+
+    # -- Graph Wastes: LIGHTNING. SHOCKED makes the next hit worse rather than
+    # this one, so health is the potion and the ward is the prize.
+    "wastes_four_roads":       {"potion": ("health_medium", 2), "metal": 2,
+                                "gear": "ward_lightning"},
+    "wastes_rings_of_light":   {"potion": ("focus_medium", 2), "metal": 2,
+                                "regalia": "lattice_tack"},
+    "wastes_undercity":        {"potion": ("health_medium", 2), "metal": 3,
+                                "gear": "hashblade_prime"},
+    "wastes_waystation":       {"potion": ("health_medium", 2), "metal": 3,
+                                "credit": True},
+
+    # -- Dynamic Programming Ruins: NEUTRAL, ELITE band. No weather to ward
+    # against, so it pays in the gold prised out of the floor and in the first
+    # Flagons anybody has been allowed to carry.
+    "ruins_paid_twice":        {"potion": ("focus_medium", 2), "metal": 2},
+    "ruins_lit_tiles":         {"potion": ("focus_medium", 2), "metal": 2},
+    "ruins_vaults":            {"potion": ("focus_hefty", 1), "metal": 3},
+    "ruins_ledger_balanced":   {"potion": ("health_hefty", 1), "metal": 3,
+                                "regalia": "counted_barding"},
+
+    # -- Debugging Dungeon: FIRE, and the Armorer's own forge. It pays in stock.
+    # No gear here on purpose: the thing this place has to give is faultsteel.
+    "forge_read_the_crack":    {"potion": ("health_small", 2), "metal": 1,
+                                "credit": True},
+    "forge_cracked_cells":     {"potion": ("health_small", 3), "metal": 2},
+    "forge_annealing":         {"potion": ("health_small", 3), "metal": 3,
+                                "credit": True},
+    "dungeon_ilsa_cell":       {"potion": ("focus_small", 3), "metal": 2},
+    "dungeon_lost_hammer":     {"potion": ("health_small", 2), "credit": True},
+
+    # -- Complexity Tower: COLD, and every floor costs more than the one below.
+    "tower_twice_the_lamps":   {"potion": ("focus_medium", 2), "metal": 2,
+                                "gear": "ward_cold", "credit": True},
+    "tower_flues":             {"potion": ("focus_medium", 2), "metal": 2},
+    "tower_staves_load":       {"potion": ("focus_medium", 2)},
+    "tower_top_lamp":          {"potion": ("focus_hefty", 1), "metal": 3},
+
+    # -- The Coding Coliseum: NEUTRAL. A sand floor, a clock and no hints, so
+    # there is nothing elemental to hand over and the pay is stock and credit.
+    "coliseum_first_bout":     {"potion": ("health_medium", 2), "credit": True},
+    "coliseum_under_arena":    {"potion": ("health_hefty", 1), "metal": 3},
+    "coliseum_full_stands":    {"potion": ("health_hefty", 2), "metal": 5,
+                                "credit": True},
+    "coliseum_footprints":     {"potion": ("focus_medium", 2), "metal": 2},
+
+    # -- The Null King's Castle: VOID, rung six, the deepest metal there is.
+    # Requirement D lands here: the two Legend-tier quests are the only place in
+    # the game that hands over five bars of nullsteel at once, and forge.py's
+    # own drop table will not casually match that — a BOSS bundle is three and
+    # there is exactly one boss down here.
+    "castle_no_signs":         {"potion": ("focus_hefty", 1), "metal": 3,
+                                "gear": "recursion_spear"},
+    "castle_unlabelled_halls": {"potion": ("focus_hefty", 2), "metal": 5,
+                                "gear": "ward_void"},
+    "castle_stewards_names":   {"potion": ("health_hefty", 2), "metal": 5,
+                                "regalia": "unlabelled_collar"},
+}
+
+
+def _pay_in_kind(quests: list) -> list:
+    """Fold _MATERIAL onto the authored quests.
+
+    `metal` is a count and the id is read from the region, so the table cannot
+    name the wrong ore. `credit` is a yes-or-no and both the region and the
+    amount are read from the quest, so a vendor cannot be paid off-curve. An extra the quest already authored always wins:
+    this fold adds the material half of a reward and never edits the half a
+    human wrote.
+    """
+    out = []
+    for quest in quests:
+        row = _MATERIAL.get(quest.id)
+        if not row:
+            out.append(quest)
+            continue
+        extras = dict(quest.extras)
+        potion = row.get("potion")
+        if potion and "potion" not in extras:
+            extras["potion"] = {"id": potion[0], "count": int(potion[1])}
+        if row.get("metal") and "metal" not in extras:
+            extras["metal"] = {"id": metal_for(quest.region),
+                               "count": int(row["metal"])}
+        if row.get("gear") and "gear" not in extras:
+            extras["gear"] = row["gear"]
+        if row.get("regalia") and "regalia" not in extras:
+            extras["regalia"] = row["regalia"]
+        if row.get("credit") and "vendor_credit" not in extras:
+            # The amount comes from the tier, never from the table. Same reason
+            # REWARD_TIERS owns the XP curve: a number authored per quest is a
+            # number that drifts one generous quest at a time.
+            if quest.tier not in VENDOR_CREDIT:
+                # Only reachable by marking a tier-1 quest as paying credit,
+                # which validate() would also reject. Said here because this runs
+                # at import and an unexplained KeyError in a table is a bad
+                # half-hour for whoever hits it.
+                raise ValueError(
+                    f"{quest.id}: tier {quest.tier} pays vendor credit, and "
+                    f"VENDOR_CREDIT only prices tiers {sorted(VENDOR_CREDIT)}")
+            extras["vendor_credit"] = {"region": quest.region,
+                                       "amount": VENDOR_CREDIT[quest.tier]}
+        out.append(replace(quest, extras=extras))
+    return out
+
+
+QUESTS = _link(_pay_in_kind(_QUESTS), CHAINS)
 QUEST_BY_ID = {q.id: q for q in QUESTS}
 CHAIN_BY_ID = {c.id: c for c in CHAINS}
 CHAIN_OF_STEP = {step: c.id for c in CHAINS for step in c.steps}
@@ -3000,6 +3585,10 @@ def new_quest_state() -> dict:
         "town_upgrades": [],   # TOWN_UPGRADES ids that stay built
         "incantations": [],    # INCANTATION_GRANTS ids awarded out here
         "titles": [],          # honorifics earned from world content
+        "regalia": [],         # REGALIA ids owned. Tack, not experience: it makes
+                               # a companion speak sooner and more often and it
+                               # never moves the tier that decides how deep.
+        "regalia_worn": "",    # the one piece in use, REGALIA_ACTIVE_LIMIT of 1
         "npc_lines": {},       # npc id -> the line they say now, forever after
     }
 
@@ -3406,9 +3995,14 @@ def complete(state: dict, quest_id: str) -> dict:
     """Turn in. Banks everything this module owns and hands back the rest.
 
     The split matters: `pay` is what the engine settles (XP, gold, the rarity
-    floor for the drop roll, a set piece, a consumable), `story` is what
-    story.apply's buckets already know how to hold, and `world` is the part that
-    changes the map. The caller never has to learn the reward vocabulary.
+    floor for the drop roll, a set piece, a consumable, and the material layer —
+    metal into the forge stock, potions into the pouch, gear into the pack,
+    credit with a vendor), `story` is what story.apply's buckets already know how
+    to hold, and `world` is the part that changes the map. Regalia is banked here
+    rather than paid, because it is a thing the player now owns in this module's
+    own ledger, exactly like a known pet or an open shortcut.
+
+    The caller never has to learn the reward vocabulary.
     """
     quest = QUEST_BY_ID[quest_id]
     raw = _bucket(state)
@@ -3424,7 +4018,8 @@ def complete(state: dict, quest_id: str) -> dict:
 
     for key, bucket in (("pet", "pets"), ("shortcut", "shortcuts"),
                         ("town_upgrade", "town_upgrades"),
-                        ("incantation", "incantations"), ("title", "titles")):
+                        ("incantation", "incantations"), ("title", "titles"),
+                        ("regalia", "regalia")):
         value = reward.get(key)
         if value and value not in raw[bucket]:
             raw[bucket].append(value)
@@ -3440,12 +4035,14 @@ def complete(state: dict, quest_id: str) -> dict:
         "consequence": dict(consequence),
         "reward": reward, "reward_lines": reward_summary(reward),
         "pay": {k: reward[k] for k in ("xp", "gold", "rarity_floor",
-                                       "set_item", "consumable")
+                                       "set_item", "consumable", "metal",
+                                       "potion", "gear", "vendor_credit")
                 if k in reward},
         "story": {k: reward[k] for k in ("card", "codex", "title", "favor")
                   if k in reward},
         "world": {k: reward[k] for k in ("shortcut", "town_upgrade", "pet",
-                                         "incantation") if k in reward},
+                                         "incantation", "regalia")
+                  if k in reward},
         "chain": quest.chain,
         "chain_complete": chain_done,
         "epilogue": chain.epilogue if chain_done else "",
@@ -3531,6 +4128,74 @@ def granted_incantations(state: dict) -> list:
             for iid in raw.get("incantations", []) if iid in INCANTATION_GRANTS]
 
 
+def owned_regalia(state: dict) -> list:
+    """Tack the player has earned. Order is turn-in order, which is also the
+    order the pet screen should list it in."""
+    raw = state.get(STATE_KEY) or {}
+    return [{"id": rid, **REGALIA[rid]} for rid in raw.get("regalia", [])
+            if rid in REGALIA]
+
+
+def wear_regalia(state: dict, regalia_id: str) -> dict:
+    """Put one piece of tack on the companion. Mirrors pets.ACTIVE_LIMIT: this
+    replaces whatever was worn rather than adding to it. Passing "" takes the
+    tack off, which is always allowed and never costs anything."""
+    raw = _bucket(state)
+    if regalia_id and regalia_id not in raw.get("regalia", []):
+        return {"ok": False, "reason": "not_owned", "worn": raw.get("regalia_worn", "")}
+    raw["regalia_worn"] = regalia_id
+    return {"ok": True, "worn": regalia_id,
+            "name": REGALIA[regalia_id]["name"] if regalia_id else ""}
+
+
+def worn_regalia(state: dict) -> dict:
+    """The piece currently in use, or {} for none."""
+    raw = state.get(STATE_KEY) or {}
+    rid = raw.get("regalia_worn", "")
+    if rid in REGALIA and rid in raw.get("regalia", []):
+        return {"id": rid, **REGALIA[rid]}
+    return {}
+
+
+def regalia_effect(state: dict) -> dict:
+    """The one thing the pet screen needs: how much sooner and how much more
+    often the companion may speak, from the single worn piece.
+
+    This is the whole of what regalia does, and saying so in one small function
+    is deliberate. There is no third key here and there is no room for one: the
+    only other lever that exists is pets.Tier, the tier decides DEPTH, and depth
+    is not for sale. A caller that wants to know whether a companion can read a
+    problem asks pets.covers(), which this function cannot reach.
+
+    `scale` multiplies pets.BondRank.threshold_scale. `interventions` is added to
+    pets.BondRank.interventions.
+    """
+    piece = worn_regalia(state)
+    return {"scale": float(piece.get("threshold_scale", 1.0)),
+            "interventions": int(piece.get("interventions", 0)),
+            "worn": piece.get("id", "")}
+
+
+def companion_speech(state: dict, bond: int) -> dict:
+    """What a companion at this bond, wearing everything the player has earned,
+    is allowed to do. Returns exactly pets.py's two non-depth levers, already
+    combined, so the engine never has to do this arithmetic and never has to be
+    trusted to leave the third lever alone.
+
+    Depth is absent from the return value on purpose. Ask pets.covers().
+    """
+    rank = petmod.bond_rank(int(bond))
+    gear = regalia_effect(state)
+    return {
+        "rank": rank.key,
+        "threshold_scale": max(REGALIA_SCALE_FLOOR,
+                               round(rank.threshold_scale * gear["scale"], 4)),
+        "interventions": min(rank.interventions + gear["interventions"],
+                             REGALIA_INTERVENTION_CAP),
+        "regalia": gear["worn"],
+    }
+
+
 # ---------------------------------------------------------------------------
 # Counts and self-check
 # ---------------------------------------------------------------------------
@@ -3559,6 +4224,21 @@ def counts() -> dict:
         "shortcuts": len(SHORTCUTS),
         "town_upgrades": len(TOWN_UPGRADES),
         "incantations": len(INCANTATION_GRANTS),
+        "regalia": len(REGALIA),
+        "upgrades_stocking": sum(1 for u in TOWN_UPGRADES.values()
+                                 if u.get("stocks")),
+        "paying_metal": sum(1 for q in QUESTS if "metal" in q.extras),
+        "paying_potion": sum(1 for q in QUESTS if "potion" in q.extras),
+        "paying_gear": sum(1 for q in QUESTS if "gear" in q.extras),
+        "paying_regalia": sum(1 for q in QUESTS if "regalia" in q.extras),
+        "paying_credit": sum(1 for q in QUESTS if "vendor_credit" in q.extras),
+        "metal_bars": sum(q.extras["metal"]["count"] for q in QUESTS
+                          if "metal" in q.extras),
+        "metals_reachable": len({q.extras["metal"]["id"] for q in QUESTS
+                                 if "metal" in q.extras}),
+        "by_band": {band: sum(1 for q in QUESTS
+                              if REGION_BAND[q.region] == band)
+                    for band in potions.TIER_ORDER},
     }
 
 
@@ -3576,6 +4256,14 @@ def report() -> str:
         f"{k} {v}" for k, v in census["by_kind"].items()))
     lines.append("  by tier:  " + ", ".join(
         f"{REWARD_TIERS[t]['name']} {v}" for t, v in census["by_tier"].items()))
+    lines.append(f"  in kind:  {census['paying_potion']} pay potions, "
+                 f"{census['paying_metal']} pay metal "
+                 f"({census['metal_bars']} bars across "
+                 f"{census['metals_reachable']} of {len(forge.METALS)} metals), "
+                 f"{census['paying_gear']} pay gear, "
+                 f"{census['paying_credit']} pay vendor credit, "
+                 f"{census['paying_regalia']} pay regalia "
+                 f"(of {census['regalia']})")
     return "\n".join(lines)
 
 
@@ -3591,6 +4279,90 @@ _OBJECTIVE_REQUIRED = {
     "RIDDLE": ("question", "answers", "skill", "explain"),
     "RELIEF": ("task", "count"),
 }
+
+
+def _regalia_grants_no_depth() -> list:
+    """The one rule in this file worth proving rather than asserting.
+
+    pets.py is explicit: a companion's TIER decides how deep the help goes, bond
+    buys only EARLIER and MORE OFTEN, and every effect that reads the encounter
+    is enumerated in pets.DEPTH_GATED_EFFECTS. The brief asked quests to reward
+    "upgraded hints"; this is the check that the upgrade is quantity and never
+    depth, so no second hint economy can grow here and quietly outrank the tiers
+    the player chose a companion for.
+
+    Three things are checked, and the third is the one that matters:
+
+      1. regalia carries only the two legal levers and its own prose. A piece
+         that grew a new key would be a piece that does something unreviewed.
+      2. neither lever can be pushed past its clamp, even stacked with the top
+         bond rank — and the clamps are enforced in regalia_effect(), not here.
+      3. NO regalia key, at any depth, is an items.EFFECT_LABELS key. That is
+         stronger than "not in DEPTH_GATED_EFFECTS": regalia may not carry an
+         effect AT ALL, which is the cheapest way to be sure it never carries a
+         gated one, today or after somebody edits this table in a hurry.
+    """
+    problems = []
+    legal = {"name", "region", "blurb", "tell", "threshold_scale",
+             "interventions"}
+    for rid, piece in REGALIA.items():
+        extra = set(piece) - legal
+        if extra:
+            problems.append(f"regalia {rid}: unexpected key(s) "
+                            f"{sorted(extra)} — regalia moves two numbers and "
+                            f"says two sentences, and that is all it may do")
+        for key in piece:
+            if key in items.EFFECT_LABELS:
+                problems.append(f"regalia {rid}: {key!r} is an equipment effect; "
+                                f"regalia may not carry effects at all")
+            if key in petmod.DEPTH_GATED_EFFECTS:
+                problems.append(f"regalia {rid}: {key!r} is depth-gated and "
+                                f"belongs to the companion tier ladder")
+        if piece["region"] not in world.REGION_BY_ID:
+            problems.append(f"regalia {rid}: unknown region {piece['region']!r}")
+        scale = float(piece.get("threshold_scale", 1.0))
+        if not 0.0 < scale <= 1.0:
+            problems.append(f"regalia {rid}: threshold_scale {scale} must be a "
+                            f"fraction that makes the animal speak sooner")
+        if scale < REGALIA_SCALE_FLOOR:
+            problems.append(f"regalia {rid}: a single piece may not undercut the "
+                            f"floor of {REGALIA_SCALE_FLOOR}")
+        if not 0 <= int(piece.get("interventions", 0)) <= 1:
+            problems.append(f"regalia {rid}: one piece may add at most one "
+                            f"intervention")
+
+    # Every piece checked against the budget on its own, worn by the best bond
+    # rank pets.py has. This is the check that BITES: because only one piece is
+    # ever worn, a piece that cannot be afforded is a piece that was authored
+    # wrong, and there is no clamp standing behind it to hide that. A reward the
+    # turn-in panel describes and the fight does not deliver is a lie, and it is
+    # the specific lie this function exists to prevent.
+    best = petmod.BOND_RANKS[-1]
+    for rid, piece in REGALIA.items():
+        scale = round(best.threshold_scale * float(piece["threshold_scale"]), 4)
+        if scale < REGALIA_SCALE_FLOOR:
+            problems.append(
+                f"regalia {rid}: worn at {best.key} bond it reaches {scale}, "
+                f"under the floor of {REGALIA_SCALE_FLOOR} — the clamp would "
+                f"quietly eat part of this reward")
+        total = best.interventions + int(piece.get("interventions", 0))
+        if total > REGALIA_INTERVENTION_CAP:
+            problems.append(
+                f"regalia {rid}: worn at {best.key} bond it reaches {total} "
+                f"interventions, over the cap of {REGALIA_INTERVENTION_CAP}")
+
+    # And the shape of what the engine is handed. Depth is not one of the things
+    # this module is allowed to return, so its absence is asserted rather than
+    # assumed.
+    sample = {STATE_KEY: {**new_quest_state(), "regalia": list(REGALIA),
+                          "regalia_worn": next(iter(REGALIA), "")}}
+    shape = set(companion_speech(sample, best.at))
+    if shape - {"rank", "threshold_scale", "interventions", "regalia"}:
+        problems.append(f"companion_speech leaked {sorted(shape)}; depth is not "
+                        f"one of the things this module may return")
+    if REGALIA_ACTIVE_LIMIT != petmod.ACTIVE_LIMIT:
+        problems.append("regalia active limit has drifted from pets.ACTIVE_LIMIT")
+    return problems
 
 
 def validate(corpus: list | None = None) -> list:
@@ -3635,12 +4407,57 @@ def validate(corpus: list | None = None) -> list:
         for key in upgrade.get("effects", {}):
             if key not in items.EFFECT_LABELS:
                 problems.append(f"{uid}: unknown effect {key!r}")
+        stocks = upgrade.get("stocks") or {}
+        for key in stocks:
+            if key not in ("potions", "metal"):
+                problems.append(f"{uid}: may stock potions and metal, not {key!r}")
+        region = upgrade["region"]
+        for pid in stocks.get("potions", ()):
+            if pid not in potions.BY_ID:
+                problems.append(f"{uid}: unknown potion {pid!r}")
+                continue
+            if potions.found_at(pid, REGION_BAND.get(region, "GUIDED")):
+                # Already on the shelf, so rebuilding the place changed nothing.
+                problems.append(f"{uid}: {pid!r} is already available at "
+                                f"{region!r}'s own band — stocking it is not an "
+                                f"upgrade, it is a restatement")
+            elif not potions.found_at(pid, next_band(region)):
+                problems.append(f"{uid}: {pid!r} is more than one band deeper "
+                                f"than {region!r}; a rebuilt shop carries the "
+                                f"next shelf up, not the last one")
+        if stocks.get("metal") and stocks["metal"] != metal_for(region):
+            problems.append(f"{uid}: stocks {stocks['metal']!r}, which does not "
+                            f"come out of {region!r}")
     for did, dungeon in DUNGEONS.items():
         if dungeon["region"] not in world.REGION_BY_ID:
             problems.append(f"{did}: unknown region {dungeon['region']!r}")
     for nid, npc in NPCS.items():
         if npc["region"] not in world.REGION_BY_ID:
             problems.append(f"{nid}: unknown region {npc['region']!r}")
+    problems.extend(_regalia_grants_no_depth())
+
+    # -- the material layer agrees with the modules that own it
+    for tier in VENDOR_CREDIT:
+        if "vendor_credit" not in REWARD_TIERS[tier]["grants"]:
+            problems.append(f"reward tier {tier}: priced for vendor credit but "
+                            f"not permitted to grant it")
+    for tier, row in REWARD_TIERS.items():
+        if "vendor_credit" in row["grants"] and tier not in VENDOR_CREDIT:
+            problems.append(f"reward tier {tier}: may grant vendor credit and "
+                            f"VENDOR_CREDIT does not price it")
+    for region_id, band in REGION_BAND.items():
+        if band not in potions.TIER_ORDER:
+            problems.append(f"{region_id}: band {band!r} is not a potion tier")
+    for region_id in world.REGION_BY_ID:
+        mid = metal_for(region_id)
+        if mid and mid not in forge.METAL_BY_ID:
+            problems.append(f"{region_id}: unknown metal {mid!r}")
+        if not mid and region_id not in forge.NO_METAL_REGIONS:
+            problems.append(f"{region_id}: no metal, and forge.py does not say "
+                            f"it is one of the regions that has none")
+        for item_id in gear_for(region_id):
+            if item_id not in items.BY_ID:
+                problems.append(f"{region_id}: unknown gear {item_id!r}")
 
     # -- gates
     def check_gate(where: str, gate: story.Trigger):
@@ -3714,6 +4531,63 @@ def validate(corpus: list | None = None) -> list:
                 problems.append(f"{where}: unknown mentor in favour grant")
             if key == "consumable" and value["id"] not in items.CONSUMABLES:
                 problems.append(f"{where}: unknown consumable {value['id']!r}")
+            if key == "metal":
+                metal = forge.METAL_BY_ID.get(value.get("id", ""))
+                if metal is None:
+                    problems.append(f"{where}: unknown metal {value.get('id')!r}")
+                elif quest.region not in metal.regions:
+                    # The whole of requirement B for this reward kind. A quest
+                    # pays the ground it stands on or it pays no ore at all.
+                    problems.append(
+                        f"{where}: pays {value['id']!r}, which does not come out "
+                        f"of {quest.region!r} (that ground gives "
+                        f"{metal_for(quest.region) or 'no metal'})")
+                if int(value.get("count", 0)) < 1:
+                    problems.append(f"{where}: metal count must be at least 1")
+                if int(value.get("count", 0)) > METAL_COUNT[max(METAL_COUNT)]:
+                    problems.append(f"{where}: metal count above the tier-5 bundle")
+            if key == "potion":
+                potion = potions.BY_ID.get(value.get("id", ""))
+                band = REGION_BAND[quest.region]
+                if potion is None:
+                    problems.append(f"{where}: unknown potion {value.get('id')!r}")
+                elif not potions.found_at(potion.id, band):
+                    # potions.py decides what a band may brew, not this file.
+                    problems.append(
+                        f"{where}: {potion.id!r} needs a {potion.min_tier} area "
+                        f"and {quest.region!r} bands at {band}")
+                elif int(value.get("count", 0)) > potions.CARRY_CAP[potion.strength]:
+                    # Paying more than the pouch holds is paying nothing.
+                    problems.append(
+                        f"{where}: {value['count']} x {potion.id!r} exceeds the "
+                        f"pouch cap of {potions.CARRY_CAP[potion.strength]}")
+                elif int(value.get("count", 0)) < 1:
+                    problems.append(f"{where}: potion count must be at least 1")
+            if key == "gear":
+                item = items.BY_ID.get(value)
+                affinity = elements.affinity_for(quest.region)
+                if item is None:
+                    problems.append(f"{where}: unknown item {value!r}")
+                elif item.source == "upgrade":
+                    # An upgrade is something the player builds at the forge.
+                    # Handing one over as a quest prize would step on forge.py's
+                    # ladder, which is somebody else's system and a better one.
+                    problems.append(f"{where}: {value!r} is an upgrade-path item "
+                                    f"and may not be given away")
+                elif value not in gear_for(quest.region):
+                    problems.append(
+                        f"{where}: {value!r} is {item.element or 'un'}-elemental "
+                        f"and {quest.region!r} is {affinity}")
+            if key == "regalia" and value not in REGALIA:
+                problems.append(f"{where}: unknown regalia {value!r}")
+            if key == "vendor_credit":
+                if value.get("region") not in world.REGION_BY_ID:
+                    problems.append(f"{where}: unknown region in vendor credit")
+                elif value["region"] != quest.region:
+                    problems.append(f"{where}: credit is for {value['region']!r}, "
+                                    f"quest is in {quest.region!r}")
+                if int(value.get("amount", 0)) < 1:
+                    problems.append(f"{where}: vendor credit must be positive")
             if key == "set_item":
                 item = items.BY_ID.get(value)
                 if item is None:
@@ -4021,10 +4895,14 @@ How the engine picks this up. Nine touch points, none of them invasive.
    quests.accept(state, quest_id) -> the giver's setup lines.
    quests.ready(quest_id, ctx, state) -> is it finished.
    quests.complete(state, quest_id) -> {"pay", "story", "world", ...}.
-       pay    XP, gold, rarity_floor for the drop roll, set_item, consumable
+       pay    XP, gold, rarity_floor for the drop roll, set_item, consumable,
+              and the material layer: metal / potion / gear / vendor_credit
        story  card / codex / title / favor — the buckets story.apply owns
-       world  shortcut / town_upgrade / pet / incantation — already banked here
+       world  shortcut / town_upgrade / pet / incantation / regalia — all of
+              which are already banked in this module's own state
    Pay `pay`, hand `story` to the story bookkeeping, and re-render the map.
+   The four material keys and exactly what each one asks of the engine are
+   spelled out in CONTRACT below, because another pass owns engine.py.
 
 5. CREDITING WORK
    After grading an attempt, once:
@@ -4049,13 +4927,124 @@ How the engine picks this up. Nine touch points, none of them invasive.
    quests.open_shortcuts(state)          routes the overworld should draw
    quests.built_upgrades(state, region)  buildings the renderer should raise
    quests.upgrade_effects(state)         folded in like equipment effects
+   quests.upgrade_stock(state, region)   what rebuilding put on local shelves
+   quests.owned_regalia(state)           tack the player has earned
+   quests.worn_regalia(state)            the one piece in use
+   quests.wear_regalia(state, id)        choose it; "" takes it off
 
-8. INTERVIEW MODE
+8. THE COMPANION, AND THE ONE LINE THAT MATTERS
+   quests.companion_speech(state, bond) -> {"rank", "threshold_scale",
+                                            "interventions", "regalia"}
+   Fold that into the pets.py intervention call in place of reading
+   pets.bond_rank(bond).threshold_scale and .interventions directly. It is the
+   same two numbers with the worn regalia applied, already clamped.
+
+   DEPTH IS NOT IN THAT RETURN VALUE AND MUST NOT BE ADDED TO IT. Whether a
+   companion may read a problem at all is still, only, pets.covers(pet_id,
+   difficulty). Regalia buys sooner and more often; the tier buys deeper and
+   nothing in this file can move it. quests._regalia_grants_no_depth() proves
+   that and validate() runs it.
+
+9. INTERVIEW MODE
    None of this exists there. Interview Mode measures; quests teach, pay and
    change the map. The gate is the same one that seals mentors and spells.
 
-9. TESTS
+10. TESTS
    assert quests.validate(corpus) == []
    The corpus argument is optional and checks the pattern families quests point
    at against the corpus actually shipped.
+"""
+
+
+CONTRACT = """
+What quests.py and story.py now need from engine.py, which another pass owns.
+
+Five new reward keys arrive in the `pay` and `world` buckets of complete(), plus
+one accessor that is a consequence rather than a reward. None of them needs a new
+system; each is a line against a system that already exists. Nothing below
+changes what a problem says, what a test asserts or what a hint reveals, and all
+of it is Adventure Mode only, behind the same finalexam.sealed() gate that
+already seals the rest of this module.
+
+story.py pays the same way. story.apply() now returns "metal", "potion" and
+"gear" in the dict it already hands back for xp/gold/companion/consumable, with
+identical shapes, so whatever settles those settles these and there is one
+handler rather than two. story.py grants no regalia and no vendor credit, and
+the reason is written at its REWARD_KEYS.
+
+  pay["metal"]          {"id": forge.METAL_BY_ID key, "count": int}
+        Add `count` of that metal to whatever stock forge.py reads when it
+        prices a rung. This is the same currency forge.roll_metal already
+        produces from encounters, so it goes into the same place; no new
+        inventory. 47 of the 74 quests pay it, 107 bars in total, and all 11
+        metals in forge.METALS are reachable from quests alone.
+
+  pay["potion"]         {"id": potions.BY_ID key, "count": int}
+        potions.grant(state, potions.BY_ID[id], count). The count is already
+        checked against potions.CARRY_CAP by validate(), so an overflow here is
+        a bug in this file, not a case to handle. All 74 quests pay potions.
+
+  pay["gear"]           items.BY_ID key
+        Put the item in the pack exactly as a drop would. It is always a real
+        catalogue entry whose element is the region's affinity, it is never an
+        `upgrade`-source item, and it is not rolled — it is the named object the
+        giver hands over. 20 quests pay it.
+
+  pay["vendor_credit"]  {"region": world.REGION_BY_ID key, "amount": int}
+        economy.grant_credit(state, region, amount). It banks against that
+        region's shop and is spendable there and nowhere else; economy.py wrote
+        that function against this exact shape.
+
+        This key names a region and an amount and deliberately names no vendor,
+        stock list or price, and it has to stay that way: economy.py imports
+        quests.py, so this module can never import it back without a cycle. The
+        region is the join. 19 quests pay it, 1,610 credit in total.
+
+  quests.upgrade_stock(state)   {region: {"potions": [ids], "metal": id}}
+        Not a reward key — a consequence, read whenever a vendor's shelf is
+        drawn. A region the player has rebuilt sells one band deeper than it
+        otherwise could, and a rebuilt works also sells that region's metal.
+        economy.py owns price, count and restock; this only says what is now on
+        the shelf at all. 7 of the 9 town upgrades stock something.
+
+  world["regalia"]      REGALIA key
+        Already banked in this module's state by complete(). The engine only
+        has to offer quests.wear_regalia(state, id) on the companion screen.
+        economy.buy_regalia() returns the same {"regalia": id} shape, so a piece
+        bought from a vendor and a piece earned from a quest settle through one
+        code path and there is exactly one regalia ledger.
+
+And one change to an existing call, which is the whole of the brief's
+"upgraded hints":
+
+  WHEREVER the pet intervention is built from pets.bond_rank(bond), read
+  threshold_scale and interventions from quests.companion_speech(state, bond)
+  instead. Same two numbers, worn regalia folded in, already clamped.
+
+  Do NOT let anything in this file reach pets.covers() or pets.Tier. Depth of
+  help is the companion's tier, is paid for in rank, and is refused in a
+  measured run. Regalia buys EARLIER and MORE OFTEN and may never buy DEEPER.
+  quests._regalia_grants_no_depth() is the proof, validate() runs it, and it is
+  written to fail loudly if a future piece of regalia grows a third lever.
+
+WHAT COULD NOT BE RESOLVED, stated plainly rather than guessed at:
+
+  economy.py  absent when this pass began and landed while it was running. The
+              shape above is unchanged and now resolves: economy.grant_credit,
+              economy.VENDOR_BY_REGION and economy.regalia_price all read this
+              module rather than the other way round, and economy.area_band is a
+              pass-through to story.band_for. Nothing here had to be rewritten,
+              which is the argument for having kept the key this thin.
+  regalia.py  never appeared. REGALIA therefore lives here, in the same idiom as
+              SHORTCUTS, TOWN_UPGRADES and PET_DISCOVERIES,
+              which are also registries this module owns. If regalia.py lands,
+              move the table and keep _regalia_grants_no_depth() pointed at it —
+              the invariant is the valuable part, not the dict. economy.py has
+              since built its regalia counter directly on quests.REGALIA, so
+              there is one roster, one price list derived from it, and one proof
+              that a piece cannot buy depth. Do not add a second.
+  region band no module said how hard a region is. It is derived from the rung
+              of the region's metal in forge.py rather than authored here, so
+              potions.found_at() stays the only authority on what a band brews.
+              See RUNG_BAND and band_for().
 """

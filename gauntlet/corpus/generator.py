@@ -7,6 +7,13 @@ just the variable names, because renaming does not exercise recognition.
 Every generated problem carries a canonical solution and reference-derived tests,
 and is run through the same validator as authored content. Anything that fails
 validation is rejected rather than shipped.
+
+This module also knows the one thing nothing downstream can recover by looking:
+which template and which *mode* of it produced a given problem. Five skins of
+`fixed_window` in `max` mode are one exercise with five stories painted on it,
+and a player who has solved one has solved all five. So each variant leaves a
+`lineage:<template>:<mode>` tag behind and the corpus groups on it. The skin is
+deliberately not part of the tag — the skin is the clothes.
 """
 from __future__ import annotations
 
@@ -150,7 +157,7 @@ def _tpl_fixed_window(skin, index):
               "middle.",
         visual="A glowing frame of width k slides right one position at a time.",
         pseudocode="add the entering element, remove the leaving element, record",
-        family="fixed_window", security=skin["security"],
+        family="fixed_window", mode=agg, security=skin["security"],
         viz={"type": "sliding_window", "caption": "One in, one out."},
     )
 
@@ -249,7 +256,7 @@ def _tpl_pair(skin, index):
         visual="One left-to-right pass; each value looks for its complement among what "
                "came before.",
         pseudocode="for value: check complement in seen; then add value to seen",
-        family="two_sum", security=skin["security"],
+        family="two_sum", mode=mode, security=skin["security"],
         viz={"type": "hash_map", "caption": "Each value unlocks its complement's vault."},
     )
 
@@ -348,7 +355,8 @@ def _tpl_k_distinct(skin, index):
         visual="Counters float above each item inside the frame; a counter reaching zero "
                "closes its vault.",
         pseudocode="expand right; while too many distinct: shrink left; record",
-        family="window_k_distinct", security=skin["security"],
+        family="window_k_distinct", mode="longest" if want_span else "count",
+        security=skin["security"],
         viz={"type": "sliding_window", "caption": "LEFT, RIGHT, COUNTS, CONSTRAINT, BEST."},
     )
 
@@ -434,7 +442,7 @@ def _tpl_frequency(skin, index):
         nudge="One `Counter`, then read from it. Never recount inside a loop.",
         visual="Each label's tally rises as you pass; the answer is read off the board.",
         pseudocode="counts = Counter(items); derive the answer from counts",
-        family="counting", security=skin["security"],
+        family="counting", mode=mode, security=skin["security"],
         viz={"type": "hash_map", "caption": "One vault per label."},
     )
 
@@ -528,7 +536,7 @@ def _tpl_best_run(skin, index):
         visual="A running accumulator that resets whenever carrying the past costs more "
                "than beginning again.",
         pseudocode="current = better_of(value, current + value); track the best current",
-        family="dp_linear", security=skin["security"],
+        family="dp_linear", mode=mode, security=skin["security"],
         viz={"type": "dp", "caption": "Solved positions light and are reused."},
     )
 
@@ -560,6 +568,7 @@ def generate(per_template: int = 8) -> list:
                        if spec.pop("security", False)
                        else {"PRACTICAL": 1.5, "GENERAL_SWE": 1.5, "SECURITY_ENGINEERING": 1.0})
             security = skin["security"]
+            mode = spec.pop("mode", "")
             out.append(code_problem(
                 id=f"gen-{name}-{skin['key']}-{i}",
                 difficulty=DIFF_BY_TEMPLATE[name],
@@ -568,7 +577,10 @@ def generate(per_template: int = 8) -> list:
                            "presented as a question any company has asked.",
                 security=security,
                 profile_weight=profile,
-                tags=["generated", "variant", name],
+                # The lineage tag is the declared half of corpus.assign_lineage:
+                # the template knows what it built, so it says so rather than
+                # leaving the corpus to infer it from the code afterwards.
+                tags=["generated", "variant", name, f"lineage:{name}:{mode}"],
                 encounter="CODE_BATTLE",
                 **spec,
             ))

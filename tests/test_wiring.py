@@ -243,11 +243,26 @@ class TestPetsReachable(GameTest):
                  g.state["pets"]["found"]]
         self.assertTrue(all(row.get("found") for row in found))
 
+    def _companion_for(self, g, problem):
+        """Field an animal whose TIER actually covers this problem.
+
+        With the hint system routed through the companion, "who is walking with
+        you" decides whether there is any unasked help at all — so a test about
+        what an intervention COSTS has to start by bringing one that can speak.
+        The starter is TUTORIAL tier and sits at found[0] in every save.
+        """
+        for pet_id in g.state["pets"]["found"]:
+            if pets.covers(pet_id, problem.difficulty):
+                g.set_active_pets([pet_id])
+                return pet_id
+        return ""
+
     def test_an_intervention_costs_a_hint_and_caps_the_rank(self):
         g = self._with_a_companion()
-        g.set_active_pets(g.state["pets"]["found"][:1])
         target = next(p for p in g.corpus
                       if p.canonical_solution and p.id not in g.state["solved_ids"])
+        self.assertTrue(self._companion_for(g, target),
+                        "no companion in this save reads that depth")
         g.start_encounter(target.id)
         event = g.pet_intervention(dict(self.SIGNALS))
         self.assertIsNotNone(event, "a companion should speak under this much struggle")
@@ -264,13 +279,14 @@ class TestPetsReachable(GameTest):
 
     def test_no_companion_line_hands_over_an_answer(self):
         g = self._with_a_companion()
-        g.set_active_pets(g.state["pets"]["found"][:1])
         for target in [p for p in g.corpus
                        if p.canonical_solution
                        and p.id not in g.state["solved_ids"]][:8]:
+            if not self._companion_for(g, target):
+                continue
             g.start_encounter(target.id)
             event = g.pet_intervention(dict(self.SIGNALS))
-            if not event:
+            if not event or event.get("refused"):
                 continue
             said = f"{event['opening']} {event['body']}".lower()
             for token in ("def ", "return ", "import ", "```"):
@@ -295,6 +311,178 @@ class TestPetsReachable(GameTest):
         g.set_active_pets([pet_id])
         self.assertEqual(g.state["pets"]["active"], [pet_id])
         self.assertIsInstance(g.effects(), dict)
+
+    # -- the tier ladder, and the floor underneath it ----------------------
+
+    def test_a_new_save_already_has_the_starter_under_the_porch(self):
+        """Nobody gives it to you and nobody asks. A save that did not have it
+        would advertise it as something hiding in Python Village."""
+        g = self.game()
+        self.assertIn(pets.STARTER_ID, g.state["pets"]["found"])
+        self.assertEqual(pets.active_id(g.state["pets"]), pets.STARTER_ID)
+        self.assertEqual(g.pet_catalogue()["limit"], 1)
+
+    def test_a_companion_above_its_depth_refuses_and_is_not_charged_for_it(self):
+        g = self.game()
+        deep = next(p for p in g.teachable if p.difficulty == "MEDIUM")
+        g.start_encounter(deep.id)
+        event = g.pet_intervention(dict(self.SIGNALS))
+        self.assertTrue(event and event["refused"], "the starter reads TUTORIAL")
+        self.assertEqual(event["hint_weight"], 0)
+        self.assertEqual(event["rank_ceiling"], "")
+        enc = g.encounter
+        self.assertEqual(enc.hints_used, 0)
+        self.assertEqual(enc.rank_ceiling, "")
+        # `pet_spoke` is what feeds `intervened=True` into bond_gain. An animal
+        # that admitted it was useless must not be paid the assisted bonus.
+        self.assertFalse(enc.pet_spoke)
+        self.assertEqual(enc.pet_refused, [pets.STARTER_ID])
+        # And it is honest exactly once per encounter.
+        self.assertIsNone(g.pet_intervention(dict(self.SIGNALS)))
+
+    def test_learning_never_dead_ends_however_wrong_the_animal_is(self):
+        """The sharpest edge in the design, asserted rather than promised.
+
+        Wrong companion, no companion, dead companion: the first rung of the
+        tree opens, the worked solution opens, and three attempts in the WHOLE
+        tree opens. None of those three asks who is walking with you.
+        """
+        g = self.game()
+        deep = next(p for p in g.teachable
+                    if p.difficulty == "MEDIUM" and p.hint_tree
+                    and p.canonical_solution)
+        for who in ("wrong", "none", "dead"):
+            with self.subTest(companion=who):
+                g.state["pets"]["fallen"] = []
+                g.state["pets"]["active"] = ([pets.STARTER_ID] if who == "wrong"
+                                             else [])
+                if who == "dead":
+                    pets.fall(g.state["pets"])
+                g.state["player"]["mana"] = 99
+                g.start_encounter(deep.id)
+                opened = g.use_hint(pets.OPEN_RUNG)
+                self.assertNotIn("error", opened, f"{who}: the open rung closed")
+                last = len(g.by_id[deep.id].hint_tree)
+                solution = g.use_hint(last)
+                self.assertNotIn("error", solution,
+                                 f"{who}: the worked solution closed")
+                route = g.hint_route()
+                self.assertTrue(route["roads"])
+                self.assertEqual(sorted(route["petless_roads"]),
+                                 sorted(pets.PETLESS_ROADS))
+
+    def test_three_attempts_in_the_whole_tree_opens_whoever_you_brought(self):
+        g = self.game()
+        deep = next(p for p in g.teachable
+                    if p.difficulty == "MEDIUM" and len(p.hint_tree) >= 3
+                    and p.canonical_solution)
+        g.state["pets"]["active"] = [pets.STARTER_ID]
+        for _ in range(pets.FREE_SOLUTION_AFTER):
+            g.start_encounter(deep.id)
+            g.submit("def nope(*a, **k):\n    return None\n")
+        g.state["player"]["mana"] = 99
+        g.start_encounter(deep.id)
+        self.assertNotIn("error", g.use_hint(2),
+                         "a player measured as stuck is not gated by a tier")
+
+    def test_a_refusal_is_not_a_seal_and_never_says_it_is(self):
+        """Two different sentences with two different answers. A client that
+        cannot tell them apart teaches the player the wrong thing."""
+        g = self.game()
+        deep = next(p for p in g.teachable
+                    if p.difficulty == "MEDIUM" and len(p.hint_tree) >= 2)
+        g.state["player"]["mana"] = 99
+        g.start_encounter(deep.id)
+        blocked = g.use_hint(2)
+        self.assertEqual(blocked["error"], "above_tier")
+        self.assertNotEqual(blocked["error"], "sealed")
+        self.assertTrue(blocked["route"]["roads"])
+        self.assertIn("first rung is open", blocked["message"])
+
+    def test_the_barrow_closes_once_and_survives_a_reload(self):
+        g = self.game()
+        region = next(d for d in dungeons.DUNGEONS
+                      if d.id == pets.FALLS_AT_DUNGEON).region
+        cleared, _, err = delve(g, pets.FALLS_AT_DUNGEON, region)
+        self.assertEqual(err, "")
+        self.assertIn(pets.FALLS_AT_DUNGEON, [c["id"] for c in cleared])
+        self.assertTrue(pets.is_fallen(g.state["pets"], pets.STARTER_ID))
+        self.assertEqual(g.state["pets"]["active"], [])
+        scene = g.state["pet_fall"]
+        self.assertEqual(len(scene["lines"]), 4)
+        self.assertEqual(scene["returns_as"], pets.RETURN_ID)
+        # It does not leave the codex, and it does not come back.
+        self.assertIn(pets.STARTER_ID, g.state["pets"]["found"])
+        self.assertIn("error", g.recall_pet(pets.STARTER_ID))
+        # Once. Clearing the same ground again produces no second scene.
+        g.acknowledge_fall()
+        g.state["dungeons_cleared"].remove(pets.FALLS_AT_DUNGEON)
+        delve(g, pets.FALLS_AT_DUNGEON, region)
+        self.assertIsNone(g.state["pet_fall"])
+        self.assertEqual(g.state["pets"]["fallen"], [pets.STARTER_ID])
+
+    def test_a_save_that_predates_the_fall_settles_the_debt_without_the_scene(self):
+        """It must not replay at somebody who was not standing there — and the
+        legendary return is gated on the debt, so it cannot go unrecorded
+        either. Both, by recording the fact and parking the scene as a memory."""
+        g = self.game()
+        from gauntlet import db as dbmod
+        g.state["pets"] = {"found": ["python"], "active": ["python"],
+                           "bond": {"python": 20}, "met_at": {}}
+        g.state["dungeons_cleared"] = [pets.FALLS_AT_DUNGEON]
+        dbmod.save_state(g.conn, g.state)
+        reopened = self.game()   # same save file, a second open
+        state = reopened.state["pets"]
+        self.assertIn(pets.STARTER_ID, state["found"])
+        self.assertTrue(pets.is_fallen(state, pets.STARTER_ID))
+        self.assertTrue(reopened.state["pet_fall"]["retroactive"])
+        self.assertTrue(reopened._pet_evidence()["starter_fallen"])
+
+    def test_the_legendary_return_is_reachable_from_things_the_engine_writes(self):
+        """"Reachable, and provably so" is a claim about wiring, not about
+        flavour text: every clause of the return's condition has to be a number
+        this engine actually records, and satisfying all of them has to make
+        `newly_found` produce it.
+        """
+        g = self.game()
+        evidence = g._pet_evidence()
+        for clause in pets.BY_ID[pets.RETURN_ID].discovery.needs:
+            row = pets._discovery_row(clause, evidence)
+            self.assertIn("have", row)
+            self.assertGreater(row["need"], 0, f"{clause}: an unfillable bar")
+        # The barrow's debt is a key this file writes at the dungeon boss.
+        self.assertIn("starter_fallen", evidence)
+        # Depth comes from quests.note_depth, which _advance_dungeon calls.
+        self.assertIn("dungeons", evidence)
+        # And RECALL mastery is graded evidence like every other skill.
+        self.assertIn("RECALL", evidence["skills"])
+
+        pets.fall(g.state["pets"])
+        g.state["quests"].setdefault("depths", {})[pets.RETURNS_AT_DUNGEON] = 4
+        skills = g.skills
+        skills["RECALL"].mastery = 40.0
+        g._write_skills(skills)
+        found = pets.newly_found(g._pet_evidence(), g.state["pets"]["found"])
+        self.assertIn(pets.RETURN_ID, [row["pet"] for row in found])
+        # It is the same animal, and it reads everything the starter could not.
+        self.assertEqual(pets.BY_ID[pets.RETURN_ID].lineage, pets.STARTER_ID)
+        self.assertTrue(pets.covers(pets.RETURN_ID, "BOSS"))
+
+    def test_the_last_trial_has_a_face_and_it_changes_nothing(self):
+        g = self.game()
+        who = finalexam.examiner_view("READY")
+        self.assertEqual(who["id"], world.FINAL_TRIAL["id"])
+        self.assertEqual(who["region"], "null_kings_castle")
+        self.assertTrue(who["arrival"] and who["closing"] and who["verdict"])
+        # The identity ships INSIDE a sealed run, so it must seal exactly what
+        # the exam already sealed and not one capability less.
+        self.assertEqual(sorted(who["sealed"]),
+                         sorted(finalexam.EXAM_SEAL.sealed))
+        self.assertEqual(finalexam.audit_seal(), [])
+        # And it is not a boss: appending to world.BOSSES would renumber every
+        # rung of the crutch ladder.
+        self.assertNotIn(world.FINAL_TRIAL["id"], world.BOSS_BY_ID)
+        self.assertEqual(len(finalexam.BOSS_LADDER), len(world.BOSSES))
 
 
 # --------------------------------------------------------------------------
@@ -510,13 +698,32 @@ class TestLegendariesReachable(GameTest):
         the relics that read them unwinnable."""
         g = self.game()
         g.choose_class("analyst")
-        testing = [p for p in g.corpus
+        # g.teachable, not g.corpus. Hold-out content is unreachable from
+        # Adventure Mode by design and start_encounter refuses it, so a test
+        # that plays it by id is asserting the thing the seal forbids.
+        testing = [p for p in g.teachable
                    if skillmod.PATTERN_TO_SKILL.get(p.pattern) == "TESTING"
                    and p.canonical_solution]
         for problem in testing:
             beat(g, problem.id)
             if len(g.state["legendaries"]) > 1:
                 break
+        else:
+            # The Band's second gate is twenty BOUNDARY clears, and a boundary
+            # clear is any clean first-submission clear of a problem that
+            # declares edges — not a TESTING problem specifically. Five of this
+            # family are hold-out content, which leaves it two short of twenty
+            # on its own, so the run tops up the way a player's would: with
+            # whatever else the teaching corpus offers.
+            spent = {p.id for p in testing}
+            for problem in g.teachable:
+                if problem.id in spent or not problem.canonical_solution:
+                    continue
+                if not (problem.edge_cases or problem.hidden_tests):
+                    continue
+                beat(g, problem.id)
+                if len(g.state["legendaries"]) > 1:
+                    break
         self.assertGreater(len(g.state["legendaries"]), 1,
                            "no relic past the Hand can be earned")
         self.assertGreater(g.state["stats"]["boundary_clears"], 0,
@@ -779,11 +986,20 @@ class TestFinalExamReachable(GameTest):
         self.assertTrue(exam["segments"])
         asked = [q for segment in exam["segments"] for q in segment["questions"]]
         self.assertTrue(asked)
-        self.assertEqual(len(asked), len(started["run"]["problem_ids"]))
+        self.assertEqual(len(asked), started["run"]["total"])
         for question in asked:
-            self.assertIn(question["problem_id"], g.by_id,
-                          "the exam asked for a problem that does not exist")
+            # The client's copy of the timetable names no problem: the exam
+            # reaches into the sealed hold-out and a roster read before the
+            # questions are served is a free look at unspent hold-out ids.
+            self.assertNotIn("problem_id", question)
+            self.assertNotIn("title", question)
             self.assertIn(question["role"], ("algorithm", "feature", "bug"))
+        # The composition is still real, read where it actually lives.
+        roster = g.state["interview"]["problem_ids"]
+        self.assertEqual(len(roster), len(asked))
+        for problem_id in roster:
+            self.assertIn(problem_id, g.by_id,
+                          "the exam asked for a problem that does not exist")
         self.assertEqual(finalexam.audit_seal(), [])
 
     def test_the_exam_is_sealed_and_the_payload_leaks_nothing(self):
@@ -1138,3 +1354,198 @@ class TestEveryModuleIsReachedThroughTheEngine(GameTest):
             self.assertIn(key, dashboard, f"the client cannot see {key}")
         self.assertTrue(dashboard["todo"], "the what-next strip is never empty")
         self.assertTrue(dashboard["world"]["nodes"])
+
+
+# --------------------------------------------------------------------------
+class TestTheTacticalLayerIsReachable(GameTest):
+    """gauntlet/elements.py, gauntlet/potions.py — proved by playing.
+
+    Three modules were written, self-checked and imported by nothing. These
+    tests drive a real `Game` through real turns, because a module that quietly
+    stops being called should fail here rather than pass its own self-check in
+    private.
+
+    The rule every one of these is really testing: the TYPING is the attack.
+    Elements, potions and armour decide how LONG a fight lasts and therefore how
+    much repetition the player gets on the moveset. Nothing here may win a fight
+    on its own.
+    """
+
+    def _fight(self, g):
+        """Open an encounter on a problem with a real solution, and return it."""
+        problem = next(p for p in g.corpus if p.canonical_solution)
+        g.state["player"]["region"] = problem.realm
+        return problem, g.start_encounter(problem.id)
+
+    def test_an_encounter_opens_with_a_turn_a_belt_and_an_element(self):
+        from gauntlet import elements
+        g = self.game()
+        g.choose_class("analyst")
+        _problem, payload = self._fight(g)
+        self.assertEqual(payload["turn"], 1)
+        self.assertIn("pouch", payload)
+        self.assertTrue(payload["pouch"]["rule"])
+        self.assertIn("element", payload)
+        self.assertIn(payload["element"]["player"],
+                      set(elements.ELEMENTS) | {elements.NEUTRAL})
+        vitals = payload["enemy_vitals"]
+        self.assertGreater(vitals["focus_max"], 0, "the enemy has no focus")
+        self.assertTrue(vitals["specials"], "the enemy has nothing to spend it on")
+
+    def test_a_missed_submission_is_a_turn_and_the_enemy_answers(self):
+        g = self.game()
+        g.choose_class("analyst")
+        _problem, payload = self._fight(g)
+        before = g.state["player"]["stamina"]
+        result = g.submit("def nope(*a, **k):\n    return None\n")
+        self.assertFalse(result["solved"])
+        self.assertEqual(result["turn"], 2, "the turn did not advance")
+        self.assertIsNotNone(result["enemy_turn"], "the enemy never acted")
+        self.assertGreater(result["damage_taken"], 0)
+        self.assertLess(g.state["player"]["stamina"], before)
+
+    def test_a_potion_rides_with_the_cast_and_is_never_instead_of_one(self):
+        """The whole feature, in one test. Drinking must not spend the turn,
+        and a second draught before casting must be refused — otherwise the
+        optimal play is drink-instead-of-think."""
+        from gauntlet import potions
+        g = self.game()
+        g.choose_class("analyst")
+        potions.grant(g.state, "health_small", 3)
+        self._fight(g)
+        g.submit("def nope(*a, **k):\n    return None\n")   # take a hit first
+        first = g.use_potion("health_small")
+        self.assertTrue(first["ok"])
+        self.assertFalse(first["turn_spent"], "drinking spent the turn")
+        self.assertTrue(first["must_still_cast"])
+        second = g.use_potion("health_small")
+        self.assertFalse(second.get("ok"))
+        self.assertEqual(second["error"], "already")
+        # and the cast is what unlocks the belt again
+        after = g.submit("def nope(*a, **k):\n    return None\n")
+        self.assertTrue(after["pouch"]["may_drink"])
+
+    def test_an_antidote_clears_both_records_of_poison(self):
+        from gauntlet import elements, potions
+        g = self.game()
+        g.choose_class("analyst")
+        potions.grant(g.state, "antidote_small", 1)
+        self._fight(g)
+        enc = g.encounter
+        statuses = [elements.StatusInstance(id="POISONED", turns=4, stacks=1)]
+        enc.statuses = [s.to_dict() for s in statuses]
+        poison = potions.Poison()
+        potions.poison_apply(poison, damage=2, turns=3, source="test")
+        enc.poison = poison.to_dict()
+        g._write_encounter(enc)
+        cured = g.use_potion("antidote_small")
+        self.assertTrue(cured["ok"])
+        self.assertIn("POISONED", cured["statuses_cured"],
+                      "the wheel's poison survived the antidote")
+        self.assertEqual(cured["poison"]["stacks"], 0,
+                         "the dose pool survived the antidote")
+
+    def test_metals_and_potions_survive_a_save_slot_round_trip(self):
+        from gauntlet import potions
+        g = self.game()
+        g.choose_class("analyst")
+        g.state["forge"]["metals"] = {"fieldiron": 4, "keybrass": 2}
+        potions.grant(g.state, "antidote_small", 2)
+        potions.grant(g.state, "health_medium", 1)
+        g.save()
+        bag = dict(g.state["forge"]["metals"])
+        pouch = dict(g.state["potions"])
+        g.save_to_slot(1, name="round trip")
+        g.state["forge"]["metals"] = {}
+        g.state["potions"] = {}
+        g.save()
+        self.assertTrue(g.load_slot("slot:1")["ok"])
+        self.assertEqual(g.state["forge"]["metals"], bag)
+        self.assertEqual(g.state["potions"], pouch)
+        # and through an export, which is the other road a save takes
+        payload = g.export()
+        g.state["potions"] = {}
+        g.save()
+        g.import_save(payload)
+        self.assertEqual(g.state["potions"], pouch)
+
+    def test_the_tactical_layer_is_sealed_in_a_measured_run(self):
+        """One capability check, and it is finalexam.sealed. A potion is ITEMS,
+        the loadout is BUILD, and the enemy's element is a reading of the room."""
+        from gauntlet import config, elements, potions
+        g = self.game()
+        g.choose_class("analyst")
+        potions.grant(g.state, "health_small", 2)
+        problem = next(p for p in g.corpus if p.canonical_solution)
+        payload = g.start_encounter(problem.id, mode=config.MODE_INTERVIEW)
+        self.assertTrue(payload["pouch"]["sealed"])
+        self.assertFalse(payload["pouch"]["may_drink"])
+        self.assertEqual(payload["element"]["player"], elements.NEUTRAL)
+        self.assertEqual(payload["element"]["enemy"], "")
+        self.assertEqual(payload["element"]["armour"]["points"], 0)
+        refused = g.use_potion("health_small")
+        self.assertFalse(refused.get("ok"))
+        self.assertEqual(g.state["potions"]["health_small"], 2, "it was spent")
+
+    def test_the_incantation_battle_takes_turns_and_the_enemy_spends_focus(self):
+        """The fight the tactical layer exists for: eight to twenty casts, an
+        enemy that banks focus and spends it, and a rout that is never a loss."""
+        from gauntlet import bestiary, potions
+        g = self.game()
+        g.choose_class("analyst")
+        potions.grant(g.state, "health_small", 3)
+        view = g.start_incantation("enc_twin_wardens")
+        field = view["incantation"]
+        self.assertTrue(field["rule"], "the turn rule is invisible to the player")
+        for enemy in field["enemies"]:
+            self.assertGreater(enemy["vitals"]["focus_max"], 0)
+            self.assertTrue(enemy["vitals"]["specials"])
+        seen_focus = 0
+        for turn in range(12):
+            if not g.state.get("incantation"):
+                break
+            out = g.incantation_cast("advance", {"counter": "left"})
+            enemy_turn = out.get("enemy_turn") or {}
+            seen_focus = max(seen_focus, int(enemy_turn.get("focus", 0) or 0))
+        self.assertGreater(seen_focus, 0, "no enemy ever banked any focus")
+
+    def test_a_wrong_cast_still_cannot_be_bought_off_with_a_potion(self):
+        """The rule that outranks the rest of this file. A potion cannot cast
+        the line, and the pouch cannot damage anything."""
+        from gauntlet import elements, potions
+        g = self.game()
+        g.choose_class("analyst")
+        potions.grant(g.state, "health_small", 5)
+        g.start_incantation("enc_twin_wardens")
+        before = {e["name"]: e["hp"]
+                  for e in g.incantation_view()["incantation"]["enemies"]}
+        for _ in range(4):
+            drink = g.use_potion("health_small")
+            if drink.get("ok"):
+                # the belt locks until a cast resolves, so a wasted cast is the
+                # only way to drink again — which is the point
+                g.incantation_cast("advance", {"counter": "__not_a_name__"})
+        after = {e["name"]: e["hp"]
+                 for e in g.incantation_view()["incantation"]["enemies"]}
+        self.assertEqual(before, after,
+                         "potions and wrong casts moved an enemy's health")
+        # and zero damage stays zero however good the matchup is
+        nothing = elements.resolve_damage(
+            0, elements.FIRE, elements.Defender(element=elements.COLD))
+        self.assertEqual(nothing.damage, 0)
+
+    def test_the_three_armour_roads_and_the_boots_are_equippable(self):
+        from gauntlet import elements, items
+        g = self.game()
+        g.choose_class("analyst")
+        g.state["inventory"] += ["ward_fire", "field_plate", "wanderers_cloak",
+                                 "crampons"]
+        self.assertTrue(g.equip("crampons").get("ok"))
+        self.assertEqual(items.boots_id(g.state["equipped"]), "crampons")
+        step = g.region_view("twin_pointer_pass")["element"]["step"]
+        self.assertTrue(step["protected"], "crampons do not answer black ice")
+        self.assertTrue(g.equip("ward_fire").get("ok"))
+        armour = g.loadout()["armour"]
+        self.assertTrue(armour["resist"], "a warded piece resists nothing")
+        self.assertLessEqual(max(armour["resist"].values()),
+                             elements.RESIST_CAP)

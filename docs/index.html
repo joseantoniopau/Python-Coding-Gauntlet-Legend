@@ -154,11 +154,11 @@
 </div>
 
 <div class="stats">
-  <div class="stat"><b>956</b><span>PROBLEMS</span></div>
+  <div class="stat"><b>1013</b><span>PROBLEMS</span></div>
   <div class="stat"><b>17</b><span>REGIONS</span></div>
   <div class="stat"><b>16</b><span>DUNGEONS</span></div>
   <div class="stat"><b>14</b><span>BOSSES</span></div>
-  <div class="stat"><b>74</b><span>QUESTS</span></div>
+  <div class="stat"><b>96</b><span>SECRET ARTS</span></div>
   <div class="stat"><b>6</b><span>CLASSES</span></div>
 </div>
 
@@ -189,8 +189,8 @@
       deliberately bottom-heavy, and every topic enters as a fill-in-the-blank
       before it is ever asked for cold.</p>
     <div class="ramp">
-      <div class="row"><span class="nm">GUIDED</span><span class="n">206</span><span class="bar"><i style="width:64%"></i></span></div>
-      <div class="row"><span class="nm">TUTORIAL</span><span class="n">210</span><span class="bar"><i style="width:65%"></i></span></div>
+      <div class="row"><span class="nm">GUIDED</span><span class="n">258</span><span class="bar"><i style="width:80%"></i></span></div>
+      <div class="row"><span class="nm">TUTORIAL</span><span class="n">215</span><span class="bar"><i style="width:67%"></i></span></div>
       <div class="row"><span class="nm">EASY</span><span class="n">321</span><span class="bar"><i style="width:100%"></i></span></div>
       <div class="row"><span class="nm">MEDIUM</span><span class="n">196</span><span class="bar"><i style="width:61%"></i></span></div>
       <div class="row"><span class="nm">HARD</span><span class="n">23</span><span class="bar"><i style="width:7%"></i></span></div>
@@ -434,14 +434,15 @@ then double-click:
    leaves a broken image on the page. */
 (function () {
   const shots = [
-    ['title.png',       'The title screen. Procedural starfield, hand-built pixel lettering — there are no image assets anywhere in this project.', true],
-    ['worldmap.png',    'The map. A “what to do next” strip that is never empty, ordered by what your evidence says would help most — not by what is shiniest.', true],
-    ['guided.png',      'A GUIDED encounter: type one expression into an otherwise complete function. Byte explains, once, that the gold slot is not Python.', false],
-    ['boss-dragon.png', 'A boss fight. The Tree Dragon tells you its own weakness — “Compare me only to my children. I dare you.”', false],
-    ['party.png',       'The skill tree. Every node says what it is MEASURED ON, so a point is a statement about how you intend to play.', true],
-    ['questlog.png',    '74 quests across 17 chains. Each locked one shows exactly what is blocking it.', false],
-    ['world.png',       'The overworld: autotiled terrain, townspeople, and the day’s board.', false],
-    ['practical.png',   'The ladder to the final practical — fourteen bosses, each removing one crutch.', true],
+    ['title.png',  'The title screen. Procedural starfield, hand-built pixel lettering — there are no image assets anywhere in this project.', true],
+    ['world.png',  'The overworld: autotiled terrain, townspeople, wandering monsters, and your companion walking behind you.', true],
+    ['guided.png', 'Encounter one. Four choices, no function, no indentation — and Byte explains, once, that the gold slot is not Python.', false],
+    ['boss.png',   'A boss fight. The Tree Dragon tells you its own weakness: “Compare me only to my children. I dare you.”', false],
+    ['map.png',    'The map. A “what to do next” strip that is never empty, ordered by what your evidence says would help most.', true],
+    ['party.png',  'Companions, the skill tree, and the relic codex. Every node says what it is MEASURED ON.', false],
+    ['quests.png', '74 quests across 17 chains, each locked one showing exactly what is blocking it.', false],
+    ['gear.png',   'Gear and build. Armour is flat mitigation or elemental resistance — and the trade reverses with the size of the hit.', false],
+    ['ledger.png', 'The Ledger, and Transfer Readiness: measured only from sealed problems met cold, unaided, for the first time.', true],
   ];
   const host = document.getElementById('gallery');
   shots.forEach(([file, caption, wide]) => {

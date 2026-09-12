@@ -22,9 +22,13 @@ Wiring is documented at the bottom of the file, in WIRING.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from . import curriculum
+from . import elements
+from . import forge
+from . import items
+from . import potions
 from . import world
 
 # ---------------------------------------------------------------------------
@@ -141,6 +145,9 @@ EVENTS = (
     "level_gained", "diagnostic_started", "diagnostic_done", "gates_half",
     "chapter_graduated", "probe_correct", "combo_five", "comeback_clear",
     "perf_recovered", "session_ended",
+    # The companion arc. Three moments, all of them things the save can prove:
+    # the barrow closed, something came back out of it, and the last room.
+    "companion_fell", "companion_returned", "last_trial_entered",
 )
 
 _STAGE_ORDER = {name: i for i, name in enumerate(
@@ -285,6 +292,9 @@ _EVENT_LABELS = {
     "shrine_cleared": "Answer a Memory Shrine",
     "probe_correct": "Land a probe",
     "chapter_graduated": "Graduate a chapter",
+    "companion_fell": "Clear the Half-Written Barrow",
+    "companion_returned": "Find what the Hall of Lit Tiles kept",
+    "last_trial_entered": "Stand in front of the last trial",
 }
 
 
@@ -297,6 +307,35 @@ def _chapter_index(chapter_id: str) -> int:
         if chapter.id == chapter_id:
             return index
     return 0
+
+
+# ---------------------------------------------------------------------------
+# How hard a place is
+# ---------------------------------------------------------------------------
+# potions.py bands its catalogue to area difficulty, and nothing in world.py says
+# what difficulty an area is. forge.py does, in effect: a region's metal has a
+# rung, the rungs run one to six in the order the map opens, and a metal is
+# exactly the statement "this ground is this hard". So the band is READ OFF THE
+# FORGE rather than invented, which means adding a region to forge.py bands it
+# for potions automatically and getting it wrong is a test failure rather than a
+# quiet mistake. The town is the exception it looks like: no metal, no danger.
+#
+# This lives in story.py rather than quests.py for one unglamorous reason: both
+# modules need it, quests.py imports story.py, and story.py may never import back
+# without making a cycle. quests.py re-exports these three names, so the fact is
+# derived once and spelled the same in both places.
+
+RUNG_BAND = {1: "TUTORIAL", 2: "EASY", 3: "MEDIUM", 4: "HARD", 5: "ELITE",
+             6: "BOSS"}
+
+
+def band_for(region_id: str) -> str:
+    """The difficulty band a region is allowed to hand out potions at."""
+    metal = forge.metal_for_region(region_id)
+    return RUNG_BAND[metal.rung] if metal else "GUIDED"
+
+
+REGION_BAND = {r["id"]: band_for(r["id"]) for r in world.REGIONS}
 
 
 # ---------------------------------------------------------------------------
@@ -316,11 +355,29 @@ def _chapter_index(chapter_id: str) -> int:
 #   consumable    dict     {"id": key, "count": n} from items.CONSUMABLES
 #   favor         dict     {"mentor": id, "amount": n}
 #
+# and the material layer, which arrived with the forge, the elements and the
+# potion bands. The spine pays in real things for the same reason the side
+# quests do — a beat that ends an act and hands over a number is a beat nobody
+# remembers — and it spends exactly the vocabulary quests.py spends, so there is
+# one material reward language in this game rather than two:
+#
+#   metal         dict     {"id": forge.METAL_BY_ID key, "count": n}
+#   potion        dict     {"id": potions.BY_ID key, "count": n}
+#   gear          str      items.BY_ID key, an elemental piece of real kit
+#
+# Deliberately NOT here: `regalia` and `vendor_credit`. Regalia is earned by
+# doing somebody a favour out in the world and it belongs to quests.py, which
+# owns the registry and the proof that it cannot buy depth; adding a second
+# source here would be the start of exactly the second hint economy that proof
+# exists to prevent. Vendor credit is per-region and the spine is not.
+#
 # Nothing here changes what a problem says, what a test asserts, or what a hint
-# reveals. That is the whole of rule 4.
+# reveals. That is the whole of rule 4, and the material layer does not bend it:
+# metal is forge stock, a potion is a bar refilled, and gear is a ward against an
+# element. None of the three has ever answered a question.
 
 REWARD_KEYS = ("xp", "gold", "title", "card", "codex", "set_piece", "technique",
-               "companion", "consumable", "favor")
+               "companion", "consumable", "favor", "metal", "potion", "gear")
 
 
 @dataclass(frozen=True)
@@ -833,6 +890,67 @@ MAIN_QUEST = [
         objective="Interview Mode is the same castle with the lights on. Go and be measured.",
     ),
 ]
+
+# The material half of the spine, in one table for the same reason quests.py
+# keeps one: a curve you can read top to bottom cannot drift a beat at a time.
+#
+# The spine pays FEWER and LARGER things than the side quests do, and only at the
+# beats that close an act or open a country. Twenty-one beats, eight payments.
+# Walking into a region is not an achievement and is not paid; surviving it is.
+#
+# Every id is checked against the region the beat fires in — the potion against
+# what that band may brew, the metal against forge.py, the gear against
+# items.py — by validate(), which is also why none of it is authored inline
+# among the prose.
+
+_SPINE_MATERIAL = {
+    # Act I closes with the village still standing. It has a well and a wall and
+    # nothing else, so it pays what a village has: red thimbles.
+    "main_02_the_village_stands": {"potion": {"id": "health_minor", "count": 3}},
+    # The Armorer's bargain. The first metal in the game comes out of the first
+    # forge in the game, handed over rather than mined, which is the only time
+    # that happens.
+    "main_04_the_bargain":        {"metal": {"id": "faultsteel", "count": 1}},
+    # Act II, the Titan. The Highlands pay in keys and in the attention it takes
+    # to hold one.
+    "main_06_the_titan_waits":    {"metal": {"id": "keybrass", "count": 2},
+                                   "potion": {"id": "focus_small", "count": 2}},
+    "main_08_from_zero":          {"gear": "ward_brute"},
+    # Act III, the floor turns. Bronze that has been through four orientations
+    # and holds none of them.
+    "main_12_the_floor_turns":    {"metal": {"id": "quarterturn", "count": 2}},
+    # Act IV. Gold prised out of a floor you have already solved, and the first
+    # Flagon anybody has been willing to part with.
+    "main_16_already_paid":       {"metal": {"id": "tilegold", "count": 3},
+                                   "potion": {"id": "health_hefty", "count": 1}},
+    # Act V, sand and a clock. The Coliseum quenches in the Tower's alloy.
+    "main_18_sand_and_clock":     {"metal": {"id": "doubling_steel", "count": 3},
+                                   "potion": {"id": "health_hefty", "count": 2}},
+    # The end. Five bars of steel with the label struck off, which is both the
+    # largest single payment in the game and the only thing down there that
+    # anyone ever carried back out.
+    "main_20_what_it_was_for":    {"metal": {"id": "nullsteel", "count": 5}},
+}
+
+
+def _pay_in_kind(beats: list) -> list:
+    """Fold _SPINE_MATERIAL onto the authored beats. An authored reward key
+    always wins: this adds the material half and never edits the half a human
+    wrote."""
+    out = []
+    for beat in beats:
+        row = _SPINE_MATERIAL.get(beat.id)
+        if not row:
+            out.append(beat)
+            continue
+        reward = dict(beat.reward)
+        for key, value in row.items():
+            reward.setdefault(key, value)
+        out.append(replace(beat, reward=reward))
+    return out
+
+
+MAIN_QUEST = _pay_in_kind(MAIN_QUEST)
 
 MAIN_BY_ID = {b.id: b for b in MAIN_QUEST}
 
@@ -1802,6 +1920,43 @@ MILESTONES = [
              "change the answer, you changed the cost. Those are different edits "
              "and only one is engineering.",
         reward={"xp": 150, "card": "card_refuse_to_answer_twice"}),
+
+    # -- the companion arc -------------------------------------------------
+    #
+    # The scene itself belongs to the fight and is played by the dungeon, not by
+    # this module — pets.fall() authors the four lines and engine fires them at
+    # the boss. What these three add is the thing the story layer is for: a
+    # voice afterwards that names what it cost, and does not soften it.
+    Milestone(
+        id="ms_companion_fell", name="The Unclosed Bracket", speaker="byte",
+        trigger=When.event("companion_fell"),
+        line="It shut the bracket. That is the only trick it ever had and nobody "
+             "told it there are things meant to stay open. You have no companion "
+             "now. The first rung of every spell tree is still open, the coach "
+             "still speaks after a failed submission, and the solution still "
+             "comes free after three attempts — none of those ever asked who was "
+             "walking with you. Go and find something that can read deeper.",
+        reward={"xp": 120, "title": "Bereaved"}),
+    Milestone(
+        id="ms_companion_returned", name="Still Lit", speaker="oracle",
+        trigger=When.event("companion_returned"),
+        line="The Hall does not record who solved anything. It only records that "
+             "the tile went out lit. So it did not come back for you. It came "
+             "back for the ring, and then it answered to the old name anyway, "
+             "and I would not read too much into that if I were you, and you are "
+             "going to.",
+        reward={"xp": 260, "title": "Remembered"}),
+    Milestone(
+        id="ms_last_trial", name="The Standing Prompt", speaker="interviewer",
+        trigger=When.event("last_trial_entered"),
+        line="Under the castle there is a room, and in the room there is a python "
+             "the length of the room, and it is wearing a hat. It will not speak "
+             "to you in anything that cannot be run. I have spent my career "
+             "trying to be that honest and I have never once managed it.",
+        # No reward, and it fires on the far side of the practical rather than
+        # at its door. The measured run pays nothing into the world; the herald
+        # at the door is the examiner's own arrival, which is static prose.
+        reward={}),
 ]
 
 MILESTONE_BY_ID = {m.id: m for m in MILESTONES}
@@ -2255,8 +2410,10 @@ def apply(story_state: dict, entry: dict) -> dict:
     """Record a shown beat and bank everything story owns.
 
     Returns the part of the reward only the engine can pay — XP, gold, a
-    companion, a consumable — so the caller never has to know the reward
-    vocabulary. Everything else (titles, cards, codex, scenes, techniques,
+    companion, a consumable, and the material layer (metal into forge stock, a
+    potion into the pouch, gear into the pack) — so the caller never has to know
+    the reward vocabulary. The keys are the same ones quests.complete() puts in
+    its `pay` bucket, and they are paid the same way. Everything else (titles, cards, codex, scenes, techniques,
     favour) is written into story_state here.
     """
     reward = entry.get("reward") or {}
@@ -2289,8 +2446,16 @@ def apply(story_state: dict, entry: dict) -> dict:
         ledger = story_state.setdefault("favor", {})
         ledger[favor["mentor"]] = ledger.get(favor["mentor"], 0) + favor["amount"]
 
-    return {k: reward[k] for k in ("xp", "gold", "companion", "consumable")
-            if k in reward}
+    # Copied one level down for the same reason quests.reward_for copies: three
+    # of these are dicts, this module promises to mutate nothing, and a caller
+    # that decrements a count while paying it out would otherwise edit the beat.
+    owed = {}
+    for key in ("xp", "gold", "companion", "consumable", "metal", "potion",
+                "gear"):
+        if key in reward:
+            value = reward[key]
+            owed[key] = dict(value) if isinstance(value, dict) else value
+    return owed
 
 
 def reward_summary(reward: dict) -> list:
@@ -2321,6 +2486,23 @@ def reward_summary(reward: dict) -> list:
                    else f"Companion: {reward['companion']}")
     if reward.get("favor"):
         out.append(f"{_speaker_name(reward['favor']['mentor'])} remembers this")
+    metal = reward.get("metal")
+    if metal:
+        row = forge.METAL_BY_ID.get(metal["id"])
+        out.append(f"{row.name if row else metal['id']} x{metal['count']}")
+    potion = reward.get("potion")
+    if potion:
+        row = potions.BY_ID.get(potion["id"])
+        out.append(f"{row.name if row else potion['id']} x{potion['count']}")
+    gear = reward.get("gear")
+    if gear:
+        item = items.BY_ID.get(gear)
+        if item:
+            element = item.element or elements.NEUTRAL
+            out.append(item.name + (f" — warded, {element.title()}"
+                                    if element != elements.NEUTRAL else ""))
+        else:
+            out.append(f"Gear: {gear}")
     return out
 
 
@@ -2479,7 +2661,7 @@ def validate() -> list:
     test and it catches the whole class of typo that silently renders nothing."""
     problems = []
 
-    def check_reward(where: str, reward: dict):
+    def check_reward(where: str, reward: dict, region: str = ""):
         for key in reward:
             if key not in REWARD_KEYS:
                 problems.append(f"{where}: unknown reward key {key!r}")
@@ -2496,6 +2678,43 @@ def validate() -> list:
             problems.append(f"{where}: unknown companion {reward['companion']!r}")
         if reward.get("favor") and reward["favor"]["mentor"] not in world.MENTORS:
             problems.append(f"{where}: unknown mentor in favor grant")
+
+        # -- the material layer. The spine is not tied to one region the way a
+        # side quest is, so there is no "metal of this ground" rule to enforce
+        # here; what IS enforced is that every id is real, that a potion count
+        # fits the pouch, and that no beat gives away a forge upgrade — those
+        # belong to forge.py's ladder and are earned there, not handed over.
+        metal = reward.get("metal")
+        if metal:
+            if metal.get("id") not in forge.METAL_BY_ID:
+                problems.append(f"{where}: unknown metal {metal.get('id')!r}")
+            if int(metal.get("count", 0)) < 1:
+                problems.append(f"{where}: metal count must be at least 1")
+        potion = reward.get("potion")
+        if potion:
+            row = potions.BY_ID.get(potion.get("id", ""))
+            if row is None:
+                problems.append(f"{where}: unknown potion {potion.get('id')!r}")
+            elif region and not potions.found_at(row.id, band_for(region)):
+                problems.append(f"{where}: {row.id!r} needs a {row.min_tier} "
+                                f"area and {region!r} bands at "
+                                f"{band_for(region)}")
+            elif int(potion.get("count", 0)) > potions.CARRY_CAP[row.strength]:
+                problems.append(f"{where}: {potion['count']} x {row.id!r} "
+                                f"exceeds the pouch cap of "
+                                f"{potions.CARRY_CAP[row.strength]}")
+            elif int(potion.get("count", 0)) < 1:
+                problems.append(f"{where}: potion count must be at least 1")
+        gear = reward.get("gear")
+        if gear:
+            item = items.BY_ID.get(gear)
+            if item is None:
+                problems.append(f"{where}: unknown item {gear!r}")
+            elif item.source == "upgrade":
+                problems.append(f"{where}: {gear!r} is an upgrade-path item and "
+                                f"may not be given away")
+            elif not item.slot:
+                problems.append(f"{where}: {gear!r} is not equippable")
 
     def check_trigger(where: str, trigger: Trigger):
         if trigger.kind in ("all", "any"):
@@ -2523,7 +2742,7 @@ def validate() -> list:
         if beat.speaker != "narrator" and beat.speaker not in world.MENTORS:
             problems.append(f"{beat.id}: unknown speaker {beat.speaker!r}")
         check_trigger(beat.id, beat.trigger)
-        check_reward(beat.id, beat.reward)
+        check_reward(beat.id, beat.reward, beat.region)
 
     for chain in SIDE_CHAINS:
         if chain.mentor not in world.MENTORS:
@@ -2537,7 +2756,7 @@ def validate() -> list:
                 problems.append(f"duplicate id {step.id!r}")
             seen_ids.add(step.id)
             check_trigger(step.id, step.trigger)
-            check_reward(step.id, step.reward)
+            check_reward(step.id, step.reward, chain.region)
 
     for milestone in MILESTONES:
         if milestone.id in seen_ids:
@@ -2553,7 +2772,7 @@ def validate() -> list:
         if meeting.place not in world.REGION_BY_ID:
             problems.append(f"{where}: unknown region {meeting.place!r}")
         check_trigger(where, meeting.trigger)
-        check_reward(where, meeting.reward)
+        check_reward(where, meeting.reward, meeting.place)
     leads = [m.lead for m in RIVAL_MEETINGS]
     if leads != sorted(leads, reverse=True):
         problems.append("rival: the lead must never grow between meetings")
@@ -2657,6 +2876,13 @@ route in server.py exposes it. Nothing in world.py changes.
                key = owed["consumable"]["id"]
                self.state["consumables"][key] = (
                    self.state["consumables"].get(key, 0) + owed["consumable"]["count"])
+           # The material layer. These are the same three keys quests.complete()
+           # puts in its `pay` bucket, so whatever pays those pays these, and
+           # there is one handler rather than two:
+           #     owed["metal"]   {"id", "count"}  -> forge stock
+           #     owed["potion"]  {"id", "count"}  -> potions.grant(...)
+           #     owed["gear"]    items.BY_ID key  -> into the pack, not rolled
+           # See quests.CONTRACT, which specifies all of it in one place.
            story_payload.append({**beat, "reward_lines": story.reward_summary(beat["reward"])})
        result["story"] = story_payload
 

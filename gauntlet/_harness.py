@@ -9,6 +9,7 @@ pristine and can be shown in the battle log verbatim.
 import json
 import math
 import os
+import re
 import signal
 import sys
 import time
@@ -370,13 +371,105 @@ def _player_traceback():
     return "\n".join(keep[-12:])
 
 
+def run_project_tests(project_dir, test_files, timeout_ms):
+    """Run a Mini-Repo's own test files and report each test function.
+
+    This is deliberately not unittest or pytest: the child runs with -I -S and
+    must not depend on anything outside the standard library being importable.
+    A test is a module-level callable whose name starts with `test`, which is
+    the convention both frameworks share and the only part of them we need.
+    """
+    import importlib.util
+
+    results = []
+    for rel in test_files:
+        path = os.path.join(project_dir, rel)
+        if not os.path.isfile(path):
+            results.append({"name": rel, "status": "exception",
+                            "message": "no such test file", "ms": 0.0})
+            continue
+        spec = importlib.util.spec_from_file_location(
+            "projtest_" + re.sub(r"\W", "_", rel), path)
+        module = importlib.util.module_from_spec(spec)
+        try:
+            _deadline_start(timeout_ms / 1000.0)
+            spec.loader.exec_module(module)
+            _deadline_clear()
+        except TestTimeout:
+            _deadline_clear()
+            results.append({"name": rel, "status": "timeout",
+                            "message": "the test file never finished importing",
+                            "ms": timeout_ms})
+            continue
+        except Exception as exc:  # noqa: BLE001
+            _deadline_clear()
+            results.append({"name": rel, "status": "exception",
+                            "message": "%s: %s" % (type(exc).__name__, exc),
+                            "ms": 0.0, "traceback": _player_traceback()})
+            continue
+
+        names = [n for n in sorted(dir(module))
+                 if n.startswith("test") and callable(getattr(module, n))]
+        if not names:
+            results.append({"name": rel, "status": "exception",
+                            "message": "no test functions found", "ms": 0.0})
+        for name in names:
+            record = {"name": "%s::%s" % (rel, name), "status": "pass",
+                      "ms": 0.0, "message": ""}
+            started = time.perf_counter()
+            try:
+                _deadline_start(timeout_ms / 1000.0)
+                getattr(module, name)()
+                _deadline_clear()
+            except TestTimeout:
+                _deadline_clear()
+                record["status"] = "timeout"
+                record["message"] = "ran longer than %dms" % timeout_ms
+            except AssertionError as exc:
+                _deadline_clear()
+                record["status"] = "fail"
+                record["message"] = str(exc) or "assertion failed"
+                record["traceback"] = _player_traceback()
+            except Exception as exc:  # noqa: BLE001
+                _deadline_clear()
+                record["status"] = "exception"
+                record["message"] = "%s: %s" % (type(exc).__name__, exc)
+                record["traceback"] = _player_traceback()
+            record["ms"] = round((time.perf_counter() - started) * 1000.0, 3)
+            results.append(record)
+    return results
+
+
 def main():
     payload_path, result_path = sys.argv[1], sys.argv[2]
     with open(payload_path) as fh:
         payload = json.load(fh)
 
+    # A project is several files that import each other. The child runs with -I,
+    # which deliberately keeps the script's directory off sys.path, so the
+    # project has to be put there explicitly or nothing in it can import
+    # anything else in it.
+    project_dir = payload.get("project_dir")
+    if project_dir:
+        sys.path.insert(0, project_dir)
+
     sys.setrecursionlimit(RECURSION_LIMIT)
     _deadline_install()
+
+    # A Mini-Repo is graded by running the project's own tests, not by calling a
+    # function the player wrote, so it never reaches the compile path below.
+    if payload.get("mode") == "project":
+        outcome = {"ok": False, "phase": "tests", "tests": [],
+                   "stdout": "", "stderr": ""}
+        try:
+            outcome["tests"] = run_project_tests(
+                project_dir, payload.get("test_files", []),
+                payload.get("timeout_ms", 3000))
+            outcome["ok"] = True
+        except Exception as exc:  # noqa: BLE001
+            outcome["error"] = {"type": type(exc).__name__, "message": str(exc)}
+        _emit(result_path, outcome)
+        return
     preamble = payload["entry"].get("preamble") or ""
     if preamble:
         source = preamble.rstrip() + "\n\n" + payload["source"]

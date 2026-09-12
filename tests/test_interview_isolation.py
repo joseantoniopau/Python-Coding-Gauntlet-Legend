@@ -164,7 +164,65 @@ SEALED_POSTS = (
     ("/api/load", {"slot_id": 1}, "BUILD"),
     ("/api/undo", {}, "BUILD"),
     ("/api/slot/import", {"payload": {"kind": "gauntlet-save-slot"}}, "BUILD"),
+
+    # -- the ten systems that had no door until this pass ------------------
+    #
+    # Read the capabilities rather than assuming BUILD: each of these is
+    # refused at the capability the module that owns it names, so a screen can
+    # say WHICH thing was taken. The healer and the smith are upkeep's BUILD;
+    # the townspeople are WEAKNESS_MAP, because a local reading your boots at
+    # you is the tactical read through a friendlier face; regalia is PET,
+    # because the object is attached to the companion; the sages and the
+    # finale are MENTOR.
+    ("/api/town/heal", {}, "BUILD"),
+    ("/api/town/repair", {"piece": "boots"}, "BUILD"),
+    ("/api/shop/buy", {"potion_id": "health_minor"}, "BUILD"),
+    ("/api/broker/open", {"form_id": "assay"}, "BUILD"),
+    # Settling a contract pays gold and records income. The engine does not
+    # refuse it; the door does, because the world may not advance under a
+    # player who is sealed off from it.
+    ("/api/broker/close", {"abandon": True}, "BUILD"),
+    ("/api/sanctuary/rest", {"sanctuary_id": "ilma_vetch"}, "BUILD"),
+    ("/api/town/talk", {}, "WEAKNESS_MAP"),
+    ("/api/npc/speak", {"npc_id": "odile"}, "WEAKNESS_MAP"),
+    ("/api/regalia/wear", {"regalia_id": "porch_nail"}, "PET"),
+    ("/api/sage/begin", {}, "MENTOR"),
+    # These two the engine never refuses on its own. The first would open an
+    # ordinary adventure encounter in the middle of a measured run; the second
+    # would hand over a secret art.
+    ("/api/sage/encounter", {"stage_key": "name"}, "MENTOR"),
+    ("/api/sage/stage", {"stage_key": "name"}, "MENTOR"),
+    ("/api/finale", {}, "MENTOR"),
+    ("/api/hunt/engage", {}, "BUILD"),
+    # Pays a bounty: gold, metal, a draught and possibly a trophy.
+    ("/api/hunt/resolve", {"casts": 4, "killed": True}, "BUILD"),
 )
+
+# The GETs that are refused too, and WHY each one is, because a read that is
+# sealed needs a better reason than tidiness.
+#
+#   /api/regalia — `regalia.view` takes `mode=` and `sealed=` and zeroes the
+#     schedule when either says so. `Game.regalia_view()` passes neither, so
+#     inside a measured run this screen reports a threshold scale and an
+#     intervention count that are NOT in force. Numbers that are not in force
+#     are the SKILL_STATE leak wearing a different hat.
+#   /api/sage — `sages.available_in` already refuses a sealed run; it decides
+#     it from the encounter, and between problems there is not one.
+#   /api/hunt — `hunt_view` reads readiness with `build_sealed` left at its
+#     default, so a measured run would be handed a preparation score counting
+#     class bonuses it no longer has.
+SEALED_GETS = (
+    ("/api/regalia", "PET"),
+    ("/api/sage", "MENTOR"),
+    ("/api/hunt", "BUILD"),
+)
+
+# The reads that stay OPEN during a measured run, and that is deliberate. A
+# price is not a hint, a log of who you have already freed is not a hint, and a
+# screen that refuses to show a player their own armour is a refusal with no
+# rule behind it.
+OPEN_GETS = ("/api/town", "/api/town/quote", "/api/shop", "/api/broker",
+             "/api/sanctuaries", "/api/rollcall", "/api/arts")
 
 # Every world-layer POST, with a body that is the wrong shape in some way. None
 # of these may produce a 500: a player who sends nonsense gets a sentence.
@@ -175,6 +233,13 @@ JUNK_BODIES = (
      "ordinal": "x", "seed": {}, "signals": "go", "move_id": 9,
      "encounter_id": "", "payload": 3, "seconds_by_segment": {"set": "soon"},
      "scope": "sideways", "profile": "NOBODY"},
+    # The same again for the ten systems' own keys.
+    {"piece": 3, "potion_id": [], "quantity": "lots", "form_id": None,
+     "abandon": 1, "sanctuary_id": {}, "npc_id": 7, "regalia_id": ["x"],
+     "stage_key": 0, "region": 99, "casts": "many", "killed": "yes",
+     "exam_report": "done"},
+    {"quantity": 10 ** 9, "casts": -5, "region": "x" * 500,
+     "piece": "legendary", "potion_id": "health_minor"},
 )
 
 
@@ -274,6 +339,81 @@ class TestInterviewIsolationOverHTTP(ServerTest):
         self.assertEqual(status, 409)
         self.assertEqual(payload["capability"], "PET")
 
+    def test_every_sealed_read_is_refused_and_names_its_capability(self):
+        self.enter_the_room()
+        for path, capability in SEALED_GETS:
+            with self.subTest(path=path):
+                status, payload = self.hit("GET", path)
+                self.assertEqual(status, 409, f"{path} answered {status}")
+                self.assertEqual(payload["error"], "sealed")
+                self.assertEqual(payload["capability"], capability)
+                self.assertTrue(payload["message"].strip())
+
+    def test_those_same_reads_are_open_outside_a_measured_run(self):
+        for path, _ in SEALED_GETS:
+            with self.subTest(path=path):
+                status, payload = self.hit("GET", path)
+                self.assertEqual(status, 200, f"{path} answered {status}")
+                self.assertNotEqual(payload.get("error"), "sealed")
+
+    def test_the_reads_that_stay_open_stay_open(self):
+        """A price is not a hint and a log of who you already freed is not a
+        hint. Sealing these would be a refusal with no rule behind it."""
+        self.enter_the_room()
+        for path in OPEN_GETS:
+            with self.subTest(path=path):
+                status, payload = self.hit("GET", path)
+                self.assertEqual(status, 200, f"{path} answered {status}")
+                self.assertNotEqual(payload.get("error"), "sealed")
+
+    def test_the_seal_holds_between_problems_and_not_only_during_one(self):
+        """The reason the door has its own check, measured.
+
+        `finalexam.sealed(encounter, capability)` asks about an ENCOUNTER, and
+        `sealed(None, anything)` is False. In a measured run `self.encounter` is
+        None whenever the player is between problems — including the whole
+        stretch between `start_interview()` and the first `interview_current()`.
+        The engine's healer, smith, sanctuary, sage board and finale all ask the
+        question that way, so in that window they answer normally.
+
+        This asserts the hole exists in the engine and that the door closes it.
+        If a later pass teaches those methods to ask about the RUN as well, the
+        first half of this test starts failing, and that is the right failure:
+        delete it and keep the second half.
+        """
+        from gauntlet import finalexam
+        self.enter_the_room()
+        self.assertTrue(self.g.state.get("interview"))
+        self.assertIsNone(self.g.encounter, "no encounter between problems")
+        self.assertFalse(finalexam.sealed(self.g.encounter, "BUILD"))
+        # The engine, asked directly, does not refuse in this window.
+        self.assertNotEqual(self.g.heal().get("error"), "sealed")
+        # The door does.
+        for path, body in (("/api/town/heal", {}),
+                           ("/api/town/repair", {}),
+                           ("/api/sanctuary/rest",
+                            {"sanctuary_id": "ilma_vetch"}),
+                           ("/api/sage/begin", {}),
+                           ("/api/finale", {})):
+            with self.subTest(path=path):
+                status, payload = self.hit("POST", path, body)
+                self.assertEqual(status, 409, f"{path} answered {status}")
+                self.assertEqual(payload["error"], "sealed")
+
+    def test_walking_away_from_an_apex_is_never_sealed(self):
+        """hunters.FLEE_ALWAYS_SUCCEEDS is a promise, and a door that could
+        refuse it would trap a player in a fight they were told they could
+        always leave. Engaging is sealed; fleeing is not, in either mode."""
+        from gauntlet import hunters
+        self.assertTrue(hunters.FLEE_ALWAYS_SUCCEEDS)
+        status, payload = self.hit("POST", "/api/hunt/flee", {})
+        self.assertEqual(status, 200)
+        self.assertNotEqual(payload.get("error"), "sealed")
+        self.enter_the_room()
+        status, payload = self.hit("POST", "/api/hunt/flee", {})
+        self.assertEqual(status, 200)
+        self.assertNotEqual(payload.get("error"), "sealed")
+
     def test_the_token_guard_still_stands_in_front_of_all_of_it(self):
         for path, body, _ in SEALED_POSTS[:4]:
             with self.subTest(path=path):
@@ -329,7 +469,14 @@ class TestTheServerNeverBreaksOnBadInput(ServerTest):
                 ("/api/dungeon/enter", "dungeon_id", "the_basement"),
                 ("/api/travel", "route", "rt_nowhere"),
                 ("/api/incant/start", "encounter_id", "enc_nothing"),
-                ("/api/incant/cast", "move_id", "abracadabra")):
+                ("/api/incant/cast", "move_id", "abracadabra"),
+                ("/api/town/repair", "piece", "tiara"),
+                ("/api/shop/buy", "potion_id", "elixir_of_whatever"),
+                ("/api/broker/open", "form_id", "guessing"),
+                ("/api/sanctuary/rest", "sanctuary_id", "nobody"),
+                ("/api/npc/speak", "npc_id", "nobody"),
+                ("/api/regalia/wear", "regalia_id", "crown"),
+                ("/api/sage/stage", "stage_key", "flourish")):
             with self.subTest(path=path):
                 status, payload = self.hit("POST", path, {key: value})
                 self.assertEqual(status, 404, f"{path} answered {status}")
@@ -367,8 +514,12 @@ class TestTheWorldLayerIsReachable(ServerTest):
     def test_quests_pets_and_dungeons(self):
         board = self.get("/api/quests")
         self.assertEqual(board["counts"]["total"], 74)
-        self.assertEqual(len(self.get("/api/pets")["pets"]), 9)
-        self.assertEqual(self.get("/api/pets")["limit"], 2)
+        # Twelve entries, eleven animals: the starter and the thing that comes
+        # back out of the barrow are the same boar on either side of it.
+        self.assertEqual(len(self.get("/api/pets")["pets"]), 12)
+        # One in the field, never two. Two meant there was a companion for every
+        # kind of trouble and no decision left in the choosing.
+        self.assertEqual(self.get("/api/pets")["limit"], 1)
         cards = self.get("/api/dungeons?region=fields_of_syntax")["dungeons"]
         self.assertTrue(cards)
         entered = self.hit("POST", "/api/dungeon/enter",
@@ -393,6 +544,242 @@ class TestTheWorldLayerIsReachable(ServerTest):
         self.assertEqual(again["seed"], card["seed"])
         self.assertTrue(self.get("/api/incantation?region=fields_of_syntax")
                         ["encounters"])
+
+    # -- the ten systems, one assertion each on the shape the client uses --
+
+    def test_the_town_the_healer_and_the_smith(self):
+        from gauntlet import upkeep
+        square = self.get("/api/town")
+        self.assertEqual(square["healer"]["id"], upkeep.DEFAULT_HEALER)
+        self.assertIn("gold", square)
+        self.assertIn("rows", square["quote"])
+        healed = self.hit("POST", "/api/town/heal", {})[1]
+        # Free, and the payload says so in its own words rather than the
+        # client's. Health gates attempts; charging for attempts steepens the
+        # curve exactly where it should flatten.
+        self.assertEqual(healed["gold_cost"], 0)
+        self.assertTrue(healed["free_because"].strip())
+        mended = self.hit("POST", "/api/town/repair", {"piece": "boots"})[1]
+        self.assertIn("gold_spent", mended)
+
+    def test_the_shelf_and_the_broker(self):
+        from gauntlet import economy
+        shelf = self.get("/api/shop?region=fields_of_syntax")
+        self.assertTrue(shelf["stock"])
+        self.assertEqual(shelf["region"], "fields_of_syntax")
+        # A purchase with an empty purse is a refusal with a price on it, not
+        # a crash and not a silent no.
+        broke = self.hit("POST", "/api/shop/buy", {"potion_id": "health_minor"})[1]
+        self.assertEqual(broke["error"], "no_gold")
+        self.assertGreater(broke["price"], 0)
+        self.g.state["player"]["gold"] = 500
+        self.g.save()
+        bought = self.hit("POST", "/api/shop/buy",
+                          {"potion_id": "health_minor", "quantity": 2})[1]
+        self.assertEqual(bought["quantity"], 2)
+        self.assertGreater(bought["gold_spent"], 0)
+        self.assertEqual(bought["gold"], 500 - bought["gold_spent"])
+        board = self.get("/api/broker")
+        self.assertTrue(board["offers"])
+        form = board["offers"][0]["id"]
+        self.assertIn(form, {f.id for f in economy.TRIAL_FORMS})
+        opened = self.hit("POST", "/api/broker/open", {"form_id": form})[1]
+        self.assertTrue(opened["opened"])
+        # One trial open at a time, ever — so the board now says so.
+        self.assertTrue(self.get("/api/broker")["trial"])
+        closed = self.hit("POST", "/api/broker/close", {"abandon": True})[1]
+        self.assertIn("purse", closed)
+
+    def test_the_hidden_healers(self):
+        from gauntlet import sanctuary
+        journal = self.get("/api/sanctuaries")
+        self.assertIn("journal", journal)
+        self.assertIn("needed", journal)
+        rested = self.hit("POST", "/api/sanctuary/rest",
+                          {"sanctuary_id": sanctuary.SANCTUARIES[0].id})[1]
+        # Free, like the Mender, and it revives a fainted companion — which is
+        # the whole point of a healer hidden where a fainted companion happens.
+        self.assertEqual(rested["gold_cost"], 0)
+        self.assertIn("toll", rested)
+
+    def test_the_forty_seven_voices(self):
+        from gauntlet import banter
+        room = self.hit("POST", "/api/town/talk", {})[1]
+        self.assertTrue(room["speakers"])
+        self.assertFalse(room["sealed"])
+        first = room["speakers"][0]
+        # Identity AND remark, both. A screen that renders only the second has
+        # built an advice kiosk out of a town.
+        self.assertTrue(first["identity"])
+        self.assertTrue(first["lines"])
+        self.assertIn(first["id"], banter.SPEAKERS)
+        again = self.hit("POST", "/api/npc/speak", {"npc_id": first["id"]})[1]
+        self.assertEqual(again["id"], first["id"])
+        self.assertTrue(again["lines"])
+
+    def test_regalia_reports_the_numbers_actually_in_force(self):
+        """The collision, as an assertion. quests.REGALIA and regalia.py chose
+        the same two levers; this screen folds both through ONE floor and ONE
+        ceiling, which is what stops them reaching past what either declares."""
+        from gauntlet import regalia
+        view = self.get("/api/regalia")
+        self.assertEqual(view["floor"], regalia.SCALE_FLOOR)
+        self.assertEqual(view["ceiling"], regalia.INTERVENTION_CEILING)
+        # The catalogue is one row per companion, each carrying that
+        # companion's own objects. Every id in it is regalia.py's.
+        offered = [row["id"] for card in view["catalogue"]
+                   for row in card["regalia"]]
+        self.assertTrue(offered)
+        self.assertTrue(set(offered) <= set(regalia.BY_ID))
+        # The two levers, inside the single floor and the single ceiling that
+        # both regalia systems now share.
+        schedule = view["schedule"]
+        self.assertGreaterEqual(schedule["threshold_scale"], view["floor"])
+        self.assertLessEqual(schedule["interventions"], view["ceiling"])
+        # One object per companion, so the object names its own. Take-off
+        # works on whoever is in the field, which is why the pet is set to it.
+        piece = regalia.BY_ID["porch_nail"]
+        self.g.state[regalia.REGALIA_STATE_KEY]["found"].append(piece.id)
+        self.g.state["pets"]["found"] = [piece.pet]
+        self.g.state["pets"]["active"] = [piece.pet]
+        self.g.save()
+        worn = self.hit("POST", "/api/regalia/wear", {"regalia_id": piece.id})[1]
+        self.assertEqual(worn.get("regalia"), piece.id)
+        # Taking it off is always allowed; nobody is stuck wearing anything.
+        self.assertEqual(self.hit("POST", "/api/regalia/wear",
+                                  {"regalia_id": ""})[1]["removed"], piece.id)
+
+    def test_a_sage_and_the_art_behind_them(self):
+        from gauntlet.engine import SAGES_STATE_KEY
+        board = self.get("/api/sage")
+        # Not found yet: a SILHOUETTE with the deed spelled out, never a grey
+        # wall. `why` is a thing to go and do.
+        self.assertTrue(board["available"])
+        self.assertFalse(board["met"])
+        self.assertFalse(board["may_attempt"])
+        self.assertTrue(board["why"].strip())
+        self.assertTrue(board["art"]["id"])
+        self.assertFalse(board["art"]["known"])
+        self.g.state[SAGES_STATE_KEY]["found"].append(board["sage"])
+        self.g.state["class"] = {"class": "analyst"}
+        self.g.save()
+        plan = self.hit("POST", "/api/sage/begin", {})[1]
+        self.assertTrue(plan["started"])
+        # Five rungs bound to REAL problems, so the trial is answered the way
+        # anything else is answered.
+        self.assertTrue(plan["bound"])
+        key, problem_id = sorted(plan["bound"].items())[0]
+        opened = self.hit("POST", "/api/sage/encounter", {"stage_key": key})[1]
+        self.assertEqual(opened["problem"]["id"], problem_id)
+        # And the rung cannot be cleared by asserting it: with no attempt on
+        # the record, there is nothing to resolve against.
+        self.g.state[SAGES_STATE_KEY]["run"]["at"] = 9e18
+        self.g.save()
+        stage = self.hit("POST", "/api/sage/stage", {"stage_key": key})[1]
+        self.assertIn("not been attempted", stage["error"])
+
+    def test_the_art_book_and_the_roll_call(self):
+        from gauntlet import captives
+        book = self.get("/api/arts")
+        self.assertTrue(book["ladder"])
+        self.assertEqual(book["known"], [])
+        roll = self.get("/api/rollcall")
+        self.assertEqual(roll["total"], len(captives.CAPTIVES))
+        self.assertEqual(roll["freed"], [])
+        # Both halves in the same row shape: the ending is a eucatastrophe and
+        # not a restoration, so the list that has not been freed is shown too.
+        self.assertEqual(len(roll["still_held"]), len(captives.CAPTIVES))
+        self.assertTrue(roll["still_held"][0]["name"])
+        self.assertTrue(roll["still_held"][0]["boss"])
+
+    def test_the_finale_is_a_scene_and_changes_nothing(self):
+        scene = self.hit("POST", "/api/finale", {})[1]
+        self.assertTrue(scene["acts"])
+        self.assertTrue(scene["title_card"])
+        self.assertTrue(scene["changes_nothing"])
+        coda = self.hit("POST", "/api/finale/coda", {})[1]
+        self.assertTrue(coda["coda_seen"])
+
+    def test_the_hunt_reads_out_before_it_is_fought(self):
+        from gauntlet import hunters
+        region = "python_village"
+        readout = self.get("/api/hunt?region=" + region)
+        self.assertEqual(readout["apex"]["id"],
+                         hunters.apex_for(region).id)
+        self.assertTrue(readout["lesson"])
+        # The readout is the point: how long this takes is said at the door.
+        self.assertTrue(readout["scaling"]["blurb"])
+        self.assertIn("score", readout["readiness"])
+        self.assertTrue(readout["client"]["apexes"])
+        # Nothing is hunting yet, so engaging is a sentence and not a crash.
+        self.assertIn("nothing is hunting",
+                      self.hit("POST", "/api/hunt/engage",
+                               {"region": region})[1]["error"])
+        # Put one on the board and walk the whole fight.
+        block = self.g._hunt_state()
+        row = hunters.new_hunt(region)
+        row.state = "TRACKING"
+        block["regions"][region] = row.to_dict()
+        self.g.save()
+        engaged = self.hit("POST", "/api/hunt/engage", {"region": region})[1]
+        self.assertTrue(engaged["engaged"])
+        self.assertTrue(engaged["flee"]["allowed"])
+
+        # A CLAIM IS NOT A KILL. This used to POST `killed: True` and be paid
+        # a bounty in gold, metal, a draught and a trophy for it — the client
+        # deciding whether the player won, in a game whose first rule is that
+        # the typing is the attack. The door reads the engine's own ledger now,
+        # and the frozen scaling says how many landed lines the apex is long.
+        needed = engaged["scaling"]["target_casts"]
+        refused = self.hit("POST", "/api/hunt/resolve",
+                           {"casts": 9999, "killed": True})[1]
+        self.assertFalse(refused.get("killed"))
+        self.assertEqual(refused["needed"], needed)
+        # And the fight is still standing, so an honest miscount costs nothing.
+        self.assertTrue(self.g._hunt_state()["fight"])
+
+        # Now put the lines in. Every one is a graded submission through the
+        # ordinary door; nothing here grades itself.
+        landed = 0
+        while landed < needed:
+            payload = self.g.next_encounter(region=region)
+            if payload.get("error"):
+                break
+            problem = self.g.by_id[self.g.encounter.problem_id]
+            before = self.g._hunt_state()["fight"]["casts"]
+            self._resolve_encounter(problem)
+            after = self.g._hunt_state()["fight"]["casts"]
+            if after == before:
+                continue            # a rung it could not land; the fight waits
+            landed = after
+        self.assertGreaterEqual(landed, needed,
+                                "the apex could not be brought down by typing")
+        paid = self.hit("POST", "/api/hunt/resolve",
+                        {"casts": landed, "killed": True})[1]
+        self.assertTrue(paid["killed"])
+        self.assertTrue(paid["first_kill"])
+        self.assertEqual(paid["casts"], landed)
+        self.assertGreater(paid["paid"]["gold"], 0)
+
+    def _resolve_encounter(self, problem):
+        """Answer the open encounter correctly, whatever kind it is."""
+        from gauntlet import puzzles
+        if problem.encounter_kind in puzzles.PUZZLE_KINDS:
+            return self.g.solve_puzzle(puzzles.answer_key(problem))
+        if problem.mcq and "answer" in problem.mcq:
+            return self.g.answer_mcq(problem.mcq["answer"])
+        return self.g.submit(problem.canonical_solution)
+
+    def test_an_apex_readout_for_a_region_with_nothing_in_it(self):
+        """Not every region has an apex, and saying so is not an error."""
+        from gauntlet import hunters, world
+        empty = [r["id"] for r in world.REGIONS
+                 if hunters.apex_for(r["id"]) is None]
+        if not empty:
+            self.skipTest("every region has an apex")
+        payload = self.get("/api/hunt?region=" + empty[0])
+        self.assertIsNone(payload["apex"])
+        self.assertTrue(payload["line"])
 
 
 

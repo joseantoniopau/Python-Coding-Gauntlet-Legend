@@ -300,14 +300,36 @@ def run_probe(problem, args, expected, *, effects: dict,
         return ProbeResult(ok=True, correct=True, weakness=weakness,
                            weakness_hit=weakness_hit, message=message, damage=damage)
 
-    reveal = bool(effects.get("probe_reveal_value")) or bool(effects.get("reveal_category"))
-    true_value = outcome.got if reveal else None
+    # TWO EFFECTS, NOT ONE. These were ORed together, which meant anything that
+    # had ever granted the weaker one handed over the stronger one's payload.
+    #
+    #   reveal_category    "probes name the failure category they would trigger"
+    #   probe_reveal_value "a failed probe shows the true value"
+    #
+    # The Testsmith set grants both, so the set that this message points at
+    # behaved correctly and the bug stayed invisible there. Everything holding
+    # reveal_category ALONE was quietly an oracle: the Boundary Maul from rung
+    # five and the Tracing Needle from rung four, whose own technique text says
+    # "the category, never the input and never the expected value" — and then
+    # the probe printed the expected value. That is the answer rule broken by a
+    # boolean rather than by a decision, so the two are separated here and the
+    # category is named as a category.
+    reveal_value = bool(effects.get("probe_reveal_value"))
+    name_category = bool(effects.get("reveal_category"))
+    true_value = outcome.got if reveal_value else None
     hint = ""
     if weakness:
         hint = " " + WEAKNESSES[weakness]["teach"]
     message = ("Your model of the spec was wrong on that input. Better to learn it "
                "now than after twenty minutes of implementation." + hint)
-    if not reveal:
+    if name_category and weakness:
+        # Same phrasing the passing branch above uses, because the category is
+        # the same fact whether the probe landed or not.
+        info = WEAKNESSES[weakness]
+        article = "an" if info["name"][0] in "AEIOU" else "a"
+        message += (f" That input is {article} {info['name']} case — which is "
+                    "the category it falls in, and not what the answer on it is.")
+    if not reveal_value:
         message += (" Equip something from the Testsmith line and a failed probe will "
                     "show you the true value.")
     return ProbeResult(ok=True, correct=False, weakness=weakness, weakness_hit=False,

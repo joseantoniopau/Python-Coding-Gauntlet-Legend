@@ -19,6 +19,14 @@ from typing import Any, Callable, Iterable
 # ---------------------------------------------------------------------------
 
 PATTERNS = [
+    # LANGUAGE is first because it is the only one that is not an algorithm.
+    # It means: the subject of this problem is Python itself — a statement, an
+    # operator, a parameter list, what a name binds to — and no data structure
+    # is being exercised. Chapter I is called The Language Itself and had no
+    # pattern that said so, which is how `doubled = n * 2` came to be labelled
+    # STRING and shown to a beginner under that word. The pattern label is what
+    # the player is trained to recognise a problem by, so it has to be true.
+    "LANGUAGE",
     "HASH_MAP", "SET", "SLIDING_WINDOW", "TWO_POINTER", "STACK", "QUEUE",
     "BFS", "DFS", "TREE", "RECURSION", "BINARY_SEARCH", "MATRIX", "HEAP",
     "PREFIX_SUM", "SORTING", "SIMULATION", "DP", "STRING", "ARRAY",
@@ -40,6 +48,12 @@ ENCOUNTER_KINDS = [
     "CODE_BATTLE", "DEBUG_BATTLE", "MISSING_RUNE", "PATTERN_ENCOUNTER",
     "COMPLEXITY_DUEL", "EDGE_CASE_TRAP", "REFACTOR_QUEST", "CODE_READING",
     "TEST_FORGE", "SPEED_DUEL", "MEMORY_AMBUSH", "ELITE", "BOSS",
+    # A Mini-Repo is NOT a Problem, and no Repo is ever built into the corpus:
+    # it has no single entry point, no reference callable and no derived tests.
+    # The string is here because this list is the one table of what a fight can
+    # be, and a kind the engine can serve that the table has never heard of is
+    # how the two quietly stop agreeing. See gauntlet/minirepo.py.
+    "MINI_REPO",
 ]
 
 REALMS = [
@@ -157,6 +171,29 @@ class Problem:
     tags: list[str] = field(default_factory=list)
     mutants: list[str] = field(default_factory=list)         # TEST_FORGE only
 
+    # -- lineage and the sealed hold-out set --------------------------------
+    #
+    # `lineage_id` groups problems that are the same exercise wearing different
+    # clothes: a template's skins, an authored problem and the variants
+    # generated from it, a scaffolded entry rung and the full-dress version of
+    # the same algorithm. Clearing five siblings is one piece of evidence, not
+    # five, and the spaced repetition scheduler wants exactly that grouping.
+    # It is derived at build time — see corpus.assign_lineage — never typed here.
+    #
+    # `sealed` marks a problem the teaching side of the game may never touch:
+    # no Adventure encounter, no hint, no SRS review, no coaching, no worked
+    # solution. It exists so that one measurement in this game is taken on a
+    # formulation the player has provably never been shown. Chosen at build
+    # time by hashing the id (corpus.seal_holdout), so it cannot drift under a
+    # player between rebuilds — a hold-out that moves voids every number it
+    # ever produced.
+    #
+    # Not to be confused with `finalexam.sealed()`, which asks whether a
+    # capability is sealed off during an encounter. Different sense of the word,
+    # both load-bearing; this one is a property of the corpus.
+    lineage_id: str = ""
+    sealed: bool = False
+
     # -- derived ------------------------------------------------------------
     @property
     def all_tests(self) -> list[dict]:
@@ -176,6 +213,12 @@ class Problem:
         d.pop("alternate_solutions", None)
         d.pop("mutants", None)
         d["hidden_test_count"] = len(self.hidden_tests) + len(self.edge_cases)
+        # Hold-out membership does not travel. A player who can read which
+        # problems are sealed can study the hold-out, and a studied hold-out
+        # measures familiarity again — which is the entire thing it exists not
+        # to measure. The server knows; the browser has no business knowing.
+        d.pop("sealed", None)
+        d.pop("lineage_id", None)
         if mode == "interview":
             # Interview Mode measures. No teaching surface whatsoever.
             d["hint_tree"] = []

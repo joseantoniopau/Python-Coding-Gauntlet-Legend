@@ -107,15 +107,26 @@ class TestItems(GameTest):
         self.assertGreater(g.state["player"]["mana_max"], before)
 
     def test_hint_discount_reduces_focus_cost(self):
+        from gauntlet import pets
         g = self.game()
         g.state["inventory"] = ["archivist_hood", "archivist_robe", "archivist_ring"]
         g.state["equipped"] = {"head": "archivist_hood", "chest": "archivist_robe",
                                "ring1": "archivist_ring"}
         g._sync_caps()
+        # The middle of the hint tree is read out by the companion in the field,
+        # and a fresh save is carrying the TUTORIAL-tier starter. This test is
+        # about what a rung COSTS, not about who may cast it, so it fields an
+        # animal that reads this depth before asking the question.
+        problem = self.by_id("sw-k-distinct")
+        reader = next(pet.id for pet in pets.PETS
+                      if pets.covers(pet.id, problem.difficulty))
+        pets.grant(g.state["pets"], reader)
+        g.set_active_pets([reader])
         g.save()
         g.start_encounter("sw-k-distinct")
         result = g.use_hint(3)
-        rung = next(r for r in self.by_id("sw-k-distinct").hint_tree if r["level"] == 3)
+        self.assertNotIn("error", result, result.get("message", ""))
+        rung = next(r for r in problem.hint_tree if r["level"] == 3)
         self.assertLess(result["cost"], rung["mana"])
 
     def test_rank_grace_never_changes_correctness(self):

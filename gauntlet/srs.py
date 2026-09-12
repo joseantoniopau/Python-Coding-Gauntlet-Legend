@@ -11,6 +11,7 @@ import time
 from dataclasses import dataclass, field, asdict
 
 from .config import SRS_INTERVALS_DAYS
+from .corpus import is_sealed
 
 DAY = 86400.0
 
@@ -86,6 +87,11 @@ def pick_disguised(entry: ScheduleEntry, candidates: list) -> object | None:
     """Prefer a problem in the family the player has NOT seen; prefer one whose
     surface differs most from what they last solved. Repeating the identical
     prompt tests recall of a prompt, which is not the skill being trained."""
+    # The schedule exists to make an unfamiliar problem familiar, which is the
+    # one thing that must never happen to hold-out content. Refused here as well
+    # as at the caller, because this function is the last thing standing between
+    # a candidate list and the player being shown it.
+    candidates = [p for p in candidates if not is_sealed(p)]
     if not candidates:
         return None
     seen = set(entry.seen_problem_ids)
