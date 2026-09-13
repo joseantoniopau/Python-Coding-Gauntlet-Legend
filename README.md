@@ -167,7 +167,33 @@ changes nothing about the exam that follows.
 | Combat | Turn-based · 6 elements in 3 opposed pairs · 12 potions · status effects · durability |
 | Content | 74 quests in 17 chains · 121 items · 22 artifacts |
 | Bestiary | 59 thematic creatures on 17 regional rosters · 6 boss phase stages |
+| The taken | 25 people across 14 holdings · freed by the boss that took them |
 | Stakes | Death rewinds the game and never the player · autosaves on region entry and boss kills |
+
+---
+
+## Two rewards, and they are not the same reward
+
+Every region boss took somebody out of its village. **Beat that boss and those
+specific people walk out** — with their own lines, the boon they hand you, the
+road it opens, and what changes back home. A rematch frees nobody, because they
+are already out.
+
+**Passing the practical is the other one**, and it is the end of the game rather
+than a payout: the Null King's index stops pointing, everyone still in a niche
+gets up on their own, and the cutscene is a roll call of what you actually did.
+
+Those two lists are kept apart on purpose, and the ending says so in one line:
+
+> **11 BY YOUR HAND. 14 BY THE FALL OF IT.**
+
+A roll call that quietly rounded up to everybody would be the game telling a lie
+about itself. The ending is a eucatastrophe, not a restoration.
+
+You can still sit the practical from the menu at level one having freed nobody,
+and it is the same sealed, timed, unassisted exam. It measures you; it does not
+end the game. **The portal gates the story. The practical gates the ending.
+Nothing gates the practical.**
 
 ---
 

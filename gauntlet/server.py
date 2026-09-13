@@ -1557,6 +1557,30 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if self._sealed(g):
                 return True
             return self._reply(g.enter_portal())
+        # THE LAST FIGHT, STARTED FROM THE LAST ROOM. The one staged route.
+        #
+        # It composes the same practical `/api/exam/start` composes and then
+        # tells ending.py, by the composed exam's id, that THIS sitting is the
+        # story climax. `/api/exam/start` above does not and must never do
+        # that: two routes, one of which is the story, is the entire mechanism,
+        # and collapsing them is the one change that would break this feature.
+        #
+        # NOT SEALED, for the same reason `/api/exam/start` is not: this is how
+        # a player enters the thing that seals them.
+        #
+        # AND IT DOES NOT CHECK THE KEYRING. A player who walked in here with
+        # the wards dark could not have opened the door, but if they reach this
+        # route anyway the exam still runs — `ending.stage()` declines to stage
+        # it and the sitting is a measurement. The practical is never behind a
+        # door, and a route that refused it would be the worst bug this file
+        # could have.
+        if path == "/api/portal/trial":
+            profile = self._opt_str(body, "profile", "", limit=40)
+            if profile is None:
+                return True
+            if profile and profile not in config.INTERVIEW_PROFILES:
+                return self._fail(f"no profile called {profile!r}.", 404)
+            return self._reply(g.start_final_trial(profile or None))
         if path == "/api/finale/coda":
             # Bookkeeping: the player watched the second half. Hands over
             # nothing, so it is not sealed.

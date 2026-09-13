@@ -29,6 +29,12 @@ from . import transfer as transfermod
 # of them imports this file and none of them writes progression. Everything
 # below is that contract being honoured at the call sites the contracts name.
 from . import antagonist, arts, banter, captives, economy, finale, hunters, movesets
+# ending.py is the seam between the two exams and it is the ONLY thing in
+# this file that decides whether a practical was the story's last room or a
+# measurement sat from the menu. See ending.WIRING; the four touch points it
+# names are the DEFAULT_STATE key below, `_start_exam(staged=...)`,
+# `finish_interview`'s single `ending.resolve()` and `start_final_trial()`.
+from . import ending
 from . import regalia, sages, sanctuary, upkeep
 from .corpus import ensure as ensure_corpus
 from .corpus.schema import Problem
@@ -526,6 +532,14 @@ DEFAULT_STATE = {
     sanctuary.STATE_KEY: sanctuary.new_state(),           # "sanctuary"
     captives.STATE_KEY: captives.new_captive_state(),     # "captives"
     finale.STATE_KEY: finale.new_state(),                 # "finale"
+    # THE SEAM BETWEEN THE TWO EXAMS — "ending". Which practical was the
+    # story climax, whether it was passed, and whether the coda was watched.
+    # BOOKKEEPING, NOT EVIDENCE: it gates nothing, and a save that loses it
+    # replays a cutscene and is otherwise identical. `_merge` deep-copies
+    # DEFAULT_STATE and folds the save over the top, so a save written before
+    # this key existed gets ending.new_state() back-filled on load;
+    # ending.ensure() fills any single key a newer build adds on every call.
+    ending.STATE_KEY: ending.new_state(),                 # "ending"
     # THE NULL KING'S OWN LEDGER — "antagonist". What he has already said, so
     # he does not say it twice. He writes here and nowhere else, ever: no
     # mastery, no gold, no flag another system reads.
@@ -687,7 +701,32 @@ class Game:
             merged["story"] = storymod.new_story_state()
         self._migrate_pets(merged, fresh=False,
                            legacy=("fallen" not in (raw.get("pets") or {})))
-        return merged
+        return self._repair_blocks(merged)
+
+    @staticmethod
+    def _repair_blocks(state: dict) -> dict:
+        """NOTHING IN THE ENDING IS ALLOWED TO REFUSE THE PRACTICAL, and this is
+        that rule enforced at the doors every save comes through.
+
+        `_merge` folds the save OVER the defaults and a non-dict incoming value
+        wins outright, so a save carrying `"ending": null` — hand-edited,
+        imported, or written by something that is not this game; `db` validates
+        the envelope and not the type of each block — survives the merge as
+        None. That used to be harmless bookkeeping. It is not any more:
+        `_start_exam` calls `ending.clear_staging` on EVERY compose, so the next
+        sitting of the practical would raise AttributeError inside
+        `ending.ensure` and /api/exam/start would answer 500 — the measurement,
+        refused, by the module whose whole contract is that it never refuses it.
+
+        It repairs rather than refuses because the block is bookkeeping and
+        nothing else: rebuilding it replays a cutscene and costs the player
+        nothing. Both doors call this — `_load_or_create` for the save on disk
+        and `_after_load` for a slot or an undo, which does its own `_merge` and
+        would otherwise let the same null through.
+        """
+        if not isinstance(state.get(ending.STATE_KEY), dict):
+            state[ending.STATE_KEY] = ending.new_state()
+        return state
 
     def _migrate_pets(self, state: dict, *, fresh: bool,
                       legacy: bool = False) -> None:
@@ -2965,6 +3004,18 @@ class Game:
             # a client that draws both of them needs.
             "still_held": [captives._view(person)
                            for person in captives.still_held(self.state)],
+            # THE THIRD LIST, which `still_held` already subtracts and which
+            # used to have no route to a client at all. On the ordinary
+            # fourteen-key playthrough everybody is carried out by hand and this
+            # is empty, which is why it was invisible; on a save where the two
+            # lists disagree — the index fell on people no boss of this run ever
+            # held — the payload used to hand over `freed: 0, still_held: 0,
+            # total: 25` and the screen printed a lie about its own roll call.
+            # Same row shape as the other two, plus `released_line`, so the
+            # renderer can stage it as what it was and not as a rescue.
+            "released": captives.release_roll(self.state),
+            "released_count": len(captives.released(self.state)),
+            "index_collapsed": captives.index_collapsed(self.state),
             "boons": captives.boons(self.state),
             "routes": captives.open_routes(self.state),
             "changes": captives.village_changes(self.state),
@@ -3074,6 +3125,16 @@ class Game:
             "watching": self._antagonist(antagonist.PORTAL_OPENED) or None,
             "world": announcements,
             "message": world.THE_STANDING_PORTAL["open_line"],
+            # The room is open; the fight in it has not started. `start_here`
+            # is the route that starts it AS THE STORY — the only staged route
+            # there is — and it is named in the payload so the client does not
+            # have to know a second way in. `two_exams` travels with it so the
+            # screen that offers the last fight is also the screen that says
+            # what makes it different from the practice one.
+            "trial_route": "/api/portal/trial",
+            "ending": ending.status(
+                self.state, cleared_bosses=self.state["cleared_bosses"]),
+            "two_exams": ending.TWO_EXAMS,
         }
         self.save()
         return room
@@ -3131,9 +3192,13 @@ class Game:
         """On `the_prompt_stays`, not on the freeze frame. The two halves of
         this ending are separate and a player who walked out at the title card
         has seen half of it."""
-        out = finale.mark_coda_seen(self.state)
+        # Through ending.py, which marks its own half and then calls
+        # finale.mark_coda_seen for the other: "the_prompt_stays" on a pass and
+        # "the_prompt_waits" on a failure are the same beat of the same ending,
+        # and only one of them is a finale scene.
+        out = ending.mark_coda_seen(self.state)
         self.save()
-        return out
+        return dict(out)
 
     # -- companions --------------------------------------------------------
     def pet_catalogue(self) -> dict:
@@ -3637,7 +3702,7 @@ class Game:
         """A loaded save is somebody else's world. Rebuild everything derived."""
         merged = _deep_copy(DEFAULT_STATE)
         _merge(merged, self.state)
-        self.state = merged
+        self.state = self._repair_blocks(merged)
         self._reseed_world(self.state.get("world_seed") or 0)
         self._sync_class_points()
         self._grant_blade()
@@ -7975,14 +8040,30 @@ class Game:
     }
 
     def start_interview(self, fmt: str = "GAUNTLET",
-                        profile: str | None = None) -> dict:
+                        profile: str | None = None, *,
+                        staged: bool = False) -> dict:
+        """Start a measured run. `staged` is the story, never the measurement.
+
+        `staged` is a PARAMETER and not a saved flag, and that is the whole of
+        why the two exams cannot drift into each other. There is no bit left
+        lying in the save that a later call could pick up by accident: the only
+        way to reach `staged=True` is to be called by `start_final_trial()`,
+        which is reached only from the last room's own door. Every other caller
+        in the codebase — the menu, `/api/exam/start`, `/api/interview/start`,
+        the CLI — gets the default and composes a measurement.
+
+        THE DIRECTION OF THE GATE, said once more because this is the method it
+        would be easiest to break: nothing here consults the portal, the keyring
+        or `cleared_bosses`. A player at level one holding nothing sits exactly
+        this run, under exactly this seal, on exactly this clock.
+        """
         spec = self.INTERVIEW_FORMATS.get(fmt)
         if not spec:
             return {"error": "unknown format"}
         profile = config.normalise_profile(
             profile or self.state["player"]["profile"])
         if fmt == "FINAL_EXAM":
-            return self._start_exam(profile)
+            return self._start_exam(profile, staged=staged)
         weights = adaptive.PROFILE_PATTERN_WEIGHT.get(
             profile, adaptive.PROFILE_PATTERN_WEIGHT["GENERAL_SWE"])
         recent = set(self.state["recent_ids"][:15])
@@ -8032,6 +8113,18 @@ class Game:
             "results": [],
         }
         self.state["interview"] = run
+        # A GAUNTLET run is not an exam, so it must not inherit the identity of
+        # one. `state["exam"]` survived being abandoned before this line existed,
+        # and `_exam_debrief` reads it off the save rather than off the run —
+        # which meant an abandoned practical's payload could still be sitting
+        # there and hand this run a debrief carrying THAT exam's `exam_id`.
+        # Harmless while a format check guarded the finale; a way to end the
+        # game from a drill now that `ending.resolve` decides off the id. So the
+        # previous exam is dropped here and its staging with it: whoever walked
+        # away from the last room is not in it any more.
+        self.state["exam"] = None
+        self._exam = None
+        ending.clear_staging(self.state)
         self.save()
         return {
             "run": self.run_view(run), "label": spec["label"],
@@ -8048,13 +8141,59 @@ class Game:
             "problems": [{"difficulty": p.difficulty} for p in chosen],
         }
 
-    def _start_exam(self, profile: str) -> dict:
+    def start_final_trial(self, profile: str | None = None) -> dict:
+        """THE LAST ROOM'S OWN DOOR, and the only staged route in the game.
+
+        It composes the same practical `/api/exam/start` composes, out of the
+        same corpus, under the same seal, on the same clock — and then says, of
+        that one composed exam and by its id, "this sitting is the last room of
+        the story". `ending.stage()` is the only thing that knows the
+        difference and this is the only call site it has.
+
+        IT DOES NOT CHECK THE PORTAL, deliberately. If the wards are dark
+        `stage()` declines to stage and the exam runs anyway, as a measurement:
+        the story is refused, never the practical. A refusal to stage is
+        reported in `ending.staging` as information and it is NOT an error.
+        """
+        return self.start_interview("FINAL_EXAM", profile, staged=True)
+
+    def _start_exam(self, profile: str, *, staged: bool = False) -> dict:
+        # THE RECIPE IS SAVED WITH THE EXAM, and it has to be, because
+        # `exam.seed` is NOT the seed the exam was drawn with: finalexam.compose
+        # draws from its rng and only THEN pulls `seed=rng.randrange(1 << 30)`
+        # off the far side of the draw. Feeding that value back into compose()
+        # rebuilds a different exam, which is why `_recover_exam` silently failed
+        # for every run that outlived the process that composed it — the player
+        # got "the per-question debrief is unavailable" and no explanation they
+        # could act on.
+        #
+        # It matters far more now than it did then. `ending.resolve` recognises
+        # the story climax by `report["exam_id"]`, and an unavailable debrief
+        # carries no exam id, so a player who closed the game in the middle of a
+        # hundred-and-fifteen-minute practical and came back to finish it used to
+        # lose the ENDING as well as the debrief. The four inputs that decide the
+        # draw are the seed, the history, the recent ids and the profile; all
+        # four are written down here and read back in `_recover_exam`.
+        recipe = {
+            # The same source compose() reaches for when handed no seed
+            # (`random.getrandbits(48)`), so the exam is exactly as fresh as it
+            # was before this line existed. It is captured rather than thrown
+            # away, and that is the only difference.
+            "seed": random.getrandbits(48),
+            "history": finalexam.history_fingerprints(
+                db.interview_history(self.conn, limit=50)),
+            "recent_ids": list(self.state["recent_ids"]),
+            "profile": profile,
+        }
         exam = finalexam.compose(
             self.corpus, self.skills, profile=profile,
-            history=finalexam.history_fingerprints(
-                db.interview_history(self.conn, limit=50)),
-            recent_ids=self.state["recent_ids"])
+            seed=recipe["seed"],
+            history=recipe["history"],
+            recent_ids=recipe["recent_ids"])
         payload = exam.to_dict()
+        # Kept in the save and never sent: `_start_exam` returns
+        # `exam.player_view()`, and /api/state's `exam` key is the ladder.
+        payload["recipe"] = recipe
         self._exam = exam
         self.state["exam"] = payload
         run = {
@@ -8066,10 +8205,52 @@ class Game:
             "minutes": payload["minutes"], "results": [],
         }
         self.state["interview"] = run
+        # THE ONE PLACE THE TWO EXAMS ARE TOLD APART, and both arms of it write.
+        #
+        # Staging is bound to `payload["id"]`, the id of the exam that was just
+        # composed and the id `finalexam.debrief` reports back as
+        # `report["exam_id"]`. `ending.resolve` triggers on that match and on
+        # nothing else.
+        #
+        # The menu arm CLEARS rather than merely declining to set, so that
+        # `state["ending"]["staged_exam_id"]` is rewritten by every compose in
+        # the game and can never be a stale id left over from a trial the player
+        # walked out of. Combined with the same clearing in the GAUNTLET branch
+        # above, the invariant is total: after any start_interview call, the
+        # staged id is the id of the exam that is about to be sat if and only if
+        # that exam was composed by `start_final_trial`, and is empty otherwise.
+        if staged:
+            staging = ending.stage(self.state, exam_id=payload["id"],
+                                   cleared_bosses=self.state["cleared_bosses"])
+            # A REFUSED STAGE STILL HAS TO WRITE, or the paragraph above is a
+            # claim and not an invariant. `ending.stage` returns at its first
+            # guard when the portal is shut, BEFORE it touches the block — so
+            # without this line a trial composed behind dark wards leaves the
+            # PREVIOUS staged id sitting in the save, naming an exam that is no
+            # longer `state["exam"]`. The next menu compose clears it, so it is
+            # not a way to collapse the two exams; what it is, is one `load_slot`
+            # away from restoring that exam beside its stale id and re-firing an
+            # ending that was already spent. Staging is total or it is nothing.
+            if not staging.get("staged"):
+                ending.clear_staging(self.state)
+        else:
+            ending.clear_staging(self.state)
+            staging = {
+                "staged": False, "reason": "from_the_menu",
+                "why": "Interview Mode. This is the measurement, it is the "
+                       "same exam the last room uses, and it does not end the "
+                       "game however well it goes.",
+                "blocks_the_practical": False,
+            }
         self.save()
         fmt = finalexam.interview_format()
         return {
             "run": self.run_view(run), "label": fmt["label"],
+            # Which of the two things the player is about to sit, said at the
+            # door so they are never confused about it, and never as an error:
+            # `staged: False` here is the normal case and the honest one.
+            "staging": staging,
+            "two_exams": ending.TWO_EXAMS,
             # `player_view`, not the `to_dict` that is kept in the save. Exam
             # already drew this line for itself — "how long, how many, and in
             # what order. Not what they are about" — and the engine was sending
@@ -8096,13 +8277,41 @@ class Game:
             return {"error": "no exam running"}
         return self.finish_interview(seconds_by_segment=seconds_by_segment)
 
-    def _exam_debrief(self, results: list, seconds_by_segment) -> dict | None:
+    def _exam_debrief(self, results: list, seconds_by_segment,
+                      *, measured: dict | None = None) -> dict | None:
         payload = self.state.get("exam")
         if not payload:
             return None
         exam = self._recover_exam(payload)
         if exam is None:
-            return {"unavailable": True, "note":
+            # BELT AND BRACES FOR THE ENDING. `_start_exam` writes a recipe now
+            # and this branch should be unreachable for any exam composed since;
+            # it is still reachable for one that was already in flight when this
+            # build landed, or if the corpus itself changed underneath a run.
+            #
+            # `exam_id` is carried anyway, because it is a FACT the engine holds
+            # without rebuilding anything, and because `ending.resolve` reads it
+            # to decide whether this was the last room of the story. Without it a
+            # staged climax that could not be scored would return
+            # `triggered: False` — the player would finish the last fight and the
+            # game would say nothing at all, which is the one outcome this
+            # feature exists to prevent. With it the climax resolves; there is no
+            # verdict to read UNLESS the run was a clean sweep inside every
+            # clock this branch can see — which it can, off the measured results
+            # and the segment budgets in the payload, without rebuilding
+            # anything. That case is carried, because the alternative is the one
+            # this pass actually reproduced: a staged climax solved 6 of 6 in
+            # time, the report printing "INTERVIEW REPORT — 100%", and "THE
+            # SHELVES ARE STILL FULL" directly beneath it. Anything short of a
+            # sweep still carries no verdict and still resolves as a failure —
+            # which costs nothing, spends nothing and leaves the portal open, so
+            # it is a rematch and not a loss.
+            return {"exam_id": payload.get("id", ""),
+                    "format": payload.get("format_id", ""),
+                    "unavailable": True,
+                    **self._unscored_verdict(payload, measured,
+                                             seconds_by_segment),
+                    "note":
                     "The exam was composed in an earlier process and could not "
                     "be rebuilt, so the per-question debrief is unavailable. "
                     "The score is still the measured one."}
@@ -8117,24 +8326,84 @@ class Game:
             # a debrief that names it hands it over for free.
             served=db.transfer_problem_ids(self.conn))
 
-    def _recover_exam(self, payload: dict):
-        """The composed Exam, from memory or rebuilt from its own seed.
+    @staticmethod
+    def _unscored_verdict(payload: dict, measured: dict | None,
+                          seconds_by_segment) -> dict:
+        """A verdict for a run whose exam could not be rebuilt, or nothing.
 
-        Exam has no from_dict and compose() is seeded, so the rebuild is exact
-        when it works — and the fingerprint says whether it did rather than
-        leaving the player with a debrief about a different exam.
+        THE ONLY CLAIM MADE HERE IS THE ONE THAT CANNOT BE WRONG. finalexam's
+        pass rule is `set_solved >= 3 of 4`, `codebase_solved >= 2 of 2`, one
+        MEDIUM among the solves and the clocks kept; every clause of it is
+        satisfied outright by a run that solved everything in time, whatever the
+        exam turned out to be, so that is the only shape this will speak for.
+        A partial run is NOT guessed at — `finalexam._verdict` is the one place
+        that decides those and this is not a second copy of it.
+
+        The clock is checked per segment where the client sent segment timings,
+        because that is the clock `finalexam.debrief` actually measures against,
+        and against the whole 115 minutes otherwise.
+        """
+        m = measured or {}
+        total = int(m.get("total") or 0)
+        if not total or int(m.get("solved") or 0) != total:
+            return {}
+        if not m.get("within_clock"):
+            return {}
+        for segment in (payload.get("segments") or []):
+            spent = (seconds_by_segment or {}).get(segment.get("id"))
+            if spent is None:
+                continue
+            if float(spent) > float(segment.get("minutes") or 0) * 60:
+                return {}
+        # ending.PASS_VERDICT is the string `ending.resolve` compares against.
+        # Spelling it from there rather than here keeps one spelling of it.
+        return {"verdict": {
+            "code": ending.PASS_VERDICT,
+            "headline": "That is a pass.",
+            "body": ("You solved {t} of {t} with nothing to lean on, inside the "
+                     "clock. The per-question debrief could not be rebuilt — the "
+                     "corpus moved under this sitting — but the result is the "
+                     "measured one and it is not in doubt.").format(t=total),
+        }}
+
+    def _recover_exam(self, payload: dict):
+        """The composed Exam, from memory or rebuilt from the recipe it was
+        drawn with.
+
+        Exam has no from_dict, so the rebuild re-runs the draw — and it can only
+        be exact if it is handed the four things that decided it. See the note in
+        `_start_exam`: `payload["seed"]` is a number the composer produced AFTER
+        drawing and rebuilding from it is a different exam, so `payload["recipe"]`
+        is what this reads. The fingerprint check stays and is the arbiter: it is
+        what stops a near-miss rebuild being reported as this player's exam, and
+        it is what catches an exam composed by a build that wrote no recipe.
+
+        A rebuilt Exam is THE SAME EXAM and keeps its identity. The id is what
+        `finalexam.debrief` stamps into `report["exam_id"]`, which is the one
+        fact `ending.resolve` uses to recognise the story climax, and a fresh
+        `fx-<now>` off the rebuild would quietly disown the run.
         """
         cached = getattr(self, "_exam", None)
         if cached is not None and cached.fingerprint == payload.get("fingerprint"):
             return cached
+        recipe = payload.get("recipe") or {}
         try:
             rebuilt = finalexam.compose(
-                self.corpus, self.skills, profile=payload.get("profile"),
-                seed=payload.get("seed"),
+                self.corpus, self.skills,
+                profile=recipe.get("profile") or payload.get("profile"),
+                seed=recipe.get("seed", payload.get("seed")),
+                history=recipe.get("history") or (),
+                recent_ids=recipe.get("recent_ids") or (),
                 format_id=payload.get("format_id", "THE_PRACTICAL"))
         except Exception:
             return None
-        return rebuilt if rebuilt.fingerprint == payload.get("fingerprint") else None
+        if rebuilt.fingerprint != payload.get("fingerprint"):
+            return None
+        rebuilt.id = payload.get("id") or rebuilt.id
+        rebuilt.seed = payload.get("seed", rebuilt.seed)
+        rebuilt.created_at = payload.get("created_at", rebuilt.created_at)
+        self._exam = rebuilt
+        return rebuilt
 
     def interview_current(self) -> dict:
         run = self.state.get("interview")
@@ -8175,12 +8444,22 @@ class Game:
         if not run:
             return {"error": "no interview running"}
         results = run["results"]
-        debrief = self._exam_debrief(results, seconds_by_segment)
         solved = sum(1 for r in results if r["solved"])
         total = max(len(run["problem_ids"]), 1)
         seconds = time.time() - run["started_at"]
         within = seconds <= run["minutes"] * 60
         score = round(100 * solved / total * (1.0 if within else 0.85))
+        # THE DEBRIEF IS TAKEN AFTER THE RUN IS MEASURED, and only because of
+        # what happens when the exam cannot be rebuilt: that branch has no
+        # per-question report to read a verdict out of, and the four numbers it
+        # needs in order not to call a clean sweep a failure are these four,
+        # which are measured here and nowhere else. Moving the call down is the
+        # whole of it — nothing between this line and the top of the method
+        # touches `results` or `state["exam"]`.
+        debrief = self._exam_debrief(
+            results, seconds_by_segment,
+            measured={"solved": solved, "total": len(run["problem_ids"]),
+                      "within_clock": within})
 
         causes = [r["root_cause"] for r in results if r.get("root_cause")]
         # finalexam.CAUSE_BUCKETS is the named version of what used to be three
@@ -8241,10 +8520,31 @@ class Game:
         # encounter this is handed is None and the MENTOR seal is open: a
         # cutscene is a named voice speaking to you, which is exactly the mentor
         # crutch, and staging it one line earlier would be staging it inside a
-        # measured run. Only for the FINAL_EXAM — an ordinary interview practice
-        # run does not end the game.
-        if was_exam:
-            out["finale"] = self.finale_scene(exam_report=debrief)
+        # measured run.
+        #
+        # THERE IS NO `if` HERE, AND ITS ABSENCE IS THE FEATURE. This used to
+        # read `if was_exam:` and fire the finale — which meant a practice
+        # practical, sittable from the menu on the first morning with no keys,
+        # ended the game. `ending.resolve` is called after EVERY interview run
+        # precisely so that the question "was this the story or a measurement"
+        # has exactly one answer in exactly one place. For every ordinary run,
+        # staged or not, it returns `triggered: False`, plays nothing, frees
+        # nobody and moves nothing in the world.
+        #
+        # `weak_regions` is not passed: ending.WIRING marks it optional and
+        # this class has no such method. Nor are `released` / `collapse_lines`
+        # — ending.py makes `captives.liberate(state, passed=True)` itself on
+        # the pass branch and builds both rosters from it, which is also what
+        # frees the three the Interviewer took out of the home village.
+        out["ending"] = ending.resolve(
+            self.state,
+            exam_report=debrief,
+            readiness=self._readiness(),
+            transfer_summary=self.transfer_report(),
+            cleared_bosses=list(self.state["cleared_bosses"]),
+            names=self._identifiers_named(),
+            encounter=self.encounter)          # None by here, and correctly so
+        self.save()
         return out
 
     @staticmethod

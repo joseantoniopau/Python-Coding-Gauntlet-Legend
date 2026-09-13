@@ -529,9 +529,23 @@ export async function paintRollCall() {
   if (!r || r.error) { body.innerHTML = refusalCard(r, { title: 'NO NAMES' }); return; }
   const freed = r.freed || [];
   const held = r.still_held || [];
+  // THE THIRD LIST, and leaving it out was the same lie in the other
+  // direction. There are two roads out of a niche: carried out by the player
+  // when the boss holding you fell, or up on your own feet when the index
+  // stopped pointing. This screen used to know only the first, so a save where
+  // the index fell read "0 walked out · 0 still in a niche · 25 in total" —
+  // twenty-five people out and the panel counting none of them.
+  //
+  // They are kept apart rather than added together on purpose. `captives.py`
+  // is explicit that the ending is a eucatastrophe and not a restoration, and
+  // the finale's own ribbon says the same thing in one sentence:
+  // "{count} BY YOUR HAND. {released} BY THE FALL OF IT."
+  const released = r.released || [];
   body.innerHTML = `
     <div class="frame" style="padding:14px">
       <p class="small"><b style="color:var(--green)">${freed.length}</b> walked out ·
+        ${released.length ? `<b style="color:var(--gold)">${released.length}</b>
+          got up on their own · ` : ''}
         <b style="color:var(--orange)">${held.length}</b> still in a niche ·
         ${num(r.total)} in total.</p>
       ${(r.changes || []).length ? `<p class="small muted">${
@@ -539,10 +553,14 @@ export async function paintRollCall() {
     </div>
     ${freed.length ? `<div class="section-title">OUT</div>
       <div id="roll-freed" class="grid2"></div>` : ''}
+    ${released.length ? `<div class="section-title">THE ONES NOBODY CAME FOR</div>
+      <div id="roll-released" class="grid2"></div>` : ''}
     <div class="section-title">STILL HELD</div>
     <div id="roll-held" class="grid2"></div>`;
   const f = $('#roll-freed');
   if (f) for (const row of freed) f.appendChild(captiveCard(row, true));
+  const rel = $('#roll-released');
+  if (rel) for (const row of released) rel.appendChild(captiveCard(row, true));
   const h = $('#roll-held');
   for (const row of held) h.appendChild(captiveCard(row, false));
 }
@@ -557,7 +575,8 @@ function captiveCard(c, out) {
         <div class="small muted" style="margin:4px 0">${esc(c.trade || '')} of
           ${esc(c.home_name || c.home || '')}</div>
         <p class="small">${esc(c.bearing || '')}</p>
-        <p class="small muted" style="font-style:italic">${esc(lines(c.lines)[0] || '')}</p>
+        <p class="small muted" style="font-style:italic">${
+          esc(c.released_line || lines(c.lines)[0] || '')}</p>
         ${out ? `<p class="small" style="color:var(--green)">${esc(c.afterwards || '')}</p>
                  <p class="small muted">${esc(c.change || '')}</p>`
               : `<p class="small muted">Held in ${esc(c.held_in || '')} by

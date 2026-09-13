@@ -1908,9 +1908,15 @@ def liberate(state: dict, *, passed: bool = True, bank_boons: bool = True) -> di
     first_time = not raw.get("index_collapsed")
     banked_boons: list = []
     banked_routes: list = []
+    # WHO MOVED ON THIS CALL, which is not the same number as who is out.
+    # `released` below is the cumulative roll, so a replayed cutscene reports
+    # the same twenty-five and is right to; a caller asking "how many did THIS
+    # do" needs the delta, and it is only knowable in here.
+    moved: list = []
     if first_time:
         for person in still_held(state):
             raw["released"].append(person.id)
+            moved.append(person.id)
             if bank_boons and person.boon and person.boon not in raw["boons"]:
                 raw["boons"].append(person.boon)
                 banked_boons.append(person.boon)
@@ -1932,6 +1938,7 @@ def liberate(state: dict, *, passed: bool = True, bank_boons: bool = True) -> di
         "counts": {
             "carried": len(raw["freed"]),
             "released": len(raw["released"]),
+            "released_now": len(moved),
             "still_held": len(still_held(state)),
             "total": total(),
             "villages": len({p.home for p in everyone_out(state)}),

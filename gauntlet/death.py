@@ -133,6 +133,11 @@ ROLLED_BACK: dict = {
     "sanctuary": "a built place. game.",
     "captives": "who has been freed. game.",
     "finale": "the ending's own bookkeeping.",
+    "ending": "the seam's own bookkeeping — staging, the verdict, whether "
+              "the coda has been seen. It rewinds IN LOCKSTEP WITH "
+              "`captives`, and that is the whole of the reasoning: a "
+              "surviving `ending.passed` over a rewound index would be a "
+              "save claiming an ending the shelves have not had.",
     "antagonist": "the Null King's ledger of what he has already said.",
     "sages": "found, cleared, tolls paid. the GAUNTLET RUNGS rewind; the "
              "attempts that were graded inside them do not, because they are "

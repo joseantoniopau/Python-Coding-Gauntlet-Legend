@@ -92,8 +92,19 @@ def new_state() -> dict:
 
 
 def ensure(state: dict) -> dict:
-    """Forward-fill for a save written before this module existed."""
-    block = state.setdefault(STATE_KEY, new_state())
+    """Forward-fill for a save written before this module existed.
+
+    `setdefault` is not enough on its own: it hands back whatever is ALREADY
+    under the key, so a save whose block is null — or a list, or a string —
+    makes the next line raise AttributeError. That was reachable from the
+    exam-start path, which means a corrupt scrap of BOOKKEEPING could refuse
+    the MEASUREMENT. It repairs rather than refuses, because none of this is
+    evidence and a player owed a practical is not owed an error message.
+    """
+    block = state.get(STATE_KEY)
+    if not isinstance(block, dict):
+        block = new_state()
+        state[STATE_KEY] = block
     for key, value in new_state().items():
         block.setdefault(key, value)
     return block

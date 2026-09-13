@@ -83,6 +83,62 @@ class TestEveryModuleIsReachable(unittest.TestCase):
                          "overworld is hardcoding a species again")
 
 
+class TestTheEndingPlayerDrawsWhatTheServerSends(unittest.TestCase):
+    """The same bug one layer in: the module is reachable, the scene arrives
+    over the wire, and the renderer drops fields on the floor.
+
+    THE REGRESSION THIS CAUGHT. The ending has two players — the pre-existing
+    web/js/finaleui.js and the one main.js grew when `ending.resolve` started
+    firing at the end of every interview run. The new one dropped
+    `title_card.ribbon`, which is the single sentence that tells the two kinds
+    of freedom apart ('11 BY YOUR HAND. 14 BY THE FALL OF IT.'), and it dropped
+    `beat.rows`, which is the only place in the whole scene a captive is named:
+    the roll-call beat played as one narrator sentence with none of the
+    twenty-five names on screen. Both fields were on the wire the entire time.
+
+    Two players of one scene may differ in style and must not differ about
+    which fields of it exist, so this checks them against each other rather
+    than against a hardcoded list — finale.py WIRING §8 is the contract both
+    are written to.
+    """
+
+    # (the expression both renderers must contain, why it matters)
+    FIELDS = (
+        ("beat.rows", "the roll call's names — the only place in the scene a "
+                      "captive is named at all"),
+        ("c.ribbon", "the sentence that separates 'by your hand' from 'by the "
+                     "fall of it'"),
+    )
+
+    def test_both_players_read_the_same_fields_of_the_scene(self):
+        main = (JS / "main.js").read_text()
+        finaleui = (JS / "finaleui.js").read_text()
+        for field, why in self.FIELDS:
+            self.assertIn(field, finaleui,
+                          f"finaleui.js stopped reading {field} — if the scene "
+                          f"really dropped it, update this test and main.js "
+                          f"together. It carried {why}.")
+            self.assertIn(field, main,
+                          f"main.js's ending player never reads {field}, which "
+                          f"finaleui.js does: {why}. The server sends it and no "
+                          f"screen shows it.")
+
+    def test_the_ending_layer_has_somewhere_to_put_the_names(self):
+        """`beat.rows` being read is not enough; there has to be an element to
+        draw them into. finaleui.js has #fin-rail and main.js needs its own."""
+        main = (JS / "main.js").read_text()
+        self.assertIn('id="ed-rail"', main,
+                      "main.js's ending layer has no name rail, so the roll "
+                      "call has nowhere to land")
+        rail = main.index('id="ed-rail"')
+        beat = main.index("function showEndingBeat")
+        self.assertLess(rail, main.index("function stopEndingCutscene"),
+                        "the rail must be part of the ending layer's markup")
+        self.assertIn("ed-rail", main[beat:],
+                      "showEndingBeat never looks the rail up, so nothing is "
+                      "ever drawn into it")
+
+
 # ---------------------------------------------------------------- the server
 #
 # The same bug has now bitten the Python side twice: gauntlet/unmaking.py was
@@ -100,21 +156,6 @@ PY_ALLOWED = {
     # run.py imports it inside main(), which is a call this AST walk of
     # gauntlet/ deliberately does not follow.
     "cli",
-    # KNOWN ORPHAN, TRACKED ON PURPOSE.
-    #
-    # ending.py is the seam that tells a practical walked through the Standing
-    # Portal apart from one sat from the menu, so that the captives-freed
-    # cutscene is the reward for the ENDING rather than for any FINAL_EXAM run.
-    # The reward itself is NOT missing: engine.finish_interview already plays
-    # finale_scene on every exam.
-    #
-    # It is four touch points (see ending.WIRING): a DEFAULT_STATE key, a
-    # stage() at the portal, a resolve() replacing the `if was_exam` block, and
-    # a client path that starts the exam as staged. It must be wired ALL AT
-    # ONCE — resolve() without stage() returns triggered:False forever and
-    # would silently delete the ending — and its own contract names the failure
-    # mode: staging from the menu path "would collapse the two exams into one".
-    "ending",
 }
 
 
@@ -156,11 +197,17 @@ class TestEveryServerModuleIsReachable(unittest.TestCase):
         mods, seen = py_modules(), py_imported()
         for name in sorted(PY_ALLOWED):
             self.assertIn(name, mods, f"{name} is allowlisted but is gone")
-        # `cli` and `_harness` are reachable by other means; `ending` is the one
-        # entry that is a real orphan, and it must leave this list when wired.
-        self.assertNotIn("ending", seen,
-                         "ending.py is imported now — wire all four touch "
-                         "points, then remove it from PY_ALLOWED")
+        # `cli` and `_harness` are reachable by other means. `ending` used to be
+        # here as the one real orphan; engine.py imports it now — the four touch
+        # points of ending.WIRING are wired — so it must NOT come back.
+        self.assertIn("ending", seen,
+                      "engine.py has stopped importing ending.py. resolve() "
+                      "without stage() returns triggered:False forever, which "
+                      "silently deletes the ending; the four touch points land "
+                      "together or not at all.")
+        self.assertNotIn("ending", PY_ALLOWED,
+                         "ending.py is wired; it does not belong on the "
+                         "orphan allowlist")
 
 
 if __name__ == "__main__":

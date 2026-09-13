@@ -94,6 +94,23 @@ export const api = {
   portal: () => call('/api/portal'),
   enterPortal: () => softPost('/api/portal/enter', {}),
 
+  /* THE LAST FIGHT, AND THE ONLY STAGED ROUTE IN THE GAME.
+   *
+   * `startExam` below and this are the SAME practical — same composer, same
+   * seal, same clock, same six questions. The only difference is that this one
+   * tells the server, by the id of the exam it just composed, that this sitting
+   * is the last room of the story. Call it from the portal room and from
+   * nowhere else; calling it from the menu would collapse the two exams into
+   * one and delete the ending by making it fire for practice.
+   *
+   * It is NOT the door to the practical and it is not a second way in. A player
+   * with no keys still presses SIT IT NOW and gets `startExam`, which is the
+   * whole point of the game. If this ever returns `staging.staged === false`
+   * — the wards went dark, somehow — the exam has still started and that is
+   * NOT an error: render it as information, or not at all. */
+  startFinalTrial: (profile) =>
+    softPost('/api/portal/trial', { profile: profile || '' }),
+
   /* The Null King, reading one line out of your file. `soft` because a
    * measured run answers with no lines rather than an error, and because a
    * villain who fails to load must never be able to stop a screen drawing. */
@@ -457,11 +474,17 @@ export const api = {
   arts: () => soft('/api/arts'),
 
   /* -- the people the bosses took --
-   * `freed` and `still_held` come back together and in the same row shape,
-   * deliberately: the ending is a eucatastrophe and not a restoration, and a
-   * roll call that quietly rounded up would be this game telling a lie about
-   * itself. Large — seventeen villages of faces and trades — so fetch it when
-   * the roll call opens, not on every frame. */
+   * THREE lists, not two, and they come back in the same row shape
+   * deliberately: `freed` is who was carried out by hand when a boss fell,
+   * `released` is who got up on their own when the index stopped pointing
+   * (each row carrying its own `released_line`, so it is never staged as a
+   * rescue), and `still_held` is who is in a niche right now. The ending is a
+   * eucatastrophe and not a restoration, and a roll call that quietly rounded
+   * up — or that dropped the middle list, which is what `still_held` has
+   * always subtracted — would be this game telling a lie about itself.
+   * `released_count` and `index_collapsed` come with them. Large — seventeen
+   * villages of faces and trades — so fetch it when the roll call opens, not
+   * on every frame. */
   rollCall: () => soft('/api/rollcall'),
 
   /* -- the last scene --

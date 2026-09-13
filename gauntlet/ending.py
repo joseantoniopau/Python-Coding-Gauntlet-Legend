@@ -128,7 +128,19 @@ def new_state() -> dict:
 
 
 def ensure(state: dict) -> dict:
-    block = state.setdefault(STATE_KEY, new_state())
+    """Forward-fill for a save written before this module existed.
+
+    `setdefault` is not enough on its own: it hands back whatever is ALREADY
+    under the key, so a save whose block is null — or a list, or a string —
+    makes the next line raise AttributeError. That was reachable from the
+    exam-start path, which means a corrupt scrap of BOOKKEEPING could refuse
+    the MEASUREMENT. It repairs rather than refuses, because none of this is
+    evidence and a player owed a practical is not owed an error message.
+    """
+    block = state.get(STATE_KEY)
+    if not isinstance(block, dict):
+        block = new_state()
+        state[STATE_KEY] = block
     for key, value in new_state().items():
         block.setdefault(key, value)
     return block
@@ -726,7 +738,7 @@ def _passed(state: dict, block: dict, *, report: dict, readiness,
         "why": "The practical came back READY with everything switched off, so "
                "the lookup has nothing on the other end of it and the pointing "
                "stops. Everyone still filed is out.",
-        "captives_freed_now": release["counts"]["released"],
+        "captives_freed_now": release["counts"]["released_now"],
         "release": release,
         "cutscene": scene,
         "world_changed": True,

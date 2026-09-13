@@ -4850,9 +4850,37 @@ function paintInterview() {
   });
 }
 
+/* THE ENDING, AND THE REPORT BEHIND IT.
+ *
+ * `report.ending` comes back on EVERY interview run — it is the one place in
+ * the codebase where the two exams are told apart, and for every ordinary run
+ * it says `triggered: false` and this function does exactly what it always
+ * did. It says `triggered: true` only for a practical that was started from
+ * the last room, which is the only route that stages one.
+ *
+ * When it does trigger, the scene plays FIRST and the debrief waits behind it:
+ * PASS is the freeze frame and the title card, FAIL is the way back down. Both
+ * are scripts off the wire and both are skippable. */
 function showInterviewReport(report) {
+  const end = report.ending || {};
+  if (end.triggered && end.cutscene) {
+    /* The run is over and the seal is off, so the battle chrome comes down
+     * before the scene rather than behind it. */
+    document.body.classList.remove('interview-mode');
+    closeModal();
+    playEndingCutscene(end, () => showInterviewReportModal(report));
+    return;
+  }
+  showInterviewReportModal(report);
+}
+
+function showInterviewReportModal(report) {
   document.body.classList.remove('interview-mode');
-  audio.play('victory');
+  const fired = !!((report.ending || {}).triggered && (report.ending || {}).cutscene);
+  /* The ending owns the room's sound — the coda ends on a held note or on
+   * nothing at all, and a victory sting over the top of it would be this
+   * screen talking across the scene it just played. */
+  if (!fired) audio.play('victory');
   const rows = report.results.map((r, i) =>
     `<div class="test-line ${r.solved ? 'pass' : 'fail'}">
       <span class="icon">${r.solved ? '✔' : '✖'}</span>
@@ -4870,10 +4898,14 @@ function showInterviewReport(report) {
       Time failures: ${report.breakdown.time_failures}</p>
     <p style="color:var(--violet)">${report.verdict}</p>
     ${examDebriefHtml(report.debrief)}
+    ${endingBannerHtml(report.ending)}
     <p class="small muted">The coach is available again now.</p>
     <div class="actions">
       <button class="btn primary" id="iv-done">RETURN</button>
-      ${report.debrief && !report.debrief.unavailable
+      ${fired ? '<button class="btn" id="iv-replay">WATCH IT AGAIN</button>' : ''}
+      ${fired && (report.ending || {}).outcome === 'FAIL'
+        ? '<button class="btn danger" id="iv-again">SIT IT AGAIN. NOW.</button>' : ''}
+      ${!fired && report.debrief && !report.debrief.unavailable
         ? '<button class="btn" id="iv-finale">THE LAST SCENE</button>' : ''}
     </div>`,
     { wide: true });
@@ -4882,6 +4914,35 @@ function showInterviewReport(report) {
     returnToWorld();
     refresh().then(paintWorldSide).catch(() => { /* refresh already said so */ });
   };
+  /* The scene that just played, played again, off the script that is still in
+   * this report. NOT `api.finale()` — that composes the standalone version from
+   * the roll call alone, and the ending's own scene is the one that has the
+   * people nobody came for standing on the stair. */
+  const replay = $('#iv-replay');
+  if (replay) {
+    replay.onclick = () => {
+      closeModal();
+      playEndingCutscene(report.ending, () => showInterviewReportModal(report));
+    };
+  }
+  /* A FAILED climax is A WAY BACK AND NEVER A GAME OVER. Nothing was spent,
+   * nothing was locked, the portal is still open and the exam recomposes — so
+   * the button is here, in the report, and it goes straight back down the
+   * stair as the STAGED sitting it was. */
+  const again = $('#iv-again');
+  if (again) {
+    again.onclick = async () => {
+      closeModal();
+      let r;
+      try {
+        r = await api.startFinalTrial(G.state.player.profile);
+      } catch (e) { toast('CANNOT START', e.message, 'red'); return; }
+      if (r.error) { toast('CANNOT START', r.message || r.error, 'red'); return; }
+      try {
+        enterBattle(await api.interviewCurrent());
+      } catch (e) { toast('CANNOT START', e.message, 'red'); }
+    };
+  }
   /* STAGED AFTER THE PRACTICAL IS SCORED AND NEVER BEFORE, and offered rather
    * than forced: the practical gates the finale and the finale does not gate
    * the practical. A player who freed nobody gets the same scene with an empty
@@ -4890,6 +4951,196 @@ function showInterviewReport(report) {
    * does not. */
   const fin = $('#iv-finale');
   if (fin) fin.onclick = () => { closeModal(); finaleui.play(report); };
+}
+
+/* ======================================================================
+ * THE ENDING, PLAYED — one clock against a script that came off the wire.
+ * ======================================================================
+ *
+ * `ending.resolve()` hands over a scene in one of two shapes and this plays
+ * both, because they were deliberately built to the same beat vocabulary:
+ *
+ *   PASS  a finale scene. Twenty-two beats, the index going out, the roll call
+ *         forming up, a freeze at `freeze_at_ms` with the guitar hit and the
+ *         title card on the same millisecond, and then the frame moving again
+ *         for the coda.
+ *   FAIL  a rematch scene. Eight beats, three acts, no title card and no
+ *         guitar hit. IT IS NOT A GAME OVER and nothing here dresses it as
+ *         one: nothing was spent, the portal is still open, and the report
+ *         behind this carries the button that goes straight back down.
+ *
+ * Every word, every timing and every colour below came off the server. This
+ * file owns the clock and nothing else.
+ *
+ * THE TWO HALVES. The title card is the freeze frame and it is NOT the end.
+ * `the_prompt_stays` (pass) and `the_prompt_waits` (failure) are, and
+ * `markCodaSeen()` fires on those two beat ids and on no others — a player who
+ * walked out at the title card has seen half of this. */
+let ENDING = null;
+
+function playEndingCutscene(result, done) {
+  stopEndingCutscene();
+  const scene = (result || {}).cutscene;
+  if (!scene || !(scene.beats || []).length) { if (done) done(); return; }
+
+  const layer = el('div', 'ending-layer');
+  layer.style.cssText = 'position:fixed;inset:0;z-index:9000;background:#06060a;'
+    + 'display:flex;flex-direction:column;justify-content:center;'
+    + 'padding:6vh 8vw;overflow:hidden';
+  layer.innerHTML = `
+    <div id="ed-act" class="pixel" style="font-size:11px;color:var(--gold-hi);
+      letter-spacing:2px;margin-bottom:14px;min-height:16px"></div>
+    <div id="ed-lines" style="max-width:58ch;line-height:1.7"></div>
+    <div id="ed-card" style="position:absolute;inset:0;display:none;
+      align-items:center;justify-content:center;flex-direction:column;
+      text-align:center;pointer-events:none"></div>
+    <!-- THE NAME RAIL. The roll call is a list of PEOPLE and the beats carry
+         them in \`rows\`; without somewhere to put them the biggest beat in the
+         scene plays as one narrator sentence and not one of the twenty-five
+         names reaches a screen. finaleui.js has drawn this since it shipped. -->
+    <div id="ed-rail" style="position:absolute;left:0;right:0;bottom:56px;
+      display:flex;flex-wrap:wrap;gap:8px;padding:0 8vw;opacity:.85"></div>
+    <div style="position:absolute;left:0;right:0;bottom:0;display:flex;
+      align-items:center;gap:12px;padding:12px 8vw;background:#0a0a0ccc">
+      <span class="bar" style="flex:1"><i id="ed-prog" style="width:0%;
+        background:var(--gold-hi)"></i></span>
+      <button class="btn small" id="ed-skip">SKIP</button>
+    </div>`;
+  document.body.appendChild(layer);
+
+  ENDING = {
+    scene, layer, done, t0: performance.now(), shown: -1, coda: false,
+    raf: 0, key: null,
+  };
+  ENDING.key = (e) => { if (e.key === 'Escape') stopEndingCutscene(); };
+  window.addEventListener('keydown', ENDING.key);
+  layer.querySelector('#ed-skip').onclick = () => stopEndingCutscene();
+
+  try { audio.play(scene.music || 'final'); } catch (e) { /* muted is fine */ }
+  const tick = () => {
+    if (!ENDING || ENDING.layer !== layer) return;
+    const t = performance.now() - ENDING.t0;
+    const beats = scene.beats || [];
+    const total = Math.max(1, Number(scene.duration_ms) || 1);
+    const prog = layer.querySelector('#ed-prog');
+    if (prog) prog.style.width = `${Math.min(100, (t / total) * 100)}%`;
+    let idx = -1;
+    for (let i = 0; i < beats.length; i++) {
+      if (t >= (Number(beats[i].at_ms) || 0)) idx = i; else break;
+    }
+    if (idx >= 0 && idx !== ENDING.shown) {
+      ENDING.shown = idx;
+      showEndingBeat(beats[idx]);
+    }
+    if (t >= total) { stopEndingCutscene(); return; }
+    ENDING.raf = requestAnimationFrame(tick);
+  };
+  ENDING.raf = requestAnimationFrame(tick);
+}
+
+function showEndingBeat(beat) {
+  if (!ENDING) return;
+  const { layer, scene } = ENDING;
+  const act = layer.querySelector('#ed-act');
+  if (act) act.textContent = beat.act || '';
+
+  const host = layer.querySelector('#ed-lines');
+  if (host) {
+    host.innerHTML = (beat.lines || []).map((l) => `
+      <div style="margin:10px 0;color:${l.speaker && l.speaker !== 'narrator'
+        ? 'var(--gold-hi)' : 'var(--ink-dim)'}">
+        ${l.name ? `<span class="pixel" style="font-size:10px;
+          color:var(--violet);display:block">${uikit.esc(l.name)}</span>` : ''}
+        ${uikit.esc(l.text || '')}</div>`).join('');
+  }
+
+  const fx = beat.fx || [];
+  /* The title card slams in on the freeze and comes off again at `unfreeze`.
+   * A card left up over the second half is this scene ending at the title,
+   * which is the half the player is supposed to stay past. */
+  const card = layer.querySelector('#ed-card');
+  if (card) {
+    if (fx.indexOf('title_card') >= 0 && scene.title_card) {
+      const c = scene.title_card;
+      card.style.display = 'flex';
+      /* THE RIBBON IS THE SENTENCE THAT TELLS THE TWO KINDS OF FREEDOM APART —
+       * "11 BY YOUR HAND. 14 BY THE FALL OF IT." Dropping it left the counts
+       * alive as numbers in the report banner and the distinction itself on no
+       * screen at all. finale.py §8 is the spec; finaleui.js draws it as
+       * .fin-ribbon and this is the same row. */
+      card.innerHTML = `
+        <div class="pixel" style="font-size:12px;color:var(--violet);
+          letter-spacing:3px">${uikit.esc(c.eyebrow || '')}</div>
+        <div class="pixel" style="font-size:min(6vw,44px);color:#f2ead8;
+          margin:14px 0;text-shadow:0 6px 0 #0a0a0c">${uikit.esc(c.slab || '')}</div>
+        <div class="pixel" style="font-size:min(3.4vw,22px);color:${
+          (c.style || {}).rim || 'var(--gold-hi)'}">${uikit.esc(c.shout || '')}</div>
+        <div class="pixel" style="font-size:min(2.6vw,16px);color:var(--gold-hi);
+          margin-top:10px">${uikit.esc(c.ribbon || '')}</div>
+        <div class="small muted" style="margin-top:18px">${
+          uikit.esc(c.stinger || '')}</div>`;
+    } else {
+      card.style.display = 'none';
+      card.innerHTML = '';
+    }
+  }
+
+  /* THE NAMES. `beat.rows` is the roll call forming up — eleven on the beat
+   * that counts the ones carried out, fourteen on the ones nobody came for —
+   * and it is the only place in the scene a captive's NAME appears. Ported
+   * from finaleui.showRail, capped at forty the same way, and cleared on the
+   * beats that carry nobody so the rail belongs to the beat that named them. */
+  const rail = layer.querySelector('#ed-rail');
+  if (rail) {
+    rail.innerHTML = (beat.rows || []).slice(0, 40).map((r) =>
+      `<span class="pixel" style="font-size:10px;color:var(--ink-dim)">${
+        uikit.esc(r.name || '')}</span>`).join('');
+  }
+
+  if ((beat.sfx || []).indexOf('finale_hit') >= 0 || fx.indexOf('guitar_hit') >= 0) {
+    try { audio.sfx('crit'); } catch (e) { /* no context yet */ }
+  }
+  /* `cut` means cut: the guitar hit is the only sound in the room on the
+   * freeze frame, and stopping is not the same as playing nothing. */
+  if (beat.music === 'cut') { try { audio.stop(); } catch (e) { /* ignore */ } }
+  else if (beat.music) { try { audio.play(beat.music); } catch (e) { /* ignore */ } }
+
+  /* THE CODA, on the last beat of either scene and on nothing else. */
+  if ((beat.id === 'the_prompt_stays' || beat.id === 'the_prompt_waits')
+      && !ENDING.coda) {
+    ENDING.coda = true;
+    api.markCodaSeen().catch(() => { /* bookkeeping, never a gate */ });
+  }
+}
+
+function stopEndingCutscene() {
+  if (!ENDING) return;
+  const { layer, raf, key, done } = ENDING;
+  ENDING = null;
+  if (raf) cancelAnimationFrame(raf);
+  if (key) window.removeEventListener('keydown', key);
+  if (layer && layer.isConnected) layer.remove();
+  if (done) done();
+}
+
+/* What just happened to the world, in the report, under the debrief. Every
+ * number here was counted by captives.py; this file adds none of its own. */
+function endingBannerHtml(end) {
+  if (!end || !end.triggered) return '';
+  const pass = end.outcome === 'PASS';
+  const counts = end.counts || {};
+  const freedNow = Number(end.captives_freed_now) || 0;
+  return `<div class="frame" style="padding:14px;margin:12px 0;
+      border-left:4px solid ${pass ? 'var(--gold-hi)' : 'var(--orange)'}">
+    <div class="section-title" style="margin-top:0">${pass
+      ? 'THE INDEX STOPPED ANSWERING' : 'THE SHELVES ARE STILL FULL'}</div>
+    <p class="small">${uikit.esc(end.why || '')}</p>
+    ${pass ? `<p class="small"><span class="tag gold">${freedNow} RELEASED</span>
+      <span class="tag green">${Number(counts.carried) || 0} CARRIED OUT</span>
+      <span class="tag">${Number(counts.total) || 0} IN ALL</span></p>` : ''}
+    ${!pass ? `<p class="small muted">${uikit.esc(
+      (end.rematch || {}).note || '')}</p>` : ''}
+  </div>`;
 }
 
 /* The Practical Test's own debrief: segment by segment against its clock, what
@@ -6582,13 +6833,71 @@ async function paintKeyring() {
       audio.sfx('unlock');
       toast((res.trial || {}).name || 'THE LAST ROOM', res.message || '', 'gold');
       paintKeyring();
+      openLastRoom(res);
     };
   }
+
   const exam = $('#keys-exam');
   // The measurement, from the screen that counts the keys, with the keys
   // uncounted. This button is here specifically so the answer to "do I need
   // these first" is a thing the player can press rather than read.
   if (exam) exam.onclick = () => go('exam');
+}
+
+/* THE LAST ROOM, once the door is open — and the one place in this client that
+ * starts the staged practical.
+ *
+ * `api.startFinalTrial()` composes the SAME exam `api.startExam()` composes:
+ * same six questions' worth of composer, same seal, same clock, same rules.
+ * The only difference is that the server binds the composed exam's id to the
+ * story, so that when the debrief comes back `ending.resolve()` recognises it.
+ * That is the entire mechanism, and it is why this call may not be made from
+ * the exam screen or the interview menu: a staged sitting reachable from the
+ * menu is the ending firing for practice, which is the bug this whole feature
+ * exists to fix.
+ *
+ * And the other direction, which matters more: this room is NOT the way to the
+ * practical. `SIT IT NOW` on the keyring screen is, it is three lines above
+ * this one, and it needs none of the fourteen keys. */
+function openLastRoom(room) {
+  const trial = room.trial || {};
+  const two = room.two_exams || {};
+  const climax = two.climax || {};
+  const examiner = room.examiner || {};
+  const m = modal(`<h2>${uikit.esc(trial.name || 'THE LAST ROOM')}</h2>
+    <p class="small muted">${uikit.esc(trial.where || '')}</p>
+    <p>${uikit.esc(room.message || '')}</p>
+    ${examiner.name ? `<p class="small"><span class="tag gold">${
+      uikit.esc(examiner.name)}</span> ${uikit.esc(examiner.epithet || '')}</p>` : ''}
+    <div class="frame" style="padding:14px;margin:12px 0;
+         border-left:4px solid var(--gold-hi)">
+      <div class="section-title" style="margin-top:0">${
+        uikit.esc(climax.name || 'THE FINAL PRACTICAL')}</div>
+      <p class="small">${uikit.esc(climax.what || '')}</p>
+      <p class="small muted">${uikit.esc(climax.note || '')}</p>
+    </div>
+    <div class="actions">
+      <button class="btn danger" id="lr-sit">BEGIN. THE CLOCK STARTS NOW.</button>
+      <button class="btn" id="lr-wait">NOT YET</button>
+    </div>`, { wide: true });
+  m.querySelector('#lr-wait').onclick = closeModal;
+  m.querySelector('#lr-sit').onclick = async () => {
+    closeModal();
+    let r;
+    try {
+      r = await api.startFinalTrial(G.state.player.profile);
+    } catch (e) { toast('CANNOT START', e.message, 'red'); return; }
+    if (r.error) { toast('CANNOT START', r.message || r.error, 'red'); return; }
+    /* `staging.staged === false` here would mean the wards went dark between
+     * the door and the desk. It is NOT an error and it does not stop anything:
+     * the exam has started and it is sat as a measurement. Said once, quietly. */
+    if (r.staging && r.staging.staged === false) {
+      toast('SAT AS A MEASUREMENT', r.staging.why || '', '');
+    }
+    try {
+      enterBattle(await api.interviewCurrent());
+    } catch (e) { toast('CANNOT START', e.message, 'red'); }
+  };
 }
 
 /* ---------------- the ledger ---------------- */
