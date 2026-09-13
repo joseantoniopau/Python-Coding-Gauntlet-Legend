@@ -16,13 +16,16 @@ nothing.
 from __future__ import annotations
 
 import ast
+import builtins
+import contextlib
 import copy
+import io
 import sys
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
-from .. import puzzles, sandbox
+from .. import puzzles, sandbox, scaffold
 from .schema import DIFFICULTIES, PATTERNS, Problem, SOURCE_TYPES
 
 
@@ -267,6 +270,291 @@ def _verify_forge(p: Problem) -> list:
                              f"mimic {i} agrees with the honest implementation on "
                              f"its own killing input {args!r} (both give "
                              f"{honest!r}) — no test suite can tell them apart"))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# The ramp
+# ---------------------------------------------------------------------------
+
+# A span that any plausible neighbour could fill and still pass is decoration:
+# it spends the player's attention on the part that did not matter. These four
+# shapes are the ones the shipped corpus already contains, named so that the
+# next pass has to argue with a check rather than with a taste.
+#
+# All four are DEFENSIBLE AT GUIDED, where naming the part genuinely is the
+# lesson — `ob-text-length` blanking `len` is the whole of what that problem
+# teaches. None of them is defensible above it. So the severity is split by
+# band rather than the rule being softened into a warning everywhere.
+_KEYWORDS = frozenset(
+    "False None True and as assert async await break class continue def del "
+    "elif else except finally for from global if import in is lambda nonlocal "
+    "not or pass raise return try while with yield".split())
+
+
+def _span_objection(p: Problem, span: dict, source: str) -> str:
+    text = span["text"].strip()
+    if not text:
+        return "the span is empty"
+    if text in _KEYWORDS or not any(ch.isalnum() or ch == "_" for ch in text):
+        return f"{text!r} is a keyword or punctuation, not an idea"
+    if text in dir(builtins):
+        return f"{text!r} is a builtin's name; that is vocabulary recall, not the idea"
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return ""
+    params = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            args = node.args
+            for arg in (args.posonlyargs + args.args + args.kwonlyargs):
+                params.add(arg.arg)
+    if text in params:
+        return (f"{text!r} is a parameter name the body already uses; filling it in "
+                f"is a lookup, not an idea")
+    statement = (p.problem_statement or "")
+    if (text.isdigit() or (text[:1] in "\"'" and text[-1:] in "\"'")) and text in statement:
+        return f"{text!r} is a literal the problem statement already hands over"
+    return ""
+
+
+def _kills(p: Problem, span: dict) -> bool:
+    """Does some plausible neighbour of this span actually fail the tests?
+
+    The same machinery `_verify_forge` already uses for TEST_FORGE, pointed at a
+    span instead of a whole function: run the honest implementation and a wrong
+    one on the same inputs and require that they disagree. A span nothing
+    disagrees on is not carrying the idea.
+
+    Run in-process against the derived expectations rather than through the
+    sandbox, because this is a build-time question about the corpus and the
+    sandbox's job is to contain the PLAYER's code.
+    """
+    name = p.entry.get("name")
+    if not name or p.entry.get("kind") != "function":
+        return True                       # class_ops is graded by op sequence
+    tests = [t for t in p.all_tests if "args" in t and "ops" not in t][:6]
+    if not tests:
+        return True
+
+    def call(source, args, *, bounded=False):
+        namespace: dict = {}
+        # `ob-say-hello` and friends print. Running them here is the build's
+        # business, not the builder's, so their output does not go to the
+        # terminal alongside the corpus report.
+        with contextlib.redirect_stdout(io.StringIO()):
+            exec(compile(source, f"<{p.id} scaffold>", "exec"), namespace)
+        fn = namespace[name]
+        if not bounded:
+            with contextlib.redirect_stdout(io.StringIO()):
+                return fn(*copy.deepcopy(args))
+        # A MUTANT IS NOT A VALIDATED SOLUTION. Swapping `!=` for `==` in a
+        # `while` condition is exactly the kind of neighbour this check is
+        # supposed to try, and exactly the kind that never terminates. The same
+        # line-event budget `corpus._call_bounded` uses, for the same reason
+        # written there: this runs on a player's machine, and a build that hangs
+        # is a game that will not start. A mutant that runs away has disagreed
+        # with a canonical solution that does not, so the budget expiring counts
+        # as a disagreement rather than as a pass.
+        left = [_MUTANT_STEP_LIMIT]
+
+        def trace(frame, event, arg):
+            if event == "line":
+                left[0] -= 1
+                if left[0] < 0:
+                    raise _StepBudget()
+            return trace
+
+        previous = sys.gettrace()
+        sys.settrace(trace)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                return fn(*copy.deepcopy(args))
+        finally:
+            sys.settrace(previous)
+
+    candidates = scaffold.neighbours(span["text"])
+    if not candidates:
+        # No plausible neighbour could be generated, so this check has nothing
+        # to say. UNDETERMINED IS NOT A PASS AND IT IS NOT A FAILURE: reporting
+        # "nothing disagrees" here would accuse the author of a decorative blank
+        # on the strength of the generator's own silence. `scaffold_audit`
+        # counts these separately so the number is visible rather than hidden
+        # inside a green build.
+        return True
+
+    honest = []
+    for test in tests:
+        try:
+            honest.append(call(p.canonical_solution, _decode_args(test["args"])))
+        except Exception:
+            honest.append(_RAISED)
+    for candidate in candidates:
+        source = scaffold.substitute(p, span, candidate)
+        try:
+            compile(source, "<candidate>", "exec")
+        except SyntaxError:
+            continue
+        for test, expected in zip(tests, honest):
+            try:
+                got = call(source, _decode_args(test["args"]), bounded=True)
+            except Exception:
+                return True               # raising IS disagreeing
+            if got != expected:
+                return True
+    return False
+
+
+_RAISED = object()
+
+
+class _StepBudget(Exception):
+    """A mutant that will not stop. See `_kills`."""
+
+
+_MUTANT_STEP_LIMIT = 200_000
+
+
+def _decode_args(args):
+    from . import __init__ as _pkg      # noqa: F401  (keeps the import local)
+    from .schema import MAP_TAG
+
+    def decode(value):
+        if isinstance(value, dict):
+            if MAP_TAG in value:
+                return {decode(k): decode(v) for k, v in value[MAP_TAG]}
+            return {k: decode(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [decode(v) for v in value]
+        return value
+    return [decode(a) for a in args]
+
+
+def scaffold_audit(problems: list) -> dict:
+    """How many declared spans the objective test could actually judge.
+
+    Reported rather than asserted, because a span the neighbour generator has no
+    move against is not thereby a good span — it is an unjudged one, and a build
+    that quietly counted it as passing would be claiming a guarantee it does not
+    have.
+    """
+    killed = survived = undetermined = 0
+    for p in problems:
+        spans = p.scaffold_spans or []
+        if not spans:
+            continue
+        try:
+            first = scaffold.normalise(spans, p.canonical_solution)[0]
+        except (scaffold.ScaffoldError, IndexError):
+            continue
+        if not scaffold.neighbours(first["text"]):
+            undetermined += 1
+        elif _kills(p, first):
+            killed += 1
+        else:
+            survived += 1
+    return {"killed": killed, "survived": survived, "undetermined": undetermined}
+
+
+def _verify_scaffold(p: Problem) -> list:
+    """The checks `starter_code` never had.
+
+    214 hand-maintained blanked starters shipped with nothing checking that a
+    blank was well formed, that its numbered comment matched it, or that filling
+    it in reproduced the answer. That is how a CODE_BATTLE came to be carrying a
+    `__BLANK__`. A declaration is checked against the canonical solution it
+    claims to describe, which is the point of moving it there.
+    """
+    out = []
+    err = lambda m: out.append(Issue(p.id, "error", m))       # noqa: E731
+    warn = lambda m: out.append(Issue(p.id, "warning", m))    # noqa: E731
+
+    if scaffold.MARKER in (p.starter_code or "") and p.encounter_kind != "MISSING_RUNE":
+        err(f"a {p.encounter_kind} carries a {scaffold.MARKER} in its starter code; "
+            f"the scaffold belongs in scaffold_spans and the starter belongs blank")
+
+    declared = p.scaffold_spans or []
+    if not declared:
+        return out
+
+    try:
+        spans = scaffold.normalise(declared, p.canonical_solution)
+    except scaffold.ScaffoldError as exc:
+        err(f"scaffold declaration does not describe its own canonical solution: {exc}")
+        return out
+
+    if not scaffold.round_trip(p, spans):
+        err("filling every declared span with its own text does not reproduce the "
+            "canonical solution")
+    for index, span in enumerate(spans):
+        if "\n" in span["text"]:
+            err(f"span {index} spans more than one line")
+        if not span["gloss"]:
+            err(f"span {index} ({span['text']!r}) has no gloss; a blank with no "
+                f"sentence beside it is a guessing game, not a teaching step")
+        for other in spans[index + 1:]:
+            if (span["line"] == other["line"]
+                    and span["col"] < other["col"] + len(other["text"])
+                    and other["col"] < span["col"] + len(span["text"])):
+                err(f"spans {span['text']!r} and {other['text']!r} overlap")
+
+    # Every generated rung must still be Python. `families/scaffolds.py` states
+    # the rule — "`__BLANK__` is a bare name, so the starter always parses. A
+    # player who runs it untouched gets a NameError naming the rune they still
+    # owe, not a SyntaxError pointing at column one" — and five shipped starters
+    # broke it by striking out an operator or a keyword, because nothing has
+    # ever checked a blank.
+    for rung in scaffold.available_rungs(p):
+        if rung == scaffold.WRITE_IT_ALL and not scaffold.scaffoldable(p):
+            # DEBUG_BATTLE / BREAK_IT / REFACTOR_QUEST: the broken starter IS
+            # the question, and `db-syntax-colon` ships a SyntaxError on purpose.
+            # Everything else's rung 4 comes out of `scaffold.skeleton`, which
+            # passes the authored starter straight through for 533 of the 746
+            # editor-axis problems — so it IS ours, and the blanket exemption is
+            # what let `oopl-except-order-tutorial` ship an unparseable rung-4
+            # starter through a build reporting zero errors. Rung 4 is what
+            # MEDIUM, HARD, Interview Mode, the practical and the hold-out serve
+            # unconditionally; it is the last rung that should go unchecked.
+            continue
+        try:
+            ast.parse(scaffold.render(p, rung)["starter_code"])
+        except SyntaxError as exc:
+            err(f"rung {rung} does not parse: {exc}; a blank stands where a bare "
+                f"name cannot go, so the player meets a SyntaxError at column one")
+
+    # The two judgement checks. Above GUIDED they reject; at GUIDED they warn,
+    # because at GUIDED naming the part is the lesson and the corpus says so.
+    #
+    # OVER EVERY SPAN A RUNG CAN STRIKE, not just the first. Rung 3 strikes
+    # spans 1 through `MANY_SPAN_COUNT`, and rung 3 is EASY's floor, so spans
+    # beyond the first are served to players like any other. Judging only
+    # spans[0] shipped four more poor blanks and five more decorative ones. The
+    # loop stops at `MANY_SPAN_COUNT` because a span no rung strikes is not
+    # served, and because `_kills` execs a mutant per neighbour per test.
+    speak = warn if p.difficulty == "GUIDED" else err
+    for index, span in enumerate(spans[:scaffold.MANY_SPAN_COUNT]):
+        where = "the first scaffold span" if index == 0 else f"scaffold span {index}"
+        objection = _span_objection(p, span, p.canonical_solution)
+        if objection:
+            speak(f"{where} is a poor blank: {objection}")
+        elif not _kills(p, span):
+            speak(f"{where} {span['text']!r} can be filled with a plausible "
+                  f"neighbour and still pass every test; a blank nothing "
+                  f"disagrees with is decoration")
+
+    # AND RUNG 1 MUST HAVE SOMETHING TO PICK BETWEEN. `choices_for` returns
+    # nothing when the neighbour generator has no move against the first span,
+    # and `available_rungs` now withholds PICK for those — which is correct, and
+    # silent. At a band whose FLOOR is rung 1 that silence is a hole in the
+    # ladder: the bottom rung of the ramp does not exist for that problem, and
+    # GUIDED's floor IS rung 1. Nothing checked this, which is how 34 of 184
+    # GUIDED problems came to serve a "pick one" with an empty choices list.
+    if scaffold.floor_for(p.difficulty) == scaffold.PICK:
+        if scaffold.PICK not in scaffold.available_rungs(p):
+            speak(f"the band floor is rung 1 (PICK) and no plausible neighbour "
+                  f"can be built for the first scaffold span {spans[0]['text']!r}, "
+                  f"so the lowest rung this problem can serve is rung 2")
     return out
 
 
@@ -607,6 +895,7 @@ def validate(problems: list, *, workers: int = 8) -> Report:
             report.issues.append(Issue(p.id, "error", "duplicate problem id"))
         seen[p.id] = p
         report.issues.extend(_static_checks(p))
+        report.issues.extend(_verify_scaffold(p))
         # Additive: a puzzle still faces every check its entry kind faces. The
         # old behaviour was to recognise `mcq` and `test_forge` and silently wave
         # everything else through.

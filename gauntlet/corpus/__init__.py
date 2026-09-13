@@ -30,6 +30,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 from .. import config, curriculum
+from . import scaffolding
 from .schema import MAP_TAG, Problem
 
 _FAMILIES = (
@@ -75,6 +76,13 @@ def build_all() -> list:
     curriculum.apply_pattern_corrections(problems)
     assign_lineage(problems)
     seal_holdout(problems)
+    # AFTER the hold-out, deliberately. The ramp's declarations name spans of a
+    # canonical solution that already exists; they create no problem, no id and
+    # no lineage, so `assign_lineage` and `seal_holdout` see byte-for-byte the
+    # input they saw before this line existed and produce the same 122 ids.
+    # Running it here rather than earlier is what makes that true by
+    # construction rather than by inspection. See tests/test_ramp.py.
+    scaffolding.apply(problems)
     return problems
 
 
@@ -884,6 +892,10 @@ def fingerprint() -> str:
     digest = hashlib.sha256()
     sources = sorted(here.glob("families/*.py")) + [
         here / "generator.py", here / "schema.py", here / "validate.py",
+        # The ramp's declarations are content: they decide which span of each
+        # problem the player is asked to write. `scaffold.py` is content too,
+        # because it is what turns a declaration into the spans that are stored.
+        here / "scaffolding.py", here.parent / "scaffold.py",
         # Lineage and the hold-out are decided in this file, so this file is
         # content too: changing how the set is chosen has to invalidate a
         # corpus that was built under the old rule.

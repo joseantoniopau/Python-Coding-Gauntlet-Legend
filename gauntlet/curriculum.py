@@ -22,6 +22,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from . import scaffold
+
 # ---------------------------------------------------------------------------
 # Difficulty ordering
 # ---------------------------------------------------------------------------
@@ -131,9 +133,260 @@ def _tier_record_missing(state) -> bool:
     return untracked_clears(state) > 0
 
 
+def rung_record(state) -> dict:
+    """Unaided clears filed by the RUNG of the ramp they were earned at."""
+    if state is None:
+        return {}
+    record = getattr(state, "rung_unaided", None) or {}
+    return {int(k): int(v) for k, v in record.items() if str(k).isdigit()}
+
+
 def has_produced_code(state) -> bool:
-    """Has this skill ever been cleared, unaided, without a scaffold?"""
-    return unaided_at_or_above(state, PRODUCTION_TIER) >= 1
+    """Has this skill ever been cleared, unaided, on a blank screen?
+
+    THE BAND IS NOT THE RUNG, and conflating the two was a live mastery farm.
+    `PRODUCTION_TIER` is EASY, and the corpus contains 21 EASY problems that
+    ship a two-or-three-blank scaffold. Clearing any one of them satisfied this
+    predicate outright, which ended the scaffold band and satisfied the
+    `scaffold` clause on every TIER_GATE above it — on the strength of having
+    filled in two blanks. Measured, not reasoned: a fresh player with
+    `tier_unaided == {"EASY": 1}` came out of here True.
+
+    So the question is asked in the vocabulary that can answer it, and it takes
+    BOTH halves: rung 4, and EASY or harder. Rung 4 alone is not enough, because
+    a GUIDED one-liner with no declaration is served at rung 4 and would mint
+    the evidence on encounter two — measured, that is exactly what happened, and
+    it moved the mastery farm rather than closing it. EASY alone is not enough
+    either, because 21 EASY problems ship a two-blank scaffold, which is the
+    farm this started as. `skills.production_unaided` is the one tally that
+    counts the conjunction.
+
+    Because the rung is recorded from what the player was SHOWN (skills.
+    apply_outcome, from the encounter), a scaffolded serving cannot produce
+    rung-4 evidence. That is not a convention anybody has to remember — it is
+    arithmetic.
+
+    ABSENT EVIDENCE IS NOT EVIDENCE OF ABSENCE. A save written before rungs were
+    recorded holds real clears and no rung record of them, and re-judging those
+    under the new predicate would throw a returning player back to the bottom of
+    the ramp — the exact trap `_tier_record_missing` already documents. Those
+    saves fall through to the old reading, unchanged.
+    """
+    if int(getattr(state, "production_unaided", 0) or 0) >= 1:
+        return True
+    # And the clears that predate rungs being recorded. THE QUESTION IS "ARE
+    # THERE UNAIDED EASY-OR-HARDER CLEARS OUTSIDE THE RUNG RECORD", NOT "IS THE
+    # RUNG RECORD EMPTY" — measured, the second question makes the exemption
+    # last exactly one encounter, and a fluent player who had skipped the
+    # beginner chain met six rungs of it as soon as their first scaffolded clear
+    # was filed.
+    return untracked_production(state) >= 1
+
+
+def untracked_production(state) -> int:
+    """Unaided EASY-or-harder clears this skill holds that carry no rung."""
+    if state is None:
+        return 0
+    filed = int(getattr(state, "production_seen", 0) or 0)
+    return max(0, unaided_at_or_above(state, PRODUCTION_TIER) - filed)
+
+
+# ---------------------------------------------------------------------------
+# Which rung of the ramp this player has earned
+# ---------------------------------------------------------------------------
+#
+# The rung comes from the player's measured competence on the skill, never from
+# the problem. A problem that is always rung 2 is a problem the player can never
+# graduate from, which is the thing the player asked not to have.
+#
+# The shape is `incantation.tier_for`, which has decided the scaffold tier for
+# combat lines from evidence since the retrieval gradient shipped, and does
+# every part of this right: it rises on accumulated unaided clears, falls one
+# rung per consecutive miss, decays with time away, and is capped by mastery of
+# the underlying skill, because typing speed cannot outrun comprehension.
+#
+# How much evidence buys the next rung. SCAFFOLD_LADDER's existing numbers —
+# eight at the bottom, six above it — are the right grain and are kept; what
+# changes is that they are counted per RUNG rather than per band.
+#
+# Six one-blank clears yield rung 3, and rung 4 only after that. Six pieces of
+# evidence about writing one expression are six pieces of evidence about writing
+# one expression, and none at all about writing a function.
+# These three numbers ARE the curve. docs/14-the-ramp.md §1b decides the mix a
+# band should serve — 95 / 70 / 35 / 10 / 0 scaffolded, strictly decreasing —
+# and the only free parameter that produces it is how long a player stays on
+# each rung.
+#
+# THEY ARE SIZED TO THE EVIDENCE ONE SKILL ACCUMULATES, NOT TO A BAND'S LENGTH.
+# That distinction is the whole of this correction, and it is worth a paragraph
+# because getting it wrong is invisible: 21 / 24 / 30 were solved against the
+# measured length of a band in a real career — 62 GUIDED editor encounters, 59
+# TUTORIAL, 75 EASY over 400 encounters — and the arithmetic was right for a
+# question nobody was asking. EVIDENCE IS FILED PER SKILL. Those 241 editor
+# encounters spread over eighteen skills: median fifteen apiece, and only
+# HASH_MAP (32) and TWO_POINTER (31) ever reached 24. So no skill climbed off
+# TUTORIAL's or EASY's floor in a whole career, and the mix the game served was
+# not measured competence at all — it was declaration coverage clamped by the
+# floor. Measured: TUTORIAL served 100.0% scaffolded against a 70% target and
+# EASY 66.7% against 35%, with every TUTORIAL encounter on the band floor.
+#
+# Re-solved against what one skill actually holds, on the same 400-encounter
+# replay: 8 / 9 / 11 puts TUTORIAL at 71.2% against its 70% and EASY at 49.3%.
+# EASY stays above its 35% because 111 of its 164 editor problems carry two
+# spans and rung 3 is EASY's own floor — that is a floor, not a climb, and the
+# remedy for it is a band-wide judgement about EASY's floor rather than a number
+# here.
+#
+# ORDER MATTERS AND IS NOT OPTIONAL. A faster climb is only safe once a GUIDED
+# problem can actually serve rung 3: while 120 of the 184 GUIDED declarations
+# carried a single span, climbing faster pushed more of them into
+# `scaffold.servable`'s fall-up to rung 4 and took GUIDED DOWN to 53.2%. The
+# second spans in `corpus/scaffolding.py` come first; these numbers come after.
+#
+# They are a design decision and they are meant to be revised by data. The first
+# cohort through TUTORIAL is what should revise them.
+RUNG_EVIDENCE = {
+    scaffold.PICK: 8,
+    scaffold.ONE_BLANK: 9,
+    scaffold.MANY_BLANKS: 11,
+}
+
+# Time away returns support before the player notices. Same two steps as
+# `incantation.tier_for`, and the same signal `SRS_INTERVALS_DAYS` encodes —
+# expressed as help rather than as a due date.
+RUNG_DECAY_DAYS = ((14.0, 2), (5.0, 1))
+
+
+def _unaided_at_or_below(record: dict, rung: int) -> int:
+    """Evidence earned at this rung or with MORE help than it.
+
+    At-or-below, because a player who has been writing whole functions has
+    obviously finished with one-blank problems and must not be sent back down
+    for want of a tally at the easier rung.
+    """
+    return sum(count for name, count in record.items() if name >= rung)
+
+
+def _mastery_ceiling(state) -> int:
+    mastery = float(getattr(state, "mastery", 0.0) or 0.0)
+    if mastery < 25:
+        return scaffold.ONE_BLANK
+    if mastery < 55:
+        return scaffold.MANY_BLANKS
+    return scaffold.WRITE_IT_ALL
+
+
+def rung_for(state, difficulty: str, *, now=None, lapsed: bool = False) -> int:
+    """The rung this player has earned on this skill, in this band.
+
+    Never below the band's floor — that is structural and monotone and content
+    drift cannot reach it — with exactly one exception, named here rather than
+    hidden: a LAPSED spaced-repetition review drops the serving one rung, which
+    is the only route to a scaffold at MEDIUM and the reason the expected mix
+    puts 10% there rather than zero.
+    """
+    import time
+
+    floor = scaffold.floor_for(difficulty)
+    if lapsed:
+        floor = max(scaffold.PICK, floor - 1)
+    if state is None:
+        return floor
+
+    record = rung_record(state)
+    if _tier_record_missing(state):
+        # A save from before rungs were recorded holds real clears and no rung
+        # record of them. Judging it on that silence would aim a competent
+        # returning player at fill-in-the-blanks. It starts at the top instead —
+        # and the misses and the decay below still apply, so the ramp can still
+        # give support back to a returning player who needs it. What it will not
+        # do is take it as read that they need it.
+        earned = scaffold.WRITE_IT_ALL
+    else:
+        # The climb STARTS AT THE FLOOR, one rung at a time. The floor is where
+        # this band admits the player; evidence is what carries them above it.
+        # Starting the count at rung 1 regardless of band would hold a TUTORIAL
+        # player at one blank until they had eight clears they were never going
+        # to be offered, because rung 1 is a rung TUTORIAL may not serve.
+        earned = floor
+        while earned < scaffold.WRITE_IT_ALL:
+            needed = RUNG_EVIDENCE.get(earned)
+            if needed is None or _unaided_at_or_below(record, earned) < needed:
+                break
+            earned += 1
+
+    # Falling back, one rung per miss in a row. No announcement, no penalty.
+    earned -= int(getattr(state, "miss_streak", 0) or 0)
+
+    last_seen = float(getattr(state, "last_seen", 0.0) or 0.0)
+    if last_seen:
+        days = max(0.0, ((time.time() if now is None else now) - last_seen) / 86400.0)
+        for threshold, cost in RUNG_DECAY_DAYS:
+            if days >= threshold:
+                earned -= cost
+                break
+
+    earned = min(earned, _mastery_ceiling(state))
+    if lapsed:
+        # One rung of support back, not a fall to the bottom. `srs.schedule_after`
+        # already halves the stage and the ease on a lapse; the rung moves with
+        # it, by one. This is the ONLY thing in the game that serves a scaffold
+        # at MEDIUM, and the only thing that serves one blank at EASY — which is
+        # exactly where the expected mix puts its 10% in each of those bands.
+        earned -= 1
+    return max(floor, min(scaffold.WRITE_IT_ALL, earned))
+
+
+def review_rung(*, lapsed: bool = False) -> int:
+    """The rung a spaced-repetition review is served at.
+
+    A review exists to MEASURE RETENTION, and a retained skill delivered with
+    the answer half written measures nothing — `srs.schedule_after` would then
+    grow the interval on the strength of it. So a review is the whole function
+    by default, whatever rung the player is climbing elsewhere.
+
+    A lapse drops it one rung, and only one: the player has just shown they
+    have forgotten something, and the next sight of it should carry a little
+    help rather than the same blank screen they have just failed at.
+    """
+    return scaffold.MANY_BLANKS if lapsed else scaffold.WRITE_IT_ALL
+
+
+def servable_rung(problem, state, *, lapsed: bool = False, mode: str = "adventure",
+                  now=None) -> int:
+    """The rung a given problem is actually served at, for a given player.
+
+    Three gates, all of which can only move the answer UP the ladder — towards
+    less help — because every way of getting this wrong that the corpus has
+    already demonstrated moved it down.
+    """
+    if mode in scaffold.UNSCAFFOLDED_MODES or getattr(problem, "sealed", False):
+        # The practical, Interview Mode and the hold-out are the whole function
+        # with nothing to lean on, in any band, forever. A sealed problem is
+        # never served at any rung, because a rung is a presentation OF a
+        # problem and the seal is a property of the problem.
+        return scaffold.WRITE_IT_ALL
+    desired = rung_for(state, problem.difficulty, lapsed=lapsed, now=now)
+    return scaffold.servable(problem, problem.difficulty, desired,
+                             floor=lapse_floor(problem.difficulty) if lapsed else None)
+
+
+# The bands the lapse exception does NOT reach. docs/14-the-ramp.md §1b says
+# HARD is "0%, with no mechanism to reach anything else", and that sentence was
+# true only by content accident: `lapse_floor` returned 3 for HARD, ELITE and
+# BOSS exactly as it does for MEDIUM, and the only thing stopping a lapsed HARD
+# review from being served two blanks was that 0 of the 20 HARD editor problems
+# happen to carry a declaration. One declaration authored at HARD would have
+# turned a documented structural guarantee into a bug, silently. MEDIUM's
+# recovery rung is the one documented exception and stays.
+NO_LAPSE_SCAFFOLD = frozenset({"HARD", "ELITE", "BOSS"})
+
+
+def lapse_floor(difficulty: str) -> int:
+    """The band's floor, one rung lower, for a lapsed review and nothing else."""
+    if difficulty in NO_LAPSE_SCAFFOLD:
+        return scaffold.WRITE_IT_ALL
+    return max(scaffold.PICK, scaffold.floor_for(difficulty) - 1)
 
 
 def scaffold_target(state):

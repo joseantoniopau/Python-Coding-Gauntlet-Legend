@@ -210,7 +210,7 @@ class TestCurriculum(GameTest):
         The clears were earned under the old calibration, so the old
         calibration is what they are read against, bottom rungs included.
         """
-        from gauntlet import adaptive, curriculum, skills as skillmod
+        from gauntlet import adaptive, curriculum, scaffold, skills as skillmod
 
         def old(mastery, clears=5):
             return skillmod.SkillState(name="PYTHON", mastery=mastery,
@@ -228,10 +228,18 @@ class TestCurriculum(GameTest):
         self.assertEqual(adaptive._difficulty_target(fresh, old(14.0)), "GUIDED")
         self.assertEqual(adaptive._difficulty_target(fresh, old(70.0)), "EASY")
         # Once they produce unscaffolded code there IS a record, and it wins.
+        # UNSCAFFOLDED IS THE RUNG, and it has to be said: this used to pass no
+        # rung at all, which is what `engine` passes for a multiple choice, a
+        # RUNE_ASSEMBLY or a DEBUG_BATTLE — and it passed anyway, because
+        # `production_seen` was only incremented inside `if rung:` while
+        # `tier_unaided` was incremented unconditionally, so the difference the
+        # pre-rung exemption reads came out at 1 for an encounter where nothing
+        # was written. See `curriculum.untracked_production`.
         produced = old(14.0)
         skillmod.apply_outcome(produced, solved=True, difficulty="EASY",
                                hints_used=0, seconds=10.0, target_seconds=60.0,
-                               first_try=True, is_retest=False)
+                               first_try=True, is_retest=False,
+                               rung=scaffold.WRITE_IT_ALL)
         self.assertTrue(curriculum.has_produced_code(produced))
         self.assertEqual(adaptive._difficulty_target(produced, produced), "EASY")
 

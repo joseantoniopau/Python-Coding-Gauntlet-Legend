@@ -171,6 +171,34 @@ class Problem:
     tags: list[str] = field(default_factory=list)
     mutants: list[str] = field(default_factory=list)         # TEST_FORGE only
 
+    # -- the ramp -----------------------------------------------------------
+    #
+    # `scaffold_spans` is the ONE declaration from which every rung of the ramp
+    # is generated: an ordered list, best blank first, of spans of this
+    # problem's own canonical solution that carry the idea, each with the
+    # one-line gloss that becomes its numbered comment.
+    #
+    #   {"line": 3, "text": "counts.get(ch, 0) + 1", "nth": 1,
+    #    "gloss": "build the tally for this character"}
+    #
+    #   rung 3  MANY BLANKS    strikes the first two or three spans
+    #   rung 2  ONE BLANK      strikes span #1
+    #   rung 1  PICK           strikes span #1 and offers four tokens
+    #   rung 4  WRITE IT ALL   strikes the whole body
+    #
+    # The corpus used to author a rung as a separate problem with the rung
+    # frozen into it, which is why TUTORIAL was 195 blank screens out of 202:
+    # the middle rung cost a whole second problem, so nobody paid for it. A rung
+    # is a PRESENTATION of a problem — see gauntlet/scaffold.py — so there is
+    # one id, one canonical solution and one lineage, and a scaffolded serving
+    # can never become a second piece of evidence about the same idea.
+    #
+    # `line` indexes `canonical_solution.split("\n")`, so the declaration is
+    # checked against the answer at build time (`scaffold.round_trip`) rather
+    # than being a second hand-maintained copy of it. It never travels to the
+    # client: `player_view` pops it, for the same reason it pops the mcq answer.
+    scaffold_spans: list[dict] = field(default_factory=list)
+
     # -- lineage and the sealed hold-out set --------------------------------
     #
     # `lineage_id` groups problems that are the same exercise wearing different
@@ -219,6 +247,11 @@ class Problem:
         # to measure. The server knows; the browser has no business knowing.
         d.pop("sealed", None)
         d.pop("lineage_id", None)
+        # The spans ARE the answer — `scaffold_spans[0]["text"]` is the
+        # expression the blank is asking for. The client gets the rendered rung
+        # (marker and gloss) and never the text that fills it, which is the same
+        # rule `redact_mcq` applies to the answer index.
+        d.pop("scaffold_spans", None)
         if mode == "interview":
             # Interview Mode measures. No teaching surface whatsoever.
             d["hint_tree"] = []

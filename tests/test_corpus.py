@@ -108,6 +108,51 @@ class TestCorpus(GameTest):
             self.assertIn(boss["problem_id"], ids,
                           f"boss {boss['id']} points at a missing problem")
 
+    def test_the_rune_pile_is_never_the_solution_in_order(self):
+        """docs/13 §7.9 X6 — THE TRIPWIRE under the `rune` cue.
+
+        `gauntlet/tutorial.py`'s CUE_CONTROLS is allowed to point an arrow at
+        the head of a RUNE_ASSEMBLY pile for one reason and one reason only:
+
+            The `rune` control is legal ONLY because the RUNE_ASSEMBLY pile is
+            mcq.shuffle and position in a shuffle carries no information. If
+            shuffle is ever sorted, seeded to put distractors last, ordered by
+            difficulty or otherwise made meaningful, DELETE the `rune` control
+            the same day: it becomes a leak.
+
+        `corpus/validate.py` checks only that `len(shuffle) == len(runes)`, so
+        an identity permutation — the pile in authored order, which is SOLUTION
+        order — passes validation. `puzzleui.js` then renders the answer down
+        the tray in the right sequence with a violet arrow on line one. That is
+        why this assertion is written on purpose rather than inherited.
+
+        Measured on the shipped corpus: 42 RUNE_ASSEMBLY problems, shuffle
+        present 42/42, identity 0/42, sorted 0/42.
+        """
+        piles = [p for p in self.corpus if p.encounter_kind == "RUNE_ASSEMBLY"]
+        self.assertGreaterEqual(len(piles), 20,
+                                "no rune assemblies left to check")
+        for p in piles:
+            with self.subTest(problem=p.id):
+                shuffle = list((p.mcq or {}).get("shuffle") or [])
+                runes = list((p.mcq or {}).get("runes") or [])
+                self.assertTrue(shuffle, f"{p.id}: no shuffle at all — "
+                                         f"puzzleui renders the pile in "
+                                         f"authored order, which is solution "
+                                         f"order")
+                self.assertEqual(sorted(shuffle), list(range(len(runes))),
+                                 f"{p.id}: the shuffle is not a permutation "
+                                 f"of every rune index")
+                self.assertNotEqual(shuffle, list(range(len(runes))),
+                                    f"{p.id}: the pile IS the solution in "
+                                    f"order. Delete the `rune` control in "
+                                    f"gauntlet/tutorial.py the same day this "
+                                    f"is allowed to ship.")
+                self.assertNotEqual(shuffle, sorted(shuffle),
+                                    f"{p.id}: the pile is sorted, so position "
+                                    f"in it carries ordering information and "
+                                    f"the `rune` cue becomes a leak.")
+
     def test_generated_variants_are_validated_like_authored_ones(self):
         generated = [p for p in self.corpus if "generated" in p.tags]
         self.assertGreaterEqual(len(generated), 20)

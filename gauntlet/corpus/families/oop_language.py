@@ -3112,8 +3112,9 @@ def build() -> list:
                     elif kind == "type":
                         1 + "a"
                     return "none"
-                # three except clauses, most specific first
-                pass
+                except Exception:
+                    pass
+                # three except clauses, most specific first — replace this one
             """,
             nudge="Put `except Exception` first and the other two clauses become "
                   "unreachable code that Python will never warn you about.",
