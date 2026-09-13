@@ -274,6 +274,181 @@ const TRACKS = {
 const LOOKAHEAD_MS = 25;      // how often the scheduler wakes
 const SCHEDULE_AHEAD = 0.12;  // how far ahead it writes, in seconds
 
+/* ------------------------------------------------------- effect vocabulary
+ *
+ * Everything below this line is the SFX side of the rig rather than the band.
+ * Three tables, named rather than inlined, because each one is a claim the
+ * measurement harness checks: scripts and scratchpad/sfxlab.mjs render every
+ * entry through an OfflineAudioContext and assert the rows differ. A table a
+ * reader can see is a table a reader can check against what they heard.
+ */
+
+/* One buffer of white noise, this long, shared by every noise voice in the
+ * file. See _noiseBuffer(). */
+const NOISE_SECONDS = 2.0;
+
+/* FOOTSTEPS. Terrain is a MATERIAL, and a material is three numbers: what the
+ * boot's impact sounds like (a transient), what the ground does afterwards (a
+ * texture), and how much body is under it (a thud). Stone is a bright click
+ * with no tail; ash is a dull puff with no click; water is the only one with a
+ * pitched voice in it, because a droplet has a pitch and gravel does not.
+ *
+ *   band    [hp, lp] of the texture, Hz
+ *   dur     texture length, seconds
+ *   gain    texture level
+ *   attack  a swell rather than a hit, seconds. Ash and sand have one.
+ *   thud    [Hz, gain] of the body under the step, or null for none
+ *   click   [Hz, gain] of the impact transient, or null
+ *   ring    [Hz, Q] of a resonant body — wood only, and it is what wood IS
+ *   squeak  the stick-slip chirp of dry snow, snow only
+ *   wet     a pitched droplet and a tail, water only
+ */
+const FOOTSTEP = {
+  stone: { band: [1200, 9000], dur: 0.045, gain: 0.30, thud: [150, 0.10], click: [3800, 0.26] },
+  wood:  { band: [140, 1100],  dur: 0.075, gain: 0.30, thud: [330, 0.26], click: [900, 0.10], ring: [330, 9] },
+  grass: { band: [500, 2400],  dur: 0.120, gain: 0.26, thud: null,        click: null, attack: 0.018 },
+  sand:  { band: [180, 1100],  dur: 0.130, gain: 0.30, thud: [90, 0.06],  click: null, attack: 0.008 },
+  ash:   { band: [50, 320],    dur: 0.220, gain: 0.46, thud: [58, 0.12],  click: null, attack: 0.030 },
+  snow:  { band: [3800, 11000], dur: 0.070, gain: 0.26, thud: null,       click: [5600, 0.16], squeak: true },
+  water: { band: [900, 5000],  dur: 0.210, gain: 0.24, thud: [70, 0.07],  click: null, wet: true },
+};
+
+/* What the overworld's own tile classes are called, mapped onto the seven
+ * materials above. tiles.js GROUND_OF answers grass/path/water/cliff/stone/
+ * lava/sand and biomeStyle().surf answers snow/ash/flag/gravel and the rest, so
+ * the next agent can hand either one straight in. */
+const FOOTSTEP_ALIAS = {
+  path: 'stone', cliff: 'stone', flag: 'stone', brick: 'stone', gravel: 'stone',
+  rubble: 'stone', glass: 'stone', basalt: 'stone', ore: 'stone', strata: 'stone',
+  bridge: 'wood', plank: 'wood', floor: 'wood', deck: 'wood',
+  meadow: 'grass', wild: 'grass', moss: 'grass', scrub: 'grass', rot: 'grass',
+  dirt: 'sand', bone: 'sand', dune: 'sand',
+  cinder: 'ash', ember: 'ash', soot: 'ash', lava: 'ash',
+  ice: 'snow', frost: 'snow', drift: 'snow',
+  tar: 'water', murk: 'water', blood: 'water', swamp: 'water', shallow: 'water',
+};
+
+/* tiles.js TERRAIN codes, so a caller holding a raw grid cell can hand it
+ * straight over. These mirror that file's own GROUND_OF, which is module-
+ * private there and cannot be imported: a tree, a chest and a shrine all STAND
+ * on something, and what you hear is what they stand on. tiles.js is owned by
+ * another pass and is not edited from here, so the mirror lives on this side
+ * and is asserted by the callsite note in the report rather than by an import.
+ *
+ * INDEX 7 IS THE ONE THAT MATTERED. It said 'stone' against tiles.js:62's
+ * 'grass', and SHRINE is NOT in that file's SOLID_CODES — so a player can and
+ * does stand on a shrine tile, and in a grass region the step under their feet
+ * came back stone. This table's whole claim is that it mirrors GROUND_OF, and
+ * a mirror with one pane out is worse than no mirror: it is right everywhere a
+ * reader would check it and wrong on the one tile a player can walk onto.
+ *
+ * TWO CODES STILL DIVERGE, AND BOTH ARE DELIBERATE. Named here rather than
+ * left to be rediscovered as a bug, because the whole value of a hand-copied
+ * mirror is that somebody can tell a copy error from a decision.
+ *
+ *   6  BUILDING  'wood' against GROUND_OF's 'grass'. BUILDING is in tiles.js
+ *                SOLID_CODES, so no foot ever lands on it and no step is ever
+ *                sounded from it. The entry is read only by callers asking
+ *                what the OBJECT is made of, where a house is wood and the
+ *                lawn it stands on is not the answer.
+ *   10 BRIDGE    'wood' against GROUND_OF's 'path'. This one IS walked on, and
+ *                'wood' is the right answer: tiles.js puts BRIDGE on 'path'
+ *                so it fringes into the road network, which is a statement
+ *                about autotiling and not about planks. This file's own
+ *                FOOTSTEP_ALIAS already says `bridge: 'wood'`, so the two
+ *                halves of audio.js agree with each other; it is tiles.js's
+ *                GROUND_OF that is answering a different question.
+ *
+ * Everything else — every walkable code — matches GROUND_OF through
+ * FOOTSTEP_ALIAS exactly.
+ */
+const FOOTSTEP_CODE = ['grass', 'stone', 'water', 'grass', 'stone', 'stone',
+                       'wood', 'grass', 'grass', 'ash', 'wood', 'sand'];
+
+/* What each biome's open ground is actually made of, mirroring tiles.js
+ * BIOME_STYLE's `surf`. It applies to GRASS and to nothing else, because
+ * surfaceRamp() in that file leaves stone, path, cliff and sand alone: a
+ * mountain region's grass tile is drawn as snow and a wastes region's is drawn
+ * as ash, but the flagstones are flagstones in both. */
+const BIOME_SURFACE = {
+  village: 'meadow', grass: 'wild', forest: 'moss', deepforest: 'moss',
+  canopy: 'moss', swamp: 'rot', cave: 'gravel', mine: 'gravel',
+  mountain: 'snow', highland: 'scrub', citadel: 'flag', ruins: 'scrub',
+  wastes: 'ash', dungeon: 'flag', tower: 'glass', arena: 'bone', castle: 'flag',
+};
+
+/* THE SIX ELEMENTS, as bossart.js ELEMENT_IDS names them (plus its NEUTRAL).
+ *
+ * This is the guard for the `sfx('cast_*')` prefix and nothing more: the six
+ * voices are ARCHITECTURES rather than table rows — they differ in which layers
+ * exist at all, not in a pitch — so they live in castElement() where that can
+ * be read. The list is here because `cast_ok` and `cast_fail` are older names
+ * that start with the same five characters and must not be caught by it.
+ */
+const ELEMENT_CAST = new Set(['fire', 'cold', 'poison', 'brute',
+                              'lightning', 'void', 'neutral']);
+
+/* WAR CRIES. Not one per creature — there are fifty-nine of them and a
+ * hand-authored cry each is a table nobody would keep true. A cry is a BODY
+ * PLAN voiced through an ELEMENT, exactly the way monsterart.js draws one: that
+ * file already stores `family` (the element) and a role in MONSTER_ROLES, and
+ * those two fields are all this needs. Nine plans x seven families is
+ * sixty-three voices out of sixteen rows of table.
+ *
+ * The plan is the vocal tract and it decides everything structural: a skeleton
+ * has no lungs, so its cry is dry clacking with no pitch centre at all; a swarm
+ * has no single throat, so its cry is wingbeat modulation with no transient; an
+ * elemental has no body, so its cry is pure tone with no noise in it anywhere.
+ * The family only TINTS what the plan built. That ordering is the design: a
+ * FIRE skeleton and a COLD skeleton are both plainly skeletons, and neither is
+ * ever mistakable for a dragon.
+ */
+const CRY_PLANS = ['skeletal', 'dragon', 'swarm', 'elemental',
+                   'flyer', 'runner', 'creeper', 'legless', 'heavy'];
+
+/* monsterart.js MONSTER_ROLES answers one of these six; the three plans it has
+ * no word for are reached by name below. */
+const CRY_ROLE = {
+  flyer: 'flyer', runner: 'runner', creeper: 'creeper',
+  legless: 'legless', heavy: 'heavy', bodiless: 'elemental',
+};
+
+/* What a creature is CALLED, when the caller has no role to hand. Ordered:
+ * skullswarm is a swarm before it is a skull. */
+const CRY_BY_NAME = [
+  [/swarm|hive|locust|midge|mite|moth|scarab|gnat|fly\b/i, 'swarm'],
+  [/wyrm|drake|dragon|serpent|hydra|behemoth|leviathan/i, 'dragon'],
+  [/skull|bone|grave|wight|lich|skelet|crypt|tomb|ossu|marrow/i, 'skeletal'],
+  [/wisp|shade|spirit|phantom|wraith|dervish|cairn|mote|glim|elemental|void|null/i, 'elemental'],
+  [/worm|vine|adder|viper|snake|slither|coil|lash|grub|slag/i, 'legless'],
+  [/wing|shrike|wren|bat|raven|crow|phoenix|flit/i, 'flyer'],
+  [/hound|wolf|jackal|ram|stag|hog|boar|cat|lion|ling\b/i, 'runner'],
+  [/spider|stalker|mantis|crab|scuttle|tick|roach|monkey/i, 'creeper'],
+  [/ape|golem|titan|colossus|guard|walker|giant|troll|ogre|crown|lord/i, 'heavy'],
+];
+
+/* The family tint. `p` multiplies every pitch in the plan, `d` every duration,
+ * and `over` names the one extra layer the element adds on top. */
+const CRY_FAMILY = {
+  /* FIRE used to be { p: 1.00, d: 1.00 } — numerically identical to NEUTRAL,
+   * the only family with no deviation at all, so a FIRE cry WAS a NEUTRAL cry
+   * with a faint overlay and measured inside the noise of one on seven of the
+   * nine body plans. Hotter and faster is the right direction and it reads
+   * correctly against COLD, which is the other way round on both axes. */
+  FIRE:      { p: 1.30, d: 0.70, over: 'crackle' },
+  COLD:      { p: 1.12, d: 1.15, over: 'shimmer' },
+  POISON:    { p: 0.90, d: 1.22, over: 'wet' },
+  BRUTE:     { p: 0.78, d: 0.95, over: 'thud' },
+  LIGHTNING: { p: 1.22, d: 0.85, over: 'buzz' },
+  VOID:      { p: 0.68, d: 1.48, over: 'detune' },
+  NEUTRAL:   { p: 1.00, d: 1.00, over: '' },
+};
+
+/* The shipped music fader over the shipped effects fader. Anything MOVED from
+ * the music bus to the effects bus is scaled by this so the move is audible as
+ * a change of fader and not as a change of level. */
+const SFX_TRIM = 0.55 / 0.80;
+
 class MetalRig {
   constructor() {
     this.ctx = null;
@@ -292,16 +467,36 @@ class MetalRig {
   }
 
   /* Asymmetric soft clip. Asymmetry is what puts even harmonics in, which is
-   * the difference between a valve amp and a fuzz pedal. */
+   * the difference between a valve amp and a fuzz pedal.
+   *
+   * ZERO MUST GO THROUGH ZERO, and it did not. A WaveShaper maps input x onto
+   * the virtual index (n-1)*(x+1)/2 and interpolates, so silence reads the
+   * curve at index (n-1)/2 = 1023.5 — BETWEEN two entries. The old sampling,
+   * x = (i*2)/n - 1, put the curve's own zero at index 1024 exactly, which left
+   * curve[1023] = -0.0344 (at drive 0.7) and made the interpolated output for
+   * an input of 0.0 equal -0.0172. That is a DC offset on a silent channel.
+   * The 80Hz highpass below turns the step into a click the moment the graph is
+   * built, the lead slapback repeats it 190ms later, and every quiet sound
+   * measured through the rig came back 190ms long because of it.
+   *
+   * Two changes, both needed: sample x SYMMETRICALLY about the midpoint so the
+   * two entries either side of zero straddle it, and then subtract the value
+   * the shaper will actually interpolate at x=0 so it is exactly 0. Subtracting
+   * a constant from a transfer curve only moves DC, which the highpass removes
+   * anyway, so the even-harmonic character is untouched. */
   _curve(drive) {
     const n = 2048;
     const curve = new Float32Array(n);
     const k = 1 + drive * 60;
+    const half = (n - 1) / 2;
     for (let i = 0; i < n; i++) {
-      const x = (i * 2) / n - 1;
+      const x = (i - half) / half;
       const bias = x > 0 ? 1 : 0.82;          // squash the negative half less
       curve[i] = Math.tanh(k * x * bias) / Math.tanh(k);
     }
+    // what the shaper interpolates for an input of exactly 0.0
+    const atZero = (curve[n / 2 - 1] + curve[n / 2]) / 2;
+    if (atZero) for (let i = 0; i < n; i++) curve[i] -= atZero;
     return curve;
   }
 
@@ -382,6 +577,34 @@ class MetalRig {
     cleanTone.type = 'lowpass'; cleanTone.frequency.value = 4200;
     this.cleanCh.connect(cleanTone); cleanTone.connect(this.musicBus);
 
+    /* The same clean guitar, landing on the SFX bus instead of the music bus.
+     * A chest opening is an EFFECT and has to sit under the effects fader; the
+     * existing clean-toned effects (shrine, unlock, pet) predate the split and
+     * are left where they are rather than changed under the player. */
+    this.cleanSfx = ctx.createGain();
+    this.cleanSfx.gain.value = 0.40;
+    const cleanSfxTone = ctx.createBiquadFilter();
+    cleanSfxTone.type = 'lowpass'; cleanSfxTone.frequency.value = 4200;
+    this.cleanSfx.connect(cleanSfxTone); cleanSfxTone.connect(this.sfxBus);
+
+    /* AND A THIRD, for the clean effects that are being MOVED to this bus
+     * rather than written for it — shrine, unlock and pet.
+     *
+     * The trim has to live on the CHANNEL and not on the gain passed to
+     * _clean(), which is the mistake this comment exists to stop anyone
+     * repeating. _clean()'s envelope is an exponentialRamp anchored at 0.0001,
+     * so its span in dB — and therefore the note's whole decay shape — is a
+     * function of the gain argument. Scaling 0.2 to 0.089 measured 6dB hotter
+     * on PEAK while RMS moved 1.4dB, because the quieter note now decays
+     * across 59dB instead of 66dB in the same half-second and simply rings
+     * longer. A level change must be a level change. 0.26 * SFX_TRIM into
+     * sfxBus is exactly what 0.26 into musicBus was. */
+    this.cleanKept = ctx.createGain();
+    this.cleanKept.gain.value = 0.26 * SFX_TRIM;
+    const cleanKeptTone = ctx.createBiquadFilter();
+    cleanKeptTone.type = 'lowpass'; cleanKeptTone.frequency.value = 4200;
+    this.cleanKept.connect(cleanKeptTone); cleanKeptTone.connect(this.sfxBus);
+
     this.bassCh = ctx.createGain();
     this.bassCh.gain.value = 0.42;
     const bassShaper = ctx.createWaveShaper();
@@ -397,6 +620,36 @@ class MetalRig {
     this.drumCh.gain.value = 0.5;
     this.drumCh.connect(this.musicBus);
 
+    /* THE OTHER HALF OF THE SFX/MUSIC SPLIT.
+     *
+     * `rhythm`, `lead` and `drumCh` above are built onto musicBus, and FIFTEEN
+     * effects — every chord, squeal, snare and crash in the battle — voiced
+     * through them. Measured: with the EFFECTS fader at zero and music at 0.55,
+     * `hit` still played at peak 0.2478 and `defeat` at 0.4516, while with the
+     * MUSIC fader at zero `hit` fell to 0.0000. Turning effects off left a
+     * whole battle audible; turning music off silenced the battle instead.
+     *
+     * These are the same three channels with the same settings, landing on
+     * sfxBus. The music scheduler keeps rhythm/lead/drumCh; sfx() uses these,
+     * so a chord in a song and a chord in a defeat are the same instrument on
+     * different faders.
+     *
+     * AND IT MUST NOT BE A MIX CHANGE. The effects fader ships at 0.80 and the
+     * music fader at 0.55, so simply re-pointing these sounds would make every
+     * one of them 3.3dB louder than the player has been hearing it — a routing
+     * fix that arrives as a remix. SFX_TRIM cancels exactly that, so at the
+     * shipped faders nothing changes level and the only new behaviour is that
+     * the right fader now moves them. Measured after the trim: all fifteen sit
+     * within 0.5dB of where they were, and every one of them falls to an exact
+     * 0.0000 when the effects fader reaches zero. */
+    this.rhythmSfx = this._channel(ctx, this.sfxBus,
+      { drive: 0.7, presence: 2200, level: 0.30 * SFX_TRIM, cut: 5600 });
+    this.leadSfx = this._channel(ctx, this.sfxBus,
+      { drive: 0.62, presence: 2800, level: 0.20 * SFX_TRIM, cut: 7000 });
+    this.drumSfx = ctx.createGain();
+    this.drumSfx.gain.value = 0.5 * SFX_TRIM;
+    this.drumSfx.connect(this.sfxBus);
+
     // --- a short slapback on the lead, the way every one of these records has
     this.delay = ctx.createDelay(0.5);
     this.delay.delayTime.value = 0.19;
@@ -407,6 +660,18 @@ class MetalRig {
     this.lead.out.connect(this.delay);
     this.delay.connect(fb); fb.connect(this.delay);
     this.delay.connect(wet); wet.connect(this.musicBus);
+
+    // the same slapback for the effects lead, so a crit squeal keeps its tail
+    // when the music fader is down
+    this.delaySfx = ctx.createDelay(0.5);
+    this.delaySfx.delayTime.value = 0.19;
+    const fbS = ctx.createGain();
+    fbS.gain.value = 0.22;
+    const wetS = ctx.createGain();
+    wetS.gain.value = 0.16;
+    this.leadSfx.out.connect(this.delaySfx);
+    this.delaySfx.connect(fbS); fbS.connect(this.delaySfx);
+    this.delaySfx.connect(wetS); wetS.connect(this.sfxBus);
 
     this.ready = true;
     return true;
@@ -653,14 +918,14 @@ class MetalRig {
     }
   }
 
-  _clean(f, when, dur, gain) {
+  _clean(f, when, dur, gain, { sfx = false, kept = false } = {}) {
     if (!f || !this.ctx) return;
     const ctx = this.ctx;
     const env = ctx.createGain();
     env.gain.setValueAtTime(0.0001, when);
     env.gain.exponentialRampToValueAtTime(Math.max(0.0001, gain), when + 0.01);
     env.gain.exponentialRampToValueAtTime(0.0001, when + dur);
-    env.connect(this.cleanCh);
+    env.connect(kept ? this.cleanKept : sfx ? this.cleanSfx : this.cleanCh);
     for (const detune of [-7, 7]) {
       const src = ctx.createBufferSource();
       src.buffer = this._string(f, Math.min(3.0, dur + 0.4),
@@ -676,12 +941,16 @@ class MetalRig {
   _power(note, when, dur, gain, opts = {}) {
     const root = freq(note);
     if (!root) return;
+    // `sfx` picks the effects-bus rhythm channel. Same amp, same settings, the
+    // other fader — see the block beside this.drumSfx in _build().
+    const sfx = !!opts.sfx;
     if (opts.clean) {
-      this._clean(root, when, dur, gain);
-      this._clean(root * Math.pow(2, 7 / 12), when, dur, gain * 0.7);
+      this._clean(root, when, dur, gain, { sfx, kept: !!opts.kept });
+      this._clean(root * Math.pow(2, 7 / 12), when, dur, gain * 0.7,
+                  { sfx, kept: !!opts.kept });
       return;
     }
-    const o = { ...opts, channel: this.rhythm.input };
+    const o = { ...opts, channel: sfx ? this.rhythmSfx.input : this.rhythm.input };
     this._guitar(root, when, dur, gain, o);
     this._guitar(root * Math.pow(2, 7 / 12), when, dur, gain * 0.8, o);
     this._guitar(root * 2, when, dur, gain * 0.45, { ...o, voices: 1 });
@@ -705,30 +974,143 @@ class MetalRig {
     sub.start(when); sub.stop(when + dur + 0.02);
   }
 
-  _noise(when, dur, gain, { hp = 200, lp = 16000, dest } = {}) {
+  /* ONE buffer of noise, for the whole rig.
+   *
+   * The previous version of _noise built a fresh AudioBuffer on every call and
+   * filled it with Math.random(): for a single footstep that is a 2.3 kB
+   * allocation and a 2,400-iteration loop, on a sound that fires six times a
+   * second for as long as the player holds a direction, and the garbage it
+   * makes is a collector pause under a game that is trying to hold 60fps.
+   *
+   * White noise has no memory. A random offset into one long buffer is
+   * indistinguishable from a fresh draw — the measured spectra of the drums are
+   * unchanged — so the buffer is built once and every voice loops it from
+   * somewhere different. This is the same discipline _string() already applies
+   * to the guitar: build it once, then allocate nothing.
+   */
+  _noiseBuffer() {
+    if (this._nbuf && this._nbufCtx === this.ctx) return this._nbuf;
     const ctx = this.ctx;
-    const frames = Math.max(1, Math.floor(ctx.sampleRate * dur));
+    const frames = Math.max(1, Math.ceil(ctx.sampleRate * NOISE_SECONDS));
     const buf = ctx.createBuffer(1, frames, ctx.sampleRate);
     const data = buf.getChannelData(0);
     for (let i = 0; i < frames; i++) data[i] = Math.random() * 2 - 1;
+    this._nbuf = buf;
+    this._nbufCtx = this.ctx;
+    return buf;
+  }
+
+  /* The general noise voice. The defaults reproduce the drum kit's old
+   * behaviour to the sample — instant attack, exponential decay, highpass into
+   * lowpass — so _kick, _snare, _tom, _hat and _crash are untouched by the
+   * options below, which exist for the world sounds.
+   *
+   *   bp/q             one resonant bandpass instead of the hp->lp pair. A
+   *                    short burst through a high Q IS a struck body: that is
+   *                    what makes a wooden bridge sound wooden.
+   *   hpTo/lpTo/bpTo   sweep that filter across the sound. A whiff is noise
+   *                    whose band falls; a cast is noise whose band opens.
+   *   attack/hold      a swell rather than a hit. Ash needs it, stone must not
+   *                    have it.
+   *   am/amDepth       amplitude modulation. A swarm's wingbeat and a lava
+   *                    churn are the same trick at 47 Hz and 6 Hz.
+   */
+  _noise(when, dur, gain, { hp = 200, lp = 16000, bp = 0, q = 0,
+                            hpTo = 0, lpTo = 0, bpTo = 0,
+                            attack = 0, hold = 0, am = 0, amDepth = 0.7,
+                            dest } = {}) {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const buf = this._noiseBuffer();
     const src = ctx.createBufferSource();
     src.buffer = buf;
-    const hpf = ctx.createBiquadFilter();
-    hpf.type = 'highpass'; hpf.frequency.value = hp;
-    const lpf = ctx.createBiquadFilter();
-    lpf.type = 'lowpass'; lpf.frequency.value = lp;
+    src.loop = true;
+    const peak = Math.max(0.0001, gain);
+    const end = when + dur;
+
+    let head, tail;
+    if (bp) {
+      const f = ctx.createBiquadFilter();
+      f.type = 'bandpass'; f.frequency.value = bp; f.Q.value = q || 1;
+      if (bpTo) f.frequency.exponentialRampToValueAtTime(Math.max(20, bpTo), end);
+      head = tail = f;
+    } else {
+      const hpf = ctx.createBiquadFilter();
+      hpf.type = 'highpass'; hpf.frequency.value = hp;
+      if (q) hpf.Q.value = q;
+      if (hpTo) hpf.frequency.exponentialRampToValueAtTime(Math.max(20, hpTo), end);
+      const lpf = ctx.createBiquadFilter();
+      lpf.type = 'lowpass'; lpf.frequency.value = lp;
+      if (q) lpf.Q.value = q;
+      if (lpTo) lpf.frequency.exponentialRampToValueAtTime(Math.max(20, lpTo), end);
+      hpf.connect(lpf);
+      head = hpf; tail = lpf;
+    }
+
     const env = ctx.createGain();
-    env.gain.setValueAtTime(Math.max(0.0001, gain), when);
+    if (attack > 0) {
+      env.gain.setValueAtTime(0.0001, when);
+      env.gain.exponentialRampToValueAtTime(peak, when + attack);
+    } else {
+      env.gain.setValueAtTime(peak, when);
+    }
+    if (hold > 0) env.gain.setValueAtTime(peak, when + attack + hold);
+    env.gain.exponentialRampToValueAtTime(0.0001, end);
+
+    let out = env;
+    if (am > 0) {
+      const trem = ctx.createGain();
+      trem.gain.value = Math.max(0, 1 - amDepth);
+      const lfo = ctx.createOscillator();
+      lfo.type = 'sine';
+      lfo.frequency.value = am;
+      const depth = ctx.createGain();
+      depth.gain.value = amDepth;
+      lfo.connect(depth); depth.connect(trem.gain);
+      lfo.start(when); lfo.stop(end + 0.02);
+      env.connect(trem);
+      out = trem;
+    }
+
+    src.connect(head); tail.connect(env);
+    out.connect(dest || this.drumCh);
+    // Somewhere different every time, so two footsteps in a row are not the
+    // same 2,000 samples of noise twice — which is audible as a machine gun.
+    src.start(when, Math.random() * (NOISE_SECONDS - 0.35));
+    src.stop(end + 0.01);
+  }
+
+  /* A struck body: a sine dropping in pitch, with an attack fast enough to be
+   * an impact rather than a note. _tone() takes 18% of its duration to open,
+   * which is right for an animal voice and wrong for a boot hitting stone. */
+  _thump(when, { f = 140, to = 0, dur = 0.16, gain = 0.2,
+                 type = 'sine', lp = 0, dest } = {}) {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const osc = ctx.createOscillator();
+    osc.type = type;
+    osc.frequency.setValueAtTime(Math.max(20, f), when);
+    osc.frequency.exponentialRampToValueAtTime(Math.max(20, to || f * 0.42), when + dur);
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(0.0001, when);
+    env.gain.exponentialRampToValueAtTime(Math.max(0.0001, gain), when + 0.003);
     env.gain.exponentialRampToValueAtTime(0.0001, when + dur);
-    src.connect(hpf); hpf.connect(lpf); lpf.connect(env);
-    env.connect(dest || this.drumCh);
-    src.start(when); src.stop(when + dur);
+    let node = env;
+    if (lp) {
+      const f2 = ctx.createBiquadFilter();
+      f2.type = 'lowpass'; f2.frequency.value = lp;
+      env.connect(f2); node = f2;
+    }
+    osc.connect(env);
+    node.connect(dest || this.sfxBus);
+    osc.start(when); osc.stop(when + dur + 0.02);
   }
 
   /* ---- drums ---- */
 
-  _kick(when, gain = 0.9) {
-    if (this._sample('kick', when, gain, { dest: this.drumCh })) return;
+  _kick(when, gain = 0.9, dest) {
+    const D = dest || this.drumCh;
+    if (this._sample('kick', when, gain, { dest: D })) return;
     const ctx = this.ctx;
     const osc = ctx.createOscillator();
     osc.type = 'sine';
@@ -737,15 +1119,17 @@ class MetalRig {
     const env = ctx.createGain();
     env.gain.setValueAtTime(gain, when);
     env.gain.exponentialRampToValueAtTime(0.0001, when + 0.17);
-    osc.connect(env); env.connect(this.drumCh);
+    osc.connect(env); env.connect(D);
     osc.start(when); osc.stop(when + 0.2);
-    this._noise(when, 0.012, gain * 0.5, { hp: 1800 });   // the beater click
+    this._noise(when, 0.012, gain * 0.5, { hp: 1800, dest: D });   // the beater click
   }
 
-  _snare(when, gain = 0.75, rim = false) {
-    if (!rim && this._sample('snare', when, gain, { dest: this.drumCh })) return;
+  _snare(when, gain = 0.75, rim = false, dest) {
+    const D = dest || this.drumCh;
+    if (!rim && this._sample('snare', when, gain, { dest: D })) return;
     const ctx = this.ctx;
-    this._noise(when, rim ? 0.09 : 0.16, gain, { hp: rim ? 2600 : 1500, lp: 10000 });
+    this._noise(when, rim ? 0.09 : 0.16, gain,
+               { hp: rim ? 2600 : 1500, lp: 10000, dest: D });
     const osc = ctx.createOscillator();
     osc.type = 'triangle';
     osc.frequency.setValueAtTime(rim ? 320 : 200, when);
@@ -753,11 +1137,12 @@ class MetalRig {
     const env = ctx.createGain();
     env.gain.setValueAtTime(gain * 0.55, when);
     env.gain.exponentialRampToValueAtTime(0.0001, when + 0.1);
-    osc.connect(env); env.connect(this.drumCh);
+    osc.connect(env); env.connect(D);
     osc.start(when); osc.stop(when + 0.12);
   }
 
-  _tom(when, gain = 0.6) {
+  _tom(when, gain = 0.6, dest) {
+    const D = dest || this.drumCh;
     const ctx = this.ctx;
     const osc = ctx.createOscillator();
     osc.type = 'sine';
@@ -766,18 +1151,20 @@ class MetalRig {
     const env = ctx.createGain();
     env.gain.setValueAtTime(gain, when);
     env.gain.exponentialRampToValueAtTime(0.0001, when + 0.22);
-    osc.connect(env); env.connect(this.drumCh);
+    osc.connect(env); env.connect(D);
     osc.start(when); osc.stop(when + 0.25);
-    this._noise(when, 0.05, gain * 0.3, { hp: 400, lp: 3000 });
+    this._noise(when, 0.05, gain * 0.3, { hp: 400, lp: 3000, dest: D });
   }
 
-  _hat(when, gain = 0.22, open = false) {
-    this._noise(when, open ? 0.24 : 0.028, gain, { hp: 8000, lp: 15000 });
+  _hat(when, gain = 0.22, open = false, dest) {
+    this._noise(when, open ? 0.24 : 0.028, gain,
+               { hp: 8000, lp: 15000, dest: dest || this.drumCh });
   }
 
-  _crash(when, gain = 0.55) {
-    if (this._sample('crash', when, gain, { dest: this.drumCh })) return;
-    this._noise(when, 1.3, gain, { hp: 2600, lp: 14000 });
+  _crash(when, gain = 0.55, dest) {
+    const D = dest || this.drumCh;
+    if (this._sample('crash', when, gain, { dest: D })) return;
+    this._noise(when, 1.3, gain, { hp: 2600, lp: 14000, dest: D });
   }
 
   /* ------------------------------------------------------ the scheduler
@@ -1291,16 +1678,35 @@ class MetalRig {
         break;
       case 'axolotl': case 'nautilus': case 'fish':
         // wet and small: a bubble, not a call
-        this._tone(t, 0.13, 0.16, { from: 420 * p, to: 900 * p, type: 'sine', lp: 2400, dest: G });
-        this._noise(t + 0.10, 0.08, 0.05, { hp: 900, lp: 3000, dest: G });
+        this._tone(t, 0.13 * d, 0.16, { from: 420 * p, to: 900 * p, type: 'sine',
+                                        lp: 2400 * p, dest: G });
+        this._noise(t + 0.10 * d, 0.08 * d, 0.05, { hp: 900 * p, lp: 3000 * p, dest: G });
         break;
-      case 'wolf': case 'dog': case 'fox':
-        this._tone(t, 0.5 * d, 0.20, { from: 260 * p, to: 340 * p, type: 'sawtooth', lp: 1800, dest: G });
-        this._tone(t + 0.45 * d, 0.35 * d, 0.14, { from: 330 * p, to: 210 * p, type: 'sawtooth', lp: 1500, dest: G });
+      case 'boar': case 'boar_great': case 'hog': case 'wolf': case 'dog':
+        /* THE STARTER. A boar does not howl and does not roar — it GRUNTS:
+         * two short nasal pulses with a snort of air on the front of each, and
+         * nothing sustained anywhere. The nasal formant at 420Hz is what keeps
+         * it off the jaguar, which is the other low voice in the roster and is
+         * a flat 90Hz buzz under broadband noise. */
+        this._noise(t, 0.045, 0.20, { bp: 1500, bpTo: 700, q: 1.6, dest: G });
+        this._tone(t, 0.15 * d, 0.24, { from: 150 * p, to: 96 * p, type: 'square',
+                                        bp: 420 * p, q: 5, dest: G });
+        this._thump(t, { f: 120 * p, to: 70 * p, dur: 0.10 * d, gain: 0.22,
+                         lp: 600, dest: G });
+        this._noise(t + 0.21 * d, 0.040, 0.16, { bp: 1400, bpTo: 640, q: 1.6, dest: G });
+        this._tone(t + 0.21 * d, 0.19 * d, 0.20, { from: 136 * p, to: 84 * p,
+                                                   type: 'square', bp: 380 * p, q: 5, dest: G });
         break;
-      case 'moth': case 'beetle': case 'insect':
-        this._noise(t, 0.30, 0.07, { hp: 1400, lp: 5200, dest: G });
-        this._tone(t, 0.30, 0.09, { from: 62, to: 58, type: 'square', bp: 240, q: 9, dest: G });
+      case 'octopus': case 'squid': case 'cuttlefish':
+        /* Wet, but not the axolotl's bubble: a jet. A band of water falling
+         * from 700Hz to 240Hz with a slow pulse in it, and one soft body tone
+         * under it. Nothing in it is bright, which is what separates it from
+         * every other small animal here. */
+        this._noise(t, 0.34 * d, 0.16, { bp: 700, bpTo: 240, q: 3,
+                                         am: 17, amDepth: 0.55, attack: 0.05, dest: G });
+        this._tone(t + 0.02, 0.26 * d, 0.13, { from: 300 * p, to: 140 * p,
+                                               type: 'sine', lp: 1100, dest: G });
+        this._noise(t + 0.30 * d, 0.07, 0.06, { hp: 600, lp: 2200, dest: G });
         break;
       default:
         // An animal the art and the audio have not met yet still answers.
@@ -1310,42 +1716,786 @@ class MetalRig {
     return true;
   }
 
-  sfx(kind) {
-    if (!this.enabled || !this._build()) return;
+  /* ==================================================================
+   * THE WORLD
+   *
+   * Everything under this heading answers a thing the PLAYER DID to the world,
+   * which is the governing rule for this whole section: if you can do it, you
+   * can hear it. They all voice through the SFX bus so the effects fader owns
+   * them, and none of them allocates a buffer — the noise is the shared one.
+   * ================================================================== */
+
+  /** A step, on a named material.
+   *
+   * Terrain is not a pitch, it is an ARCHITECTURE: which of the four layers
+   * exist at all. Stone is a bright transient with nothing after it; ash is a
+   * dull puff with no transient at all; wood is the only one with a resonant
+   * body; water is the only one with a pitched voice, because a droplet has a
+   * pitch and gravel does not. See the FOOTSTEP table above for the numbers —
+   * they are laid out so the seven land far apart in (brightness, length),
+   * which is the only reason a player can tell snow from sand without looking.
+   *
+   * `terrain` takes tiles.js's own words: the ground classes GROUND_OF answers
+   * (grass/path/water/cliff/stone/lava/sand) and the surfaces biomeStyle()
+   * answers (snow/ash/flag/gravel/moss/...) both resolve through FOOTSTEP_ALIAS,
+   * so the overworld can hand over whatever it already has.
+   *
+   * Throttled at 55ms. The overworld already gates on its own animation frame,
+   * but a footstep is the one effect in the game that fires from a held key and
+   * the rate has to be bounded HERE, where the cost is.
+   */
+  footstep(terrain = 'grass', { running = false, heavy = false, gain = 1,
+                                biome = '' } = {}) {
+    if (!this.enabled || !this._build()) return false;
+    const now = this.ctx.currentTime;
+    if (this._lastStep === undefined) this._lastStep = -Infinity;
+    if (now - this._lastStep < 0.055) return false;
+    this._lastStep = now;
+
+    const name = this.footstepMaterial(terrain, biome);
+    const m = FOOTSTEP[name];
+    const t = now + 0.005;
+    const G = this.sfxBus;
+
+    // No two steps identical. Six a second of the same 2,000 samples is a
+    // machine gun, and the ear locks onto the repeat long before it tires of
+    // the sound itself.
+    const v = 0.88 + Math.random() * 0.24;
+    const lvl = gain * (running ? 1.15 : 1) * (heavy ? 1.35 : 1) * (0.9 + Math.random() * 0.2);
+    const dur = m.dur * (running ? 0.85 : 1);
+
+    this._noise(t, dur, m.gain * lvl, {
+      hp: m.band[0] * v, lp: m.band[1], attack: m.attack || 0, dest: G,
+    });
+    if (m.click) {
+      this._noise(t, 0.014, m.click[1] * lvl, { bp: m.click[0] * v, q: 1.4, dest: G });
+    }
+    if (m.thud) {
+      this._thump(t, { f: m.thud[0] * v, to: m.thud[0] * 0.42, dur: 0.09,
+                       gain: m.thud[1] * lvl, lp: 420, dest: G });
+    }
+    if (m.ring) {
+      // a plank is a box with air in it, which is a high-Q bandpass and nothing
+      // else. This one layer is the whole difference between wood and stone.
+      this._noise(t, 0.17, 0.20 * lvl, { bp: m.ring[0] * v, q: m.ring[1], dest: G });
+    }
+    if (m.squeak) {
+      // dry snow squeaks because the crystals stick and slip. High, short, and
+      // falling — it is the only footstep with a pitch contour above 3kHz.
+      this._noise(t + 0.012, 0.055, 0.07 * lvl,
+                  { bp: 4300 * v, bpTo: 2900 * v, q: 9, dest: G });
+    }
+    if (m.wet) {
+      this._tone(t + 0.025, 0.11, 0.11 * lvl,
+                 { from: 360 * v, to: 880 * v, type: 'sine', lp: 2600, dest: G });
+      this._noise(t + 0.05, 0.19, 0.07 * lvl,
+                  { hp: 1800, lp: 8000, attack: 0.02, dest: G });
+    }
+    return true;
+  }
+
+  /** Which of the seven materials a tile is, from anything the caller has.
+   *
+   * Takes a tiles.js TERRAIN code (a number, straight out of `scene.grid`), a
+   * ground class, or a biome surface name, and optionally the region's biome.
+   * Exposed rather than kept private because the caller may want to know what
+   * it is walking on for reasons other than the sound, and because a mapping
+   * two files have to agree on should be readable from both.
+   */
+  footstepMaterial(terrain, biome = '') {
+    let name;
+    if (typeof terrain === 'number' && FOOTSTEP_CODE[terrain]) {
+      name = FOOTSTEP_CODE[terrain];
+    } else {
+      const key = String(terrain || '').toLowerCase();
+      name = FOOTSTEP[key] ? key : (FOOTSTEP_ALIAS[key] || 'grass');
+    }
+    // The biome's surface governs open ground and nothing else -- tiles.js
+    // paints snow and ash over GRASS, and leaves stone, path and sand alone.
+    if (name === 'grass' && biome) {
+      const surf = BIOME_SURFACE[String(biome).toLowerCase()];
+      if (surf) name = FOOTSTEP[surf] ? surf : (FOOTSTEP_ALIAS[surf] || name);
+    }
+    return name;
+  }
+
+  /** A door. Opening and closing are not the same sound played backwards.
+   *
+   * Opening is a CREAK that rises and a latch that lets go; the sound ends
+   * brighter than it started and nothing in it is loud. Closing is the reverse
+   * creak cut short by a SLAM, and the slam is four times the peak of anything
+   * in the open. That asymmetry is the point: a player who hears the low thud
+   * knows they are outside again without reading the screen.
+   */
+  door(closing = false, { heavy = false } = {}) {
+    if (!this.enabled || !this._build()) return false;
     const t = this.ctx.currentTime + 0.005;
     const G = this.sfxBus;
-    const guitar = (f, when, dur, gain, opts = {}) =>
-      this._guitar(f, when, dur, gain, { channel: this.lead.input, ...opts });
+    const p = heavy ? 0.72 : 1;
+
+    if (!closing) {
+      this._noise(t, 0.025, 0.16, { bp: 2500, q: 2.2, dest: G });        // the latch
+      this._thump(t + 0.01, { f: 120 * p, to: 70 * p, dur: 0.17, gain: 0.11, lp: 620, dest: G });
+      // stick-slip: a bandpass climbing, amplitude-modulated by the judder
+      this._noise(t + 0.04, 0.44, 0.11, { bp: 430 * p, bpTo: 940 * p, q: 7,
+                                          am: 23, amDepth: 0.55, attack: 0.03, dest: G });
+      this._tone(t + 0.07, 0.36, 0.055, { from: 610 * p, to: 1010 * p,
+                                          type: 'sawtooth', bp: 1400, q: 5, dest: G });
+      return true;
+    }
+    this._noise(t, 0.19, 0.09, { bp: 900 * p, bpTo: 440 * p, q: 7, am: 19, amDepth: 0.5, dest: G });
+    const slam = t + 0.21;
+    this._thump(slam, { f: 155 * p, to: 48 * p, dur: 0.28, gain: 0.46, lp: 480, dest: G });
+    this._noise(slam, 0.13, 0.26, { hp: 110, lp: 1900, dest: G });
+    this._noise(slam + 0.02, 0.035, 0.13, { bp: 2700, q: 3, dest: G });  // the latch catching
+    return true;
+  }
+
+  /** A chest. The two outcomes share a lid, on purpose.
+   *
+   * `chest(true)` is the chest that was already empty, and it is the SAME latch
+   * and the SAME hinge as the full one — the player has to recognise the chest
+   * — with the reward figure replaced by a hollow knock and a two-note fall.
+   * Nothing is added to say "empty"; something is taken away, which is what
+   * empty means.
+   */
+  chest(empty = false) {
+    if (!this.enabled || !this._build()) return false;
+    const t = this.ctx.currentTime + 0.005;
+    const G = this.sfxBus;
+
+    this._noise(t, 0.028, 0.24, { bp: 2600, q: 2, dest: G });            // latch
+    this._thump(t + 0.01, { f: 180, to: 82, dur: 0.11, gain: 0.17, lp: 700, dest: G });
+    this._noise(t + 0.06, 0.30, 0.09, { bp: 520, bpTo: 1080, q: 8,      // hinge
+                                        am: 17, amDepth: 0.5, dest: G });
+    if (!empty) {
+      this._thump(t + 0.36, { f: 124, to: 62, dur: 0.16, gain: 0.20, lp: 520, dest: G });
+      ['B5', 'E6', 'F#6'].forEach((n, i) =>
+        this._clean(freq(n), t + 0.42 + i * 0.07, 0.55, 0.17, { sfx: true }));
+      this._noise(t + 0.42, 0.018, 0.12, { bp: 5200, q: 2, dest: G });
+      return true;
+    }
+    // the lid hits the stop and that is all that happens
+    this._thump(t + 0.36, { f: 96, to: 50, dur: 0.24, gain: 0.26, lp: 330, dest: G });
+    this._tone(t + 0.40, 0.20, 0.13, { from: 330, to: 262, type: 'triangle', lp: 900, dest: G });
+    this._tone(t + 0.56, 0.26, 0.10, { from: 262, to: 196, type: 'triangle', lp: 760, dest: G });
+    this._noise(t + 0.36, 0.14, 0.05, { hp: 200, lp: 1100, dest: G });
+    return true;
+  }
+
+  /* ==================================================================
+   * THE ZONES
+   * ================================================================== */
+
+  /** A continuous sound, held until something stops it.
+   *
+   * Ice sliding is not an event, it is a STATE — the player is sliding for as
+   * long as the ice says so — and a one-shot retriggered every frame is the
+   * single most recognisable "programmer did the audio" sound there is. This
+   * returns a handle instead:
+   *
+   *     const s = audio.sfxLoop('ice_slide');
+   *     s.set(0.6);        // how hard, 0..1, ramped not stepped
+   *     s.stop();          // fades out over 180ms and disconnects
+   *
+   * Asking twice for the same loop returns the SAME handle rather than stacking
+   * a second copy, because the caller is a game loop and a game loop will ask
+   * twice. Everything steady-state here is allocated once at start: after that
+   * the loop costs nothing per frame, which is the whole reason it is a loop.
+   */
+  sfxLoop(kind, { gain = 1 } = {}) {
+    const dead = { set() {}, stop() {}, kind, silent: true };
+    if (!this.enabled || !this._build()) return dead;
+    if (!this._loops) this._loops = new Map();
+    const live = this._loops.get(kind);
+    if (live && !live.closed) { live.handle.set(gain); return live.handle; }
+
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const out = ctx.createGain();
+    out.gain.setValueAtTime(0.0001, t);
+    out.connect(this.sfxBus);
+    const parts = [];
+    const src = () => {
+      const s = ctx.createBufferSource();
+      s.buffer = this._noiseBuffer();
+      s.loop = true;
+      s.start(t, Math.random() * (NOISE_SECONDS - 0.35));
+      parts.push(s);
+      return s;
+    };
+
+    let level = 0.25;
+    if (kind === 'ice_slide') {
+      /* Ice is a hiss with a pitch hiding in it. The bandpass IS the pitch and
+       * an LFO on its frequency is the wobble a skate makes; the ring on top is
+       * the note the surface sings back. */
+      const band = ctx.createBiquadFilter();
+      band.type = 'bandpass'; band.frequency.value = 2600; band.Q.value = 1.3;
+      const lfo = ctx.createOscillator();
+      lfo.type = 'sine'; lfo.frequency.value = 3.1;
+      const lfoAmt = ctx.createGain(); lfoAmt.gain.value = 620;
+      lfo.connect(lfoAmt); lfoAmt.connect(band.frequency);
+      lfo.start(t); parts.push(lfo);
+      src().connect(band); band.connect(out);
+
+      const body = ctx.createBiquadFilter();
+      body.type = 'lowpass'; body.frequency.value = 520;
+      const bodyGain = ctx.createGain(); bodyGain.gain.value = 0.5;
+      src().connect(body); body.connect(bodyGain); bodyGain.connect(out);
+
+      const ring = ctx.createOscillator();
+      ring.type = 'sine'; ring.frequency.value = 1840;
+      const ringGain = ctx.createGain(); ringGain.gain.value = 0.035;
+      ring.connect(ringGain); ringGain.connect(out);
+      ring.start(t); parts.push(ring);
+      level = 0.30;
+    } else if (kind === 'lava_flow') {
+      /* Molten rock has no top end at all. Everything above 400Hz is removed
+       * and what is left is made to breathe at 5.5Hz, which is the churn. */
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass'; lp.frequency.value = 340;
+      const hp = ctx.createBiquadFilter();
+      hp.type = 'highpass'; hp.frequency.value = 38;
+      const churn = ctx.createGain(); churn.gain.value = 0.45;
+      const lfo = ctx.createOscillator();
+      lfo.type = 'sine'; lfo.frequency.value = 5.5;
+      const amt = ctx.createGain(); amt.gain.value = 0.4;
+      lfo.connect(amt); amt.connect(churn.gain);
+      lfo.start(t); parts.push(lfo);
+      src().connect(lp); lp.connect(hp); hp.connect(churn); churn.connect(out);
+
+      const sub = ctx.createOscillator();
+      sub.type = 'sine'; sub.frequency.value = 46;
+      const subGain = ctx.createGain(); subGain.gain.value = 0.22;
+      sub.connect(subGain); subGain.connect(out);
+      sub.start(t); parts.push(sub);
+      level = 0.55;
+    } else {
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass'; lp.frequency.value = 2000;
+      src().connect(lp); lp.connect(out);
+    }
+
+    const entry = { closed: false, handle: null };
+    const handle = {
+      kind, silent: false,
+      set(v) {
+        if (entry.closed) return;
+        const g = Math.max(0.0001, level * Math.max(0, Math.min(1, v)));
+        const now = ctx.currentTime;
+        out.gain.cancelScheduledValues(now);
+        out.gain.setValueAtTime(Math.max(0.0001, out.gain.value), now);
+        out.gain.exponentialRampToValueAtTime(g, now + 0.07);
+      },
+      stop(fade = 0.18) {
+        if (entry.closed) return;
+        entry.closed = true;
+        const now = ctx.currentTime;
+        try {
+          out.gain.cancelScheduledValues(now);
+          out.gain.setValueAtTime(Math.max(0.0001, out.gain.value), now);
+          out.gain.exponentialRampToValueAtTime(0.0001, now + fade);
+          for (const n of parts) { try { n.stop(now + fade + 0.02); } catch (e) {} }
+        } catch (e) { /* a context torn down under us is not an error here */ }
+        setTimeout(() => { try { out.disconnect(); } catch (e) {} }, (fade + 0.1) * 1000);
+      },
+    };
+    entry.handle = handle;
+    this._loops.set(kind, entry);
+    handle.set(gain);
+    return handle;
+  }
+
+  /** Stop one loop, or all of them. Called on scene changes, where the sliding
+   *  stops because the map did. */
+  stopLoops(kind) {
+    if (!this._loops) return;
+    for (const [k, e] of this._loops) {
+      if (kind && k !== kind) continue;
+      e.handle.stop();
+      this._loops.delete(k);
+    }
+  }
+
+  /* ==================================================================
+   * BATTLE
+   * ================================================================== */
+
+  /** A cast, by ELEMENT. Six architectures, not six transpositions.
+   *
+   * The requirement is that a player with the screen off can name the element,
+   * and six sine sweeps at six pitches would not do it — pitch is the one
+   * dimension a listener reliably forgets. So each element differs in WHAT
+   * LAYERS EXIST and in the SHAPE of the envelope:
+   *
+   *   FIRE       a lowpass opening across a roar. Noisy, mid, no transient.
+   *   COLD       tone only. Three high partials and a shimmer; almost no noise.
+   *   POISON     a wet bandpass wobbling down, with bubbles rising through it.
+   *   BRUTE      an impact. The shortest, the loudest, and the lowest.
+   *   LIGHTNING  a crack, then a 62Hz-modulated buzz, then distant rumble.
+   *   VOID       a swell inward, 550ms of attack, cut off. The longest.
+   *
+   * The measured numbers for these six are the distinctness matrix this pass
+   * exists to produce; centroid alone separates them by more than 4kHz.
+   */
+  castElement(element = 'neutral', { power = 1 } = {}) {
+    if (!this.enabled || !this._build()) return false;
+    const t = this.ctx.currentTime + 0.005;
+    const G = this.sfxBus;
+    const g = Math.max(0.3, Math.min(1.6, power));
+    const el = String(element || '').toLowerCase();
+
+    switch (el) {
+      case 'fire': {
+        this._noise(t, 0.55, 0.34 * g, { hp: 180, lp: 900, lpTo: 5400,
+                                         attack: 0.05, dest: G });
+        this._noise(t + 0.02, 0.46, 0.17 * g, { bp: 2400, bpTo: 5200, q: 1.2, dest: G });
+        this._tone(t, 0.50, 0.16 * g, { from: 96, to: 60, type: 'sawtooth', lp: 700, dest: G });
+        for (let i = 0; i < 5; i++) {
+          this._noise(t + 0.08 + Math.random() * 0.42, 0.02, 0.07 * g,
+                      { bp: 2400 + Math.random() * 2600, q: 3, dest: G });
+        }
+        break;
+      }
+      case 'cold': {
+        // glass has no noise floor. Three partials, a fifth apart, falling
+        // barely at all, and a shimmer far above anything else in the game.
+        [[2100, 0.11], [3150, 0.075], [4200, 0.05]].forEach(([f, a]) =>
+          this._tone(t, 0.80, a * g, { from: f, to: f * 0.94, type: 'sine',
+                                       lp: 14000, dest: G }));
+        this._noise(t + 0.04, 0.70, 0.075 * g, { hp: 6800, lp: 15000,
+                                                 attack: 0.14, dest: G });
+        this._noise(t, 0.02, 0.16 * g, { bp: 7200, q: 2, dest: G });
+        break;
+      }
+      case 'poison': {
+        this._tone(t, 0.62, 0.22 * g, { from: 330, to: 165, type: 'sawtooth',
+                                        bp: 900, q: 8, dest: G });
+        this._noise(t, 0.56, 0.11 * g, { bp: 760, bpTo: 420, q: 3,
+                                         am: 9.5, amDepth: 0.6, dest: G });
+        for (let i = 0; i < 5; i++) {
+          this._tone(t + 0.06 + i * 0.105 + Math.random() * 0.04, 0.10, 0.15 * g,
+                     { from: 420 + Math.random() * 220, to: 1500, type: 'sine',
+                       lp: 3000, dest: G });
+        }
+        break;
+      }
+      case 'brute': {
+        this._thump(t, { f: 160, to: 44, dur: 0.34, gain: 0.52 * g, lp: 420, dest: G });
+        this._tone(t, 0.28, 0.24 * g, { from: 110, to: 50, type: 'sawtooth',
+                                        lp: 380, dest: G });
+        this._noise(t, 0.18, 0.30 * g, { hp: 55, lp: 820, dest: G });
+        this._noise(t + 0.02, 0.30, 0.10 * g, { bp: 300, bpTo: 130, q: 2, dest: G });
+        break;
+      }
+      case 'lightning': {
+        this._noise(t, 0.013, 0.55 * g, { hp: 2200, lp: 16000, dest: G });
+        this._noise(t + 0.012, 0.30, 0.22 * g, { bp: 3300, bpTo: 1500, q: 1.1,
+                                                 am: 62, amDepth: 0.55, dest: G });
+        this._tone(t + 0.01, 0.26, 0.12 * g, { from: 1800, to: 520, type: 'square',
+                                               lp: 7000, dest: G });
+        this._noise(t + 0.10, 0.36, 0.10 * g, { hp: 48, lp: 380, attack: 0.08, dest: G });
+        break;
+      }
+      case 'void': {
+        // played inward. 550ms of attack, then it is taken away rather than
+        // allowed to decay, which is the only envelope in the rig that does this.
+        this._noise(t, 0.88, 0.22 * g, { hp: 90, lp: 1600, lpTo: 180,
+                                         attack: 0.55, dest: G });
+        [[110, 0.15], [155.6, 0.11], [73.4, 0.09]].forEach(([f, a]) =>
+          this._tone(t, 0.90, a * g, { from: f, to: f * 0.72, type: 'triangle',
+                                       lp: 300, dest: G }));
+        this._noise(t + 0.86, 0.05, 0.17 * g, { hp: 150, lp: 1400, dest: G });
+        break;
+      }
+      default:
+        this._noise(t, 0.30, 0.16 * g, { hp: 300, lp: 1400, lpTo: 3400,
+                                         attack: 0.04, dest: G });
+        this._tone(t, 0.30, 0.14 * g, { from: 220, to: 660, type: 'triangle',
+                                        lp: 3000, dest: G });
+    }
+    return true;
+  }
+
+  /** Which cry a creature has, from what the creature IS.
+   *
+   * Name first, then monsterart.js's role. Name first because the four the
+   * brief names — a skeleton, a dragon, a swarm, an elemental — are all
+   * name-recognisable and MONSTER_ROLES has no word for three of them: a
+   * skullswarm and a shade are both `bodiless` in that table and must not come
+   * out of here as the same voice. Pass `plan` to override both.
+   */
+  cryPlan(name, role = '') {
+    const n = String(name || '');
+    for (const [re, plan] of CRY_BY_NAME) if (re.test(n)) return plan;
+    const r = CRY_ROLE[String(role || '').toLowerCase()];
+    return r || 'runner';
+  }
+
+  /** A war cry, built rather than authored.
+   *
+   * Fifty-nine creatures and a hand-written cry each is a table that goes stale
+   * the first time somebody adds a monster. This is petSound()'s idea taken to
+   * the bestiary: a cry is a BODY PLAN voiced through an ELEMENT, and
+   * monsterart.js already stores both — `family` on every monster spec and a
+   * role in MONSTER_ROLES. Nine plans times seven families is sixty-three
+   * voices, every one of them derived.
+   *
+   *     audio.warCry('skullswarm', { family: 'VOID', role: 'bodiless' })
+   *     audio.warCry(name, { family, role, tier: 'elite' })
+   *
+   * The plan owns everything structural, the family only tints — which is the
+   * whole reason a FIRE skeleton still reads as a skeleton. A skeleton has no
+   * lungs and so has no sustained pitch at all; a swarm has no throat and so
+   * has no transient; an elemental has no body and so has no noise in it
+   * anywhere. Those three absences are what make them unmistakable, and they
+   * are absences, so they cost nothing.
+   */
+  warCry(name, { family = 'NEUTRAL', role = '', plan = '', tier = '',
+                 power = 1 } = {}) {
+    if (!this.enabled || !this._build()) return false;
+    const now = this.ctx.currentTime;
+    if (this._lastCry === undefined) this._lastCry = -Infinity;
+    if (now - this._lastCry < 0.12) return false;
+    this._lastCry = now;
+
+    const t = now + 0.005;
+    const G = this.sfxBus;
+    const kind = CRY_PLANS.includes(plan) ? plan : this.cryPlan(name, role);
+    const fam = CRY_FAMILY[String(family || '').toUpperCase()] || CRY_FAMILY.NEUTRAL;
+    const big = /ELITE|APEX|BOSS|LEGENDARY/i.test(String(tier));
+    const p = fam.p * (big ? 0.78 : 1);          // bigger throat, lower voice
+    const d = fam.d * (big ? 1.30 : 1);          // and a longer one
+    const g = Math.max(0.3, Math.min(1.6, power));
+    const rnd = () => Math.random();
 
     switch (kind) {
+      case 'skeletal':
+        // no lungs: no sustained pitch anywhere in it, only dry bone on bone
+        for (let i = 0; i < 7; i++) {
+          this._noise(t + i * 0.055 + rnd() * 0.03, 0.022, 0.30 * g * (1 - i * 0.08),
+                      { bp: 1700 * p * (0.8 + rnd() * 0.5), q: 7, dest: G });
+        }
+        this._tone(t + 0.05, 0.50 * d, 0.09 * g,
+                   { from: 128 * p, to: 96 * p, type: 'triangle', lp: 420, dest: G });
+        this._noise(t, 0.45 * d, 0.06 * g,
+                    { bp: 2600 * p, q: 2, am: 26, amDepth: 0.8, dest: G });
+        break;
+      case 'dragon':
+        this._tone(t, 1.30 * d, 0.32 * g,
+                   { from: 72 * p, to: 46 * p, type: 'sawtooth', bp: 210 * p, q: 4, dest: G });
+        this._tone(t + 0.05, 1.15 * d, 0.17 * g,
+                   { from: 108 * p, to: 62 * p, type: 'square', lp: 620 * p, dest: G });
+        this._noise(t, 1.30 * d, 0.30 * g,
+                    { hp: 70 * p, lp: 900 * p, lpTo: 340 * p, attack: 0.15,
+                      am: 24, amDepth: 0.45, dest: G });
+        this._thump(t, { f: 70 * p, to: 42 * p, dur: 0.50 * d, gain: 0.34 * g,
+                         lp: 260 * p, dest: G });
+        break;
+      case 'swarm':
+        // no throat: no transient. It arrives by getting louder, and the only
+        // rhythm in it is wingbeat.
+        this._noise(t, 0.95 * d, 0.44 * g, { hp: 1000 * p, lp: 2400 * p, am: 47 * p,
+                                             amDepth: 0.85, attack: 0.22, dest: G });
+        this._noise(t + 0.05, 0.85 * d, 0.13 * g, { hp: 2200 * p, lp: 3800 * p, am: 61 * p,
+                                                    amDepth: 0.7, attack: 0.30, dest: G });
+        this._noise(t, 0.90 * d, 0.16 * g, { hp: 260, lp: 1200, am: 11,
+                                             amDepth: 0.5, attack: 0.25, dest: G });
+        break;
+      case 'elemental':
+        // no body: no noise. Every layer here is a pure tone, which is why it
+        // measures with a rolloff almost on top of its own centroid.
+        this._tone(t, 1.00 * d, 0.17 * g,
+                   { from: 620 * p, to: 930 * p, type: 'sine', lp: 5000, dest: G });
+        this._tone(t + 0.08, 0.90 * d, 0.14 * g,
+                   { from: 930 * p, to: 1395 * p, type: 'sine', lp: 5000, dest: G });
+        this._tone(t + 0.16, 0.80 * d, 0.08 * g,
+                   { from: 1240 * p, to: 1860 * p, type: 'sine', lp: 5000, dest: G });
+        break;
+      case 'flyer':
+        this._tone(t, 0.10, 0.26 * g,
+                   { from: 900 * p, to: 2300 * p, type: 'sawtooth', bp: 2200 * p, q: 3, dest: G });
+        this._tone(t + 0.10, 0.32 * d, 0.22 * g,
+                   { from: 2300 * p, to: 700 * p, type: 'sawtooth', lp: 6000, dest: G });
+        this._noise(t + 0.05, 0.40 * d, 0.10 * g,
+                    { hp: 900, lp: 5200, am: 17, amDepth: 0.7, dest: G });
+        break;
+      case 'creeper':
+        for (let i = 0; i < 11; i++) {
+          this._noise(t + i * (0.05 - i * 0.002) * d, 0.012 * d, 0.60 * g,
+                      { bp: 1500 * p * (1 + i * 0.06), q: 5, dest: G });
+        }
+        this._noise(t, 0.40 * d, 0.09 * g, { hp: 2600 * p, lp: 9000 * p, dest: G });
+        this._tone(t + 0.42 * d, 0.12 * d, 0.10 * g,
+                   { from: 1400 * p, to: 2100 * p, type: 'square', bp: 2000 * p, q: 4, dest: G });
+        break;
+      case 'legless':
+        /* `p` used to reach only the 74Hz triangle, which sat at 0.07 gain under
+         * 300Hz under two broadband hiss layers at 0.22 and 0.10 — so no
+         * family's pitch tint could move a legless cry at all and the seven
+         * tints collapsed onto each other. The hiss is what carries this plan,
+         * so the hiss is what the family has to be allowed to move. */
+        this._noise(t, 0.75 * d, 0.22 * g,
+                    { hp: 3800 * p, lp: 12000 * p, attack: 0.10, dest: G });
+        this._noise(t + 0.20, 0.50 * d, 0.10 * g,
+                    { hp: 5500 * p, lp: 14000 * p, attack: 0.15, dest: G });
+        this._tone(t, 0.60 * d, 0.17 * g,
+                   { from: 74 * p, to: 58 * p, type: 'triangle', lp: 420 * p, dest: G });
+        break;
+      case 'heavy':
+        this._thump(t, { f: 62 * p, to: 34 * p, dur: 0.34, gain: 0.50 * g, lp: 220, dest: G });
+        this._tone(t + 0.12, 0.70 * d, 0.28 * g,
+                   { from: 104 * p, to: 82 * p, type: 'sawtooth', bp: 200 * p, q: 5, dest: G });
+        this._noise(t, 0.30, 0.16 * g, { hp: 50, lp: 480, dest: G });
+        this._noise(t + 0.12, 0.60 * d, 0.07 * g,
+                    { bp: 440, q: 2, am: 14, amDepth: 0.4, dest: G });
+        break;
+      default:               // runner
+        this._tone(t, 0.09, 0.26 * g,
+                   { from: 300 * p, to: 200 * p, type: 'square', lp: 2400, dest: G });
+        this._noise(t, 0.05, 0.22 * g, { hp: 900, lp: 6000, dest: G });
+        this._tone(t + 0.14, 0.09, 0.22 * g,
+                   { from: 280 * p, to: 186 * p, type: 'square', lp: 2200, dest: G });
+        this._tone(t + 0.30, 0.50 * d, 0.20 * g,
+                   { from: 240 * p, to: 330 * p, type: 'sawtooth', lp: 2600, dest: G });
+    }
+
+    /* The family tint. One layer, on top of a plan that is already finished —
+     * so it colours the cry without ever being able to restructure it. */
+    switch (fam.over) {
+      case 'crackle':
+        /* 2200-3800Hz is exactly where swarm runs 0.44-gain noise, creeper runs
+         * 0.60-gain bursts and legless runs 0.22 hiss, so four 0.065-gain
+         * bursts up there were 5-9x under the layer they sat inside and
+         * contributed nothing measurable. Fire is a LOW crackle with an ember
+         * bed under it: down at 620-1140Hz there is nothing else competing,
+         * and 33Hz AM on the bed is the flutter that says combustion. */
+        for (let i = 0; i < 9; i++) {
+          this._noise(t + rnd() * 0.45 * d, 0.03, 0.20 * g,
+                      { bp: 620 + rnd() * 520, q: 6, dest: G });
+        }
+        this._noise(t, 0.55 * d, 0.10 * g,
+                    { bp: 420, bpTo: 260, q: 3, am: 33, amDepth: 0.7, dest: G });
+        break;
+      case 'shimmer':
+        this._noise(t + 0.05, 0.50 * d, 0.010 * g, { hp: 8500, lp: 11000, attack: 0.15, dest: G });
+        this._tone(t, 0.60 * d, 0.026 * g,
+                   { from: 4200, to: 3900, type: 'sine', bp: 4200, q: 12, dest: G });
+        break;
+      case 'wet':
+        this._noise(t, 0.45 * d, 0.18 * g,
+                    { bp: 500, bpTo: 260, q: 4, am: 9, amDepth: 0.6, dest: G });
+        for (let i = 0; i < 3; i++) {
+          this._tone(t + 0.12 + i * 0.22, 0.09, 0.16 * g,
+                     { from: 320, to: 700, type: 'sine', lp: 1800, dest: G });
+        }
+        break;
+      case 'thud':
+        this._thump(t, { f: 78, to: 40, dur: 0.28, gain: 0.24 * g, lp: 300, dest: G });
+        break;
+      case 'buzz':
+        this._noise(t, 0.30 * d, 0.20 * g,
+                    { bp: 5200, q: 4, am: 58, amDepth: 0.85, dest: G });
+        this._noise(t, 0.26 * d, 0.075 * g,
+                    { bp: 2600, q: 1.2, am: 58, amDepth: 0.7, dest: G });
+        this._noise(t, 0.010, 0.22 * g, { hp: 2600, lp: 16000, dest: G });
+        break;
+      case 'detune':
+        this._tone(t, 1.10 * d, 0.18 * g,
+                   { from: 96 * p * 1.414, to: 72 * p * 1.414, type: 'triangle',
+                     lp: 500, dest: G });
+        this._tone(t + 0.06, 0.95 * d, 0.10 * g,
+                   { from: 96 * p * 1.414 * 1.03, to: 72 * p * 1.414 * 0.97,
+                     type: 'triangle', lp: 500, dest: G });
+        break;
+      default: break;
+    }
+    return true;
+  }
+
+  /** One name, one sound. The prefixes below are a convenience for callers that
+   *  already hold a string — `sfx('step_snow')` and `footstep('snow')` are the
+   *  same call, and `sfx('cast_fire')` and `castElement('fire')` are too, so a
+   *  call site with a terrain or an element in a variable does not have to
+   *  branch. `cast_ok` and `cast_fail` are NOT elements and keep their old
+   *  meanings, which is why the element table is consulted rather than assumed.
+   */
+  sfx(kind) {
+    if (!this.enabled || !this._build()) return;
+    const name = String(kind || '');
+    if (name.startsWith('step_')) { this.footstep(name.slice(5)); return; }
+    if (name.startsWith('cast_') && ELEMENT_CAST.has(name.slice(5))) {
+      this.castElement(name.slice(5)); return;
+    }
+    if (name.startsWith('cry_')) { this.warCry('', { plan: name.slice(4) }); return; }
+
+    const t = this.ctx.currentTime + 0.005;
+    const G = this.sfxBus;
+    /* leadSfx, not lead: this helper voices EFFECTS, and `lead` is built onto
+     * musicBus. Every note below therefore obeys the effects fader. */
+    const guitar = (f, when, dur, gain, opts = {}) =>
+      this._guitar(f, when, dur, gain, { channel: this.leadSfx.input, ...opts });
+    const D = this.drumSfx;
+
+    switch (kind) {
+      /* ---- the four that used to fall through to a guitar note ---- */
+
+      case 'type': {
+        /* Fires on EVERY KEYSTROKE, which makes it the only sound in the game
+         * whose first requirement is that it must not be noticed. A typewriter
+         * key is a click with a small wooden body under it and no pitch to
+         * speak of; a guitar note at E5 forty times a sentence is torture.
+         * Throttled at 22ms because a held key repeats faster than that, and
+         * varied +-6% because forty identical clicks is a rattle. */
+        const now = this.ctx.currentTime;
+        if (this._lastType === undefined) this._lastType = -Infinity;
+        if (now - this._lastType < 0.022) return;
+        this._lastType = now;
+        const v = 0.94 + Math.random() * 0.12;
+        this._noise(t, 0.010, 0.42, { bp: 1900 * v, q: 2.4, dest: G });
+        this._thump(t, { f: 300 * v, to: 180 * v, dur: 0.020, gain: 0.022,
+                         lp: 1400, dest: G });
+        break;
+      }
+      case 'error':
+        /* Refusal. Low, square, two notes falling — the shape of "no" in every
+         * machine that has ever said it. Nothing bright in it at all, which is
+         * what separates it from `miss` and from `cast_fail`. */
+        this._tone(t, 0.16, 0.26, { from: 196, to: 190, type: 'square', lp: 1200, dest: G });
+        this._tone(t + 0.17, 0.26, 0.24, { from: 147, to: 138, type: 'square', lp: 1000, dest: G });
+        this._noise(t, 0.05, 0.10, { hp: 120, lp: 900, dest: G });
+        this._thump(t + 0.17, { f: 92, to: 62, dur: 0.20, gain: 0.14, lp: 400, dest: G });
+        break;
+      case 'miss':
+        /* A whiff is air, and air has no pitch. A bandpass falling from 1.9kHz
+         * to 420Hz is something passing the ear and going away. */
+        this._noise(t, 0.24, 0.40, { hp: 600, hpTo: 150, lp: 1800, lpTo: 380,
+                                     attack: 0.012, dest: G });
+        this._noise(t + 0.02, 0.16, 0.10, { bp: 900, bpTo: 320, q: 2.2, dest: G });
+        break;
+      case 'cast':
+        /* A release: everything in it opens. The lowpass climbs, the tone
+         * climbs, and a small tick at the end is the moment it leaves the hand.
+         * `cast_ok` is the answer that comes back; this is the throw. */
+        this._noise(t, 0.30, 0.22, { hp: 260, lp: 1100, lpTo: 5200, attack: 0.06, dest: G });
+        this._tone(t, 0.28, 0.16, { from: 220, to: 660, type: 'triangle', lp: 4000, dest: G });
+        this._noise(t + 0.27, 0.05, 0.14, { bp: 3200, q: 2, dest: G });
+        break;
+
+      /* ---- the world ---- */
+
+      case 'door_open':   this.door(false); break;
+      case 'door_close':  this.door(true); break;
+      case 'chest_open':  this.chest(false); break;
+      case 'chest_empty': this.chest(true); break;
+      case 'pickup':
+        this._noise(t, 0.014, 0.16, { bp: 3400, q: 2, dest: G });
+        ['E6', 'B6'].forEach((n, i) =>
+          this._clean(freq(n), t + 0.01 + i * 0.055, 0.34, 0.62, { sfx: true }));
+        break;
+
+      /* ---- the zones ---- */
+
+      case 'ice_crack':
+        this._noise(t, 0.022, 0.32, { bp: 3200, q: 1.5, dest: G });
+        this._tone(t, 0.36, 0.10, { from: 3400, to: 3080, type: 'sine', bp: 3400, q: 14, dest: G });
+        this._tone(t + 0.02, 0.50, 0.09, { from: 150, to: 94, type: 'triangle', lp: 500, dest: G });
+        break;
+      case 'lava_divert':
+        /* The player asked for a screen shake on this one. A sound that
+         * deserves a screen shake is not a loud sound, it is a LOW one that
+         * lasts: everything here is under 400Hz, it runs for nearly two
+         * seconds, and it breathes at 6Hz so the weight arrives in waves
+         * rather than all at once. It measures as the lowest centroid and the
+         * highest sustained level of anything in the game. */
+        this._thump(t, { f: 90, to: 34, dur: 0.50, gain: 0.50, lp: 260, dest: G });
+        this._tone(t, 1.70, 0.30, { from: 44, to: 30, type: 'sine', lp: 120, dest: G });
+        this._noise(t, 1.70, 0.40, { hp: 40, lp: 420, lpTo: 200, attack: 0.12,
+                                     hold: 0.50, am: 6.2, amDepth: 0.5, dest: G });
+        this._noise(t + 0.05, 1.20, 0.14, { bp: 180, bpTo: 90, q: 2.5,
+                                            am: 3.1, amDepth: 0.35, dest: G });
+        this._tone(t, 1.20, 0.16, { from: 62, to: 40, type: 'sawtooth', lp: 300, dest: G });
+        this._noise(t + 0.50, 1.00, 0.014, { hp: 1400, lp: 3400, attack: 0.30, dest: G });
+        break;
+      case 'lantern':
+        this._noise(t, 0.030, 0.30, { bp: 4200, bpTo: 2600, q: 2, dest: G });   // flint
+        this._noise(t + 0.13, 0.035, 0.34, { bp: 4600, bpTo: 2800, q: 2, dest: G });
+        this._noise(t + 0.28, 0.34, 0.30, { hp: 180, lp: 1800, lpTo: 600,       // catch
+                                            attack: 0.05, dest: G });
+        this._tone(t + 0.28, 0.50, 0.16, { from: 180, to: 120, type: 'triangle',
+                                           lp: 800, dest: G });
+        this._noise(t + 0.60, 0.60, 0.07, { hp: 400, lp: 2600, am: 7.3,         // flicker
+                                            amDepth: 0.6, attack: 0.10, dest: G });
+        break;
+      case 'snowball':
+        this._thump(t, { f: 320, to: 120, dur: 0.12, gain: 0.26, lp: 900, dest: G });
+        this._noise(t, 0.16, 0.24, { hp: 1500, lp: 6000, lpTo: 2600, dest: G });
+        this._noise(t + 0.06, 0.22, 0.07, { hp: 2600, lp: 7000, attack: 0.04, dest: G });
+        break;
+      case 'firework':
+        this._tone(t, 0.50, 0.14, { from: 420, to: 1750, type: 'sine', lp: 4000, dest: G });
+        this._noise(t, 0.50, 0.05, { bp: 900, bpTo: 2600, q: 3, dest: G });
+        this._noise(t + 0.52, 0.28, 0.50, { hp: 200, lp: 12000, lpTo: 2000, dest: G });
+        this._thump(t + 0.52, { f: 120, to: 45, dur: 0.30, gain: 0.30, lp: 400, dest: G });
+        for (let i = 0; i < 9; i++) {
+          this._noise(t + 0.66 + Math.random() * 0.80, 0.02,
+                      0.06 + Math.random() * 0.07,
+                      { bp: 2400 + Math.random() * 3000, q: 3, dest: G });
+        }
+        break;
+
+      /* ---- battle ---- */
+
+      case 'defeat':
+        /* Not a bigger `hit`. A hit is 100ms of muted chug; this is the shape
+         * of something ending — three chords walking down, the body landing,
+         * and a tail that disperses instead of decaying. */
+        this._power('A2', t, 0.30, 0.34, { mute: true, sfx: true });
+        this._power('F2', t + 0.10, 0.30, 0.32, { mute: true, sfx: true });
+        this._power('D2', t + 0.20, 0.85, 0.38, { sfx: true });
+        this._thump(t + 0.34, { f: 130, to: 40, dur: 0.40, gain: 0.40, lp: 320, dest: G });
+        this._noise(t + 0.34, 0.70, 0.14, { hp: 300, lp: 5200, lpTo: 700,
+                                            attack: 0.05, dest: G });
+        break;
+
       case 'hit':
-        this._power('E2', t, 0.16, 0.34, { mute: true });
-        this._snare(t, 0.5);
+        this._power('E2', t, 0.16, 0.34, { mute: true, sfx: true });
+        this._snare(t, 0.5, false, D);
         break;
       case 'crit':
         // a pinch harmonic squealing over a chord stab
-        this._power('A2', t, 0.55, 0.4);
+        this._power('A2', t, 0.55, 0.4, { sfx: true });
         guitar(freq('A5') * 2, t + 0.02, 0.55, 0.3, { bend: 2 });
-        this._crash(t, 0.4);
+        this._crash(t, 0.4, D);
         break;
       case 'fail':
         // the dive bomb: whammy bar to the floor
         guitar(freq('E4'), t, 0.85, 0.32, { bend: -28 });
-        this._kick(t, 0.7);
+        this._kick(t, 0.7, D);
         break;
       case 'select':
         this._noise(t, 0.02, 0.18, { hp: 3000, dest: G });
         break;
       case 'move':
-        this._noise(t, 0.012, 0.06, { hp: 6000, dest: G });
+        this._noise(t, 0.022, 0.16, { bp: 1250, q: 3, dest: G });
+        this._thump(t, { f: 520, to: 380, dur: 0.03, gain: 0.05, lp: 2200, dest: G });
         break;
       case 'spell':
+        /* The arpeggio alone measured 2.2 sigma from `cast_ok`, which is the
+         * other rising guitar figure in the rig. A spell moves AIR: a band
+         * opening from 300Hz to 6kHz underneath is the part that says something
+         * left the hand, and it is the part cast_ok's confirmation must not
+         * have. */
         ['A4', 'C5', 'E5', 'A5', 'C6', 'E6'].forEach((n, i) =>
           guitar(freq(n), t + i * 0.032, 0.3, 0.2));
+        this._noise(t, 0.34, 0.20, { hp: 300, hpTo: 1800, lp: 1200, lpTo: 6400,
+                                     attack: 0.10, dest: G });
+        this._noise(t + 0.30, 0.22, 0.07, { hp: 3000, lp: 11000, attack: 0.06, dest: G });
         break;
       case 'cast_ok':
         ['E4', 'B4', 'E5'].forEach((n, i) => guitar(freq(n), t + i * 0.04, 0.35, 0.24));
-        this._snare(t, 0.4, true);
+        this._snare(t, 0.4, true, D);
         break;
       case 'cast_fail':
         guitar(freq('C4'), t, 0.3, 0.2, { bend: -3 });
@@ -1353,46 +2503,56 @@ class MetalRig {
         break;
       case 'levelup':
         ['C3', 'F3', 'G3', 'C4'].forEach((n, i) =>
-          this._power(n, t + i * 0.12, 0.6, 0.34));
+          this._power(n, t + i * 0.12, 0.6, 0.34, { sfx: true }));
         ['C5', 'E5', 'G5', 'C6', 'E6'].forEach((n, i) =>
           guitar(freq(n), t + i * 0.1, 0.45, 0.26));
-        this._crash(t, 0.5);
+        this._crash(t, 0.5, D);
         break;
       case 'victory':
         ['C3', 'G2', 'A2', 'F2'].forEach((n, i) =>
-          this._power(n, t + i * 0.17, 0.8, 0.4));
+          this._power(n, t + i * 0.17, 0.8, 0.4, { sfx: true }));
         ['C5', 'E5', 'G5', 'C6'].forEach((n, i) =>
           guitar(freq(n), t + i * 0.17, 0.6, 0.28));
-        this._crash(t, 0.55);
-        this._kick(t, 0.95);
+        this._crash(t, 0.55, D);
+        this._kick(t, 0.95, D);
         break;
       case 'shrine':
         ['A5', 'E6', 'A6'].forEach((n, i) =>
-          this._clean(freq(n), t + i * 0.15, 1.0, 0.18));
+          this._clean(freq(n), t + i * 0.15, 1.0, 0.18, { kept: true }));
         break;
       case 'unlock':
         ['G3', 'B3', 'D4', 'G4'].forEach((n, i) =>
-          this._clean(freq(n), t + i * 0.06, 0.4, 0.2));
+          this._clean(freq(n), t + i * 0.06, 0.4, 0.2, { kept: true }));
         break;
       case 'armor':
         this._noise(t, 0.2, 0.4, { hp: 2400, lp: 12000, dest: G });
-        this._kick(t, 0.7);
+        this._kick(t, 0.7, D);
         guitar(freq('B4'), t + 0.06, 0.3, 0.2);
         break;
       case 'loot':
+        /* This was a fourth rising guitar arpeggio and measured 1.3 sigma from
+         * `spell` and 2.8 from `cast_ok` — three different events on one sound.
+         * What separates treasure from a spell is not the notes, it is the
+         * METAL: coins are a scatter of short high transients with no pitch,
+         * and nothing else in the rig has that. */
         ['E5', 'G#5', 'B5', 'E6'].forEach((n, i) =>
           guitar(freq(n), t + i * 0.055, 0.4, 0.22));
+        for (let i = 0; i < 7; i++) {
+          this._noise(t + 0.02 + Math.random() * 0.34, 0.012, 0.20,
+                      { bp: 5200 + Math.random() * 3600, q: 5, dest: G });
+        }
+        this._noise(t + 0.01, 0.30, 0.05, { hp: 6000, lp: 14000, attack: 0.06, dest: G });
         break;
       case 'boss':
         // the tritone. Nothing announces a boss like a diabolus in musica.
-        this._power('C2', t, 1.6, 0.42);
-        this._power('F#2', t + 0.18, 1.6, 0.42);
-        this._crash(t, 0.6);
-        this._kick(t, 0.95); this._kick(t + 0.11, 0.95);
+        this._power('C2', t, 1.6, 0.42, { sfx: true });
+        this._power('F#2', t + 0.18, 1.6, 0.42, { sfx: true });
+        this._crash(t, 0.6, D);
+        this._kick(t, 0.95, D); this._kick(t + 0.11, 0.95, D);
         break;
       case 'pet':
         ['D5', 'F#5', 'A5', 'D6'].forEach((n, i) =>
-          this._clean(freq(n), t + i * 0.05, 0.5, 0.2));
+          this._clean(freq(n), t + i * 0.05, 0.5, 0.2, { kept: true }));
         break;
       case 'tick':
         this._noise(t, 0.01, 0.08, { hp: 7000, dest: G });

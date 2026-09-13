@@ -491,7 +491,9 @@ async function doRepair(piece) {
   if (!(r.mended || []).length) {
     HOST.toast('NOT YET', r.message || 'Come back with gold.', 'red');
   } else {
-    HOST.sfx('unlock');
+    // Plate hammered back into shape: `armor` is the authored sound for exactly
+    // this and had no caller anywhere in web/ or gauntlet/.
+    HOST.sfx('armor');
     /* `mended` is rows, not names — {piece, points, gold, ...} each — and
      * `message` is upkeep's own sentence about the same event. The sentence is
      * the better half; the rows are what says how many pieces, which matters
@@ -533,7 +535,10 @@ async function paintShelf(body) {
       ? '<div id="shelf-rows"></div><p class="small muted" style="margin-top:10px">'
         + 'A price is not a hint, so this is readable during a measured run. '
         + 'Buying is not.</p>'
-      : '<p class="small muted">Bare. Clear a few encounters and come back.</p>')}`;
+      : '<p class="small muted">Bare. Clear a few encounters and come back.</p>')}
+    ${rackCard(r)}`;
+
+  paintRack(r);
 
   const host = $('#shelf-rows');
   if (!host) return;
@@ -557,6 +562,113 @@ async function paintShelf(body) {
   }
 }
 
+/* ------------------------------------------------- the rack on the east wall
+ *
+ * WHY THIS SAYS "IT CANNOT BE REROLLED" OUT LOUD. gauntlet/shop.py makes a peg
+ * a pure function of (save seed, region, restock index) and moves the index
+ * only on six CLEARED encounters — so walking out, leaving the region,
+ * quitting to the title and reloading the save all land on the same eight
+ * items. A panel that does not say so invites the player to spend twenty
+ * minutes discovering it, and the discovery is "nothing I do works" rather
+ * than "this is a fair shop".
+ *
+ * SOLD PEGS ARE DRAWN, NOT DROPPED, for the same reason. An empty peg is the
+ * visible half of the anti-farm rule: the wall is finite by construction, and
+ * a wall that quietly shortened would read as a wall that restocks.
+ */
+
+function rackCard(r) {
+  const rows = r.rack || [];
+  if (!rows.length) return '';
+  const bounds = r.rack_bounds || [];
+  const note = `<p class="small muted" style="margin-top:10px">${
+    esc(r.credit_note || 'The rack takes gold.')} The eight pegs are fixed by
+    this save, this region and how much work has been cleared here — leaving
+    and coming back finds the same wall. ${num(r.rack_left)} of ${rows.length}
+    still hanging${bounds.length === 2
+      ? `, ${esc(bounds[0].toLowerCase())} to ${esc(bounds[1].toLowerCase())}`
+      : ''}.</p>`;
+  return card('THE RACK', '<div id="rack-rows"></div>' + note
+    + (r.blank && r.blank.blade
+       ? '<div id="rack-blank" style="margin-top:14px"></div>' : ''));
+}
+
+function paintRack(r) {
+  const host = $('#rack-rows');
+  if (!host) return;
+  for (const p of (r.rack || [])) {
+    const row = el('div', 'list-item', `
+      <span class="t" style="color:${esc(p.rarity_colour || 'var(--gold)')}">
+        ${esc(p.name)}
+        <span class="tag ${p.sold ? '' : (p.affordable ? 'green' : 'red')}">${
+          p.sold ? 'GONE' : `${num(p.price)} gold`}</span>
+        <span class="tag">${esc(p.slot)}</span>
+        <span class="tag violet">${esc(p.rarity)}</span></span>
+      <span class="d">${esc(p.effect_text || '')}<br>
+        <span class="muted small">${esc(p.flavour || '')}</span>${
+          p.sold ? '<br><span class="muted small">Sold off this peg for '
+                   + num(p.sold_for) + ' gold. The peg does not refill until '
+                   + 'the work does.</span>' : ''}</span>`);
+    if (!p.sold) {
+      const buy = el('button', 'btn small good', 'BUY');
+      buy.disabled = !p.affordable;
+      buy.onclick = (e) => { e.stopPropagation(); doBuyRack(p, buy); };
+      row.appendChild(buy);
+    }
+    host.appendChild(row);
+  }
+
+  const blankHost = $('#rack-blank');
+  const b = r.blank;
+  if (!blankHost || !b || !b.blade) return;
+  blankHost.innerHTML = `
+    <div class="pixel" style="font-size:12px;color:var(--gold-hi)">THE BLANK</div>
+    <p class="small">${esc(b.name)} — rung ${num(b.tier)} of your own line,
+      cut and not forged. ${esc(b.effect_text || '')}</p>
+    <p class="small muted">${num(b.price)} gold. That is the forge's own labour
+      at ${num(b.forge_labour)} plus the metal you did not walk out and find.
+      ${esc(b.note || '')}</p>`;
+  const buy = el('button', 'btn small good', 'BUY THE BLANK');
+  buy.disabled = !b.affordable || b.sold;
+  buy.onclick = (e) => { e.stopPropagation(); doBuyBlank(buy); };
+  blankHost.appendChild(buy);
+}
+
+async function doBuyRack(peg, btn) {
+  btn.disabled = true;
+  const r = await api.buyRack(peg.slot).catch(e => ({ error: e.message }));
+  if (!r || r.error) {
+    btn.disabled = false;
+    HOST.toast(isSealed(r) ? sealedTitle(r) : 'IT STAYS ON THE PEG',
+      refusal(r) || 'Not that one.', 'red');
+    return;
+  }
+  HOST.sfx('pickup');
+  HOST.toast('OFF THE WALL', `${esc(peg.name)} — ${num(r.gold_spent)} gold.
+    It is in your bag; the peg stays empty until the work refills it.`, 'green');
+  await HOST.refresh();
+  const body = $('#town-body');
+  if (body) await paintShelf(body);
+}
+
+async function doBuyBlank(btn) {
+  btn.disabled = true;
+  const r = await api.buyBlank().catch(e => ({ error: e.message }));
+  if (!r || r.error) {
+    btn.disabled = false;
+    HOST.toast(isSealed(r) ? sealedTitle(r) : 'NO BLANK THIS WEEK',
+      refusal(r) || 'Not this week.', 'red');
+    return;
+  }
+  HOST.sfx('pickup');
+  HOST.toast('BOUGHT THE BLANK',
+    `Rung ${num(r.tier)} — ${num(r.gold_spent)} gold. The smith will hang it
+     on your line.`, 'green');
+  await HOST.refresh();
+  const body = $('#town-body');
+  if (body) await paintShelf(body);
+}
+
 async function doBuy(id, quantity, btn) {
   btn.disabled = true;
   const r = await api.buyPotion(id, '', quantity).catch(e => ({ error: e.message }));
@@ -566,7 +678,9 @@ async function doBuy(id, quantity, btn) {
       refusal(r) || 'Not that one.', 'red');
     return;
   }
-  HOST.sfx('unlock');
+  // Taken off a shelf, not unlocked. `pickup` is the small bright "you have it
+  // now"; `loot` is a fanfare and a bought potion has not earned one.
+  HOST.sfx('pickup');
   /* Two purses come back and they are not the same. `credit_spent` was banked
    * here by a quest and was already gone; `gold_spent` has just left. `gold` is
    * the truth afterwards and is the only one worth putting in front of a
@@ -693,7 +807,8 @@ async function doClose(abandon, btn) {
     return;
   }
   const award = r.award || {};
-  HOST.sfx(num(r.gold) ? 'unlock' : 'select');
+  // Gold changing hands is a drop; walking away with none is a menu click.
+  HOST.sfx(num(r.gold) ? 'loot' : 'select');
   HOST.toast(abandon ? 'WALKED AWAY' : 'WEIGHED',
     `${num(r.gold)} gold. Purse ${num(r.purse)}.`, num(r.gold) ? 'green' : '');
   if (lines(award.lines).length) {
@@ -773,7 +888,8 @@ function voiceCard(s) {
     }
     const box = node.querySelector('.voice-lines');
     if (box) box.innerHTML = prose(r.lines, 'small');
-    HOST.sfx('tick');
+    // Somebody turned to answer you. A tick is the cursor; a step is a person.
+    HOST.sfx('step_wood');
   };
   return node;
 }

@@ -219,6 +219,13 @@ export class IncantationUI {
     this.onSelectMove = this.opts.onSelectMove || null;
     this.onTimeout = this.opts.onTimeout || null;
     this.audio = this.opts.audio || null;
+    /* WHAT A CAST SOUNDS LIKE IS WHAT THE CASTER IS MADE OF.
+     * audio.castElement() has seven architectures, not seven pitches — a FIRE
+     * cast and a VOID cast do not share a layer — so this field is the whole
+     * difference between "a spell went off" and "you cast fire". The server
+     * names it (`element.player`, elements.py's own id) and main.js hands it
+     * over; unknown and absent both mean NEUTRAL, never an exception. */
+    this.element = String(this.opts.element || '') || 'neutral';
 
     this.mode = this.opts.mode === 'interview' ? 'interview' : 'adventure';
     /* Interview measures, so it never shows a scaffold. Overridable for a
@@ -384,9 +391,17 @@ export class IncantationUI {
    * }
    * `name` is the Python identifier and the thing the player types. `title` is
    * the theatrical name and is decoration. */
+  /** The element the player casts in. Settable mid-field: a fight can change
+   *  what the player is made of, and the cast has to follow it. */
+  setElement(id) {
+    this.element = String(id || '') || 'neutral';
+    return this;
+  }
+
   setEncounter(encounter) {
     this.encounter = encounter || null;
     const enc = this.encounter || {};
+    if (enc.element !== undefined) this.setElement(enc.element);
     this.enemies = Array.isArray(enc.enemies) ? enc.enemies.slice() : [];
     this.turn = enc.turn || 1;
     if (enc.mode) this.setMode(enc.mode, { silent: true });
@@ -642,6 +657,10 @@ export class IncantationUI {
     this._on(input, 'input', () => {
       this.holeValues[index] = input.value;
       this._mirrorHole(index, input);
+      // The blanks ARE the typing in this fight. audio.sfx('type') throttles
+      // itself at 22ms and varies its own pitch, so a held key is a typewriter
+      // and not a buzz; a paste is one click, which is the truth about a paste.
+      this._sfx('type');
     });
     this._on(input, 'focus', () => {
       this.focusHole = index;
@@ -675,6 +694,7 @@ export class IncantationUI {
     this._on(input, 'input', () => {
       this.rawValue = input.value;
       this._syncHole(entry);
+      this._sfx('type');
     });
     this._on(input, 'focus', () => { this.focusHole = 0; this._markFocus(); });
     this._on(input, 'keydown', (e) => this._onHoleKey(e, 0));
@@ -875,8 +895,27 @@ export class IncantationUI {
     const r = result || {};
     this.setBusy(false);
 
-    if (Array.isArray(r.enemies)) { this.enemies = r.enemies.slice(); this._renderEnemies(); }
-    else if (r.enemy_id !== undefined && r.hp !== undefined) this.setEnemyHp(r.enemy_id, r.hp, r.hp_max);
+    /* WHAT DIED ON THIS CAST, before the list is replaced.
+     *
+     * A name going down is not the same event as a line landing, and it was
+     * silent: `hit` played over both, so clearing the last name on a field
+     * sounded exactly like grazing the first. The diff is taken here because
+     * this is the only moment both lists exist — after the swap the old one is
+     * gone, and main.js sees the field only through this object. */
+    const fell = [];
+    if (Array.isArray(r.enemies)) {
+      const before = new Map(this.enemies.map(e => [String(e.id), !!e.dead]));
+      for (const e of r.enemies) {
+        const was = before.get(String(e.id));
+        if (e.dead && was === false) fell.push(e);
+      }
+      this.enemies = r.enemies.slice();
+      this._renderEnemies();
+    } else if (r.enemy_id !== undefined && r.hp !== undefined) {
+      const was = this.enemies.find(e => String(e.id) === String(r.enemy_id));
+      if (was && !was.dead && r.hp <= 0) fell.push(was);
+      this.setEnemyHp(r.enemy_id, r.hp, r.hp_max);
+    }
 
     if (r.ok) {
       const m = this.move;
@@ -888,6 +927,7 @@ export class IncantationUI {
       this._pushLog(true, m ? m.name : '', r.line || '', bits.join(' · '));
       this._flash('good');
       this._sfx('hit');
+      this._elementLands();
       /* The move stays selected on a hit. Repetition inside one fight is how
        * the pattern becomes fluent; the SRS across days is what makes it stick. */
       this._resetLine();
@@ -902,10 +942,22 @@ export class IncantationUI {
         'The turn passes.');
       this._pushLog(false, this.move ? this.move.name : '', r.line || '', meta.label);
       this._flash('bad');
-      this._sfx('miss');
+      /* SEMANTICS is a line that parsed and bound and still did the wrong
+       * thing — a whiff. SYNTAX and BINDING are the spell coming apart in the
+       * hand, which is what `cast_fail` is for; it was authored as cast_ok's
+       * counterpart and had no caller at all. */
+      this._sfx(layer === CAST_LAYER.SEMANTICS ? 'miss' : 'cast_fail');
       if (typeof r.hole === 'number') this._focusHoleAt(r.hole, { select: true });
       else this.focus();
     }
+
+    /* After the hit, not instead of it: the blow lands and THEN the thing
+     * stops standing. Staggered because two names falling on one line are two
+     * events, and audio.sfx has no throttle on `defeat`. */
+    fell.forEach((e, i) => {
+      if (i === 0) this._sfx('defeat');
+      else setTimeout(() => { if (!this.destroyed) this._sfx('defeat'); }, i * 210);
+    });
 
     if (r.turn !== undefined) this.setTurn(r.turn);
     else this.setTurn(this.turn + 1);
@@ -1138,10 +1190,41 @@ export class IncantationUI {
     }
   }
 
+  /* ONE LINE USED TO EAT THREE OF THE FOUR NAMES IN THIS FILE.
+   *
+   *     { cast: 'select', hit: 'hit', miss: 'error', select: 'select', type: <a
+   *       name that no longer exists> }
+   *
+   * `cast` played the menu blip, `miss` played the refusal buzz and `type`
+   * played a click borrowed from somewhere else — so a spell leaving the hand,
+   * a whiff and a keystroke were three names for two sounds that belonged to
+   * other events. Every one of those names now exists on its own in audio.js,
+   * so there is no map left at all: a name asked for here is the name that
+   * plays. Nothing here decides what a sound is; it decides which one is being
+   * asked for.
+   *
+   * THE LAST THING THIS MAP ATE was `cast` itself. It was diverted to
+   * castElement(this.element) and returned before audio.sfx() was reached, so
+   * audio.js's `case 'cast'` could never fire from anywhere in the client.
+   * They are not the same event and they do not sound alike — `cast` is the
+   * THROW (0.26s, centroid 2545, tilt +1.00, everything in it opens) and
+   * castElement is the ARRIVAL (0.19s, centroid 418, tilt -0.65). The throw
+   * plays here, at cast time; the element lands in resolveCast()'s ok branch,
+   * where the line actually holds. */
   _sfx(kind) {
-    if (!this.audio || typeof this.audio.sfx !== 'function') return;
-    const map = { cast: 'select', hit: 'hit', miss: 'error', select: 'select', type: 'blip' };
-    try { this.audio.sfx(map[kind] || kind); } catch (e) { /* audio is never load-bearing */ }
+    if (!this.audio) return;
+    try {
+      if (typeof this.audio.sfx !== 'function') return;
+      this.audio.sfx(kind);
+    } catch (e) { /* audio is never load-bearing */ }
+  }
+
+  /* The element arriving. Separate from _sfx() because it takes the element
+   * rather than a name, and because it is a different moment in the turn. */
+  _elementLands() {
+    if (!this.audio || typeof this.audio.castElement !== 'function') return;
+    try { this.audio.castElement(this.element); }
+    catch (e) { /* audio is never load-bearing */ }
   }
 
   /* ------------------------------------------------------ timer */

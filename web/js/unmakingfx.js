@@ -154,7 +154,13 @@ export const UNMAKING_VERSION = '1.0.0';
  *       eyedropped screenshot, the same six characters. Anything drawing the
  *       Green Index as an object should use INDEX_GREEN_HEX and nothing else.
  *   [4] is that taken toward white, so a one-pixel arc on a 16px sprite still
- *       reads at 3x scale, which is the only scale this is ever seen at.
+ *       reads at the smallest world scale the field is ever drawn at. That was
+ *       3 when this was written and the comment said "the only scale this is
+ *       ever seen at", which was already untrue — resize() has always handed
+ *       back a range — and is now plainly so: overworld.js draws the field on
+ *       FF6's pixel scale, which is 3 on a 1280x800 window and 5 on a 1920x1080
+ *       one. The arc gets MORE readable as that number goes up, so the
+ *       requirement is a floor and 3 is still the floor.
  *   [0..2] are it taken toward black, for the screen layer, which has to sit
  *       under a night tint and a vignette and still be green rather than grey.
  */

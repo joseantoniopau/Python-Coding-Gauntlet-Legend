@@ -132,6 +132,18 @@ ROLLED_BACK: dict = {
     "banter": "what has already been said.",
     "sanctuary": "a built place. game.",
     "captives": "who has been freed. game.",
+    "escorts": "the zone companions' latch — which capture scenes have played, "
+               "which drops were handed over, whether the Interviewer's sweep "
+               "fired. IT REWINDS IN LOCKSTEP WITH `captives`, `inventory`, "
+               "`cleared_bosses` and `dungeons_cleared`, and it has to, "
+               "because it is a RECORD OF those four and every one of them is "
+               "on this page. zonecompanions.state_of() reads the latch before "
+               "it derives, so a latch that survived a rollback would report "
+               "TAKEN for somebody the rewound world says is still walking — "
+               "and `given` would claim a drop was handed over while the "
+               "rewound bag is empty, which is the one way in this arc an item "
+               "CAN be lost. Rewound, the derivation rebuilds the whole thing "
+               "off the four keys on the next tick, which is what it is for.",
     "finale": "the ending's own bookkeeping.",
     "ending": "the seam's own bookkeeping — staging, the verdict, whether "
               "the coda has been seen. It rewinds IN LOCKSTEP WITH "

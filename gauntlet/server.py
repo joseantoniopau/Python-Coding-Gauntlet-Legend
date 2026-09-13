@@ -27,6 +27,9 @@ from . import quests, saves, worldgen
 # method, because a second copy of a rule in the HTTP layer is how the two
 # start disagreeing.
 from . import banter, economy, finale, hunters, regalia, sages, sanctuary, upkeep
+# The rack's slot names and its id grammar, for validating a POST body at
+# the door rather than against a list this file would have to keep in sync.
+from . import shop
 from .engine import Game
 
 TOKEN = secrets.token_urlsafe(24)
@@ -493,8 +496,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # reload mid-repo comes back through here.
             return self._reply(g.minirepo_view())
         if path == "/api/ping":
+            # `scratch` says whether this server is writing to a throwaway data
+            # dir (GAUNTLET_DATA_DIR) rather than to the player's real save.
+            # A verification harness drives a real game — it starts exams,
+            # walks the character and spends gold — so it has to be able to ask
+            # before it does that, rather than trusting the operator to have
+            # remembered. Read-only, and it names the dir so a refusal can say
+            # which one it refused.
             return self._json({"ok": True, "version": config.VERSION,
-                               "corpus": len(g.corpus)})
+                               "corpus": len(g.corpus),
+                               "data_dir": str(config.data_dir()),
+                               "scratch": bool(os.environ.get("GAUNTLET_DATA_DIR"))})
         if self._world_get(g, path, query):
             return
         return self._json({"error": f"no such endpoint: {path}"}, 404)
@@ -968,6 +980,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if region is False:
                 return True
             return self._reply(g.broker(region))
+
+        # -- the five who walk a zone with you -----------------------------
+        # A read, and a read of the STORY: five people, five states, who is
+        # beside you here and what you are carrying because of them. It says
+        # nothing about a problem, an enemy or an answer, so it stays open
+        # during a measured run for the same reason /api/rollcall does. The
+        # ENGINE has already emptied the part that would be a crutch:
+        # `Game.escorts` asks `_run_is_open()` and blanks `here` while a run is
+        # open, so what comes back mid-exam is the roll with nobody walking
+        # beside the player rather than a closed door.
+        if path == "/api/escorts":
+            region = self._region(one("region"))
+            if region is False:
+                return True
+            return self._reply(g.escorts(region))
 
         # -- the hidden healers --------------------------------------------
         # A log of people who were found by being hurt in the right place.
@@ -1452,6 +1479,54 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     return True
             return self._reply(g.buy_potion(potion_id, region_id=region,
                                             quantity=quantity))
+
+        # -- THE RACK, on the Shelf's east wall ----------------------------
+        #
+        # Same door, same capability, same two-layer seal as /api/shop/buy
+        # above: a rack purchase is a LOADOUT change mid-exam, which is
+        # strictly more than a consumable, so it cannot be less sealed. Selling
+        # is sealed too — it takes a piece off the player's body and pays gold
+        # into the purse, and both of those are the world moving under a run
+        # that is supposed to be sealed off from it.
+        #
+        # `shop.buy` and `shop.buy_blank` have no gate of their own and must
+        # not grow one: gauntlet/shop.py never reads the exam, and a story
+        # layer that started asking whether a measurement was running would be
+        # the first one in the codebase that did. The gate lives here and in
+        # engine.py, which is where every other one lives.
+        if path == "/api/shop/rack/buy":
+            if self._sealed(g):
+                return True
+            slot = self._need_str(body, "slot", limit=30)
+            if slot is None:
+                return True
+            if slot not in shop.RACK_SLOTS:
+                return self._fail(f"nothing hangs on a {slot!r} peg.", 404)
+            region = self._opt_str(body, "region", "", limit=60)
+            if region is None or self._region(region) is False:
+                return True
+            return self._reply(g.buy_rack(slot, region_id=region))
+        if path == "/api/shop/rack/sell":
+            if self._sealed(g):
+                return True
+            item_id = self._need_str(body, "item_id", limit=120)
+            if item_id is None:
+                return True
+            # The id is the whole of the request, so it is validated by the
+            # module that mints it rather than against a list this file keeps.
+            if not shop.is_rack_item(item_id):
+                return self._fail("that did not come off a rack.", 404)
+            region = self._opt_str(body, "region", "", limit=60)
+            if region is None or self._region(region) is False:
+                return True
+            return self._reply(g.sell_rack(item_id, region_id=region))
+        if path == "/api/shop/blank":
+            if self._sealed(g):
+                return True
+            region = self._opt_str(body, "region", "", limit=60)
+            if region is None or self._region(region) is False:
+                return True
+            return self._reply(g.buy_blank(region_id=region))
 
         # -- the challenge broker ------------------------------------------
         # `open` is sealed by the engine. `close` is NOT — and it pays gold,

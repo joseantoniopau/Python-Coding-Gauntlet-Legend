@@ -911,6 +911,31 @@ export class WorldUI {
     if (audio && audio.sfx) { try { audio.sfx(name); } catch (e) { /* silence is fine */ } }
   }
 
+  /** A door, for the two places on this screen that are doors: the mouth of a
+   *  dungeon, and the way back out of one. `heavy` is what makes a dungeon
+   *  sound like a dungeon rather than like a shop. */
+  door(closing, opts) {
+    const audio = this.hooks.audio;
+    if (audio && audio.door) { try { audio.door(!!closing, opts || {}); } catch (e) { /* silence is fine */ } }
+  }
+
+  /** WALKING IS A SOUND. Travelling a road and moving between dungeon rooms are
+   *  both the player covering ground, and both were silent — a chime played and
+   *  then the screen was somewhere else. `n` steps, staggered past footstep()'s
+   *  own 55ms throttle, on the material the place is made of. */
+  steps(terrain = 'stone', n = 3, opts = {}) {
+    const audio = this.hooks.audio;
+    if (!audio || !audio.footstep) return 0;
+    for (let i = 0; i < n; i++) {
+      const at = i * 155;
+      const fire = () => {
+        try { audio.footstep(terrain, { gain: 0.9, ...opts }); } catch (e) { /* silence is fine */ }
+      };
+      if (!i) fire(); else this.later(fire, at);
+    }
+    return n;
+  }
+
   /** The last resort way home: main.js's own WORLD button, which is in the
    *  document whether or not this file was handed an onBack. */
   back() {
@@ -1028,6 +1053,9 @@ export class WorldUI {
       const res = await api.travel(routeId);
       if (this.refused(res, 'THE ROAD IS CLOSED')) return false;
       this.sfx('unlock');
+      // Four paces of road under you. The `unlock` above is the gate; this is
+      // the walk, and without it travelling between regions was a menu click.
+      this.steps('stone', 4);
       const world = res.world || {};
       if (world.events && world.events.length) this.queue.push(...world.events);
       if (this.hooks.onRegion && res.region) this.hooks.onRegion(res.region);
@@ -1586,6 +1614,8 @@ export class WorldUI {
         return;
       }
       this.sfx('unlock');
+      // The mouth of the dungeon. Heavy, because it is.
+      this.door(false, { heavy: true });
       this.descent = res;
       this.dungeonRegion = regionId || this.world().here;
       this.screen = 'descent';
@@ -1781,6 +1811,8 @@ export class WorldUI {
       }
       if (this.refused(res, 'NOT THAT WAY')) return;
       this.sfx('tick');
+      // A room is a walk, not a jump cut. Stone, because a dungeon is.
+      this.steps('stone', 3);
       this.adopt(res);
       const room = res.room || {};
       if (room.name) {
@@ -1816,6 +1848,7 @@ export class WorldUI {
       const res = await api.dungeonRetreat();
       if (this.refused(res, 'YOU CANNOT WALK OUT')) return;
       this.sfx('select');
+      this.steps('stone', 4);
       this.adopt(res);
       this.toast('YOU WALK OUT', `${Math.max(0, (res.path || []).length - 1)} rooms back `
         + 'to the threshold. The descent stays where it is.');
@@ -1838,6 +1871,9 @@ export class WorldUI {
       this.dungeonRegion = null;
       await this.reload();
       this.render();
+      // "The door closes behind you" is the sentence this screen has always
+      // printed. Now it is also the sound.
+      this.door(true, { heavy: true });
       this.toast('OUT', 'The door closes behind you. What you cleared stays cleared.');
     } finally {
       this.busy = false;

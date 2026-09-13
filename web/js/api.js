@@ -394,6 +394,31 @@ export const api = {
     potion_id: potionId, region: region || '', quantity: quantity || 1,
   }),
 
+  /* -- the rack, on the same shelf's east wall --
+   * Eight pegs of generated armour and, some weeks, one blade blank. They ride
+   * the SAME `/api/shop` payload the potions do — `rack`, `rack_left`,
+   * `rack_index`, `rack_bounds` and `blank` — so there is no second read.
+   *
+   * THE WALL CANNOT BE REROLLED, and the panel should say so rather than
+   * inviting the player to try: a peg is a pure function of (save seed,
+   * region, restock index) and the restock index only moves on six CLEARED
+   * encounters. Walking out, leaving the region, quitting to the title and
+   * reloading the save appear in none of those.
+   *
+   * All three writes are sealed at BUILD during a measured run, because armour
+   * is a loadout change — read `error` ('sealed', 'no_gold', 'sold',
+   * 'not_bought', 'not_held', 'no_blank', 'owned') and print `text`.
+   * `buyRack` takes a SLOT, not an id, because a peg is identified by where it
+   * hangs. `sellRack` pays a quarter and refuses if the piece is not still in
+   * the bag. */
+  buyRack: (slot, region) => softPost('/api/shop/rack/buy', {
+    slot, region: region || '',
+  }),
+  sellRack: (itemId, region) => softPost('/api/shop/rack/sell', {
+    item_id: itemId, region: region || '',
+  }),
+  buyBlank: (region) => softPost('/api/shop/blank', { region: region || '' }),
+
   /* -- the challenge broker --
    * One trial open at a time, ever. `broker()` is the board plus whatever is
    * already open under `trial`. `openTrial` takes a form id off the board;

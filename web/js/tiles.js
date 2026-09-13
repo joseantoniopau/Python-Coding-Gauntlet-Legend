@@ -3489,7 +3489,23 @@ export function drawLights(ctx, scene, view, time, intensity = 1) {
     g.addColorStop(0.45, `rgba(${l.colour},${0.09 * intensity})`);
     g.addColorStop(1, `rgba(${l.colour},0)`);
     ctx.fillStyle = g;
-    ctx.fillRect(l.x - r, l.y - r, r * 2, r * 2);
+    /* THE RECT IS ON THE LATTICE; THE GRADIENT INSIDE IT IS NOT.
+     *
+     * `r` carries a sine, so this was the ONE primitive the world layer painted
+     * on fractional world coordinates — five to seven times a frame at every
+     * window size, and the world layer is multiplied by a scale that is now as
+     * high as 5. Nothing antialiased visibly, because the gradient's last stop
+     * is fully transparent and the rect's own edge is therefore invisible; what
+     * it actually cost was the truth of the claim the harness makes, which is
+     * that every world primitive lands on a whole world pixel. A rule with one
+     * quiet exception is not a rule, and it was quiet in the harness too — see
+     * the save-depth counter in field.mjs, which is what finally saw these.
+     *
+     * The CENTRE stays unrounded on purpose. The flicker is the gradient, not
+     * the box, so rounding the box costs nothing and rounding the centre would
+     * make a smooth wobble into a stepping one. */
+    const R = Math.round(r);
+    ctx.fillRect(Math.round(l.x) - R, Math.round(l.y) - R, R * 2, R * 2);
   }
   ctx.restore();
 }

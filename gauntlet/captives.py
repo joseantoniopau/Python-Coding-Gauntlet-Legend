@@ -178,6 +178,46 @@ class Captive:
         return world.BOSS_BY_ID[self.boss]["region"]
 
 
+# ---------------------------------------------------------------------------
+# Taken out of a village the cage is not in
+# ---------------------------------------------------------------------------
+# A cage holds one village, and validate() has enforced that since this file
+# was written: fourteen rooms, fourteen streets, and nobody standing in
+# somebody else's rescue. Two people break it on purpose, both of them break it
+# the same way, and so the exception is stated as a RULE rather than as a pair
+# of names.
+#
+# THE RULE. A captive may be held alongside people from another village only
+# when the cage's region is STRICTLY DOWNSTREAM of their own home in
+# world.REGIONS' unlock graph — the boss came up the road at them, it did not
+# cross the map. Greave runs the lift in the Stack and Queue Mines and
+# graph_wastes unlocks FROM stack_queue_mines. Halla Vane works the inward
+# trail and binary_tree_canopy unlocks FROM recursive_forest. Both regions they
+# were taken out of have no boss of their own, which is why this rule had to
+# exist before either of them could be a zone companion at all.
+#
+# validate() proves the downstream claim against world.REGIONS rather than
+# trusting this list, so a name added here without the geography behind it is a
+# failure at import and not a quiet exception. The reward still lands on the
+# cage's own village: home_of() reads past anybody in this set.
+
+TAKEN_FROM_UPSTREAM = frozenset({"halla_vane", "greave"})
+
+
+def _upstream_of(region_id: str) -> set:
+    """Every region that must already be open before you can stand in this
+    one. The transitive closure of world.REGIONS' "unlocks"."""
+    seen: set = set()
+    stack = list(world.REGION_BY_ID.get(region_id, {}).get("unlocks", ()))
+    while stack:
+        rid = stack.pop()
+        if rid in seen:
+            continue
+        seen.add(rid)
+        stack.extend(world.REGION_BY_ID.get(rid, {}).get("unlocks", ()))
+    return seen
+
+
 @dataclass(frozen=True)
 class Holding:
     """A boss, and the room it keeps people in."""
@@ -557,6 +597,43 @@ CAPTIVES = [
                "climbers' ledger has gone a full season without a fall.",
         boon="the_second_line", gift="wayfarers",
     ),
+    # Taken out of the Recursive Forest and held one route up the Branch
+    # Ladder, because the Stringwood and the Forest have no boss between them
+    # and the Dragon does. See TAKEN_FROM_UPSTREAM. She was already in this
+    # file before she was in it: Corr Vane wears "the Vane family's canvas with
+    # the shoulder patch Halla sews on all of them", and quests.GIVERS has had
+    # her name, her trade, her region and her sprite the whole time.
+    Captive(
+        id="halla_vane", name="Halla Vane",
+        trade="forester of the inward trail",
+        boss="tree_dragon", home="recursive_forest", sprite="forester",
+        bearing="Thirty-eight, in the Vane family canvas with the shoulder "
+                "patch she sews on all of them herself, a felling axe carried "
+                "head down through the belt loop, and the flat-footed quiet of "
+                "somebody who has spent twenty years learning not to be heard "
+                "by anything with more legs than she has.",
+        opinion="Works both sides of the Branch Ladder and holds that the "
+                "forest is not one forest but a great many small ones, that "
+                "every clearing contains a smaller copy of itself, and that "
+                "the people who get hurt out there are the ones who stopped "
+                "counting how far down they had gone.",
+        lines=("Four of them came out of the understorey at once. I have "
+               "worked that slope since I was fifteen and it has never held "
+               "four of anything.",
+               "The Dragon took me off the ladder between one rung and the "
+               "next. I would like that said plainly, because Corr is going "
+               "to hear a version where I fell.",
+               "Two charges in the tube and I cut the thorn myself. I will "
+               "cut more. There is a whole Stringwood of them and I know "
+               "which slope they come off."),
+        afterwards="Both sides of the Ladder are cut and blazed again, and I "
+                   "have taught Corr's eldest to count the way down before she "
+                   "counts the way back. The small forests are still in there. "
+                   "They always were.",
+        change="The inward trail is cut and blazed from the Stringwood to the "
+               "high crown, and nothing in the Recursive Forest comes at a "
+               "walker four at a time any more.",
+    ),
 
     # -- The Path-Sum Ent, Binary Tree Canopy ------------------------------
     Captive(
@@ -645,6 +722,36 @@ CAPTIVES = [
         change="The Wastes' burial lists are kept in three places again, and "
                "the roads out of the Lattice have stopped producing things "
                "that used to have names.",
+    ),
+    # Taken out of the Stack and Queue Mines, which have no boss row and cannot
+    # be given one, and held in the Wastes, which world.REGIONS unlocks FROM
+    # the Mines. The Necromancer came up the ore line. See TAKEN_FROM_UPSTREAM.
+    Captive(
+        id="greave", name="Greave", trade="lift engineer of the Ninth Cart",
+        boss="graph_necromancer", home="stack_queue_mines", sprite="engineer",
+        bearing="Fifty, deaf in the left ear from thirty years beside a "
+                "winding drum, in a scorched canvas coat with the sluice key "
+                "still on the loop at his hip, and the habit of putting a hand "
+                "flat on any machine before he trusts it with a person.",
+        opinion="Runs the lift on the rule that the cart which came off last "
+                "goes down first, and holds that every burial in the Mines for "
+                "forty years has come from somebody deciding that the order "
+                "was a suggestion because they were in a hurry.",
+        lines=("It came up the ore line. Not down the stair, not through the "
+               "gate. Up the line, in the dark, at the speed of a cart, and "
+               "the Wastes are a long way from my lift.",
+               "I cranked the third sluice shut behind it. That is the only "
+               "useful thing I did and it bought the cart crew about eleven "
+               "minutes, and I have decided to be satisfied with that.",
+               "Thirty years on the drum and the one thing I have never done "
+               "is leave a gate seized. Somebody has left a gate seized."),
+        afterwards="Lift is running and the sluices are cranked on the hour "
+                   "whether anything is crossing or not, because a gate that "
+                   "is only opened when it is needed is a gate that is seized "
+                   "on the day it is needed.",
+        change="Every lava sluice on the Mines' cart roads is cranked and "
+               "greased on a schedule again, and the Ninth Cart runs to the "
+               "bottom without a man walking ahead of it with a bar.",
     ),
 
     # -- The Complexity Wyrm, Complexity Tower -----------------------------
@@ -1332,9 +1439,16 @@ def tier_for(boss_id: str) -> int:
 
 
 def home_of(boss_id: str) -> str:
-    """The village these people go back to. Their home, not the cage's region."""
+    """The village these people go back to. Their home, not the cage's region.
+
+    Anybody in TAKEN_FROM_UPSTREAM is read past: the vendor credit and the
+    mentor's regard belong to the street the cage is on, which is the street
+    that lost the other two people in the room.
+    """
     people = BY_BOSS.get(boss_id, ())
-    return people[0].home if people else world.BOSS_BY_ID[boss_id]["region"]
+    resident = [p for p in people if p.id not in TAKEN_FROM_UPSTREAM]
+    chosen = resident or list(people)
+    return chosen[0].home if chosen else world.BOSS_BY_ID[boss_id]["region"]
 
 
 def _extras_for(boss_id: str) -> dict:
@@ -1399,17 +1513,85 @@ def new_captive_state() -> dict:
         # nobody came for. See `liberate()`, and the long note above it.
         "released": [],           # captive ids the index released, roster order
         "index_collapsed": False, # the practical was passed and the shelves emptied
+        # THE SWEEP. Everyone the Interviewer went back for after the
+        # second-to-last rung fell. They stay in `freed` — the player did carry
+        # them out and the roll call goes on saying so, struck through — and
+        # their boons are suspended while they are on this list. See retake().
+        "retaken": [],
     }
+
+
+def _read(state) -> dict:
+    """The block, read-only, and {} for anything that is not one.
+
+    A save is a file on somebody's disk. It can be old, it can be half-written,
+    and it can have been edited by hand by a player who wanted to see what
+    happened. Every reader in this module goes through here so that the answer
+    to "who is out" on a damaged save is "nobody yet" rather than a traceback
+    on the loading screen.
+    """
+    raw = (state or {}).get(STATE_KEY) if isinstance(state, dict) else None
+    return raw if isinstance(raw, dict) else {}
 
 
 def _bucket(state: dict) -> dict:
     raw = state.get(STATE_KEY)
-    if not raw:
+    if not isinstance(raw, dict) or not raw:
         raw = new_captive_state()
         state[STATE_KEY] = raw
     for key, blank in new_captive_state().items():
         raw.setdefault(key, blank)
+    _forward_fill(raw)
     return raw
+
+
+def _forward_fill(raw: dict) -> None:
+    """Everybody a beaten boss is holding is out, even if they were not in
+    CAPTIVES on the day that boss was beaten.
+
+    DERIVATION, NOT MIGRATION, which is the rule both this module and
+    zonecompanions.py state in their own docstrings. `free()` returns {} the
+    moment `boss_id` is already in `raw['bosses']`, and it does that BEFORE the
+    per-person loop — correctly, because a rematch must not pay twice. But that
+    also means promoting somebody into `CAPTIVES` strands them on every save
+    that had already beaten the boss holding them: `halla_vane` and `greave`
+    were added to `tree_dragon` and `graph_necromancer` after those fights had
+    shipped, and on such a save `is_freed` answered False for both, a rematch
+    returned {} and changed nothing, and `still_held()` listed two people the
+    player had demonstrably already walked past. They held the dart and the
+    gear with no thank-you, no handover and no boon for the rest of the run,
+    surfacing only at the index collapse as people nobody came for.
+
+    So the repair runs here, in the one function every writer already goes
+    through, and it banks the boon and the route exactly the way `free()` does
+    — the same three lines, so the two cannot disagree about what a rescue is
+    worth. It costs one pass over a list that is at most fourteen long, it is
+    idempotent, and it heals the save on the first write after load rather than
+    asking the player to fight something again.
+
+    It does NOT synthesise a reward payout. `free()`'s return value is the
+    xp/gold/gear settlement and that was paid on the day the boss fell; this
+    fills in the ROLL CALL and the WORLD (boons, routes), which are the two
+    things a promoted person should have had all along.
+    """
+    freed = raw.get("freed")
+    bosses = raw.get("bosses")
+    if not isinstance(freed, list) or not isinstance(bosses, list):
+        return
+    for boss_id in list(bosses):
+        for person in held_by(boss_id):
+            if person.id in freed:
+                continue
+            freed.append(person.id)
+            boons_list = raw.get("boons")
+            if person.boon and isinstance(boons_list, list) \
+                    and person.boon not in boons_list:
+                boons_list.append(person.boon)
+                route = BOONS[person.boon].get("route")
+                routes_list = raw.get("routes")
+                if route and isinstance(routes_list, list) \
+                        and route not in routes_list:
+                    routes_list.append(route)
 
 
 def available_in(mode: str) -> bool:
@@ -1434,7 +1616,7 @@ def chamber(boss_id: str, state: dict | None = None) -> dict:
     holding = HOLDINGS.get(boss_id)
     if holding is None:
         return {}
-    raw = (state or {}).get(STATE_KEY) or {}
+    raw = _read(state)
     out = boss_id in raw.get("bosses", [])
     return {
         "boss": boss_id, "boss_name": world.BOSS_BY_ID[boss_id]["name"],
@@ -1522,6 +1704,106 @@ def _view(person: Captive) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# The sweep
+# ---------------------------------------------------------------------------
+# THE SECOND-TO-LAST BOSS FALLS AND THE INTERVIEWER GOES AND COLLECTS.
+#
+# This is the one thing in the file that takes somebody back, and it exists
+# because the player asked for it in those words: the last boss captures all of
+# these known villagers after the second-to-last boss is defeated. The rung is
+# not named here — the caller passes the ids — because this module has never
+# known anything about the ladder and adding that knowledge to it would be the
+# first time a story file read an exam file.
+#
+# THREE REFUSALS, AND EVERY ONE OF THEM IS LOAD-BEARING.
+#
+#   IT DOES NOT TOUCH ITEMS. Whatever a freed person handed over stays handed
+#   over. Taking a zone mechanic away at the thirteenth rung would put the last
+#   two fights behind a wall built out of a cutscene, and nothing in this game
+#   is allowed behind a locked door.
+#
+#   IT DOES NOT CLOSE A ROAD. cap_rigged_span and cap_marked_line stay open.
+#   A road that shuts behind a player is a dead end with a story attached.
+#
+#   IT DOES NOT REMOVE ANYBODY FROM `freed`. They were carried out. That
+#   happened. roll_call() renders them struck through rather than quietly
+#   shortening, because the whole weight of the finale is in watching that list
+#   move — and it only has weight if the player trusts the list.
+#
+# What it DOES cost is the boons: a suspended boon is a real, felt, reversible
+# loss, and final_release() gives every one of them back.
+
+RETAKE_LINES = (
+    "Nothing comes for them. Somebody goes, and walks back out with them, and "
+    "is perfectly polite about it the entire time.",
+    "The villages do not empty. The benches are still there, the shelves are "
+    "still stocked, the roads are still cut. What stops is the people.",
+)
+
+RETAKE_NOTE = (
+    "They keep what they gave you. That is not mercy and it is not an "
+    "oversight: a thing somebody handed over is theirs to have handed over, "
+    "and the last two fights are not going to be decided by an inventory."
+)
+
+
+def retake(state: dict, captive_ids=()) -> dict:
+    """The Interviewer collects. Idempotent, and it only ever takes the freed.
+
+    `captive_ids` is the caller's list — zonecompanions.py passes the five zone
+    companions, which is the set the player would notice. With no list at all
+    it takes everybody the Interviewer already holds who is somehow out, which
+    is normally nobody and is the honest default rather than a guess.
+
+    Returns the same shape twice: a second call reports `first_time` False and
+    an empty `retaken`, so a replayed cutscene cannot suspend a boon twice or
+    read a name out twice.
+    """
+    raw = _bucket(state)
+    wanted = [cid for cid in (captive_ids or
+                              [p.id for p in BY_BOSS.get("the_interviewer", ())])]
+    took: list = []
+    if not raw.get("final_release"):
+        for cid in wanted:
+            if cid not in CAPTIVE_BY_ID:
+                continue
+            if cid not in raw["freed"]:
+                continue          # you cannot take back somebody still in a cage
+            if cid in raw["retaken"]:
+                continue
+            raw["retaken"].append(cid)
+            took.append(cid)
+    suspended = sorted({CAPTIVE_BY_ID[cid].boon for cid in raw["retaken"]
+                        if CAPTIVE_BY_ID[cid].boon}
+                       - {b["id"] for b in boons(state)})
+    return {
+        "retaken": took,
+        "already": [cid for cid in raw["retaken"] if cid not in took],
+        "first_time": bool(took),
+        "lines": list(RETAKE_LINES) if took else [],
+        "people": [_view(CAPTIVE_BY_ID[cid]) for cid in took],
+        "suspended_boons": suspended,
+        "keeps_items": True,
+        "keeps_routes": True,
+        "note": RETAKE_NOTE,
+        "counts": {"retaken": len(raw["retaken"]), "freed": len(raw["freed"]),
+                   "total": len(CAPTIVES)},
+    }
+
+
+def is_retaken(state: dict, captive_id: str) -> bool:
+    raw = _read(state)
+    return captive_id in (raw.get("retaken") or [])
+
+
+def retaken(state: dict) -> list:
+    """Captive records the Interviewer went back for, in the order he did."""
+    raw = _read(state)
+    return [CAPTIVE_BY_ID[cid] for cid in (raw.get("retaken") or [])
+            if cid in CAPTIVE_BY_ID]
+
+
 def final_release(state: dict) -> dict:
     """The last fight, and the only call the finale has to make.
 
@@ -1535,8 +1817,14 @@ def final_release(state: dict) -> dict:
     rescue = free(state, "the_interviewer")
     raw = _bucket(state)
     raw["final_release"] = True
+    # The sweep is over. Everybody it took is out again and every boon it
+    # suspended is back on, which is the only reversal in the file and is the
+    # reason the suspension was allowed to cost anything in the first place.
+    given_back = list(raw.get("retaken") or [])
+    raw["retaken"] = []
     return {
         "rescue": rescue,
+        "given_back": given_back,
         "roll_call": roll_call(state),
         "still_held": [_view(p) for p in still_held(state)],
         "counts": {"freed": len(raw["freed"]), "total": len(CAPTIVES),
@@ -1550,15 +1838,41 @@ def final_release(state: dict) -> dict:
 # The roll call
 # ---------------------------------------------------------------------------
 
+def repair(state: dict) -> dict:
+    """Run the forward-fill now, on purpose, and say what it filled.
+
+    `_bucket()` already does this on every write, but a save can be LOADED and
+    then only READ — a player who opens a run and walks around without beating
+    anything never reaches a writer — and the readers (`is_freed`, `freed`,
+    `still_held`, `roll_call`) go through `_read`, which is deliberately
+    read-only so that a damaged save answers "nobody yet" instead of raising on
+    the loading screen.
+
+    So this is the one public call that says "reconcile the block with CAPTIVES
+    as it is today". It is idempotent, it costs a pass over a list at most
+    fourteen long, and the engine makes it on the same tick it advances the
+    companion arc. Returns the ids it had to add, which is empty on every save
+    that was already correct.
+    """
+    if not isinstance(state, dict):
+        return {"filled": []}
+    before = set((_read(state).get("freed") or []))
+    raw = _bucket(state)
+    added = [cid for cid in raw["freed"] if cid not in before]
+    return {"filled": added,
+            "people": [_view(CAPTIVE_BY_ID[cid]) for cid in added
+                       if cid in CAPTIVE_BY_ID]}
+
+
 def is_freed(state: dict, captive_id: str) -> bool:
-    raw = state.get(STATE_KEY) or {}
-    return captive_id in raw.get("freed", [])
+    raw = _read(state)
+    return captive_id in (raw.get("freed") or [])
 
 
 def freed(state: dict) -> list:
     """Captive records, in the order they came out."""
-    raw = state.get(STATE_KEY) or {}
-    return [CAPTIVE_BY_ID[cid] for cid in raw.get("freed", [])
+    raw = _read(state)
+    return [CAPTIVE_BY_ID[cid] for cid in (raw.get("freed") or [])
             if cid in CAPTIVE_BY_ID]
 
 
@@ -1569,16 +1883,29 @@ def still_held(state: dict) -> list:
     index stopped answering — so this subtracts both lists. Before the ending
     the second one is empty and this is exactly what it always was.
     """
-    raw = state.get(STATE_KEY) or {}
-    out = set(raw.get("freed", [])) | set(raw.get("released", []))
+    raw = _read(state)
+    out = set(raw.get("freed") or []) | set(raw.get("released") or [])
     return [c for c in CAPTIVES if c.id not in out]
 
 
 def roll_call(state: dict) -> list:
     """Everyone out, in order, with what they are doing now. This is the list
     the finale stands behind the player, and the list the player can watch grow
-    from the pause screen."""
-    return [_view(person) for person in freed(state)]
+    from the pause screen.
+
+    `retaken` is a flag on the row and never a deletion from the list. The
+    finale's weight is entirely in watching this list shorten and then come
+    back, and a list that quietly dropped a name would spend that weight on
+    nothing.
+    """
+    raw = _read(state)
+    back = set(raw.get("retaken") or [])
+    rows = []
+    for person in freed(state):
+        row = _view(person)
+        row["retaken"] = person.id in back
+        rows.append(row)
+    return rows
 
 
 def roll_call_by_region(state: dict) -> dict:
@@ -1622,10 +1949,28 @@ def village_changes(state: dict, region_id: str = "") -> list:
 # What the freed are worth
 # ---------------------------------------------------------------------------
 
-def boons(state: dict, region_id: str = "") -> list:
-    raw = state.get(STATE_KEY) or {}
-    rows = [{"id": bid, **BOONS[bid]} for bid in raw.get("boons", [])
-            if bid in BOONS]
+def boons(state: dict, region_id: str = "",
+           include_suspended: bool = False) -> list:
+    """Who is doing what, out in the world, right now.
+
+    A boon is SUSPENDED while every person who earned it is on the retaken
+    list. Every person, not any: the Rigged Span was built by two people from
+    opposite ends and a thing two people built does not stop standing because
+    one of them is gone. That means the Snow keeps its road through the sweep
+    and the felt loss there is Hessa herself, which is the correct place for it
+    to be.
+    """
+    raw = _read(state)
+    held_back = set() if include_suspended else set(raw.get("retaken") or [])
+    rows = []
+    for bid in raw.get("boons", []):
+        boon = BOONS.get(bid)
+        if boon is None:
+            continue
+        owners = boon.get("captives", ())
+        if held_back and owners and all(c in held_back for c in owners):
+            continue
+        rows.append({"id": bid, **boon})
     return [b for b in rows if not region_id or b["region"] == region_id]
 
 
@@ -1664,8 +2009,8 @@ def boon_stock(state: dict, region_id: str = "") -> dict:
 def open_routes(state: dict) -> list:
     """Roads that stay open because somebody who knew them is walking around
     free. Additive to quests.open_shortcuts(); the ids cannot collide."""
-    raw = state.get(STATE_KEY) or {}
-    return [{"id": rid, **ROUTES[rid]} for rid in raw.get("routes", [])
+    raw = _read(state)
+    return [{"id": rid, **ROUTES[rid]} for rid in (raw.get("routes") or [])
             if rid in ROUTES]
 
 
@@ -1753,6 +2098,18 @@ RELEASE_LINES = {
         "Nobody rigged a line down here, so I will not be standing about "
         "saying I was fetched. I got out the way the middle of a span gets "
         "found: the thing holding it up stopped, and there the error was.",
+    "halla_vane":
+        "Nobody came down the inward trail, and I know exactly what that trail "
+        "sounds like when somebody is on it, because listening to it is most "
+        "of my job. The lock went and I walked out. Corr will have cut the "
+        "high side on his own all season, and I would rather be angry about "
+        "that than about this.",
+    "greave":
+        "Nobody came up the ore line after me, which is the correct decision "
+        "and I would have given the same order myself. The gate let go and I "
+        "walked out past a winding drum that has not turned in a year. The "
+        "first thing I am going to do is put a hand flat on it and find out "
+        "what it has been doing without me.",
     "torv_bael":
         "Nobody came. One span, one person, end to end, and the person was "
         "nobody. I have had six weeks to think of a better way to put that and "
@@ -1843,14 +2200,14 @@ def release_line(captive_id: str) -> str:
 
 
 def is_released(state: dict, captive_id: str) -> bool:
-    raw = state.get(STATE_KEY) or {}
-    return captive_id in raw.get("released", [])
+    raw = _read(state)
+    return captive_id in (raw.get("released") or [])
 
 
 def released(state: dict) -> list:
     """Captive records for the people the collapse let out, in roster order."""
-    raw = state.get(STATE_KEY) or {}
-    out = raw.get("released", [])
+    raw = _read(state)
+    out = raw.get("released") or []
     return [CAPTIVE_BY_ID[cid] for cid in out if cid in CAPTIVE_BY_ID]
 
 
@@ -1875,8 +2232,7 @@ def release_roll(state: dict) -> list:
 
 
 def index_collapsed(state: dict) -> bool:
-    raw = state.get(STATE_KEY) or {}
-    return bool(raw.get("index_collapsed"))
+    return bool(_read(state).get("index_collapsed"))
 
 
 def liberate(state: dict, *, passed: bool = True, bank_boons: bool = True) -> dict:
@@ -2064,10 +2420,29 @@ def validate() -> list:
         if not 1 <= len(people) <= 3:
             problems.append(f"{boss['id']}: holds {len(people)} people, "
                             f"want one to three")
-        homes = {p.home for p in people}
+        resident = [p for p in people if p.id not in TAKEN_FROM_UPSTREAM]
+        homes = {p.home for p in resident}
         if len(homes) > 1:
             problems.append(f"{boss['id']}: holds people from {sorted(homes)}; "
                             f"one cage, one village")
+        if people and not resident:
+            problems.append(f"{boss['id']}: every person in this cage was "
+                            f"taken from somewhere else, so the cage belongs "
+                            f"to no village at all")
+        cage = boss["region"]
+        upstream = _upstream_of(cage)
+        for person in people:
+            if person.id not in TAKEN_FROM_UPSTREAM:
+                continue
+            if person.home in homes:
+                problems.append(f"{person.id}: listed as taken from upstream, "
+                                f"but {person.home} is this cage's own "
+                                f"village and needs no exception")
+            elif person.home not in upstream:
+                problems.append(f"{person.id}: taken to {cage}, which "
+                                f"world.REGIONS does not unlock from "
+                                f"{person.home} — a boss comes up the road, it "
+                                f"does not cross the map")
         gifts = [p.gift for p in people if p.gift]
         if len(gifts) > 1:
             problems.append(f"{boss['id']}: {len(gifts)} gear gifts, and a "
@@ -2076,6 +2451,10 @@ def validate() -> list:
         if boss_id not in world.BOSS_BY_ID:
             problems.append(f"{boss_id}: captives held by a boss that is not "
                             f"in world.BOSSES")
+    for cid in sorted(TAKEN_FROM_UPSTREAM):
+        if cid not in CAPTIVE_BY_ID:
+            problems.append(f"TAKEN_FROM_UPSTREAM names {cid!r}, who is not in "
+                            f"this file")
 
     # -- the rooms
     for boss_id, holding in HOLDINGS.items():

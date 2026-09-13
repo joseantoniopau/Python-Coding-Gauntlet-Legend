@@ -15,6 +15,7 @@ from . import adaptive, config, coach as coachmod, db, grading, items, sandbox
 from . import curriculum, diagnostic, puzzles, story as storymod, tactics
 from . import death
 from . import unmaking
+from . import scaffold
 from . import skills as skillmod
 from . import srs as srsmod
 from . import world
@@ -30,6 +31,14 @@ from . import transfer as transfermod
 # of them imports this file and none of them writes progression. Everything
 # below is that contract being honoured at the call sites the contracts name.
 from . import antagonist, arts, banter, captives, economy, finale, hunters, movesets
+# THE THREE THAT WERE BUILT AND NEVER PLUGGED IN. Each one was green in its own
+# test file and unreachable from the running game — tests/test_art_is_wired.py's
+# orphan guard names all three — which is the same condition ending.py was in
+# before its four touch points landed. `shop` is the rack on the Shelf's east
+# wall, `zonecompanions` is the five people who walk a zone with you, and
+# `villagelife` is the 82 villagers and 41 buildings that make a village look
+# like one. Every call below is at a site the module's own CONTRACT names.
+from . import shop, villagelife, zonecompanions
 # ending.py is the seam between the two exams and it is the ONLY thing in
 # this file that decides whether a practical was the story's last room or a
 # measurement sat from the menu. See ending.WIRING; the four touch points it
@@ -155,11 +164,21 @@ def _forge_item_dict(item_id: str) -> dict | None:
             "look": rung.look, "line": blade.line}
 
 
-def _item(item_id: str):
-    """An item, an artifact or a forged rung, whichever owns this id.
+def _item(item_id: str, *, save_seed: int = 0):
+    """An item, an artifact, a forged rung or a rack piece — whichever owns
+    this id.
 
-    Neither of the latter two ever shadows the catalogue: both modules assert
-    their ids are absent from items.BY_ID, and both are checked after it.
+    None of the latter three ever shadows the catalogue: each module asserts
+    its ids are absent from items.BY_ID, and each is checked after it.
+
+    THE RACK IS THE ONE THAT NEEDS AN ARGUMENT, and shop.CONTRACT section 4
+    says why: a generated piece is not stored, only its id is, and the id plus
+    the save seed rebuilds it exactly. That makes `save_seed` load-bearing —
+    resolve a rack id against the wrong seed and you get a DIFFERENT, legal,
+    same-slot piece. So it is keyword-only and it defaults to 0: a caller that
+    never handles rack ids (the secret awards, the forge) is unchanged, and the
+    four places a rack piece can actually reach — the loadout panel, the equip
+    path and the two gear grants — pass `self._save_seed()`.
     """
     found = items.BY_ID.get(item_id)
     if found is not None:
@@ -168,7 +187,18 @@ def _item(item_id: str):
     if rung is not None:
         return rung
     artifact = legendaries.BY_ID.get(item_id)
-    return artifact.to_item() if artifact is not None else None
+    if artifact is not None:
+        return artifact.to_item()
+    if shop.is_rack_item(item_id):
+        row = shop.item_by_id(item_id, save_seed=int(save_seed or 0))
+        if row:
+            return items.Item(
+                id=row["id"], name=row["name"], slot=row["slot"],
+                rarity=row["rarity"], effects=dict(row["effects"]),
+                icon=row.get("icon", "relic"), source="vendor",
+                element=row.get("element", ""),
+                flavour=row.get("flavour", ""))
+    return None
 
 
 @dataclass
@@ -185,6 +215,17 @@ class Encounter:
     first_code_at: float = 0.0
     is_retest: bool = False
     interval_days: float = 0.0
+    # Which rung of the ramp this encounter was SERVED at — 1 pick, 2 one blank,
+    # 3 many blanks, 4 the whole function. Carried on the encounter because the
+    # evidence a clear produces has to be filed under what the player was shown,
+    # not under what the problem could have shown them. See gauntlet/scaffold.py
+    # and curriculum.has_produced_code.
+    # Zero means "not recorded", which is what an encounter opened before this
+    # field existed and reloaded afterwards has to be. `_encounter_payload` sets
+    # a real rung on every serving, so the default only ever reaches a fight
+    # that was already in progress — and filing that as rung 4 would mint
+    # blank-screen evidence for a scaffold the player was actually handed.
+    rung: int = 0
     declared_pattern: str = ""
     # What the player said was WRONG, before the diagnosis rendered. Kept beside
     # `declared_pattern` because it is the same kind of claim — a guess made
@@ -532,6 +573,12 @@ DEFAULT_STATE = {
     regalia.REGALIA_STATE_KEY: regalia.new_state(),       # "regalia"
     sanctuary.STATE_KEY: sanctuary.new_state(),           # "sanctuary"
     captives.STATE_KEY: captives.new_captive_state(),     # "captives"
+    # THE FIVE WHO WALK A ZONE WITH YOU — "escorts". Three lists and a latch.
+    # `state_of()` is a pure function of cleared_bosses, dungeons_cleared,
+    # inventory and the captives block, so `_merge` gaining this key on an old
+    # save is not a migration: the arc reads correct on that save's first tick
+    # whether the latch was ever written or not. See zonecompanions.WIRING.
+    zonecompanions.STATE_KEY: zonecompanions.new_escort_state(),   # "escorts"
     finale.STATE_KEY: finale.new_state(),                 # "finale"
     # THE SEAM BETWEEN THE TWO EXAMS — "ending". Which practical was the
     # story climax, whether it was passed, and whether the coda was watched.
@@ -1080,13 +1127,14 @@ class Game:
         suspended = bool(self._sealed_in_interview())
         fx = {} if suspended else self.effects(include_temp=False)
         equipped = {}
+        seed = self._save_seed()
         for slot, item_id in self.state["equipped"].items():
-            item = _item(item_id)
+            item = _item(item_id, save_seed=seed)
             if item:
                 equipped[slot] = item.to_dict()
         owned = []
         for item_id in self.state["inventory"]:
-            item = _item(item_id)
+            item = _item(item_id, save_seed=seed)
             if item:
                 owned.append({**item.to_dict(),
                               "equipped": self.state["equipped"].get(item.slot) == item.id})
@@ -1225,7 +1273,7 @@ class Game:
         sealed = self._sealed_in_interview()
         if sealed:
             return sealed
-        item = _item(item_id)
+        item = _item(item_id, save_seed=self._save_seed())
         if not item or item_id not in self.state["inventory"]:
             return {"error": "you do not carry that"}
         class_id = (self.state.get("class") or {}).get("class", "")
@@ -2520,7 +2568,8 @@ class Game:
         player["title"] = world.title_for(player["level"])
 
         item_id = pay.get("set_item") or ""
-        if item_id and _item(item_id) and item_id not in self.state["inventory"]:
+        if item_id and _item(item_id, save_seed=self._save_seed()) \
+                and item_id not in self.state["inventory"]:
             self.state["inventory"].append(item_id)
             self.state["stats"]["items_found"] += 1
             out["items"].append(item_id)
@@ -2551,7 +2600,8 @@ class Game:
                              "count": int(potion.get("count", 1)), **got}
 
         gear = pay.get("gear") or ""
-        if gear and _item(gear) and gear not in self.state["inventory"]:
+        if gear and _item(gear, save_seed=self._save_seed()) \
+                and gear not in self.state["inventory"]:
             self.state["inventory"].append(gear)
             self.state["stats"]["items_found"] += 1
             out["gear"] = gear
@@ -2711,11 +2761,125 @@ class Game:
     # ======================================================================
 
     def shop(self, region_id: str = "") -> dict:
-        """Seventeen vendors, one per region, each with its own shelf."""
+        """Seventeen vendors, one per region, each with its own shelf.
+
+        `shop.counter()` calls `economy.vendor_view` itself and hands the
+        result straight through — same stock, same prices, same restock
+        counter the panel has always shown — then adds the rack's eight pegs
+        and the week's blade blank. So this is one call rather than a merge,
+        and there is exactly one place that decides what is on a counter.
+
+        See shop.CONTRACT section 1. `save_seed` is state["world_seed"]: the
+        rack is a pure function of (save_seed, region, restock_index) and
+        nothing else, which is what makes it unrerollable — walking out,
+        quitting to the title and reloading do not appear in that tuple.
+        """
         region_id = region_id or self.state["player"].get("region", "")
-        return economy.vendor_view(self.state,
-                                   region_id,
-                                   gold=int(self.state["player"]["gold"]))
+        return shop.counter(self.state, region_id,
+                            gold=int(self.state["player"]["gold"]),
+                            save_seed=self._save_seed(),
+                            blade_id=self._blade_id())
+
+    # -- THE RACK ----------------------------------------------------------
+    #
+    # Three wrappers, one shape. shop.py touches neither the purse, the
+    # inventory nor state["forge"] — it reports and this file applies, exactly
+    # as it already does for `forge.upgrade` and `economy.buy_potion`.
+    #
+    # ALL THREE ARE SEALED IN A MEASURED RUN, at capability BUILD, because a
+    # rack purchase is a loadout change mid-exam. `economy.buy_potion` is
+    # sealed twice — here and at the door — and these get the same treatment;
+    # the routes in server.py call `self._sealed(g)` beside them.
+
+    # `_blade_id()` already exists on this class and is the blade the blank is
+    # cut for: the line this player's CLASS owns. Do not add a second one — an
+    # earlier draft of this section did, it shadowed the real method because it
+    # was defined later in the body, and every forge test in tests/test_combat
+    # went red at once because `forge.rung(g._blade_id(), t)` came back None.
+    # `shop.blank()` derives the same value itself when handed "", so passing
+    # it is only for legibility.
+
+    def buy_rack(self, slot: str, *, region_id: str = "") -> dict:
+        """Take a piece off the rack. CONTRACT section 2."""
+        sealed = self._sealed_in_interview()
+        if sealed:
+            return sealed
+        region_id = region_id or self.state["player"].get("region", "")
+        player = self.state["player"]
+        out = shop.buy(self.state, region_id, slot,
+                       gold=int(player["gold"]), save_seed=self._save_seed())
+        if out.get("error"):
+            return out
+        player["gold"] = max(0, int(player["gold"]) - int(out.get("gold_spent", 0)))
+        bought = out.get("bought", "")
+        if bought and bought not in self.state["inventory"]:
+            self.state["inventory"].append(bought)
+        self.save()
+        return {**out, "gold": player["gold"]}
+
+    def sell_rack(self, item_id: str, *, region_id: str = "") -> dict:
+        """Sell a rack piece back, once, for a quarter. CONTRACT section 3.
+
+        The bag goes WITH the call. `shop.sell` reads the receipt, and a
+        receipt deliberately outlives the restock — it says the vendor sold you
+        one of these, never that you still have it.
+        """
+        sealed = self._sealed_in_interview()
+        if sealed:
+            return sealed
+        region_id = region_id or self.state["player"].get("region", "")
+        player = self.state["player"]
+        out = shop.sell(self.state, region_id, item_id,
+                        inventory=self.state["inventory"])
+        if out.get("error"):
+            return out
+        # Unequip before removing, or the slot keeps pointing at a piece that
+        # is not in the bag and `loadout()` draws a ghost. `pop`, not
+        # `= None`, because that is what `unequip()` does and
+        # `items.total_effects` is handed this dict unfiltered.
+        for slot, worn in list(self.state["equipped"].items()):
+            if worn == item_id:
+                self.state["equipped"].pop(slot, None)
+        if item_id in self.state["inventory"]:
+            self.state["inventory"].remove(item_id)
+        player["gold"] = int(player["gold"]) + int(out.get("gold_back", 0))
+        upkeep.record_income(self.state, int(out.get("gold_back", 0)))
+        self._sync_caps()
+        self.save()
+        return {**out, "gold": player["gold"]}
+
+    def buy_blank(self, *, region_id: str = "") -> dict:
+        """Buy the week's blade blank. CONTRACT section 2, and BLOCKED.
+
+        `forge.py` has no public mutator that sets a rung without consuming
+        metal, so `shop.buy_blank` returns a `grant` and this applies it to
+        `state["forge"]["tiers"]` — the one write forge.py's owner would make
+        if it had a `grant_rung`.
+        """
+        sealed = self._sealed_in_interview()
+        if sealed:
+            return sealed
+        region_id = region_id or self.state["player"].get("region", "")
+        player = self.state["player"]
+        out = shop.buy_blank(self.state, region_id,
+                             gold=int(player["gold"]),
+                             save_seed=self._save_seed(),
+                             blade_id=self._blade_id())
+        if out.get("error"):
+            return out
+        player["gold"] = max(0, int(player["gold"]) - int(out.get("gold_spent", 0)))
+        grant = out.get("grant") or {}
+        if grant.get("owner") == "forge" and grant.get("blade"):
+            # THROUGH `_forge_state()`, which is the one place this file builds
+            # forge.py's block and back-fills every key forge.new_state()
+            # declares. Reaching into state["forge"] directly would create a
+            # half-shaped block on a save that had never visited a smith.
+            tiers = self._forge_state().setdefault("tiers", {})
+            have = int(tiers.get(grant["blade"], 0) or 0)
+            tiers[grant["blade"]] = max(have, int(grant.get("tier", 0) or 0))
+        self.save()
+        return {**out, "gold": player["gold"],
+                "tiers": dict(self._forge_state().get("tiers", {}))}
 
     def buy_potion(self, potion_id: str, *, region_id: str = "",
                    quantity: int = 1) -> dict:
@@ -3713,9 +3877,18 @@ class Game:
         # world.REGIONS in world order and derives each region's element from
         # its BIOME, so a new region arrives with weather already attached and
         # nobody has to remember to author it twice.
+        self._advance_escorts()
+        seed = self._save_seed()
         return {**progression.world_map(self.state, self.skills,
                                         readiness=self._readiness()),
-                "affinities": elements.region_affinities()}
+                "affinities": elements.region_affinities(),
+                # Keyed by region id, deterministic in the save seed. A client
+                # drawing the overworld reads its own region's row out of here
+                # and never has to ask a second time.
+                "villages": {row["region"]: row
+                             for row in villagelife.region_payload(seed=seed)},
+                "escorts": zonecompanions.snapshot(
+                    self.state, self.state["player"].get("region", ""))}
 
     def region_view(self, region_id: str) -> dict:
         prog = progression.snapshot(self.state, self.skills,
@@ -3744,7 +3917,37 @@ class Game:
             "boots": ("" if sealed else boots),
             "sealed": sealed,
         }
+
+        # -- WHO IS WALKING BESIDE YOU, AND WHO ELSE IS OUT HERE -------------
+        #
+        # Both are pure derivations off the save and the world seed, so they
+        # ride the region payload the client already asks for on every arrival
+        # rather than needing a route of their own.
+        #
+        # `village` is seeded off the SAVE SEED, not off time and not off the
+        # region id alone: two saves get two villages and one save gets the
+        # same village every time it is opened, which is the same discipline
+        # `worldgen` and `shop` hold themselves to. It is 82 people and 41
+        # buildings across the seventeen regions and it was, until this line,
+        # reachable only from its own test process.
+        self._advance_escorts()
+        view["escort"] = ({} if self._run_is_open()
+                          else zonecompanions.escort_in(self.state, region_id))
+        view["zone"] = zonecompanions.zone_of(region_id)
+        view["village"] = villagelife.village(
+            region_id, self._save_seed())
         return view
+
+    def _save_seed(self) -> int:
+        """The one seed every deterministic generator in this save shares.
+
+        `shop.CONTRACT` section 0 names it: do not invent a second one, or two
+        shops in one save will disagree about what is on the wall.
+        """
+        try:
+            return int(self.state.get("world_seed", 0) or 0)
+        except (TypeError, ValueError):
+            return 0
 
     def things_to_do(self) -> list:
         due = srsmod.due(self.schedule, now=time.time(), limit=25)
@@ -3770,10 +3973,18 @@ class Game:
         if route_id not in walked:
             walked.append(route_id)
         self._count_world_stats()
+        # THE COMPANION ARC MOVES ON REGION ENTRY. Beside _count_world_stats,
+        # because they are the same kind of thing: a derivation off the save
+        # that has to be re-run wherever the ground under the player changed.
+        escorts = self._advance_escorts()
         self.save()
         saves.autosave(self.conn, self.state, "region_entered")
         return {"ok": True, "route": status,
                 "region": status["to"],
+                # Who is walking beside you here, or {} for the twelve regions
+                # in no zone. overworld.setEscort() is fed from exactly this.
+                "escort": zonecompanions.escort_in(self.state, status["to"]),
+                "escort_events": escorts["events"],
                 "world": progression.advance(self.state, self.skills,
                                              readiness=self._readiness())}
 
@@ -4132,6 +4343,27 @@ class Game:
         self.save()
         return self._encounter_payload(problem, enc, reason=reason)
 
+    def _serve_rung(self, problem: Problem, enc: Encounter) -> int:
+        """Which rung of the ramp this encounter is served at.
+
+        A SPACED REPETITION REVIEW IS THE WHOLE FUNCTION. A review exists to
+        measure retention, and a retained skill delivered with the answer half
+        written measures nothing — `srs.schedule_after` would then grow the
+        interval on the strength of it. A lapse drops it one rung, and that is
+        the only route to a scaffold at MEDIUM.
+        """
+        skill_name = skillmod.PATTERN_TO_SKILL.get(problem.pattern, "PYTHON")
+        state = self.skills.get(skill_name)
+        if enc.is_retest:
+            entry = self.schedule.get(problem.spaced_repetition_family)
+            lapsed = bool(getattr(entry, "recovering", False))
+            if enc.mode in scaffold.UNSCAFFOLDED_MODES or corpusmod.is_sealed(problem):
+                return scaffold.WRITE_IT_ALL
+            return scaffold.servable(
+                problem, problem.difficulty, curriculum.review_rung(lapsed=lapsed),
+                floor=curriculum.lapse_floor(problem.difficulty) if lapsed else None)
+        return curriculum.servable_rung(problem, state, mode=enc.mode)
+
     def _encounter_payload(self, problem: Problem, enc: Encounter,
                            reason: str = "") -> dict:
         seal = finalexam.encounter_seal(enc)
@@ -4142,6 +4374,30 @@ class Game:
         # answer is expected.
         view = (finalexam.exam_view(problem) if interview
                 else problem.player_view(mode=enc.mode))
+        # THE RAMP. A rung is a way of DISPLAYING this problem, chosen from what
+        # this player has measurably produced — never frozen into the record, so
+        # there is one id, one canonical solution and one lineage whatever rung
+        # is served. `servable_rung` refuses to go below the band's floor, below
+        # what the declaration supports, or below rung 4 for a measured mode or
+        # a sealed problem, and every one of those corrections moves UP.
+        enc.rung = self._serve_rung(problem, enc)
+        rendered = scaffold.render(problem, enc.rung)
+        view["starter_code"] = rendered["starter_code"]
+        view["scaffold"] = {"rung": rendered["rung"], "name": rendered["name"],
+                            "blanks": rendered["blanks"],
+                            "choices": rendered["choices"]}
+        self._write_encounter(enc)
+        # AND PERSISTED IN THE SAME BREATH AS IT IS DECIDED. `_write_encounter`
+        # only puts the encounter into `self.state`; `start_encounter` calls
+        # `save()` at line 4342, BEFORE this payload is built, so the rung lived
+        # in memory and nowhere else. Measured: serve rung 3, reconstruct the
+        # Game on the same db, and `enc.rung` comes back 0 — the clear is then
+        # filed with no rung at all, which `curriculum.untracked_production`
+        # reads as a legacy pre-rung save and `has_produced_code` answers True
+        # to, on a two-blank fill-in. The other half of the same bug: after the
+        # reload `Game.problem(id)` renders rung 4, so the resumed player loses
+        # the scaffold they were handed.
+        self.save()
         if seal.blocks("VISUALS"):
             view["visualization"] = {}
         if seal.blocks("PATTERN"):
@@ -5148,7 +5404,16 @@ class Game:
             skills[skill_name], solved=solved, difficulty=problem.difficulty,
             hints_used=enc.hints_used, seconds=seconds,
             target_seconds=problem.target_seconds, first_try=first_try,
-            is_retest=enc.is_retest, interval_days=enc.interval_days, mode=enc.mode)
+            is_retest=enc.is_retest, interval_days=enc.interval_days, mode=enc.mode,
+            # Rung evidence is only minted by an encounter where a rung is a
+            # statement about what the player WROTE. A CODE_READING is answered
+            # by choosing, a RUNE_ASSEMBLY by ordering, a DEBUG_BATTLE by
+            # editing code that was handed over complete — all of them are
+            # served whole, and counting them as "wrote the whole function" put
+            # a beginner past the scaffold band on encounter two. Measured: the
+            # first-steps chain went from twelve rungs in forty encounters to
+            # five before this line said so.
+            rung=enc.rung if scaffold.scaffoldable(problem) else 0)
         # Fluency tiers credit PYTHON itself. A GUIDED fill-in-the-blank is filed
         # under whatever pattern it happens to use, but what it is actually
         # teaching is the language — and the curriculum's first chapters measure
@@ -5158,7 +5423,12 @@ class Game:
                 skills["PYTHON"], solved=solved, difficulty=problem.difficulty,
                 hints_used=enc.hints_used, seconds=seconds,
                 target_seconds=problem.target_seconds, first_try=first_try,
-                is_retest=enc.is_retest, mode=enc.mode)
+                is_retest=enc.is_retest, mode=enc.mode,
+                # The rung travels with the fluency credit: the scaffold band is
+                # about the language, so PYTHON has to know which rung the
+                # language was practised at or `scaffold_target(fluency)` is
+                # deciding on the same silence the band was built to end.
+                rung=enc.rung if scaffold.scaffoldable(problem) else 0)
         elif problem.spaced_repetition_family.startswith(("python_", "onboarding_")) \
                 and skill_name != "PYTHON":
             skillmod.apply_outcome(
@@ -5210,7 +5480,8 @@ class Game:
             if problem.id not in entry.seen_problem_ids:
                 entry.seen_problem_ids.append(problem.id)
                 entry.seen_problem_ids = entry.seen_problem_ids[-30:]
-            srsmod.schedule_after(entry, solved=solved, hints_used=enc.hints_used)
+            srsmod.schedule_after(entry, solved=solved, hints_used=enc.hints_used,
+                                  rung=enc.rung)
             schedule[family] = entry
             self._write_schedule(schedule)
 
@@ -6554,6 +6825,67 @@ class Game:
         exact = [p for p in health if p.strength == band]
         pick = exact or health
         return pick[0].id if pick else ""
+
+    # ======================================================================
+    # THE ZONE COMPANIONS, AND THE ONE CALL THAT MOVES THEM
+    # ======================================================================
+    #
+    # ORDERING HAZARD, and it is the one that can seize a gate. `advance()` is
+    # the ONLY thing that grants the five drops, and Greave's `without` column
+    # is a flat refusal — {"drain": 0.0, "open": 0.0, "refill": 0.0,
+    # "crankable": False} — so if the lava channels and sluices ever ship
+    # before this call exists, `the_gear` never exists either and every sluice
+    # in `stack_queue_mines` is shut permanently. Measured by enumerating the
+    # two facts the arc derives from — capture dungeon cleared, boss beaten —
+    # across the four dungeon companions, 1,024 save shapes: with `advance()`
+    # called, 1024 of 1024 carry either the person or the thing; with it never
+    # called, 768 of 1024 carry neither, and 512 of those are FREED — the
+    # player went and beat the boss, the person went home, and the thing they
+    # left never arrived.
+    #
+    # It is idempotent and cheap — five `state_of()` derivations over lists
+    # that are at most fourteen long — so it runs wherever the player's region
+    # can have changed rather than on a schedule of its own.
+
+    def _advance_escorts(self) -> dict:
+        """Reconcile the companion arc with the save. Safe on every tick.
+
+        `captives.repair()` runs first and in the same breath. `state_of()`
+        reads `captives.is_freed`, which goes through captives' READ path and
+        never forward-fills, so a save that beat `tree_dragon` or
+        `graph_necromancer` before Halla Vane and Greave were promoted into
+        CAPTIVES would answer WALKING for two people the player already carried
+        out — and the dart and the gear would never be granted. One call, and
+        the save is reconciled with the cast as it stands today.
+
+        Adventure Mode only. `zonecompanions.available_in(mode)` is the
+        module's own gate and it takes a MODE STRING, which this file does not
+        keep — there is no state["mode"]; a measured run is `state["interview"]`
+        or `state["exam"]` or an encounter opened in that mode. `_run_is_open()`
+        is the engine's own answer to exactly that question and is what every
+        other door here asks, so it is what is asked here: a measured run does
+        not hand anybody an escort, a lamp or a road, and it does not quietly
+        advance a story arc underneath a player who is being measured.
+        """
+        if self._run_is_open():
+            return {"events": [], "states": {}}
+        captives.repair(self.state)
+        return zonecompanions.advance(self.state)
+
+    def escorts(self, region_id: str = "") -> dict:
+        """The panel's one call: five rows, five states, who is here, what the
+        player is carrying, and whether the sweep has fired."""
+        region_id = region_id or self.state["player"].get("region", "")
+        self._advance_escorts()
+        snap = zonecompanions.snapshot(self.state, region_id)
+        if self._run_is_open():
+            # A measured run has no companion beside it, whatever the save
+            # says was true five minutes ago. The ROLL is still readable — it
+            # is the story, and the story has never been sealed — but nobody
+            # is walking with you in here.
+            snap["here"] = {}
+            snap["sealed"] = True
+        return snap
 
     def _count_world_stats(self) -> None:
         """Two acquisition counters that were declared in DEFAULT_STATE and
@@ -7965,6 +8297,31 @@ class Game:
                                                      story=rescue.get("story") or {},
                                                      source="rescue")
 
+            # -- AND THE ONES WHO WALKED WITH YOU ---------------------------
+            #
+            # Same site, one line later, and for the same reason the cages
+            # open here: the dungeon that took this person is recorded as
+            # cleared three lines above, so the fact and the consequence are
+            # one transaction. `capture()` latches the escort, grants the drop
+            # in the same breath and hands back the scene; it returns {} for a
+            # boss who takes nobody, {} on a rematch, and {} for anybody
+            # already freed, so there is no `if` to write and no way to take
+            # somebody twice.
+            #
+            # `advance()` below would do this anyway on the next region entry —
+            # it derives the same answer off `dungeons_cleared` — so this call
+            # is not what makes the arc work. It is what makes the scene play
+            # on the fight that caused it rather than one map later.
+            escort_scenes = []
+            if self._pays_into_the_world(enc) and not self._run_is_open():
+                for row in zonecompanions.BY_BOSS.get(enc.boss_id, ()):
+                    scene = zonecompanions.capture(self.state, row.id)
+                    if scene:
+                        escort_scenes.append(scene)
+                escorts_now = self._advance_escorts()
+            else:
+                escorts_now = {"events": [], "states": {}}
+
             # The boss's own purse, which is economy.py's number and not a flat
             # one. `times_defeated` is read BEFORE the increment above, which is
             # what turns a memorised rematch from 1.54x the plain rate into
@@ -8028,6 +8385,17 @@ class Game:
                     "rematch_tier": self.state["boss_rematch"][enc.boss_id],
                     "gold": boss_gold,
                     "rescue": rescue or None,
+                    # THE CAPTURE, AND THE HANDING BACK. `escort_scenes` is the
+                    # eight-second scene for anybody this boss just took — the
+                    # item is already in the bag before it plays, which is why
+                    # it never blocks input and why there is nothing on the
+                    # ground to walk back for. `escort_events` carries the
+                    # other three kinds: "given" (the Slate), "kept" (freed
+                    # before the capture ever fired, so they hand it over
+                    # anyway) and "sweep".
+                    "escort_scenes": escort_scenes or None,
+                    "escort_events": escorts_now["events"] or None,
+                    "escorts": zonecompanions.states(self.state),
                     "phase": int((fight or {}).get("phase", 0) or 0),
                     "phases": int((fight or {}).get("phases", 1) or 1),
                     "key": key,
@@ -9333,9 +9701,17 @@ class Game:
         # motion sensor rather than a villain reading a file.
         watching = self._antagonist(antagonist.REGION_ENTERED,
                                     detail={"region": region}) if arrived else {}
+        # See `travel`: geography is recorded wherever the player's region
+        # changes and there are exactly two such places, so the companion arc
+        # advances in both. Only on ARRIVAL — this is called on every step, and
+        # a derivation per footfall would be a motion sensor, not a story.
+        escorts = self._advance_escorts() if arrived else {"events": []}
         self.save()
         return {"ok": True, "arrived": bool(arrived),
-                "watching": watching or None}
+                "watching": watching or None,
+                "escort": ({} if self._run_is_open()
+                           else zonecompanions.escort_in(self.state, region)),
+                "escort_events": escorts["events"]}
 
     def problem(self, problem_id: str, *, mode: str = config.MODE_ADVENTURE) -> dict:
         """Look one problem up by id. The browsable door, so it is also the
@@ -9364,7 +9740,26 @@ class Game:
         if self.state.get("interview") or (
                 self.encounter and self.encounter.mode == config.MODE_INTERVIEW):
             mode = config.MODE_INTERVIEW
-        return p.player_view(mode=mode)
+        view = p.player_view(mode=mode)
+        # AND THE RUNG IS NOT THE LOOKUP'S TO CHOOSE EITHER.
+        #
+        # `starter_code` on the record is still the rung the problem was
+        # AUTHORED at, and for 213 MISSING_RUNE problems that is the canonical
+        # solution with one span struck out. Serving that from this door would
+        # hand a scaffold — most of the answer — for a problem the run has just
+        # served whole, through one GET, the same shape of leak as the pattern
+        # and the hints. So the lookup gets rung 4 unless it is asking about the
+        # encounter the player is actually in, which already decided its rung.
+        enc = self.encounter
+        if enc is not None and enc.problem_id == problem_id and enc.rung:
+            rendered = scaffold.render(p, enc.rung)
+        else:
+            rendered = scaffold.render(p, scaffold.WRITE_IT_ALL)
+        view["starter_code"] = rendered["starter_code"]
+        view["scaffold"] = {"rung": rendered["rung"], "name": rendered["name"],
+                            "blanks": rendered["blanks"],
+                            "choices": rendered["choices"]}
+        return view
 
     def performance_history(self, problem_id: str | None = None) -> dict:
         """What you have done. DEGRADE — docs/10-sealed-views.md §4.B.

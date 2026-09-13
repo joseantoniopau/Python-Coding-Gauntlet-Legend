@@ -179,6 +179,14 @@ SEALED_POSTS = (
     ("/api/town/heal", {}, "BUILD"),
     ("/api/town/repair", {"piece": "boots"}, "BUILD"),
     ("/api/shop/buy", {"potion_id": "health_minor"}, "BUILD"),
+    # THE RACK. A generated armour piece is a LOADOUT change mid-exam, which is
+    # strictly more than the consumable on the line above, so it cannot be less
+    # sealed. Selling is sealed for the same reason plus one: it pays gold into
+    # the purse and takes a piece off the player's body.
+    ("/api/shop/rack/buy", {"slot": "chest"}, "BUILD"),
+    ("/api/shop/rack/sell",
+     {"item_id": "rack__python_village__0__chest"}, "BUILD"),
+    ("/api/shop/blank", {}, "BUILD"),
     ("/api/broker/open", {"form_id": "assay"}, "BUILD"),
     # Settling a contract pays gold and records income. The engine does not
     # refuse it; the door does, because the world may not advance under a
@@ -259,8 +267,14 @@ DEGRADED_GETS = (
 # price is not a hint, a log of who you have already freed is not a hint, and a
 # screen that refuses to show a player their own armour is a refusal with no
 # rule behind it.
+# `/api/escorts` joins them: five people, five states and who walks beside you
+# is the STORY, and the story has never been sealed. The engine has already
+# refused to hand anybody an escort during a measured run — `snapshot` comes
+# back with `sealed: True` and `here: {}` — so the answer is an empty village
+# rather than a closed door.
 OPEN_GETS = ("/api/town", "/api/shop", "/api/broker",
-             "/api/sanctuaries", "/api/rollcall", "/api/arts")
+             "/api/sanctuaries", "/api/rollcall", "/api/arts",
+             "/api/escorts")
 
 # Every world-layer POST, with a body that is the wrong shape in some way. None
 # of these may produce a 500: a player who sends nonsense gets a sentence.

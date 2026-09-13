@@ -124,6 +124,64 @@ class TheEnding(GameTest):
         self.assertEqual(scene["freeze_at_ms"], scene["guitar_hit_at_ms"])
         self.assertEqual(scene["freeze_at_ms"], scene["title_card_at_ms"])
 
+    def test_a_pass_closes_the_sweep_and_gives_everybody_back(self):
+        """THE ONLY CALL THE LAST FIGHT HAS TO MAKE, and until this it had no
+        production caller anywhere in `gauntlet/`.
+
+        `liberate()` empties the index. It sets neither `final_release` nor
+        clears `retaken`, so at the credits every companion the Interviewer
+        went back for after the second-to-last rung still read RETAKEN, their
+        boons stayed suspended for ever, and the one reversal the suspension
+        was allowed to cost anything for never happened. The finale's whole
+        weight is in watching the roll call shorten and then come back; a roll
+        call that never came back spent that weight on nothing.
+        """
+        from gauntlet import zonecompanions as zc
+
+        # Get everybody the arc can get, then let the sweep take them.
+        state = self._save(bosses=[row.boss for row in zc.ESCORTS])
+        state["cleared_bosses"] = self._all_bosses()[:13]
+        state["dungeons_cleared"] = []
+        state["inventory"] = []
+        state["world"] = {"routes_walked": []}
+        zc.advance(state)
+
+        taken = list(state[captives.STATE_KEY]["retaken"])
+        self.assertTrue(taken, "the sweep never fired, so this proves nothing")
+        for eid in taken:
+            self.assertEqual(zc.state_of(state, eid), zc.RETAKEN)
+        suspended = captives.boon_effects(state)
+
+        ending.stage(state, exam_id="x-sweep",
+                     cleared_bosses=self._all_bosses())
+        _, report = self._report(solved=99)
+        report["exam_id"] = "x-sweep"
+        out = ending.resolve(state, exam_report=report,
+                             cleared_bosses=self._all_bosses())
+        self.assertEqual(out["outcome"], "PASS")
+
+        raw = state[captives.STATE_KEY]
+        self.assertTrue(raw["final_release"])
+        self.assertEqual(raw["retaken"], [])
+        self.assertEqual(sorted(out["given_back"]), sorted(taken))
+        for eid in taken:
+            self.assertEqual(zc.state_of(state, eid), zc.FREED, eid)
+
+        # Every suspended boon is back on, including the two the sweep cost.
+        restored = captives.boon_effects(state)
+        self.assertEqual(restored.get("mana_regen"), 1)
+        self.assertTrue(restored.get("srs_preview"))
+        for key in suspended:
+            self.assertIn(key, restored)
+        banked = {b["id"] for b in captives.boons(state)}
+        self.assertIn("lamps_both_ends", banked)
+        self.assertIn("the_square_drill", banked)
+
+        # And the finale stands nobody struck through behind the player: the
+        # release has to happen BEFORE the roll call is read into the scene.
+        roll = out["cutscene"]["roll_call"]
+        self.assertEqual([r["id"] for r in roll["rows"] if r.get("retaken")], [])
+
     def test_a_pass_says_the_readiness_line_from_measured_numbers(self):
         state = self._save(bosses=self._all_bosses())
         ending.stage(state, exam_id="x-2", cleared_bosses=self._all_bosses())

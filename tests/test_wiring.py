@@ -1211,6 +1211,14 @@ class TestTheIsolationRuleOverHTTP(GameTest):
         ("/api/incant/start", {"encounter_id": "enc_first_loop"}),
         ("/api/incant/cast", {"move_id": "gather", "answers": {}}),
         ("/api/incant/leave", {}),
+        # THE RACK. A purchase is a LOADOUT change mid-exam, which is strictly
+        # more than the consumable /api/shop/buy already refuses, so it cannot
+        # be less sealed. Selling is sealed for the same reason plus one: it
+        # pays gold into the purse, which is the world moving under a run that
+        # is supposed to be sealed off from it.
+        ("/api/shop/rack/buy", {"slot": "chest"}),
+        ("/api/shop/rack/sell", {"item_id": "rack__python_village__0__chest"}),
+        ("/api/shop/blank", {}),
     )
 
     def setUp(self):
@@ -1251,7 +1259,10 @@ class TestTheIsolationRuleOverHTTP(GameTest):
                      "/api/events", "/api/todo", "/api/saves",
                      "/api/legendaries", "/api/hand", "/api/exam/ladder",
                      "/api/classes", "/api/class/tree", "/api/world/card",
-                     "/api/incantation", "/api/incantation/state"):
+                     "/api/incantation", "/api/incantation/state",
+                     # The three that were built, self-checked, green in their
+                     # own test files and imported by nothing in gauntlet/.
+                     "/api/shop", "/api/escorts"):
             status, payload = self.call(path)
             self.assertEqual(status, 200, f"{path} -> {payload}")
             self.assertNotIn("error", payload, path)
@@ -1549,6 +1560,151 @@ class TestTheTacticalLayerIsReachable(GameTest):
         self.assertTrue(armour["resist"], "a warded piece resists nothing")
         self.assertLessEqual(max(armour["resist"].values()),
                              elements.RESIST_CAP)
+
+
+class TestTheThreeOrphansAreReachable(GameTest):
+    """`shop`, `zonecompanions` and `villagelife` were each written, proved
+    against real numbers and imported by NOTHING in `gauntlet/`. Their own test
+    files were green and the player could not reach a line of any of them —
+    the same condition `ending.py` was in before its four touch points landed,
+    and the reason `tests/test_art_is_wired.py` keeps an orphan guard at all.
+
+    Everything below drives a real `Game` and asserts on what the engine hands
+    back, because an import statement is not reachability.
+    """
+
+    def test_the_rack_is_on_the_counter_and_can_be_bought_worn_and_sold(self):
+        from gauntlet import shop
+        g = self.game()
+        g.choose_class("analyst")
+        view = g.shop("python_village")
+        # The potions are untouched — same call, same rows, same restock.
+        self.assertIn("stock", view)
+        self.assertEqual(len(view["rack"]), len(shop.RACK_SLOTS))
+        self.assertEqual(view["rack_left"], len(view["rack"]))
+        self.assertTrue(view["shelf_note"])
+
+        peg = view["rack"][0]
+        g.state["player"]["gold"] = 9999
+        bought = g.buy_rack(peg["slot"], region_id="python_village")
+        self.assertNotIn("error", bought, bought)
+        self.assertEqual(bought["gold"], 9999 - bought["gold_spent"])
+        self.assertIn(peg["id"], g.state["inventory"])
+
+        # IT RESOLVES. A generated id is not in items.BY_ID, so without
+        # shop.is_rack_item in the engine's resolver a bought piece is
+        # invisible in the bag and refuses to equip — the exact failure the
+        # five zone drops had.
+        owned = {row["id"]: row for row in g.loadout()["inventory"]}
+        self.assertIn(peg["id"], owned)
+        self.assertEqual(owned[peg["id"]]["name"], peg["name"])
+        self.assertTrue(g.equip(peg["id"]).get("ok"))
+        self.assertEqual(g.state["equipped"][peg["slot"]], peg["id"])
+
+        purse = g.state["player"]["gold"]
+        sold = g.sell_rack(peg["id"], region_id="python_village")
+        self.assertNotIn("error", sold, sold)
+        self.assertEqual(g.state["player"]["gold"], purse + sold["gold_back"])
+        self.assertNotIn(peg["id"], g.state["inventory"])
+        self.assertNotEqual(g.state["equipped"].get(peg["slot"]), peg["id"],
+                            "a sold piece is still being worn")
+        self.assertEqual(
+            g.sell_rack(peg["id"], region_id="python_village")["error"],
+            "not_bought")
+
+    def test_the_rack_cannot_be_rerolled_by_anything_a_player_can_do(self):
+        g = self.game()
+        g.choose_class("analyst")
+        first = [row["id"] for row in g.shop("python_village")["rack"]]
+        g.region_view("fields_of_syntax")
+        g.world_map()
+        g.save()
+        again = [row["id"] for row in g.shop("python_village")["rack"]]
+        self.assertEqual(first, again)
+
+    def test_the_escort_walks_the_village_and_the_slate_lands_in_the_bag(self):
+        from gauntlet import zonecompanions as zc
+        g = self.game()
+        g.choose_class("analyst")
+
+        here = g.region_view("python_village")
+        self.assertEqual(here["escort"]["id"], "thessaly_brun")
+        self.assertEqual(here["escort"]["state"], zc.WALKING)
+        self.assertEqual(here["zone"]["id"], "home")
+        self.assertTrue(here["escort"]["lines"])
+
+        walked = g.travel("rt_waking_road")
+        self.assertTrue(walked.get("ok"), walked)
+        self.assertIn("the_slate", g.state["inventory"])
+        kinds = [e["kind"] for e in walked["escort_events"]]
+        self.assertIn("given", kinds)
+
+        # And it resolves in the bag, which is the whole of what the five
+        # missing items.py rows cost.
+        owned = {row["id"] for row in g.loadout()["inventory"]}
+        self.assertIn("the_slate", owned)
+
+        # skate_irons is slot `feet`, and §4.1 makes ice control conditional on
+        # it being EQUIPPED. Before the rows landed that slot could not be
+        # filled at all.
+        g.state["inventory"].append("skate_irons")
+        self.assertTrue(g.equip("skate_irons").get("ok"))
+        self.assertEqual(g.state["equipped"]["feet"], "skate_irons")
+
+    def test_the_escort_panel_and_the_arc_advance_on_a_real_save(self):
+        from gauntlet import zonecompanions as zc
+        g = self.game()
+        g.choose_class("analyst")
+        snap = g.escorts("python_village")
+        self.assertEqual(snap["counts"]["total"], len(zc.ESCORTS))
+        self.assertEqual(snap["counts"]["walking"], len(zc.ESCORTS))
+        self.assertEqual(snap["here"]["id"], "thessaly_brun")
+        self.assertEqual(g.state[zc.STATE_KEY],
+                         {"taken": [], "given": [], "scenes": [], "swept": []})
+
+    def test_a_measured_run_has_no_companion_beside_it(self):
+        g = self.game()
+        g.choose_class("analyst")
+        g.state["interview"] = {"exam_id": "x"}
+        self.assertEqual(g.region_view("python_village")["escort"], {})
+        snap = g.escorts("python_village")
+        self.assertTrue(snap["sealed"])
+        self.assertEqual(snap["here"], {})
+        for call in (lambda: g.buy_rack("chest", region_id="python_village"),
+                     lambda: g.buy_blank(region_id="python_village")):
+            out = call()
+            self.assertEqual(out.get("error"), "sealed", out)
+            self.assertEqual(out.get("capability"), "BUILD", out)
+
+    def test_the_villages_are_on_the_wire_and_not_only_in_a_test_process(self):
+        from gauntlet import villagelife
+        g = self.game()
+        g.choose_class("analyst")
+        here = g.region_view("python_village")["village"]
+        self.assertGreater(here["count"], 0)
+        self.assertGreater(here["buildings"], 0)
+        self.assertTrue(here["activity"]["kind"])
+        self.assertTrue(any(v["child"] for v in here["villagers"]))
+
+        card = g.world_map()
+        self.assertEqual(len(card["villages"]), len(world.REGIONS))
+        self.assertEqual(sum(v["count"] for v in card["villages"].values()),
+                         sum(v["count"] for v in
+                             villagelife.region_payload(seed=g._save_seed())))
+        self.assertGreater(sum(v["count"] for v in card["villages"].values()), 0)
+
+    def test_one_save_gets_one_village_and_two_saves_get_two(self):
+        """Seeded off the SAVE SEED, which is what stops a village being
+        rebuilt under a player who reloaded, and what stops two runs looking
+        identical."""
+        g = self.game()
+        g.choose_class("analyst")
+        first = g.region_view("python_village")["village"]
+        again = g.region_view("python_village")["village"]
+        self.assertEqual(first, again)
+        g.state["world_seed"] = int(g._save_seed()) + 1
+        other = g.region_view("python_village")["village"]
+        self.assertNotEqual(first["villagers"], other["villagers"])
 
 
 # Runnable on its own. tests/run_all.py discovers this file too, but the

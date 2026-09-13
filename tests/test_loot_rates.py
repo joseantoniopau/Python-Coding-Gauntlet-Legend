@@ -91,15 +91,58 @@ class TestDropRates(GameTest):
             self.assertGreater(by_rarity[rarity], 0,
                                f"nothing exists at {rarity}")
 
+    # The sources `roll_drop` will never offer. `upgrade` forms are earned,
+    # `secret`/boss rows are hidden or gated, and `quest` items are handed over
+    # by a named person in a scene. Kept here as a named list rather than read
+    # off roll_drop's own filter, for the same reason shop.MIN_RARITY is
+    # checked against a named list: a guard that reads the thing it is testing
+    # goes quiet the moment somebody widens it.
+    NEVER_ROLLED = ("upgrade", "quest")
+
     def test_items_carry_real_attributes(self):
         from gauntlet import items
-        bare = [i.id for i in items.CATALOGUE if not i.effects]
+        # AN ITEM THAT CAN BE DROPPED MUST DO SOMETHING. A rolled blank is a
+        # reward the player cannot tell from nothing.
+        bare = [i.id for i in items.CATALOGUE
+                if not i.effects and i.source not in self.NEVER_ROLLED]
         self.assertEqual(bare, [], f"items with no effect at all: {bare[:5]}")
         for item in items.CATALOGUE:
             for key in item.effects:
                 self.assertIn(key, items.EFFECT_LABELS,
                               f"{item.id} uses an undocumented effect {key}")
             self.assertTrue(item.flavour, f"{item.id} has no flavour text")
+
+    def test_an_item_with_no_effects_can_never_be_rolled(self):
+        """The other half of the rule above, and the half that matters.
+
+        The five zone-companion drops carry `effects={}` ON PURPOSE — they are
+        overworld VERBS (a light radius, a grip on ice, a thinned pack, a gate
+        that opens) read off the item's presence in the bag, and
+        `zonecompanions.validate()` fails the build if one of them grows a stat
+        line, because a number here would quietly pay back part of the loss
+        that whole arc is built on. What must stay true is that none of them
+        can ever fall out of a chest: a blank in the loot table is a reward the
+        player cannot tell from nothing, and a zone mechanic found by accident
+        is the arc's own scene arriving before the person who plays it.
+        """
+        import random
+        from gauntlet import items
+        blanks = {i.id for i in items.CATALOGUE if not i.effects}
+        self.assertTrue(blanks, "nothing to prove")
+        for item_id in blanks:
+            self.assertIn(items.BY_ID[item_id].source, self.NEVER_ROLLED,
+                          item_id)
+        rolled = seen = 0
+        for seed in range(2500):
+            for boss in (False, True):
+                out = items.roll_drop(difficulty="normal", rank="S", luck=1.0,
+                                      is_boss=boss, rng=random.Random(seed))
+                if out and out.get("kind") == "item":
+                    rolled += 1
+                    if out["id"] in blanks:
+                        seen += 1
+        self.assertGreater(rolled, 1000, "the sample proved nothing")
+        self.assertEqual(seen, 0)
 
     def test_rarity_buys_power(self):
         """A legendary must actually be better than a common, or rarity is a lie."""

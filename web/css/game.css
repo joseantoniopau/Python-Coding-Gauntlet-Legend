@@ -167,6 +167,8 @@ h1, h2, h3, .pixel { font-family: 'Press Start 2P', 'Courier New', monospace; }
 }
 
 @media (prefers-reduced-motion: reduce) {
+  /* They still get out of his way; they just stop sliding there. */
+  #region-card, #world-hint { transition: none; }
   /* Still unmistakably an alarm, just not a moving one. */
   #topbar .vital.dire .bar,
   #topbar .vital.dire i { animation: none; }
@@ -185,7 +187,36 @@ h1, h2, h3, .pixel { font-family: 'Press Start 2P', 'Courier New', monospace; }
 #world-overlay {
   position: absolute; left: 14px; bottom: 14px; right: 14px;
   pointer-events: none; display: flex; gap: 10px; align-items: flex-end;
+  /* HE IS NOT BEHIND THE FURNITURE. This row is pinned to the bottom of the
+     frame and the hero is not: at the map's south edge the camera clamps
+     (worldH 544 against a span of 206..251) and he keeps walking down the
+     screen until he is standing behind the region card or the control hints.
+     Measured in Chrome with him in the south-east corner, as a share of his own
+     16x24 sprite box: 53% of him behind #world-hint at 1440x940 and the same at
+     1600x1000. Against a clean plate of the same frame with the row removed,
+     the shipped overlay put a mean colour error of 26/255 across his sprite box
+     and had 53% of his pixels materially wrong; faded, that is 4/255 and 40%.
+     This is OLDER than the zoom and the zoom improved it — the pre-zoom scale
+     buried more of him in the same corner — but a hero you cannot see is a hero
+     you cannot see.
+
+     THE TEST IS PER CHILD, NOT ON THIS ROW. #world-overlay runs the full width
+     of the frame, so testing its box fades the region name in the south-WEST
+     corner because the hero is standing in the south-east one — screenshotted,
+     and it reads as the label having gone out rather than got out of the way.
+     Each child is measured against his real screen rect instead, so only the
+     thing he is actually standing behind moves.
+
+     Nothing is repositioned and nothing is hidden: a fade keeps the words where
+     the player has learnt to look for them, and the part of this screen that is
+     an actual warning — apex.js's rim marks and the way-out chevron — is
+     painted on the canvas and is not in this element at all. */
 }
+#region-card, #world-hint { transition: opacity 140ms linear; }
+#region-card.behind-hero, #world-hint.behind-hero { opacity: 0.15; }
+/* The region card is the one thing in here that takes a pointer. A card at 15%
+   is a card the player cannot read, so it must not be a card he can click. */
+#region-card.behind-hero { pointer-events: none; }
 #region-card { pointer-events: auto; padding: 10px 12px; max-width: 420px; }
 #region-card h3 { margin: 0 0 6px; font-size: calc(11px * var(--scale)); color: var(--gold); }
 #region-card p { margin: 0; font-size: calc(12px * var(--scale)); color: var(--ink-dim); line-height: 1.5; }
@@ -343,8 +374,295 @@ h1, h2, h3, .pixel { font-family: 'Press Start 2P', 'Courier New', monospace; }
   font-family: 'Press Start 2P', monospace; font-size: calc(9px * var(--scale));
   color: var(--violet); letter-spacing: 1px;
 }
-#answer-here .ah-arrow i { font-style: normal; animation: ah-nudge 1.3s ease-in-out infinite; display: inline-block; }
-@keyframes ah-nudge { 0%, 100% { transform: translateX(0) } 50% { transform: translateX(7px) } }
+#answer-here .ah-arrow i { font-style: normal; animation: ah-nudge 2.4s ease-in-out infinite; display: inline-block; }
+
+/* ---------- THE CUE ----------
+ *
+ * One violet triangle on the edge of the one control the player should press
+ * next. See docs/13-the-first-lesson.md; the rule in one sentence is that the
+ * cue may point at a control because of what the control IS, and never
+ * because of what the last attempt DID. This file builds the APPEARANCE only:
+ * the markup is `<i class="cue">` appended as the last child of a host that
+ * has been given `.has-cue`, and web/js/tutor.js (not yet written) decides
+ * which host that is.
+ *
+ * THREE THINGS THAT LOOK ARBITRARY AND ARE NOT:
+ *
+ *  - It is a real element, not a ::after. metal.css puts the button's specular
+ *    skim on .btn::after, and a pseudo-element has one box: a cue written as
+ *    [data-cue]::after would strip the skim off whichever button it pointed
+ *    at, so the button would change material while cued. z-index:2 paints the
+ *    cue above that skim instead of under it, and that is a measurement, not a
+ *    hope. Measured in Chrome 153 at 1440x940 on #btn-run: the button is
+ *    border-box 27px with a 2px border, so `height: 34%` resolves against the
+ *    23px PADDING box to a computed 7.8125px, and an absolutely positioned
+ *    ::after is laid out against that same padding box. The skim therefore
+ *    runs button-relative y 4.00-11.81 and the cue runs y 9-18 — an overlap of
+ *    2.81px, not the 2.2px this paragraph used to claim between two bands that
+ *    were both wrong. Inside the overlap the keyline renders at exactly
+ *    rgb(4,3,10) and the inner at rgb(99,60,145), which is z-index:2 doing
+ *    what it is here for.
+ *
+ *  - The sizes are device pixels and do NOT multiply by --scale. The paddings
+ *    it lives in do not either -- .btn.small is `padding: 7px 9px` with no
+ *    calc() -- so a scaled cue would eat its own clearance at text_scale 1.5.
+ *
+ *    MEASURED CLEARANCE, in Chrome 153 at 1024x640, 1280x800 and 1440x940,
+ *    from the tip of the triangle at the PEAK of its drift to the host's
+ *    content-box edge. These are the numbers, not the arithmetic: an
+ *    absolutely positioned child is laid out against its host's PADDING box,
+ *    so `left: -3px` lands 3px into the padding and only 1px outside the
+ *    border box, which is 2px tighter than a border-box reading suggests.
+ *
+ *      .btn.small (#btn-run, #btn-submit)   3px    <- the worst case
+ *      .rune                                3px
+ *      .list-item                           4px
+ *      .btn full size / .inc-cast           8px
+ *      #battle-side-tabs button (UNDER)     0px, flush with the content box
+ *      panel (RIM)                          3px at 12px padding
+ *      .frame panel (RIM.top)               3px at 12px padding, and see below
+ *
+ *    THE LAST ROW IS NOT A CONSTANT AND USED TO BE WRITTEN AS ONE. Clearance
+ *    for a RIM placement is the HOST PANEL's padding-left minus 9px — 7px of
+ *    triangle plus 2px of drift — and `.frame` contributes none of it: game
+ *    .css:46 and metal.css:205 give .frame a 3px border and NO padding at all.
+ *    The 5px this table used to claim, explained below as "a .frame (3px
+ *    border + 14px padding)", is a number no .frame in the tree produces.
+ *    Measured on the four .frame hosts on the battle screen: #region-card at
+ *    12px -> 3px, #dialogue at 16px -> 7px, #modal at 20px -> 11px, and a bare
+ *    .frame at 0px -> -9px, which lands the cue on the text. A RIM or RIM.top
+ *    placement has to have its clearance checked against its actual host.
+ *
+ *  - The dark keyline is opaque and only the violet inside it breathes. Under
+ *    metal.css the CAST button is a #4a2f8c->#150c28 gradient with a --violet
+ *    border, and a violet triangle at 55% on that ground is invisible. The
+ *    16-bit answer is a keyline, not a second colour.
+ *
+ *    THE KEYLINE BUYS COLOUR INDEPENDENCE, WHICH IS NOT THE SAME AS
+ *    LEGIBILITY, and this paragraph used to stop before saying so. It delivers
+ *    what it promises — the inner triangle renders the same rgb on all six
+ *    EDGE grounds, measured — but on .btn.primary the cue's violet sits on the
+ *    button's OWN violet border and reads as a notch cut into it. That is the
+ *    one exception and it is one rule; see `.btn.primary .cue::after` below.
+ *
+ * Z-ORDER: z-index 2 is taken in whatever stacking context the host sits in,
+ * and no battle container opens one. So the cue competes in the root context
+ * against #dialogue (60), .modal-bg (80), #toasts (90), .hunt-banner (95),
+ * #title-layer (150) and #crt (200), and loses to every one of them. A cue is
+ * never on top of a modal or the title screen, which is the correct order for
+ * a thing that points at a control the modal has just covered up.
+ *
+ * TWO OF THOSE SIX WERE GUESSED AND ARE NOW READ. #region-card has no z-index
+ * at all — it is a .frame inside #world-overlay, which metal.css:484 puts at
+ * z-index 2; the element that actually holds 95 is .hunt-banner (game.css
+ * :1045). And there is no #cutscene: no element, no selector, nowhere under
+ * web/. The z-150 fixed overlay is #title-layer (game.css:920).
+ *
+ * ATTENUATED, NOT ERASED, and the difference is worth one sentence. .modal-bg
+ * is rgba(5,4,10,.82), so a cue underneath it is dimmed rather than removed.
+ * Rendered with a real .modal-bg open and diffed against the same frame with
+ * no cue in it: the largest summed channel delta anywhere in a cue's box is
+ * 6/765 on the panel RIM and 3/765 on CAST — under one per cent, which reads
+ * as nothing and is not nothing.
+ */
+/* A CUE IS NEVER PLACED INSIDE A :disabled HOST. A .cue is a CHILD of the
+ * control it points at, so the host's opacity composites the whole subtree:
+ * game.css:72 sets .btn:disabled{opacity:.38} and metal.css:292 tightens it to
+ * .3. Measured on #btn-submit with disabled=true — which is every
+ * RUNE_ASSEMBLY encounter until G.puzzle.ready() flips — the cue renders
+ * rgb(76,65,91) where the same cue on the same enabled button renders
+ * rgb(186,149,215), and its contrast against the ground beneath it falls from
+ * 6.13:1 to 1.75:1. (On a cue without the .btn.primary rule below the fall is
+ * 3.40:1 to 1.39:1; either way it stops being a mark.) Worse than dim: the
+ * keyline is composited too, so the cue's colour becomes GROUND DEPENDENT
+ * again, which is the one property the opaque keyline exists to guarantee. tutorial.CUE_BY_ID["cast"].kinds includes "puzzle", so the policy
+ * invites exactly this placement and the eligibility check in tutor.js is what
+ * must refuse it. The same paragraph is in gauntlet/tutorial.py above
+ * CUE_CONTROLS, because the registry has to carry the constraint too. */
+.has-cue { position: relative; }
+
+.cue {
+  position: absolute;
+  width: 7px; height: 9px;
+  background: #04030a;
+  clip-path: polygon(0 0, 100% 50%, 0 100%);
+  pointer-events: none;
+  z-index: 2;                     /* above metal.css's .btn::after skim */
+  left: -3px; top: 50%;
+  transform: translate(0, -50%);
+  animation: cue-drift 2.4s ease-in-out infinite;
+}
+.cue::after {
+  content: '';
+  position: absolute;
+  left: 1px; top: 1px;
+  width: 5px; height: 7px;
+  background: var(--violet);
+  clip-path: polygon(0 0, 100% 50%, 0 100%);
+  opacity: .55;
+  animation: cue-breathe 2.4s ease-in-out infinite;
+}
+
+/* CAST IS THE EXCEPTION, AND IT IS THE HIGHEST-PRIORITY PLACEMENT IN THE
+ * POLICY. On .btn.primary the cue sits on the button's own var(--violet) 2px
+ * border over a #4a2f8c -> #2a1a4d -> #150c28 violet plate, so a var(--violet)
+ * triangle at .55/.85 reads as a dark NOTCH cut into the keyline rather than
+ * as a violet arrow -- rendered at 12x and looked at, not inferred. The
+ * measured numbers, 1440x940, body.crt on, animation pinned at the peak:
+ * the cue's violet is rgb(151,91,215) against a border rendering rgb(175,108,
+ * 248), which is 1.32:1. Against the local ground it is 3.51:1, the lowest of
+ * the six EDGE placements.
+ *
+ * One rule, using a token metal.css:41 already defines. --violet-hi is #dcb4ff;
+ * it lifts the cue to rgb(186,149,215) and 6.13:1 against the same ground, and
+ * it changes nothing anywhere else -- .btn.primary is CAST and the incantation
+ * pane's .inc-cast, which are the two controls this rule is for. The keyline
+ * is untouched: colour independence stays the keyline's job, and this is
+ * legibility, which is a different one. */
+.btn.primary .cue::after { background: var(--violet-hi); }
+
+/* UNDER: the only target with no horizontal room is a side tab --
+ * #battle-side-tabs button is `padding: 9px 2px` with five across 360px. The
+ * 9px bottom padding is clear of the 8px label. */
+/* THE ONE OVERLAP, AND WHY IT NEVER HAPPENS. metal.css gives the ACTIVE tab
+ * `inset 0 -3px 0 var(--red)`, a red bar across its bottom 3px, and the cue's
+ * widest edge sits in that band. Rendered, it reads as a triangle standing on
+ * a red line: legible, but cluttered. It cannot occur in play -- the only tab
+ * the cue is ever placed on is TRIALS on an MCQ whose choices are off-screen,
+ * which is to say a tab the player has navigated AWAY from, which is to say a
+ * tab that is not .active and has no red bar. Both were rendered. */
+.cue.under {
+  width: 9px; height: 7px;
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+  left: 50%; top: auto; bottom: 1px;
+  transform: translate(-50%, 0);
+  /* 1px, not 2. The tab's bottom padding is 9px and the cue is 7px tall at
+   * bottom:1px, so 2px of travel would put the peak 1px inside the content
+   * box. 1px lands it exactly flush. */
+  animation-name: cue-drift-up;
+}
+.cue.under::after {
+  width: 7px; height: 5px;
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+}
+
+/* RIM: a panel edge, and the one placement docs/13 did not need. EDGE hangs
+ * 3px outside the host, which is free on a button sitting in #editor-toolbar's
+ * 12px of padding but is NOT free on a panel: #battle-side-body starts at the
+ * left content edge of #battle-side, and #battle-side is `overflow: hidden`,
+ * so an EDGE cue on that panel loses 3px of a 7px triangle -- measured, by
+ * putting one there: #battle-side's inner edge is x=1083 and EDGE lands the
+ * cue at x=1080. RIM sits ON the panel's own border instead of outside it --
+ * left:0, measured at x=1083, exactly flush, nothing clipped. Same 7x9
+ * triangle, same 2.4s, same 2px of travel; the only thing that changes is
+ * where x=0 is.
+ *
+ * A RIM HOST MUST NOT BE A SCROLL CONTAINER, and that is the whole of the
+ * rule. `.has-cue` makes its host `position: relative`, so the cue's
+ * containing block becomes that host's PADDING BOX -- and if the host scrolls,
+ * the padding box scrolls with the content and takes the cue with it.
+ *
+ * This paragraph used to name #battle-side-body as the RIM host. It computes
+ * `overflow: auto`. Measured at 1440x940 with a fourteen-row trials list
+ * (scrollHeight 682, clientHeight 403): at scrollTop 279 the cue moves from
+ * y=733.797 to y=454.797 -- 81.8px ABOVE the panel's own top edge at
+ * y=536.594 -- and is clipped out of the panel entirely. The trials list
+ * scrolls on every real code encounter, so the panel cue silently disappeared
+ * in normal play, and "measured at x=1083, exactly flush, nothing clipped"
+ * was true only at scrollTop 0.
+ *
+ * THE HOST IS #battle-side. Measured, not assumed: its border-left is 3px so
+ * its padding box starts at x=1083, the identical pixel, unclipped; it is
+ * `overflow: hidden` and non-scrollable (scrollHeight 432 == clientHeight
+ * 432); and with the same list scrolled 279px the cue does not move at all
+ * (y=719.297 before and after). The one thing that changes is that `top: 50%`
+ * now centres on the whole aside including the tab row.
+ *
+ * Clearance at the peak of the drift is the host's padding-left minus 9px, so
+ * it is a fact about the PANEL and not about .frame -- see the table above.
+ *   .cue.rim         vertically centred, for a panel you point at whole
+ *   .cue.rim.top     pinned near the top, for a panel with a heading */
+.cue.rim { left: 0; }
+/* 14px, and the number is metal.css's, not mine: .frame::after paints four
+ * corner rivets as 7px radial gradients at `background-position: 5px 5px`, so
+ * the top-left rivet occupies y 5-12 of the padding box. A cue at top:5px
+ * lands on it -- it was rendered and looked at, and the triangle disappears
+ * into the chrome sphere. 14px clears the rivet by 2px, and by 4px under the
+ * narrow-viewport rule at metal.css:1283 that drops --rivet-size to 5px. */
+.cue.rim.top {
+  top: 14px;
+  transform: translate(0, 0);
+  animation-name: cue-drift-flat;
+}
+
+@keyframes cue-drift {
+  0%, 100% { transform: translate(0, -50%) }
+  50%      { transform: translate(2px, -50%) }
+}
+@keyframes cue-drift-up {
+  0%, 100% { transform: translate(-50%, 0) }
+  50%      { transform: translate(-50%, -1px) }
+}
+@keyframes cue-drift-flat {
+  0%, 100% { transform: translate(0, 0) }
+  50%      { transform: translate(2px, 0) }
+}
+@keyframes cue-breathe {
+  0%, 100% { opacity: .55 }
+  50%      { opacity: .85 }
+}
+
+/* Motion is decoration; the cue is the signal. Both stills have to read on
+ * their own, and they are pinned brighter than the rest state, because a still
+ * triangle at .55 is dimmer than a breathing one that spends half its life at
+ * .85.
+ *
+ * TWO SWITCHES, NOT ONE, and they are genuinely independent. The game's own
+ * setting is body.reduced-motion, set by main.js from settings.reduced_motion.
+ * The OS-level one is the media query, which the game does NOT mirror into the
+ * class -- and metal.css's blanket `*{animation-duration:.001ms!important}`
+ * only STOPS the breathe, it does not pin it, so without this block an OS
+ * reduced-motion player would be left with a still triangle at .55. */
+body.reduced-motion .cue::after { opacity: .78; }
+@media (prefers-reduced-motion: reduce) {
+  .cue, .cue::after { animation: none; }
+  .cue::after { opacity: .78; }
+}
+/* metal.css flattens decoration under .high-contrast and hides .btn::after
+ * outright. The cue is not decoration, so it goes to a solid violet
+ * (metal.css also lifts --violet to #cfa2ff there).
+ *
+ * `animation: none` is NOT tidiness and must not be deleted: a CSS animation
+ * beats a normal declaration in the cascade, so `opacity: 1` on its own loses
+ * to cue-breathe and the cue measured .55/.85 here with the pin in place. The
+ * drift is untouched — the cue still moves, it just stops dimming. */
+body.high-contrast .cue::after { animation: none; opacity: 1; }
+/* MENU -> GUIDANCE -> "Show the guide arrow". tutor.js also stops placing it;
+ * this is the second of the two locks. */
+body.no-cues .cue { display: none; }
+/* A measurement furnishes the room without tutoring the candidate.
+ *
+ * TWO CLASSES, AND THE SECOND ONE IS THE LOAD-BEARING ONE. `interview-mode`
+ * goes on the body in enterBattle when the ENCOUNTER is measured, and
+ * returnToWorld() takes it off again — while the run itself is still open
+ * server-side. RETREAT reaches returnToWorld mid-run, and doc 10 §4b.I
+ * establishes that the player is on the overworld between two questions of a
+ * measured run, so `interview-mode` is absent for the whole of that gap.
+ * `run-open` is mirrored from the server's own `run_open` (Game._run_is_open,
+ * served on /api/state, named in tutorial.CUE_POLICY["sealed_body_class"]) and
+ * is set and cleared with the RUN rather than with the encounter.
+ *
+ * `interview-mode` stays because it is free, it is true while a question is on
+ * screen, and it also drains --violet to grey — a third accidental lock. It is
+ * `run-open` that closes the gap. */
+body.interview-mode .cue { display: none; }
+body.run-open .cue { display: none; }
+
+/* ONE MOTION VOCABULARY. #answer-here's arrow predates the cue and was tuned
+ * for a screen with nothing to type on: 1.3s and 7px is too fast and too far
+ * beside a 2.4s, 2px cue. Same period, same register. */
+@keyframes ah-nudge { 0%, 100% { transform: translateX(0) } 50% { transform: translateX(3px) } }
+
 #battle-side {
   width: 360px; flex: 0 0 360px; border-left: 3px solid var(--line);
   background: var(--panel); display: flex; flex-direction: column; overflow: hidden;

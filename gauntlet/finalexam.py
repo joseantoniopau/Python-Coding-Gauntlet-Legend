@@ -66,7 +66,7 @@ import random
 import time
 from dataclasses import dataclass, field, asdict, replace
 
-from . import adaptive, config, grading, world
+from . import adaptive, config, grading, scaffold, world
 from . import skills as skillmod
 
 # The exam is Interview Mode. Not a mode that resembles it, not a mode with the
@@ -1296,7 +1296,11 @@ def within_band(exam: Exam) -> tuple:
 _MUST_BE_EMPTY = ("hint_tree", "secondary_patterns", "common_failures",
                   "variants", "prerequisites", "complexity_choices")
 _MUST_BE_ABSENT = ("canonical_solution", "hidden_tests", "edge_cases",
-                   "perf_tests", "alternate_solutions", "mutants")
+                   "perf_tests", "alternate_solutions", "mutants",
+                   # The ramp's declaration IS the answer: scaffold_spans[0]
+                   # ["text"] is the expression the blank asks for. It never
+                   # leaves the server, here least of all.
+                   "scaffold_spans")
 
 
 # The answer surface of a puzzle payload, named once so that `exam_view` strips
@@ -1333,6 +1337,19 @@ def exam_view(problem) -> dict:
     """
     view = problem.player_view(mode=EXAM_MODE)
     view["complexity_choices"] = []
+    # THE PRACTICAL SERVES RUNG 4 AND SAYS SO.
+    #
+    # It used to be clean by two coincidences: MISSING_RUNE was excluded by
+    # encounter kind, and the one CODE_BATTLE that carried a blank was excluded
+    # by being GUIDED. Under render-time rungs both evaporate, because any
+    # CODE_BATTLE is now servable at rung 2 — so the guard moves from encounter
+    # kind to rung, which is the one vocabulary that stays true. A GUIDED
+    # problem is a finished function with one expression struck out; that is a
+    # scaffold, which is help, which is the one thing this exam does not have.
+    view["starter_code"] = scaffold.skeleton(problem)
+    view["scaffold"] = {"rung": scaffold.WRITE_IT_ALL,
+                        "name": scaffold.RUNG_NAMES[scaffold.WRITE_IT_ALL],
+                        "blanks": 0, "choices": []}
     mcq = view.get("mcq")
     if isinstance(mcq, dict):
         view["mcq"] = {k: v for k, v in mcq.items()
@@ -1363,6 +1380,12 @@ def audit_view(view: dict) -> list:
     for test in view.get("visible_tests") or ():
         if test.get("hidden"):
             leaks.append("a hidden test was served as a visible one")
+    rung = (view.get("scaffold") or {}).get("rung", scaffold.WRITE_IT_ALL)
+    if int(rung) != scaffold.WRITE_IT_ALL:
+        leaks.append(f"the question was served at rung {rung}; the practical is "
+                     f"the whole function with nothing to lean on")
+    if scaffold.MARKER in (view.get("starter_code") or ""):
+        leaks.append("the starter code carries a scaffold blank")
     return leaks
 
 

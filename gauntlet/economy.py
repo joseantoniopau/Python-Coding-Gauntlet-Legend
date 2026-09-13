@@ -1055,6 +1055,25 @@ def _vendor_room(state: dict, region_id: str) -> dict:
     room = _economy(state)["vendors"].setdefault(region_id, {})
     room.setdefault("clears", 0)    # progress toward the next restock
     room.setdefault("credit", 0)    # quests.VENDOR_CREDIT, spendable here only
+    # THE RACK'S TWO FIELDS. `rack` is the restock INDEX — how many times these
+    # shelves have been refilled — and it is the only thing the generated
+    # armour in shop.py varies with besides the save seed and the region. It
+    # lives here, next to `clears`, because it advances from exactly the same
+    # event and must never learn a second way to advance. `rack_sold` is what
+    # has already been taken off the rack SINCE that index last moved, so a
+    # bought slot stays empty rather than regenerating. Both are defaulted
+    # rather than required, so a save written before the rack existed loads
+    # with an untouched rack instead of a KeyError.
+    room.setdefault("rack", 0)
+    room.setdefault("rack_sold", {})
+    # The receipts. `rack_sold` is cleared every time the shelves turn over,
+    # because that is what reopens the pegs — but a piece bought three
+    # restocks ago is still a piece this vendor sold, and sell-back has to
+    # still know what was paid for it. So the price is kept here, keyed by
+    # item id, and removed when the piece is sold back. Without this a player
+    # who bought armour and then cleared six encounters was told "you did not
+    # buy that here" by the shop that sold it to them.
+    room.setdefault("rack_paid", {})
     stock = room.setdefault("stock", {})
     for pid in stock_list(region_id):
         p = potions.potion(pid)
@@ -1082,8 +1101,53 @@ def restock(state: dict, region_id: str, *, clears: int = 1) -> dict:
             if new != have:
                 added[pid] = new - int(have)
                 room["stock"][pid] = new
+        # The rack turns over on the same event and only on this event. A
+        # player who walks out of the shop, out of the region, out of the game
+        # and back in finds the same eight pieces on the wall, because nothing
+        # in that sequence is a cleared encounter. Reload-scumming for a
+        # legendary is not discouraged here; it is arithmetically unavailable.
+        room["rack"] = int(room.get("rack", 0)) + steps
+        room["rack_sold"] = {}
     return {"restocked": added, "clears": int(room["clears"]),
-            "next_in": RESTOCK_EVERY - int(room["clears"])}
+            "next_in": RESTOCK_EVERY - int(room["clears"]),
+            "rack_index": int(room.get("rack", 0)),
+            "rack_restocked": bool(steps)}
+
+
+def rack_index(state: dict | None, region_id: str) -> int:
+    """How many times this region's shelves have turned over.
+
+    One of the three inputs to the rack's generator; see `shop.rack`. Reading
+    it never advances it, which is the property that makes the rack safe to
+    render on every frame of a shop panel.
+    """
+    if state is None:
+        return 0
+    return int(_economy(state)["vendors"].get(region_id, {}).get("rack", 0))
+
+
+def rack_sold(state: dict | None, region_id: str) -> dict:
+    """What has already been bought off this rack since it last turned over.
+
+    `{slot: {"item": item_id, "price": gold}}`. shop.py writes it; this module
+    holds it, so that the rack's bookkeeping sits in the same bucket as the
+    potion stock and a save has one shop per region rather than two.
+    """
+    if state is None:
+        return {}
+    return dict(_economy(state)["vendors"].get(region_id, {})
+                .get("rack_sold", {}))
+
+
+def rack_ledger(state: dict, region_id: str) -> dict:
+    """The mutable form of `rack_sold`, for the one module allowed to write it."""
+    return _vendor_room(state, region_id).setdefault("rack_sold", {})
+
+
+def rack_receipts(state: dict, region_id: str) -> dict:
+    """`{item_id: gold paid}` for every piece this vendor sold and has not yet
+    bought back. Survives a restock, unlike the pegs."""
+    return _vendor_room(state, region_id).setdefault("rack_paid", {})
 
 
 # VENDOR CREDIT
@@ -1849,6 +1913,143 @@ ARMOUR_FEE = {"COMMON": 20, "UNCOMMON": 45, "RARE": 100, "EPIC": 220,
 def armour_fee(rarity: str) -> int:
     """The smith's labour on a piece of armour, in gold, on top of the metal."""
     return int(ARMOUR_FEE.get(str(rarity).upper(), 0))
+
+
+# -- the rack --------------------------------------------------------------
+#
+# WHY THE PRICE IS HERE AND THE GENERATOR IS NOT.
+# `shop.py` decides WHAT is on the wall. This file decides WHAT IT COSTS,
+# because a price is a claim about how much Python a thing is worth and this
+# module is the only place in the game allowed to make that claim. The rack's
+# price is therefore the smith's own `ARMOUR_FEE` — the exact number the player
+# already pays her to upgrade a piece of the same rarity — bent by two
+# multipliers and nothing else:
+#
+#   the region, at the same 10% a rung the rest of the file uses, so a piece
+#   bought deep costs what the deep region pays; and
+#
+#   how much of the roll's budget actually turned into effect, which is the
+#   only way a generated item's price can tell the truth about a generated
+#   item. Two RARE pieces are not the same piece. A roll that spent its whole
+#   budget costs 60% more than a roll that spent none of it.
+#
+# RACK_ROLL_WEIGHT is 0.60 rather than 1.00 deliberately. A thin roll must
+# still cost something, because the floor under the price is the rarity, and a
+# rarity you can buy for almost nothing is a rarity that means nothing.
+RACK_ROLL_WEIGHT = 0.60
+
+# Sell-back, flat, to the vendor who sold it. A quarter is low enough that
+# buy -> sell is a 75% loss and there is no laundering loop, and high enough
+# that a piece you replaced is worth carrying back rather than dropping.
+RACK_SELLBACK = 0.25
+
+# The sink name, so the rack shows up in `ledger_view` beside potions and the
+# forge instead of hiding inside one of them.
+RACK_SINK = "rack"
+
+# What the Shelf charges over the forge for a blade you did not gather the
+# metal for. The rung, the ladder, the rarity and the art are forge.py's and are
+# not touched; only the bill is this file's. See `shop.blank`.
+#
+# THE 25% IS CHARGED ON THE WHOLE JOB, NOT ON THE LABOUR.
+# `forge.GOLD_SHAPE` is Vess's labour and her own comment says gold is never
+# meant to be the binding constraint on a rung — the METAL is. So pricing a
+# blank at labour x 1.25 would sell rung nine, which costs 48 Doubling Steel,
+# 28 Nullsteel and 20 Wastes-iron, for 1875 gold: the single largest hole this
+# economy has ever had, and the same shape as the two farming holes that were
+# already closed here. A blank is priced at labour PLUS what the metal is
+# worth, and `blank_metal_value` works that out of numbers this game already
+# publishes rather than out of an opinion.
+BLANK_PREMIUM = 1.25
+
+_BLANK_METAL_CACHE: dict = {}
+
+
+def blank_metal_value(blade_id: str, tier: int) -> int:
+    """What the metal for one rung is worth in gold, measured, not guessed.
+
+    For each metal the rung costs: how many units, divided by
+    `forge.expected_metal()` for the band of a region that yields it, gives the
+    fights. Times `encounter_award()` for that region and band at B rank gives
+    the gold those fights would have paid. Sum over the metals.
+
+    THE PROPERTY THIS BUYS, and the reason a blank is not a bypass: the walk
+    that gathers the metal PAYS the gold. Gathering rung five's metal is about
+    thirty-two fights and those fights pay about 1,350 gold, which is what the
+    metal is priced at. Buying the blank therefore costs the player the same
+    fights they would have spent gathering, plus 25%, and saves them only the
+    SPECIFIC WALK — they may earn that gold anywhere. The forge stays the cheap
+    road and the Shelf is the convenient one, which is the correct order.
+    """
+    key = (str(blade_id), int(tier))
+    if key in _BLANK_METAL_CACHE:
+        return _BLANK_METAL_CACHE[key]
+    blade = forge.BLADE_BY_ID.get(blade_id)
+    if blade is None:
+        return 0
+    rung = blade.rung(int(tier))
+    total = 0.0
+    for metal_id, units in (rung.cost or {}).items():
+        metal = forge.METAL_BY_ID.get(metal_id)
+        if metal is None or not metal.regions:
+            continue
+        rid = metal.regions[0]
+        band = area_band(rid)
+        per_fight = forge.expected_metal(band, rank="B")
+        if per_fight <= 0:
+            continue
+        award = encounter_award(None, region_id=rid, difficulty=band,
+                                rank="B", problem_id="")
+        total += (float(units) / per_fight) * float(award.gold)
+    out = int(round(total))
+    _BLANK_METAL_CACHE[key] = out
+    return out
+
+
+def round_to_5(value: float) -> int:
+    """Shop prices end in 0 or 5. A price with a 3 in it reads as a number the
+    game computed; a price ending in 5 reads as a number somebody charged."""
+    return int(5 * round(float(value) / 5.0))
+
+
+def rack_price(rarity: str, region_id: str = "", *,
+               budget_used: float = 0.0, budget_max: float = 0.0) -> int:
+    """What one generated piece of armour costs, in gold.
+
+        ARMOUR_FEE[rarity] x (1 + 0.10 x depth) x (1 + 0.60 x used/max)
+
+    `budget_used` and `budget_max` come from `shop.roll`, which clamps every
+    magnitude against what an authored item of the same rarity carries. A roll
+    that was clamped therefore costs less, automatically, because the clamp
+    lowers `budget_used` — the player is never charged for effect the ceiling
+    check took away.
+    """
+    fee = armour_fee(rarity)
+    if not fee:
+        return 0
+    depth = 1.0 + AREA_STEP * area_depth(region_id)
+    span = 1.0
+    if budget_max > 0:
+        span = 1.0 + RACK_ROLL_WEIGHT * max(0.0, min(1.0, budget_used / budget_max))
+    return max(5, round_to_5(fee * depth * span))
+
+
+def rack_sellback(price: int) -> int:
+    """A quarter of what it cost, rounded down, and never below one gold."""
+    return max(1, int(int(price) * RACK_SELLBACK))
+
+
+def blank_price(blade_id: str, tier: int) -> int:
+    """Vess's labour for that rung plus the metal's worth, plus 25%.
+
+    forge owns the ladder and the labour; this reads both and adds the one
+    number forge has no reason to hold — what the walk you skipped was worth.
+    """
+    labour = int(forge.GOLD_SHAPE.get(int(tier), 0))
+    if not labour:
+        return 0
+    return round_to_5((labour + blank_metal_value(blade_id, tier))
+                      * BLANK_PREMIUM)
 
 
 def weapon_fee(blade_id: str, to_tier: int) -> int:
@@ -2896,6 +3097,48 @@ def validate() -> list:
     if st["player"]["gold"] != 100:
         bad.append("something in this module wrote to the player's purse")
 
+    # -- the rack cannot be walked around ---------------------------------
+    #
+    # Three claims, each the closing of a specific hole. The rack's stock turns
+    # over on cleared encounters and on nothing else; a piece is always worth
+    # more to buy than to sell; and a bought blade blank is never cheaper than
+    # the metal it stands in for, which is the hole that opens if anybody ever
+    # reads forge.GOLD_SHAPE as the price of a rung rather than as the labour
+    # on one.
+    st = {}
+    _vendor_room(st, "graph_wastes")
+    before = rack_index(st, "graph_wastes")
+    for _ in range(RESTOCK_EVERY - 1):
+        restock(st, "graph_wastes", clears=1)
+    if rack_index(st, "graph_wastes") != before:
+        bad.append("the rack turned over on fewer than RESTOCK_EVERY clears")
+    restock(st, "graph_wastes", clears=1)
+    if rack_index(st, "graph_wastes") != before + 1:
+        bad.append("the rack did not turn over on the sixth clear")
+    rack_ledger(st, "graph_wastes")["chest"] = {"item": "x", "price": 1}
+    restock(st, "graph_wastes", clears=RESTOCK_EVERY)
+    if rack_sold(st, "graph_wastes"):
+        bad.append("a restock did not clear the rack's sold pegs")
+
+    fees = [rack_price(r, "graph_wastes", budget_used=1.0, budget_max=1.0)
+            for r in ("COMMON", "UNCOMMON", "RARE", "EPIC", "LEGENDARY")]
+    if fees != sorted(fees):
+        bad.append(f"rack prices are not monotone in rarity: {fees}")
+    for fee in fees:
+        if rack_sellback(fee) >= fee:
+            bad.append("rack sell-back is not a loss, so buy-sell launders gold")
+
+    for blade in forge.BLADES:
+        for tier in sorted(forge.GOLD_SHAPE):
+            price = blank_price(blade.id, tier)
+            metal = blank_metal_value(blade.id, tier)
+            if tier > forge.MIN_TIER + 1 and metal <= 0:
+                bad.append(f"{blade.id} rung {tier}: its metal is priced at "
+                           f"nothing, so the blank is a bypass")
+            if price <= forge.GOLD_SHAPE[tier]:
+                bad.append(f"{blade.id} rung {tier}: a blank costs {price}, "
+                           f"which is not more than the forge's own labour")
+
     # -- learning never dead-ends -----------------------------------------
     if rank_pay("LEARNING_CLEAR") <= 0:
         bad.append("a phoenix clear pays nothing, which leaves a stuck player "
@@ -2922,6 +3165,11 @@ def self_check() -> dict:
         "sink_share_fighting_only": r["sink_share_fighting_only"],
         "sink_share_with_broker": r["sink_share_with_broker"],
         "trial_rate_ceiling": max(trial_rate_ratio(f.id) for f in TRIAL_FORMS),
+        "rack_restock_every": RESTOCK_EVERY,
+        "rack_sellback": RACK_SELLBACK,
+        "blank_premium": BLANK_PREMIUM,
+        "blank_prices": {t: blank_price(forge.BLADES[0].id, t)
+                         for t in sorted(forge.GOLD_SHAPE)},
         "verdict": r["verdict"],
     }
 

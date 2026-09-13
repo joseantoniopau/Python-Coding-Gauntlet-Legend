@@ -231,11 +231,40 @@ class TestTheCorpusItself(CoverageTest):
     def test_the_whole_corpus_validates_with_no_errors_and_no_warnings(self):
         """Every problem carries a reference implementation and an independently
         written canonical solution, and the two must agree on every test. A
-        build that finishes IS the proof; this records what it proved."""
+        build that finishes IS the proof; this records what it proved.
+
+        ONE EXEMPTION, WITH A SHAPE AND A CEILING. docs/14-the-ramp.md §4 asks
+        for a deliberate split: a scaffold span that names a parameter, a
+        builtin, a keyword or a given literal is REJECTED above GUIDED and
+        WARNED about at GUIDED, "where naming the part genuinely is the lesson".
+        So the ramp's own rule emits warnings by design and `warnings == []`
+        cannot be the assertion any more — it was red, by 23 and then by 52.
+
+        What is asserted instead is the documented shape of the exemption, which
+        is still load-bearing: every warning must be a GUIDED scaffold-span
+        judgement, so a warning of any other kind, in any other band, still
+        fails this outright. And there is a ceiling on how many, because §4 is a
+        band-specific exemption and not a waiver to grow indefinitely."""
+        by_id = {p.id: p for p in self.corpus}
         self.assertEqual([f"{i.problem_id}: {i.message}"
                           for i in self.report.errors], [])
+        allowed = [i for i in self.report.warnings
+                   if by_id[i.problem_id].difficulty == "GUIDED"
+                   and "scaffold span" in i.message]
         self.assertEqual([f"{i.problem_id}: {i.message}"
-                          for i in self.report.warnings], [])
+                          for i in self.report.warnings if i not in allowed], [],
+                         "a warning that is not a GUIDED scaffold-span judgement")
+        # Split by kind, because they drift for different reasons and a single
+        # total would let one hide behind the other.
+        no_pick = [i for i in allowed if "band floor is rung 1" in i.message]
+        judgement = [i for i in allowed if i not in no_pick]
+        self.assertLessEqual(
+            len(judgement), 25,
+            "the GUIDED span exemption is growing; §4 is being used as a waiver")
+        self.assertLessEqual(
+            len(no_pick), 35,
+            "more GUIDED problems cannot render their own floor rung; the "
+            "multiple-choice rung the player asked for is thinning out")
         self.assertGreaterEqual(len(self.corpus), 900)
         self.assertEqual(len(self.corpus), self.report.checked)
 

@@ -109,12 +109,45 @@ class TestAcceptance(GameTest):
         self.assertGreater(g.state["armor"]["gauntlets"], 10)
 
     def test_09_spaced_repetition_schedules_correctly(self):
+        """A REVIEW MEASURES RETENTION, so what enrols a family is a serving the
+        player wrote whole.
+
+        This used to clear one EASY problem on a fresh save and assert stage 1.
+        A fresh save is served EASY at its floor — rung 3, two blanks — and
+        counting that as the family's first review is the measurement error the
+        whole ramp exists to avoid: measured, four such clears reached stage 4,
+        ease 1.40 and a next sighting 42 days out, bought with fill-in-the-
+        blanks. So the test asks the question in two halves, which is what
+        `srs.counts_as_review` now answers.
+        """
+        from gauntlet import scaffold, skills as skillmod
         from gauntlet.config import SRS_INTERVALS_DAYS
         g = self.game()
         p = self.by_id("ah-two-sum-indices")
+
         g.start_encounter(p.id)
+        self.assertLess(g.encounter.rung, scaffold.WRITE_IT_ALL,
+                        "a fresh save was served this whole; the half below is "
+                        "then the only half being tested")
+        g.submit(p.canonical_solution)
+        self.assertNotIn(p.spaced_repetition_family,
+                         [f for f, e in g.schedule.items() if e.due_at],
+                         "a two-blank serving scheduled the family's next "
+                         "sighting")
+
+        # Now the same problem, written whole. `rung_for` is capped by mastery,
+        # so the evidence has to be real on both axes.
+        skill = skillmod.PATTERN_TO_SKILL.get(p.pattern, "PYTHON")
+        skills = g.skills
+        skills[skill].rung_unaided = {"3": 99, "4": 99}
+        skills[skill].mastery = 80.0
+        g._write_skills(skills)
+        g.save()
+        g.start_encounter(p.id)
+        self.assertEqual(g.encounter.rung, scaffold.WRITE_IT_ALL)
         result = g.submit(p.canonical_solution)
-        self.assertGreaterEqual(result["next_retest_days"], SRS_INTERVALS_DAYS[0] * 0.6)
+        self.assertGreaterEqual(result["next_retest_days"],
+                                SRS_INTERVALS_DAYS[0] * 0.6)
         entry = g.schedule[p.spaced_repetition_family]
         self.assertEqual(entry.stage, 1)
 

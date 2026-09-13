@@ -23,10 +23,9 @@
  *   G  DISCIPLINE     fifteen colours off the rendered sprite, determinism,
  *                     reduced motion, and a capped working set
  */
-import { installRaster, RASTER, colourCount, frameHash, pixelDiff } from './raster.mjs';
+import { installRaster, RASTER, colourCount, frameHash } from './raster.mjs';
 installRaster();
 import fs from 'fs';
-import { execSync } from 'child_process';
 
 const listeners = [];
 globalThis.window.addEventListener = (t, fn) => listeners.push([t, fn]);
@@ -55,10 +54,13 @@ const OW = await import('../../web/js/overworld.js');
 const K = await import('../../web/js/kingui.js');
 const SPR = await import('../../web/js/sprites.js');
 
-/* A window the size of a real one: overworld.resize() clamps the world scale
- * to 2-4 off the CSS box, and a 800x520 frame at scale 3 is what a player
- * actually looks at. A harness window small enough to change his placement
- * would be measuring the harness. */
+/* A window the size of a real one, WITH THE SCALE PINNED. resize() takes the
+ * world scale off the CSS box — see fieldScale() in overworld.js, which puts
+ * the field on FF6's 224-pixel field height — and this harness is not about
+ * that, so it stubs the whole thing and fixes 3, the scale a 1280x800 window
+ * gets. scripts/verify/field.mjs is where the panel is held to the hero's head
+ * at every scale the rule actually produces, 3 through 5, and at the map edges
+ * where the camera clamps and he is not where viewH/2 says he is. */
 const T = 16, W = 800, H = 520, DT = 1 / 60;
 const REGION = V.regions[3];
 const fail = [];
@@ -569,59 +571,78 @@ for (const [k, v] of Object.entries(out.tablesMatchAntagonistPy)) {
 
 /* ---------------- F. no king, no cost ---------------- */
 {
-  // The overworld.js that shipped before him, pulled straight out of git, run
-  // on the same region with the same input. If a frame differs by one byte, the
-  // claim "renders exactly as it does today" is false.
-  const baselinePath = new URL('../../web/js/__kingbaseline.js', import.meta.url);
-  let baselineOK = 'not attempted';
-  let identical = null, diffPx = null;
-  try {
-    const src = execSync('git show HEAD:web/js/overworld.js', {
-      cwd: new URL('../../', import.meta.url).pathname, maxBuffer: 32 * 1024 * 1024 }).toString();
-    fs.writeFileSync(baselinePath, src);
-    const BASE = await import('../../web/js/__kingbaseline.js');
-    const mk = (Mod, state) => {
-      const ow = new Mod.Overworld(makeCanvas());
-      ow.stateSource = () => state;
-      ow.resize = function () { this.viewW = W; this.viewH = H; this.scale = 3; };
-      ow.load(REGION, REGION.tier || 2);
-      ow.time = 0;
-      return ow;
-    };
-    const a = mk(BASE, { pets: [] });
-    const b = mk(OW, { pets: [] });
-    // the clock is the only thing that would legitimately differ, so both are
-    // driven by the same fixed step and the same (absent) input
-    for (let i = 0; i < 40; i++) { a.update(DT); a.draw(); b.update(DT); b.draw(); }
-    const fa = snap(a), fb = snap(b);
-    diffPx = pixelDiff(fa, fb);
-    identical = frameHash(fa) === frameHash(fb);
-    baselineOK = `git HEAD:web/js/overworld.js, ${src.length} bytes`;
-  } catch (e) {
-    baselineOK = 'FAILED: ' + e.message;
-  } finally {
-    try { fs.unlinkSync(baselinePath); } catch (e) { /* nothing to remove */ }
-  }
-
+  /* WHAT THIS USED TO DO, AND WHY IT COULD NOT MEAN ANYTHING.
+   *
+   * It rendered a silent frame against `git show HEAD:web/js/overworld.js` and
+   * asserted the two were byte-identical. That is a tripwire with exactly two
+   * states and neither of them is the claim: while overworld.js is UNCOMMITTED
+   * it diffs the file against its own last commit, so it goes red for any
+   * change at all, King or not; the moment overworld.js is committed it diffs
+   * the file against ITSELF and passes vacuously for ever. It was red when this
+   * was written — 1046 pixels — and bisecting the working tree hunk by hunk put
+   * every one of those pixels in the elite-silhouette change at overworld.js
+   * :2068, with the chevron rounding and the marker-cull margin each accounting
+   * for exactly zero. So it was not reporting a King defect, and it was not
+   * reporting a rendering defect; it was reporting that somebody had edited the
+   * file.
+   *
+   * Pinning it to a fixed commit does not rescue it either, and that is worth
+   * saying because it is the obvious repair. The baseline the claim names is
+   * the overworld that shipped before him, 5a95796 — but that module renders
+   * through today's tiles.js, sprites.js and pixel.js, and the field has since
+   * been put on FF6's pixel scale, given weather that comes and goes and given
+   * an elite silhouette. A whole-frame diff across any of that is a number made
+   * of four unrelated changes, and none of them is the King.
+   *
+   * SO THE CLAIM IS ASSERTED DIRECTLY INSTEAD. "No king, no cost" is four
+   * statements about THIS module, and every one of them is checkable here
+   * without reference to any other version of the file:
+   *
+   *   1  no king object is built from a state that has no king in it
+   *   2  nothing rasterises on the silent path — 240 frames, zero canvases
+   *   3  every output the king's draw paths write stays at its initial value,
+   *      so no king code executed. These four fields are the complete set of
+   *      observable effects of drawKingBody, drawIndexWash, drawKingPanel and
+   *      the sort clamp; if any of them ran, one of these moves.
+   *   4  and kingDebug(), the whole reporting surface, is null
+   *
+   * Unlike the diff, none of these can go vacuous, and none of them cares who
+   * else edited the file this week. */
   const ow = build({ pets: [] });
   step(ow, 10);
+  const quiet = () => {
+    const d = ow.kingDebug();
+    return { sortY: ow._kingSortY, under: ow._kingUnder,
+             panelAlpha: ow._kingPanelAlpha, washPeak: ow._kingWashPeak, debug: d };
+  };
+  const before0 = quiet();
   RASTER.counting = true;
   const before = RASTER.canvases;
   step(ow, 240);
   const after = RASTER.canvases;
   RASTER.counting = false;
+  const after0 = quiet();
+  const untouched = after0.sortY === 0 && after0.under === 0
+                 && after0.panelAlpha === 0 && after0.washPeak === 0;
   out.noKingNoCost = {
-    baseline: baselineOK,
-    frameIsByteIdenticalToThePreviousOverworld: identical,
-    pixelsDifferent: diffPx,
-    canvasesAllocatedOver240SilentFrames: after - before,
+    baseline: 'none — see the comment above; the claim is asserted on this '
+      + 'module rather than diffed against another copy of it',
     kingIsNull: ow.king === null,
-    kingDebugIsNull: ow.kingDebug() === null,
+    kingDebugIsNull: after0.debug === null,
+    kingDrawOutputsUntouchedOver240Frames: untouched,
+    kingDrawOutputs: { sortY: after0.sortY, framesSortClamped: after0.under,
+                       panelAlpha: after0.panelAlpha, washPeak: after0.washPeak },
+    canvasesAllocatedOver240SilentFrames: after - before,
     costWhenSilent: 'one null check in update(), one in _gatherObjects(), one in '
       + 'draw(), one in the hero closure, one on Escape',
   };
-  if (identical === false) note(`a silent frame differs from the old overworld by ${diffPx} px`);
+  if (ow.king !== null) note('a state with no king in it still built one');
+  if (after0.debug !== null) note('kingDebug() answered on a silent overworld');
+  if (!untouched) {
+    note(`king draw output moved on a silent frame: ${JSON.stringify(after0)}`);
+  }
   if (after - before !== 0) note(`${after - before} canvases allocated on a silent frame path`);
+  if (before0.sortY !== 0) note('the king sort was already written before the run');
 }
 
 /* ---------------- F2. and with him, still nothing per frame ---------------- */
@@ -737,3 +758,11 @@ for (const [k, v] of Object.entries(out.tablesMatchAntagonistPy)) {
 out.failures = fail.length;
 out.detail = fail;
 console.log(JSON.stringify(out, null, 1));
+/* THE EXIT CODE IS THE ONLY THING A SWEEP READS.
+ *
+ * This printed `failures: 1` and then ended, so the process exited 0 and a red
+ * harness looked green in any automated run — which is exactly how section F's
+ * stale baseline sat unnoticed. A harness that reports a failure and returns
+ * success is worse than one that does not run: it is a measurement that says
+ * the opposite of what it measured. */
+process.exit(fail.length ? 1 : 0);

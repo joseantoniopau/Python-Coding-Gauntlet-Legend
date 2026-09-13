@@ -26,7 +26,20 @@ function escape(text) {
 
 function runeAssembly(problem, onChange) {
   const runes = (problem.mcq && problem.mcq.runes) || [];
-  const order = (problem.mcq && problem.mcq.shuffle) || runes.map((_, i) => i);
+  /* THE FALLBACK IS AN EMPTY PILE, NOT THE AUTHORED ORDER. The runes are cut
+   * from the canonical solution in authored order, so `runes.map((_, i) => i)`
+   * — the old fallback — renders THE ANSWER, in order, down the tray. It is
+   * unreachable today — all 42 shipped assemblies carry a real shuffle,
+   * measured (identity 0/42, sorted 0/42) — but only just: corpus/validate.py
+   * checks the shuffle's LENGTH and nothing else, so `[0,1,2,...]` passes it.
+   * tests/test_corpus.py's `test_the_rune_pile_is_never_the_solution_in_order`
+   * is the assertion that closes that, and this line is the second lock,
+   * because
+   * gauntlet/tutorial.py's `rune` cue points a violet arrow at the head of
+   * this pile and its whole licence to do so is that a shuffle carries no
+   * ordering information. An empty pile is a visible bug somebody fixes in an
+   * hour. The answer in order is a silent leak nobody sees. */
+  const order = (problem.mcq && problem.mcq.shuffle) || [];
   const placed = [];          // [{index, indent}]
   let tray = order.slice();
 

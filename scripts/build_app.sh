@@ -109,3 +109,32 @@ if command -v codesign >/dev/null 2>&1; then
 fi
 
 echo "==> built: $APP"
+
+# ---------------------------------------------------------------- install
+#
+# THE BUG THIS EXISTS TO PREVENT, and it cost a player two days of testing a
+# build that did not contain any of the fixes they were testing for:
+#
+# This script writes to dist/ inside the repo. The app a person actually
+# double-clicks lives in ~/Applications. Nothing ever connected the two, so
+# every rebuild landed somewhere the player never opened, and they reported the
+# old music, the old battle screen and a refresh that "did nothing" — all three
+# correct observations of a copy from two days earlier.
+#
+# So: if a copy is already installed, UPDATE IT. Only if one is already there —
+# putting an app into someone's Applications folder uninvited is not this
+# script's business, and a first-time build should not do it.
+INSTALLED="$HOME/Applications/$(basename "$APP")"
+if [ -d "$INSTALLED" ]; then
+  # A running copy holds its own Python in memory and would keep serving the
+  # old code from the new files, which looks exactly like the bug above.
+  if pgrep -f "gauntlet.launcher" >/dev/null 2>&1; then
+    echo "==> a copy is RUNNING; quit it before launching the new one"
+  fi
+  rm -rf "$INSTALLED"
+  cp -R "$APP" "$INSTALLED"
+  echo "==> installed: $INSTALLED"
+else
+  echo "==> not installed to ~/Applications (no copy there yet)"
+  echo "    to install:  cp -R \"$APP\" ~/Applications/"
+fi

@@ -921,6 +921,46 @@ export class Overworld {
     this._raf = null;
   }
 
+  /* A FOOTSTEP, ON THE GROUND THE FOOT IS ACTUALLY ON.
+   *
+   * TWO DEFECTS WERE HERE AND THEY ARE DIFFERENT DEFECTS.
+   *
+   * 1. THE SOUND WAS WRONG EVERYWHERE. It played audio.sfx('move') — a 22ms
+   *    cursor blip — for every step on every surface. audio.js has seven
+   *    authored materials (stone, grass, snow, ash, water, wood, sand) reached
+   *    by audio.footstep(), which takes the terrain CODE directly through its
+   *    FOOTSTEP_CODE table, and nothing in the tree called it. Snow sounded
+   *    like a menu.
+   *
+   * 2. ABOUT 55% OF FOOTFALLS WERE SILENT, IRREGULARLY. The gate was
+   *    `Math.floor(this.time * 6) % 2 === 0` — a gate on the WALL CLOCK, not on
+   *    the step. It opens and shuts in sixth-of-a-second windows regardless of
+   *    when a foot lands, so whether you heard a step depended on the phase you
+   *    happened to walk in. Holding a direction gave an irregular limp.
+   *
+   * The cadence is now DISTANCE, which is what a footfall actually is. A step
+   * is one tile; a stride is two, so a footfall lands every 2*T world pixels.
+   * At speed 112 that is 3.5 a second — a brisk walk, and half the 7/s that
+   * emitting on every tile would give. Distance rather than time also means a
+   * speed change carries the cadence with it: the snow zone's skate irons are
+   * 1.35x, and boots that make you faster should make you louder, not the same
+   * noise at wider spacing.
+   */
+  _footfall() {
+    const p = this.player;
+    this._strideAccum = (this._strideAccum || 0) + T;
+    if (this._strideAccum < T * 2) return false;
+    this._strideAccum = 0;
+    if (!this.scene) return false;
+    const row = this.scene.grid[p.y];
+    if (!row) return false;
+    try {
+      // The terrain CODE, not a name: audio.footstep resolves it through its
+      // own table, so this file does not need a second copy of that mapping.
+      return audio.footstep(row[p.x], { biome: this.scene.biome || '' });
+    } catch (e) { return false; }   // a footstep is never load-bearing
+  }
+
   solid(x, y) {
     if (!this.scene) return true;
     if (x < 0 || y < 0 || x >= MAP_W || y >= MAP_H) return true;
@@ -953,7 +993,7 @@ export class Overworld {
         if (!this.solid(nx, ny)) {
           p.x = nx; p.y = ny;
           p.moving = true;
-          if (Math.floor(this.time * 6) % 2 === 0) audio.sfx('move');
+          this._footfall();
           this.checkTile();
           if (this.onMove) this.onMove(p.x, p.y);
         }

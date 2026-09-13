@@ -4,7 +4,8 @@ import { audio } from './audio.js';
 import * as pixel from './pixel.js';
 import * as sprites from './sprites.js';
 import * as lootart from './lootart.js';
-import { createBattleFX, DAMAGE_KIND, trialsFromFeedback } from './fx.js';
+import { createBattleFX, DAMAGE_KIND, trialsFromFeedback,
+         screenShake, stopScreenShake, SHAKE } from './fx.js';
 import * as puzzleui from './puzzleui.js';
 import { IncantationUI } from './incantui.js';
 import { TitleScreen } from './title.js';
@@ -14,6 +15,11 @@ import { Overworld } from './overworld.js';
 import { Visualiser, hasViz } from './viz.js';
 import { WorldUI } from './worldui.js';
 import * as partyui from './partyui.js';
+/* Not for drawing — fx.js does that. For asking what a creature IS: its
+ * `family` (the element it is made of) and its role in MONSTER_ROLES are the
+ * two fields audio.warCry() builds a voice out of, and this file is where a
+ * fight has a bestiary sprite key in its hand. */
+import * as monsterart from './monsterart.js';
 /* The ten systems that had no door. Each one owns its own screens, its own
  * styling and its own timers, and borrows this file's chrome through uikit's
  * HOST — the same bargain partyui.js already makes. */
@@ -80,6 +86,10 @@ const G = {
   incantCards: [],
   // The worldui/partyui instance currently mounted in #panel-body.
   child: null,
+  // WHICH BUILDING THE PLAYER IS STANDING IN, by screen id, or null for
+  // outdoors. The one record of it, so a door can never close twice or be left
+  // hanging open behind somebody who took a side exit. See INTERIOR.
+  interior: null,
   // The live Mini-Repo. It owns #repo-host and a clock, which is why every
   // path that leaves the fight destroys it first.
   repo: null,
@@ -387,6 +397,19 @@ function markdownish(text) {
 }
 
 function show(screen) {
+  /* A LOOP OUTLIVES THE MAP OTHERWISE.
+   *
+   * audio.sfxLoop() is a STATE, not an event: the ice slide and the lava bed
+   * run until somebody stops them, and the overworld's own loop is the only
+   * thing that would — which is exactly the thing that stops running when the
+   * screen changes. So the screen change stops them, here, in the one function
+   * every screen change goes through. Idempotent, and free when there are none.
+   * The transform goes with them: a shake frozen mid-throw by a screen change
+   * leaves the world canvas permanently three pixels to the left. */
+  if (G.screen !== screen) {
+    audio.stopLoops();
+    stopScreenShake();
+  }
   G.screen = screen;
   // A mounted child panel keeps its own timers and listeners. Leaving the panel
   // screen without telling it is the fifth leak this file is not going to have.
@@ -684,7 +707,18 @@ function applySettings() {
   document.body.classList.toggle('reduced-motion', !!s.reduced_motion);
   document.body.classList.toggle('high-contrast', !!s.high_contrast);
   document.documentElement.style.setProperty('--scale', s.text_scale || 1);
+  /* setEnabled(false) calls silence(), which clears `current` and tears the
+   * recording down; setEnabled(true) used to restart nothing, so switching
+   * Audio off and on again left the game mute until the next screen change
+   * happened to call play(). Re-enabling has to resume. */
+  const wasOff = !audio.enabled;
   audio.setEnabled(!!s.music);
+  if (wasOff && s.music) {
+    try {
+      const region = currentRegion();
+      audio.play((region && region.music) || 'overworld');
+    } catch (e) { /* audio is never load-bearing */ }
+  }
   if (s.vol_master !== undefined) audio.setMaster(s.vol_master);
   if (s.vol_music !== undefined) audio.setMusic(s.vol_music);
   if (s.vol_sfx !== undefined) audio.setSfx(s.vol_sfx);
@@ -1098,6 +1132,13 @@ const CODEX_PAGES = [
 function openChest(marker) {
   const key = 'gauntlet-chest-' + marker.id;
   const read = !!localStorage.getItem(key);
+  /* THE LID, EVERY TIME — and it says which kind of chest this is before the
+   * player has read a word of the modal. audio.chest(false) is a lid and a
+   * chime; audio.chest(true) is the same lid with nothing under it, which is
+   * the honest sound for a page you have already read. The shake is the lid
+   * hitting its stop, and it is the smallest one in the table. */
+  audio.chest(read);
+  screenShake(SHAKE.chest);
   if (!read) {
     localStorage.setItem(key, '1');
     audio.sfx('unlock');
@@ -1175,6 +1216,10 @@ async function startProblem(id, mode = 'adventure') {
 }
 
 function enterBattle(payload) {
+  // A fight started from inside a building — a hunt board, a sage's rung — is
+  // still leaving the building. One record of where the player is, one place
+  // that clears it.
+  closeInterior();
   // An IncantationUI from a previous fight owns #puzzle-host until it is told
   // otherwise, and renderPuzzle is about to want that node.
   destroyIncant();
@@ -1310,6 +1355,19 @@ function enterBattle(payload) {
   // the player into this fight.
   focusEditor({ keepSelection: true });
   audio.play(enemy.boss ? 'boss' : 'battle');
+  /* THE WAR CRY, ON THE FRAME THE FIGHT APPEARS.
+   *
+   * After the track starts, so the cry lands over the first bar rather than
+   * into silence, and after show() so it cannot arrive before the thing making
+   * it is on screen. The element comes off the payload the server already sent
+   * — `element.enemy` is enemy_vitals.element — so a FIRE wolf and a COLD wolf
+   * are audibly the same animal in two different coats, which is the whole
+   * claim warCry() makes. A boss gets a bigger throat: `tier` is read from
+   * enemy.boss inside cryInfo, and the delay lets its name card land first. */
+  const cryFamily = ((payload.element || {}).enemy)
+    || ((payload.enemy_vitals || {}).element || '');
+  if (enemy.boss) setTimeout(() => warCry(enemy, { family: cryFamily, power: 1.25 }), 420);
+  else warCry(enemy, { family: cryFamily });
 
   if (enemy.boss && enemy.taunt) {
     audio.sfx('boss');
@@ -1349,6 +1407,64 @@ function explainBlank() {
     + 'marker — with the expression that belongs there, then cast.',
     'Your cursor is already sitting on it.',
   ], mentor.sprite);
+}
+
+
+/* ======================================================================
+ * WHAT THE THING SOUNDS LIKE
+ * ======================================================================
+ *
+ * audio.warCry() builds a cry out of a BODY PLAN and an ELEMENT, and both of
+ * those already exist in this tree — so nothing here invents a taxonomy, it
+ * only carries the two fields across.
+ *
+ *   the plan     monsterart.MONSTER_ROLES[key], plus the resolved key's own
+ *                NAME for the three plans that table has no word for. Which is
+ *                why `name` below is the monsterart key and NOT enemy.name:
+ *                the bestiary calls its creatures TOTAL and SEEN — Python
+ *                constructs, not animals — while `sprite` is the animal, and
+ *                monsterart resolves that sprite against this region's roster
+ *                into a key like `skullswarm` or `bonepike`. Handing over
+ *                "SEEN, the Hollow Set" would match nothing and every creature
+ *                in the game would be a runner.
+ *
+ *   the element  the SERVER'S, first: enemy_vitals.element is what this fight
+ *                is actually being fought against, and it is the field the
+ *                specials and the wheel are already reading. monsterart's own
+ *                `family` is the fallback for a payload that has not got one —
+ *                a sealed run withholds the reading, and the sealed run still
+ *                gets a cry, just not a tinted one it could be read off.
+ *
+ * A creature at a time. warCry() drops anything inside 120ms of the last one,
+ * so anywhere more than one thing cries — the incantation field, which holds up
+ * to four live names — the calls are staggered past that. See fieldCry().
+ */
+function cryInfo(enemy, regionId) {
+  const e = enemy || {};
+  const boss = !!e.boss;
+  const key = monsterart.monsterKeyFor(e.sprite || e.name || '',
+                                       { region: regionId || '', apex: boss });
+  const spec = monsterart.MONSTERS[key] || {};
+  return {
+    key,
+    family: spec.family || 'NEUTRAL',
+    role: monsterart.MONSTER_ROLES[key] || '',
+    tier: boss ? 'BOSS' : (e.rank || e.tier || ''),
+  };
+}
+
+/** One creature, once. `family` overrides what monsterart thinks it is made of,
+ *  because the fight's own element is the better answer when there is one. */
+function warCry(enemy, { region = '', family = '', power = 1 } = {}) {
+  const info = cryInfo(enemy, region || currentRegion().id);
+  try {
+    return audio.warCry(info.key, {
+      family: family || info.family,
+      role: info.role,
+      tier: info.tier,
+      power,
+    });
+  } catch (e) { return false; }
 }
 
 function ensureStage() {
@@ -2568,6 +2684,17 @@ async function playElementalExchange(result, fb) {
   // which is every number this needs and none it has to work out.
   const et = result.enemy_turn;
   if (et && et.acted) {
+    /* IT SPEAKS WHEN IT SWINGS. The cry opens its turn, ahead of the special
+     * and well ahead of the blow, because a creature that cried after hitting
+     * you would be reacting rather than attacking. Louder when it spent focus
+     * on something: `power` is the one dial warCry takes that does not change
+     * which creature it is. */
+    warCry((result.enemy || G.encounter && G.encounter.enemy) || {}, {
+      family: (result.element || {}).enemy
+        || ((result.enemy_vitals || {}).element || ''),
+      power: et.special ? 1.2 : 0.9,
+    });
+    await beat(150);
     if (et.special) {
       G.fx.statusTick({ status: et.special.name, element: et.special.element,
                         damage: 0, side: 'enemy', label: et.special.name });
@@ -3204,6 +3331,17 @@ async function doSubmit() {
   const label = btn.textContent;
   btn.disabled = true;
   btn.textContent = 'CASTING…';
+  /* THE RELEASE, ON THE PRESS — not on the answer.
+   *
+   * Everything else about this exchange waits for the server, and it should:
+   * the damage, the trials and the element's reading are all the engine's. The
+   * sound of the spell LEAVING THE HAND is not. Playing it when the grade comes
+   * back would put a cast noise a whole round trip after the click, which reads
+   * as lag rather than as casting. castElement is told which element the player
+   * is made of — `element.player` off the payload, kept on G.hud — so a FIRE
+   * caster and a VOID caster do not press the same button and hear the same
+   * thing. */
+  audio.castElement(((G.hud || {}).element || {}).player || 'neutral');
   if (G.puzzle) {
     try {
       const answer = G.puzzle.answer();
@@ -3288,9 +3426,26 @@ async function showResult(result) {
        * its place: freeze, flash, the silhouette changes under the white, the
        * boss speaks, and then one sentence saying what just got worse. */
       if ((result.boss || {}).advanced) await playPhaseTurn(result);
-      else if (result.solved) await G.fx.victory({ rank: result.rank, xp: result.xp,
-                                                   loot: result.loot });
-      else await G.fx.defeat({ cause: (result.analysis || {}).root_cause });
+      else if (result.solved) {
+        /* THE KILL, AND THEN THE WIN. Two events, and they were one sound.
+         * `victory` is the RUN's fanfare — the rank, the XP, the loot. This is
+         * the creature stopping, on the frame it stops, ahead of any of that.
+         * A phase turn never reaches here: the thing is still standing.
+         *
+         * MEASURED, and this is why the pause exists: `defeat` runs 828ms and
+         * fx.victory() opens with its own `victory`/`crit` on its first frame,
+         * so without a beat between them the two land 3ms apart and the fall is
+         * buried under the fanfare. A third of a second puts the fanfare on the
+         * TAIL of the fall, which is where a fanfare goes. Reduced motion does
+         * not get the pause: it is pacing, and that setting already means
+         * "stop making me wait for the animation". */
+        audio.sfx('defeat');
+        if (!(G.state && G.state.settings.reduced_motion)) {
+          await new Promise(r => setTimeout(r, 360));
+        }
+        await G.fx.victory({ rank: result.rank, xp: result.xp,
+                             loot: result.loot });
+      } else await G.fx.defeat({ cause: (result.analysis || {}).root_cause });
     } catch (err) { /* the report must appear even if the animation cannot */ }
   }
   // Outside the try: the numbers must land on the strip whether or not the
@@ -3555,7 +3710,9 @@ async function showResult(result) {
     toast('LOOT', result.loot.name, result.loot.kind === 'consumable' ? '' : 'gold');
   }
   if (result.metal) {
-    audio.sfx('unlock');
+    // Picked up, not unlocked. `loot` above is the fanfare a drop earns; this
+    // is the smaller, brighter "you took it" that everything else earns.
+    audio.sfx('pickup');
     toast('METAL', `${result.metal.units} ${result.metal.name} — ${
       result.metal.held} in the bag.`, 'gold');
   }
@@ -3574,8 +3731,17 @@ async function showResult(result) {
     const points = result.unspent_points;
     setTimeout(() => {
       if (!$('#modal-bg').classList.contains('show')) showLevelUp(levels, points);
-      else toast('LEVEL UP', `Level ${G.state.player.level} — ${points} point(s) `
-        + 'waiting in GEAR.', 'gold');
+      else {
+        /* THE SILENT LEVEL. A level gained on a fight that ends in a report —
+         * which is most of them — took the toast branch, and the toast branch
+         * had no sound at all: showLevelUp() owned the fanfare and showLevelUp()
+         * was the branch that did not run. Observed in a real clear: rank S,
+         * one level, and nothing between `loot` and the next click. */
+        audio.sfx('levelup');
+        setTimeout(() => audio.sfx('firework'), 260);
+        toast('LEVEL UP', `Level ${G.state.player.level} — ${points} point(s) `
+          + 'waiting in GEAR.', 'gold');
+      }
     }, 400);
   }
 }
@@ -3671,6 +3837,8 @@ function playStoryQueue() {
 function returnToWorld() {
   clearInterval(G.timer);
   stopViz();
+  // The door shuts behind you on the way out to the field, wherever you were.
+  closeInterior();
   // IncantationUI holds #puzzle-host, a document key listener and its own
   // clock. Leaving the screen without destroying it leaks all three.
   destroyIncant();
@@ -3725,6 +3893,51 @@ function incantEnemies(inc) {
     value: e.binding, note: e.taunt,
     hp: e.hp, hp_max: e.hp_max, dead: !e.alive,
   }));
+}
+
+/* WHAT A LIVE NAME SOUNDS LIKE.
+ *
+ * The field has no sprites and no bestiary row — its creatures are Python
+ * constructs, and `kind` is the only thing that says what one IS. So the cry's
+ * BODY PLAN is read off that, and it is not a third taxonomy: `kind` is
+ * incantation.py's own field, shipped on every field enemy, and the nine plans
+ * are audio.js's. The mapping is the only judgement here, and it is made once:
+ *
+ *   set     no contents and perfect memory — a body made of nothing
+ *   dict    many pairs answering at once, one hum
+ *   list    one long ordered thing that has to be walked end to end
+ *   int     a bare count. Dry, no lungs.
+ *   deque   it comes at you from both ends
+ *   heap    mass, and it only ever gives up its smallest
+ *   grid    mass, in two directions
+ *   func    it is not standing anywhere; it arrives when called
+ *
+ * The element is the FIELD'S OWN GROUND — elements.affinity_for(region), which
+ * the server already sends as `element.region` — so a field in the Tower and a
+ * field in the Mines do not sound the same even holding the same names. */
+const FIELD_PLAN = Object.freeze({
+  set: 'elemental', dict: 'swarm', list: 'legless', str: 'legless',
+  int: 'skeletal', tuple: 'skeletal', deque: 'creeper',
+  heap: 'heavy', grid: 'heavy', matrix: 'heavy', func: 'flyer',
+  node: 'creeper', index: 'flyer', bool: 'skeletal', none: 'elemental',
+});
+
+function fieldCry(enemies, inc) {
+  const family = ((inc || {}).element || {}).region || 'NEUTRAL';
+  const live = (enemies || []).filter(e => e && !e.dead).slice(0, 4);
+  live.forEach((e, i) => {
+    const plan = FIELD_PLAN[String(e.type || '').toLowerCase()] || '';
+    const fire = () => {
+      try {
+        audio.warCry(e.title || e.name || '',
+                     { family, plan, power: i ? 0.85 : 1 });
+      } catch (err) { /* a cry is never load-bearing */ }
+    };
+    // warCry drops anything inside 120ms of the last one, so a field of four
+    // cried at once is one cry and three silences. 180ms apart is four names.
+    if (i === 0) fire(); else setTimeout(fire, i * 180);
+  });
+  return live.length;
 }
 
 /* One rendered move, translated to the shape IncantationUI reads. */
@@ -3880,6 +4093,9 @@ function enterIncantation(payload) {
   G.incant = new IncantationUI(host, {
     mode: 'adventure',
     audio,
+    // What the player is made of, so the cast that leaves their hand is that
+    // element and not a generic noise. The server names it; this carries it.
+    element: ((inc.element || {}).player) || 'neutral',
     reducedMotion: !!(G.state && G.state.settings.reduced_motion),
     onCast: sendCast,
   });
@@ -3895,6 +4111,8 @@ function enterIncantation(payload) {
   setTab('trials');
   show('battle');
   audio.play('battle');
+  // The field announces itself, one name at a time, over the first bar.
+  fieldCry(incantEnemies(inc), inc);
 }
 
 /* An incantation field, as the HUD reads it. The same strip, because it is the
@@ -3966,6 +4184,9 @@ async function sendCast(payload) {
   const inc = r.incantation || {};
   G.incantRun = inc;
   if (r.moveset && G.incant) G.incant.setMoveset(incantMoves(r.moveset));
+  // A fight can change what the player is made of — boots, a draught, the
+  // ground. The cast follows it rather than being fixed at the door.
+  if (G.incant && inc.element) G.incant.setElement((inc.element || {}).player);
   refresh().then(() => {}).catch(() => { /* refresh already said so */ });
   if (G.incant) setTab(G.tab);
 
@@ -3977,6 +4198,12 @@ async function sendCast(payload) {
   // The strip moves with the fight: the field's log is what the other side just
   // did, and the belt's lock cleared the moment this cast resolved.
   paintCombatHud(hudFromIncant({ incantation: inc, pouch: r.pouch }));
+
+  /* "Land the line and nothing reaches you but what it saved up for. Miss, and
+   * it swings." — the field's own rule, printed on the screen, and until now
+   * the swing made no sound at all. The names that are still standing are the
+   * ones that answer. */
+  if (!r.correct && !(r.cleared || inc.cleared)) fieldCry(enemies, inc);
 
   // Let the last hit land before the report. If the player walked out inside
   // those nine hundred milliseconds, there is nothing left to report on.
@@ -6370,6 +6597,12 @@ function showForged(r) {
 
 function showLevelUp(levels, points) {
   audio.sfx('levelup');
+  /* A level is the one moment in this game that is unambiguously GOOD, and it
+   * had a single rising arpeggio and nothing else. The firework goes over the
+   * top of it — one report, over the fanfare rather than instead of it — and a
+   * level gained at the end of a long fight is worth a bang. */
+  setTimeout(() => audio.sfx('firework'), 260);
+  if (levels > 1) setTimeout(() => audio.sfx('firework'), 620);
   const lo = G.state.loadout;
   const attrs = Object.entries(lo.attribute_info).map(([key, info]) =>
     `<button class="btn" data-lvl-attr="${key}" style="text-align:left;
@@ -7670,9 +7903,57 @@ const SCREENS = {
   finale: () => mountWorldScreen(finaleui, finaleui.paintFinaleCard),
 };
 
+/* ======================================================================
+ * THE DOOR IS THE SCREEN TRANSITION
+ * ======================================================================
+ *
+ * This game has no walk-through-a-doorway animation; it cuts. So the cut IS
+ * the door, and the only thing that can say a door happened is the sound —
+ * which is exactly why audio.door() exists and takes `closing`. A player who
+ * clicks TOWN hears a door open, and the one who clicks away hears it shut
+ * behind them.
+ *
+ * FIVE SCREENS, not fifteen. `arts`, `regalia`, `rollcall` and the rest are
+ * reference pages — reading a list is not walking into a building, and a door
+ * on every panel would turn the one signal that means "you have gone somewhere"
+ * into chrome. The five below are PLACES: a square with five people standing on
+ * it, a sage's hall, a hunter's board, a workshop, and two doors heavy enough
+ * that the game has already built a screen about opening them.
+ */
+const INTERIOR = Object.freeze({
+  town:  { heavy: false },
+  sage:  { heavy: false },
+  hunt:  { heavy: false },
+  repos: { heavy: false },
+  keys:  { heavy: true },   // fourteen bosses, fourteen roads, ONE DOOR
+  exam:  { heavy: true },   // and the one you need all fourteen for
+});
+
+/** Shut whatever the player is standing in. Idempotent: G.interior is the one
+ *  record of where they are, so a door can never close twice or hang open. */
+function closeInterior() {
+  const id = G.interior;
+  if (!id) return false;
+  G.interior = null;
+  audio.door(true, { heavy: !!(INTERIOR[id] || {}).heavy });
+  return true;
+}
+
+function openInterior(id) {
+  const spec = INTERIOR[id];
+  if (G.interior === id) return false;
+  closeInterior();
+  if (!spec) return false;
+  G.interior = id;
+  audio.door(false, { heavy: !!spec.heavy });
+  if (spec.heavy) screenShake(SHAKE.door);
+  return true;
+}
+
 function go(id) {
   audio.resume();
   audio.sfx('select');
+  if (id !== 'world') openInterior(id);
   const open = SCREENS[id];
   if (!open) { toast('NO SUCH SCREEN', `There is no screen called ${id}.`, 'red'); return; }
   if (id === 'world') { open(); return; }
@@ -8046,6 +8327,23 @@ async function boot() {
   // one thing overworld.js's budget is written to avoid.
   G.overworld.stateSource = () => huntui.stateFor(G.state);
   G.overworld.onEnter = onNodeEnter;
+  /* THE SHAKE, HANDED TO A FILE THAT IS OWNED ELSEWHERE.
+   *
+   * web/js/overworld.js belongs to the pass building the zones — the ice, the
+   * lava, the footsteps — and it does not import fx.js. Rather than making that
+   * pass add an import to take a screen shake, the shake is hung on the
+   * instance here, next to onEnter and onApexContact, which is how everything
+   * else this file lends the overworld is lent. The call over there is one
+   * guarded line and nothing has to be re-derived:
+   *
+   *     this.shake && this.shake(9);        // lava diverted, on the same frame
+   *     this.shake && this.shake(4);        // a slide ending against something
+   *
+   * fx.screenShake honours the reduced-motion setting itself and returns false
+   * rather than throwing when there is nothing to shake, so the guard above is
+   * for the field being absent, never for the call failing. */
+  G.overworld.shake = (mag, opts) => screenShake(mag, opts);
+  G.overworld.SHAKE = SHAKE;
   /* The canvas draws the telegraph wordlessly, which is deliberate; this is the
    * words, on the region card, where a number belongs. */
   G.overworld.onApexStage = (stage, info) => {

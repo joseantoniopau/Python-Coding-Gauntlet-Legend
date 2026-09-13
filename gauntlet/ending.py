@@ -708,6 +708,32 @@ def _passed(state: dict, block: dict, *, report: dict, readiness,
             transfer_summary, cleared_bosses, names, weak_regions, encounter,
             king_voice, now) -> dict:
     """The reward, paid in the three things the player asked for."""
+    # THE SWEEP IS CLOSED HERE, AND NOWHERE ELSE.
+    #
+    # `captives.final_release()` is what the module's own docstring calls "the
+    # only call the last fight has to make", and docs/12 §7 calls it "the
+    # existing single call the finale makes" — and until this line there was no
+    # production caller for it anywhere in gauntlet/. `liberate()` empties the
+    # index; it does not set `final_release` and it does not clear `retaken`.
+    # So at the credits all five zone companions still read RETAKEN, the boons
+    # `lamps_both_ends` and `the_square_drill` stayed suspended forever, and
+    # `boon_effects` was permanently missing {'mana_regen': 1, 'srs_preview':
+    # True} — the one reversal the whole suspension was allowed to cost
+    # anything for never happened.
+    #
+    # IT RUNS FIRST, before `liberate`, and the order is load-bearing twice
+    # over. The people the Interviewer is holding were CARRIED OUT by a player
+    # who beat him, so they belong in `freed` and not in the index collapse's
+    # `released` — the two lists never merge, and which one a name lands in is
+    # the difference between "you went and got them" and "the thing holding
+    # them failed". And `roll_call(state)` is read into the scene below, so the
+    # sweep has to be reversed before the roll call is built or the finale
+    # stands five struck-through names behind the player at the title card.
+    #
+    # `final_release()` is idempotent and calls `free('the_interviewer')`
+    # itself, which returns {} if that fight already paid out, so nothing here
+    # is paid twice.
+    given_back = captives.final_release(state)
     release = captives.liberate(state, passed=True)
     scene = finale.view(
         state,
@@ -740,6 +766,14 @@ def _passed(state: dict, block: dict, *, report: dict, readiness,
                "stops. Everyone still filed is out.",
         "captives_freed_now": release["counts"]["released_now"],
         "release": release,
+        # Everybody the Interviewer went back for after the second-to-last
+        # rung, handed back. Empty on a run where the sweep never fired, which
+        # is most of them. NOT passed into finale.cutscene(): that function's
+        # keyword list is closed and a name it does not know raises. The finale
+        # already SHOWS this — the roll call these people are on stops being
+        # struck through — and this is the number a panel wants to print.
+        "given_back": given_back["given_back"],
+        "final_release": given_back,
         "cutscene": scene,
         "world_changed": True,
         "world": {

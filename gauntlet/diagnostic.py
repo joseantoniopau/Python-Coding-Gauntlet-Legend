@@ -291,5 +291,14 @@ def seed_skills(skills: dict, placement: Placement) -> dict:
             tier = curriculum.PRODUCTION_TIER
             state.tier_clears[tier] = state.tier_clears.get(tier, 0) + 1
             state.tier_unaided[tier] = state.tier_unaided.get(tier, 0) + 1
+            # AND SAID IN THE VOCABULARY THAT MEANS IT. The writing trial is a
+            # real unaided EASY clear of a whole function on a blank screen —
+            # rung 4 by definition, since there is no scaffold in the placement
+            # — so it is filed as one. Without these two the clear reached
+            # `has_produced_code` only through `untracked_production`, the
+            # exemption for saves written before rungs were recorded, which
+            # would have this fresh save claiming to be an old one.
+            state.production_seen += 1
+            state.production_unaided += 1
             state.confidence = min(state.confidence, 18.0)
     return skills

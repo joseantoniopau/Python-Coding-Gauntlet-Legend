@@ -1,7 +1,21 @@
 /* headless.mjs — drive the real client against the real server, with no browser.
  *
- *     python3 run.py serve --port 8801 &
+ *     GAUNTLET_DATA_DIR=$(mktemp -d) python3 run.py serve --port 8801 &
  *     node scripts/verify/headless.mjs 8801
+ *
+ * THE DATA DIR IS NOT OPTIONAL, and the env var above is the whole reason.
+ * This harness DRIVES A REAL GAME: it walks the character, starts encounters,
+ * and opens a 115-minute FINAL_EXAM which then seals the world layer behind
+ * HTTP 409s. On a server started without GAUNTLET_DATA_DIR, the game it does
+ * that to is the PLAYER'S OWN SAVE — which is exactly what happened once, from
+ * the command this header used to recommend.
+ *
+ * So it asks /api/ping, which reports whether the server is on a throwaway
+ * dir, and exits 2 if it is not. A verification harness must not be able to do
+ * that to somebody's game, and "remember the env var" is not a mechanism.
+ *
+ * To run it against the real save anyway — there is no good reason, but it is
+ * the operator's game — set GAUNTLET_ALLOW_LIVE_SAVE=1.
  *
  * Drive the real client headlessly against the real server.
  *
@@ -24,8 +38,39 @@ const PORT = process.argv[2] || '8801';
 // rather than passed in, because that is where a browser gets it too.
 const page = await (await fetch(`http://127.0.0.1:${PORT}/`)).text();
 const TOKEN = (page.match(/__GAUNTLET_TOKEN__ *= *"([^"]*)"/) || [])[1] || '';
-if (!TOKEN) { console.error(`no server on ${PORT}. run: python3 run.py serve --port ${PORT}`); process.exit(2); }
+if (!TOKEN) {
+  console.error(`no server on ${PORT}. run: `
+    + `GAUNTLET_DATA_DIR=$(mktemp -d) python3 run.py serve --port ${PORT}`);
+  process.exit(2);
+}
 const BASE = `http://127.0.0.1:${PORT}`;
+
+// Refuse the player's save before touching it.
+{
+  let ping = null;
+  try {
+    ping = await (await fetch(`${BASE}/api/ping`,
+      { headers: { 'X-Gauntlet-Token': TOKEN } })).json();
+  } catch (e) { ping = null; }
+  if (!ping || !ping.ok) {
+    console.error(`the server on ${PORT} did not answer /api/ping; refusing to drive it`);
+    process.exit(2);
+  }
+  if (!ping.scratch && process.env.GAUNTLET_ALLOW_LIVE_SAVE !== '1') {
+    console.error(
+`REFUSING TO RUN: the server on port ${PORT} is not on a throwaway data dir
+
+    ${ping.data_dir || '(this server is too old to say — treat that as the real save)'}
+
+This harness walks the character, starts encounters and can open a 115-minute
+FINAL_EXAM that seals the world layer behind HTTP 409s. Start a throwaway one:
+
+    GAUNTLET_DATA_DIR=$(mktemp -d) python3 run.py serve --port ${PORT} &
+
+(or set GAUNTLET_ALLOW_LIVE_SAVE=1 if you really mean this save.)`);
+    process.exit(2);
+  }
+}
 
 globalThis.window.__GAUNTLET_TOKEN__ = TOKEN;
 const realFetch = globalThis.fetch;

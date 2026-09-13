@@ -201,22 +201,30 @@ const DAMAGE_STYLE = {
  *
  * `weather` names the ambient particle style an area of this element wears, so
  * a cold region reads cold before anything has been cast in it.
+ *
+ * `sfx` is the element ARRIVING, and it used to be four generic names across
+ * seven elements: FIRE and LIGHTNING both played `crit`, COLD and POISON both
+ * played `tick`, BRUTE and NEUTRAL both played `hit`. Six of the seven motions
+ * above are unmistakable on screen and three of them were indistinguishable in
+ * the ear. audio.castElement() now owns seven ARCHITECTURES — they differ in
+ * which layers exist at all, not in a pitch — and `sfx('cast_fire')` reaches
+ * the same code, so the table names them and the ear gets what the eye has.
  */
 export const ELEMENT_FX = Object.freeze({
   FIRE:      { colour: '#e06a3c', dark: '#8f3a1e', motion: 'rise',
-               weather: 'ember', sfx: 'crit' },
+               weather: 'ember', sfx: 'cast_fire' },
   COLD:      { colour: '#7ec8ff', dark: '#2f6d9e', motion: 'converge',
-               weather: 'snow', sfx: 'tick' },
+               weather: 'snow', sfx: 'cast_cold' },
   POISON:    { colour: '#8fd07a', dark: '#3f7a3a', motion: 'seep',
-               weather: 'motes', sfx: 'tick' },
+               weather: 'motes', sfx: 'cast_poison' },
   BRUTE:     { colour: '#bf8f4f', dark: '#6f4f28', motion: 'slam',
-               weather: 'ash', sfx: 'hit' },
+               weather: 'ash', sfx: 'cast_brute' },
   LIGHTNING: { colour: '#f2dc6a', dark: '#9a8220', motion: 'strike',
-               weather: 'rain', sfx: 'crit' },
+               weather: 'rain', sfx: 'cast_lightning' },
   VOID:      { colour: '#6a4f8f', dark: '#2f2445', motion: 'implode',
-               weather: 'ash', sfx: 'spell' },
+               weather: 'ash', sfx: 'cast_void' },
   NEUTRAL:   { colour: '#9b96b8', dark: '#4a4450', motion: 'plain',
-               weather: '', sfx: 'hit' },
+               weather: '', sfx: 'cast_neutral' },
 });
 
 /* elements.MATCHUP_MULT's floor and ceiling. Everything elemental on this stage
@@ -892,8 +900,17 @@ export class BattleFX {
     if (kind === DAMAGE_KIND.CRIT) {
       this.effects.push(this._ring(ix, iy, style.colour, 45, 0.45));
     }
-    this._sfx(kind === DAMAGE_KIND.CRIT ? 'crit' : kind === DAMAGE_KIND.RESIST
-      ? 'tick' : 'hit');
+    /* MEASURED, NOT ASSUMED: this line used to read
+     *     CRIT ? 'crit' : RESIST ? 'tick' : 'hit'
+     * which gave a MISS and a HEAL the sound of a blow landing. The stage was
+     * already drawing them as readouts — no flash, no knock, no health taken —
+     * and then playing the impact over the top of that. `miss` did not exist
+     * when this was written; it does now. */
+    this._sfx(kind === DAMAGE_KIND.CRIT ? 'crit'
+      : kind === DAMAGE_KIND.MISS ? 'miss'
+      : kind === DAMAGE_KIND.HEAL ? 'shrine'
+      : kind === DAMAGE_KIND.RESIST ? 'tick'
+      : 'hit');
     return this;
   }
 
@@ -1261,7 +1278,16 @@ export class BattleFX {
       });
     }
 
-    this._sfx(opposed ? 'crit' : shrugged ? 'tick' : fx.sfx);
+    /* THE ELEMENT ALWAYS SPEAKS. It used to speak only in the middle case —
+     * an opposed hit played `crit` INSTEAD of the element and a shrugged one
+     * played `tick` instead — so the two readings a player most needs to hear
+     * apart, "this is a counter" and "this barely landed", were the two that
+     * threw the element away. Now the element's own voice is the blow and the
+     * matchup is a layer ON it: a counter adds the crit over the element, a
+     * shrug adds the thin tick, and either way you hear WHICH element. */
+    this._sfx(fx.sfx);
+    if (opposed) this._sfx('crit');
+    else if (shrugged) this._sfx('tick');
     await this._wait(this._t(0.22 + 0.26 * k, { keep: true }));
     if (this.cam) this.cam.release();
     return this;
@@ -2816,6 +2842,150 @@ body.reduced-motion .fx-canvas { transition: none; }
   }
 }
 
+
+/* ======================================================================
+ * THE SCREEN SHAKE OUTSIDE THE FIGHT
+ * ======================================================================
+ *
+ * battlescene.createCamera() is the camera, and this is NOT a second one. The
+ * camera moves a frame that fx.js draws itself, every frame, through one ctx
+ * transform — and the overworld is a canvas this module never touches: tiles.js
+ * paints it, overworld.js owns the loop, and neither of them has a camera to
+ * lend. So the world's half of the same gesture is a CSS transform on the
+ * canvas box, driven from here, with the camera's own curve on it:
+ *
+ *   translate   decaying noise, m*k*k, exactly camera.shake's falloff
+ *   kick        one shove along the blow and a spring back through centre,
+ *               sin(k*8.6) * (1-k)^2.2, exactly camera's _kick
+ *   overscan    a hair of scale, so the throw never uncovers the black behind
+ *               the canvas — the same job camera.baseZoom 1.03 is doing
+ *
+ * MOTION SICKNESS IS A FAILURE here too, and harder: this one moves a
+ * full-screen field of view rather than a 256x224 stage. The cap is eleven
+ * logical pixels and the strongest thing that calls it asks for nine.
+ *
+ * REDUCED MOTION TAKES ALL OF IT. The battle camera keeps a fifth of a shake
+ * because the frame it is moving is a small box on a still page; this one is
+ * the whole view, so `body.reduced-motion` returns false before a single
+ * transform is written and the SOUND is the whole event. That class is set by
+ * main.js applySettings() from the player's own setting, so the reading is
+ * always current and there is no second copy of the flag to go stale.
+ */
+const SHAKE_CAP = 11;
+const SHAKE_TARGET = '#world-canvas';
+
+/* A hash, not Math.random: the same shake is the same shake, which is what
+ * lets a harness measure one. */
+function shakeNoise(x) {
+  const s = Math.sin(x * 12.9898) * 43758.5453;
+  return s - Math.floor(s);
+}
+
+const worldShake = {
+  el: null, mag: 0, t: 0, dur: 0, kick: 0, kickDir: 1, kickT: 1,
+  raf: 0, last: 0,
+};
+
+function shakeReduced() {
+  try {
+    return !!(document.body && document.body.classList.contains('reduced-motion'));
+  } catch (e) { return false; }
+}
+
+function shakeResolve(target) {
+  if (target && target.nodeType === 1) return target;
+  try { return document.querySelector(target || SHAKE_TARGET); } catch (e) { return null; }
+}
+
+function shakeStep(now) {
+  const S = worldShake;
+  S.raf = 0;
+  if (!S.el) return;
+  const dt = Math.min(0.05, Math.max(0, (now - S.last) / 1000));
+  S.last = now;
+  S.t += dt;
+  let x = 0, y = 0;
+  let live = false;
+  if (S.t < S.dur) {
+    const k = Math.max(0, 1 - S.t / S.dur);
+    const m = S.mag * k * k;
+    x += (shakeNoise(S.t * 137.1) - 0.5) * 2 * m;
+    y += (shakeNoise(S.t * 91.7 + 9.3) - 0.5) * 2 * m * 0.7;
+    live = true;
+  }
+  if (S.kickT < 1) {
+    S.kickT += dt / 0.55;
+    const k = Math.min(1, S.kickT);
+    const sp = Math.sin(k * 8.6) * Math.pow(1 - k, 2.2);
+    x += S.kick * S.kickDir * sp;
+    y += S.kick * sp * 0.3;
+    live = true;
+  }
+  if (!live) { stopScreenShake(); return; }
+  // The overscan is proportional to the throw, so a small shake does not scale
+  // the field at all and a big one never shows the wall behind it.
+  const z = 1 + Math.max(Math.abs(x), Math.abs(y)) / 420;
+  S.el.style.transform = `translate3d(${x.toFixed(2)}px, ${y.toFixed(2)}px, 0) scale(${z.toFixed(4)})`;
+  S.raf = requestAnimationFrame(shakeStep);
+}
+
+/** Shake the world view.
+ *
+ *  @param mag   logical pixels of throw. 2 is a lid, 5 a door, 9 a diverted
+ *               river of lava. Clamped at 11.
+ *  @param opts  { dur, dirX, target }
+ *  @returns true if anything moved — false when the player has asked for less
+ *           motion, which callers may read but must never NEED, because the
+ *           sound is the event and the shake is the garnish.
+ */
+export function screenShake(mag = 4, opts = {}) {
+  if (shakeReduced()) return false;
+  const el = shakeResolve(opts.target);
+  if (!el) return false;
+  const m = Math.min(SHAKE_CAP, Math.max(0, Number(mag) || 0));
+  if (!m) return false;
+  const S = worldShake;
+  // A weaker shake never cuts a stronger one short. Same rule as camera.shake,
+  // and for the same reason: the chest lid must not flatten the lava.
+  const standing = S.el === el && S.t < S.dur
+    ? S.mag * Math.max(0, 1 - S.t / Math.max(0.01, S.dur)) : 0;
+  if (m <= standing) return true;
+  if (S.el && S.el !== el) stopScreenShake();
+  S.el = el;
+  S.mag = m;
+  S.t = 0;
+  S.dur = Math.max(0.05, Number(opts.dur) || 0.36);
+  S.kick = m * 0.55;
+  S.kickDir = opts.dirX < 0 ? -1 : opts.dirX > 0 ? 1
+    : (shakeNoise(m * 53.1) < 0.5 ? -1 : 1);
+  S.kickT = 0;
+  S.last = performance.now();
+  if (!S.raf) S.raf = requestAnimationFrame(shakeStep);
+  return true;
+}
+
+/** Put the view back. Called on any screen change: a transform left on the
+ *  canvas outlives the map it was shaking. */
+export function stopScreenShake() {
+  const S = worldShake;
+  if (S.raf) { cancelAnimationFrame(S.raf); S.raf = 0; }
+  if (S.el) { try { S.el.style.transform = ''; } catch (e) { /* gone */ } }
+  S.el = null; S.mag = 0; S.t = 0; S.dur = 0; S.kick = 0; S.kickT = 1;
+}
+
+/** What a shake is worth, by event, so the number lives in one table rather
+ *  than being re-invented at each call site. Four entries, and all four are
+ *  called: `chest` and `door` from main.js, `lava` and `ice` from overworld.js
+ *  through the `shake`/`SHAKE` pair main.js hangs on the instance. Nothing is
+ *  listed here that nothing asks for — an unreachable constant is how a table
+ *  like this starts lying. */
+export const SHAKE = Object.freeze({
+  chest: 2.5,        // a lid hitting its stop
+  door: 3,           // a heavy door, and only a heavy one
+  ice: 4,            // a slide ending against something
+  lava: 9,           // the diversion the player asked for by name
+});
+
 /* Convenience constructor for callers that would rather not use `new`. */
 export function createBattleFX(host, opts = {}) {
   return new BattleFX(host, opts);
@@ -2842,4 +3012,4 @@ export function trialsFromFeedback(feedback, combat) {
 
 /* 1.1.0 adds technique(): the forged blade's swing, scaled entirely by its
  * rung, and the camera hold frame in battlescene.js that it drives. */
-export const FX_VERSION = '1.2.0';   // 1.2: bossPhaseTurn, and the art phase finally reaches drawBoss
+export const FX_VERSION = '1.3.0';   // 1.3: screenShake(), the world's half of the camera

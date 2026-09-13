@@ -956,6 +956,145 @@ commit and its own verification pass.
 
 ---
 
+# §H. THE FIELD, AND WHY IT IS NOT THE STAGE'S PROBLEM
+
+§A moved the BATTLE raster onto 256x224 and left the field alone, on the
+grounds that the two are different pictures. They are — but the field was the
+last screen in the game not drawn on FF6's pixel scale, and it stayed that way
+for a whole release because nobody had written its arithmetic down.
+
+## H-1. What was wrong, measured
+
+`tiles.js` has always used **TILE 16**, which is FF6's own terrain tile,
+exactly. The tile was never the problem. `overworld.resize()` was:
+
+```js
+this.scale = Math.max(2, Math.min(4, Math.floor(Math.min(w / 340, h / 230))));
+```
+
+340 and 230 are not FF6's numbers and are not anything else's either. What they
+produced, measured live at devicePixelRatio 1 with the field canvas read off the
+laid-out page rather than guessed:
+
+| window | field canvas | scale | tiles across | tiles down | hero |
+|---|---|---|---|---|---|
+| 1280x800  | 950x753   | **2x** | 29.69 | 23.53 | 32x48 |
+| 1440x940  | 1110x893  | 3x | 23.13 | 18.60 | 48x72 |
+| 1600x1000 | 1270x953  | 3x | 26.46 | 19.85 | 48x72 |
+| 1920x1080 | 1590x1033 | 4x | 24.84 | 16.14 | 64x96 |
+| *FF6 field* | *256x224* | *1x* | *16.00* | *14.00* | *16x24* |
+
+A 1280x800 window showed **29.7 x 23.5 tiles** against FF6's 16 x 14 — better
+than four times the field of view by area — with the hero 48 pixels tall in a
+753-pixel frame. That is a strategy map with a walk cycle on it.
+
+> **A NOTE ON HOW THIS WAS FIRST MIS-DIAGNOSED, because the mistake is
+> instructive.** The brief this work started from reported the field at **scale
+> 1**, showing 69.4 x 55.8 tiles. It was not. The number came from a playwright
+> probe that computed `tilesAcross = canvas.width / 16` — dividing the backing
+> store by the tile size and never reading `overworld.scale` at all. The field
+> was at 3 on that window, not 1, and the hero was 72 pixels tall rather than
+> 24. **The complaint was right and every number attached to it was wrong**, and
+> the fix designed against those numbers would have been three times too strong.
+> Read the property. `overworld.js` exports `fieldScale()` and `fieldView()` now
+> so that nobody has to divide anything by hand again.
+
+## H-2. The rule, and the axis it honours
+
+FF6's field is **256x224 world pixels** — 16 tiles by 14. Our field canvas runs
+**1.26:1 to 1.54:1**; FF6's screen is 8:7, which is 1.14:1. No integer scale
+lands on 16 x 14 in both axes on a canvas that shape, so the rule has to say
+which axis it is honouring, and the two candidates are not close:
+
+- **Fit the WIDTH to 256.** At 1920x1080 the canvas is 1590 wide, so `s = 7` and
+  the player sees **9.2 rows** — less than two thirds of FF6's vertical field.
+  The frame closes over your head.
+- **Fit the HEIGHT to 224.** The rows stay at FF6's fourteen at every size, and
+  the extra monitor width buys extra COLUMNS, which is what a widescreen version
+  of a 4:3 game should spend it on.
+
+> **THE FIELD SCALE IS `round(viewH / 224)`**, floored by a column guard and
+> clamped. Round, not floor — floor is what was there, and it is what let the
+> view drift to twenty-three tiles across.
+
+```js
+const FF6_FIELD_H = 224;   // 14 tiles
+const MIN_COLS = 12;       // never a corridor
+fieldScale = clamp(min(round(viewH / 224), floor(viewW / (MIN_COLS * 16))), 2, 12)
+```
+
+## H-3. Every size, as adopted
+
+| window | field canvas | scale | tile px | cols | rows | hero |
+|---|---|---|---|---|---|---|
+| 1280x800  | 950x753   | **3x** | 48 | 19.79 | 15.69 | 48x72 |
+| 1440x940  | 1110x893  | **4x** | 64 | 17.34 | **13.95** | 64x96 |
+| 1600x1000 | 1270x953  | **4x** | 64 | 19.84 | 14.89 | 64x96 |
+| 1920x1080 | 1590x1033 | **5x** | 80 | 19.88 | 12.91 | 80x120 |
+| *FF6 field* | *256x224* | *1x* | *16* | *16.00* | *14.00* | *16x24* |
+
+Rows land between 12.91 and 15.69 against FF6's 14 — inside two rows at every
+size, and the launcher's own window lands on 13.95. Columns run 17.3 to 19.9;
+they are **not** held to sixteen and must not be, because the aspect ratio is
+the only thing paying for them.
+
+`SCALE_MIN` is **2** and that is not a retreat. Two is the scale 1280x800 was
+shipping at, and it is fixed by the height rule asking for 3 there, not by a
+floor. A floor of 3 wins against `MIN_COLS` on a 480-wide frame and quietly
+hands back ten columns — measured, before it was lowered. `SCALE_MAX` is **12**
+for the mirror-image reason: at 8, a 5120x2880 canvas goes straight back to
+forty tiles across, and a cap low enough to bite is a cap that reintroduces the
+bug on a bigger monitor.
+
+## H-4. What the zoom moved, and what it did not
+
+Raising `s` multiplies everything drawn inside the camera transform and nothing
+drawn outside it. Every layer was checked either way; the list is in
+`scripts/verify/field.mjs`. Two things were actually wrong:
+
+1. **The King's panel printed across the hero at any map edge.** `kingui.js`
+   computed its ceiling as `viewH / 2 + (8 - 24) * scale` — where the hero is
+   only while the camera is FREE. At the north edge the camera clamps, the hero
+   is 24 to 40 pixels down the frame, and `PANEL_TOP` is 28. Older than the
+   zoom; found because raising the scale made the clamped band worth measuring.
+   The panel now takes the hero's measured top and, when there is no room above
+   his head, prints **below his feet** instead.
+2. **The chevron over his head was on a half pixel.** `fillRect(p.px + 6, ...)`
+   with a float `p.px` and a float bob — the only primitive in the world layer
+   not landing on a whole world pixel, in a layer where the sprite beside it is
+   at `Math.round(p.px)`. `imageSmoothingEnabled` does not reach a `fillRect`,
+   so it was 4x2 fuzzy pixels at scale 2 and would have been 20x10 at scale 5.
+
+And one latent one, fixed on the way past: the camera clamp `max(0, min(worldW -
+spanX, ...))` pins to 0 and shows void when the view is wider than the map. It
+cannot happen at these four sizes and is one window-drag away at `SCALE_MIN`.
+
+## H-5. The terrain already has the tones
+
+The obvious next move after a zoom is to deepen the art, and the measurement
+says not to. Distinct colours in the base 16x16 ground tile, per biome, counted
+off the rendered canvas:
+
+| biome | ground | path | stone | sand | ground luminance span |
+|---|---|---|---|---|---|
+| wastes | 7 | 7 | 6 | 5 | 106 |
+| ruins | 7 | 7 | 4 | 5 | 149 |
+| forest | 7 | 7 | 5 | 5 | 123 |
+| swamp | 7 | 7 | 5 | 5 | 191 |
+| mountain | **5** | 7 | 5 | 5 | **24** |
+
+§3 asks for three tones. Every tile has four to seven, over a luminance span
+of a third to three quarters of the range. The tones are there; what the zoom
+changed is that they are now legible **as grain** rather than averaging into a
+texture. Whether that grain should become structure is an art-direction
+decision, not a defect, and it is not made here.
+
+The one measured flat spot is **mountain ground: five colours over a luminance
+span of 24** (231..255 — snow). At 80-pixel tiles that is a large near-uniform
+white. It is left alone deliberately: §1 says there is no headroom, so
+deepening it means taking range from something else, and that trade has to be
+made on purpose.
+
 # §G. HOW EACH CONTRACT IS PROVED
 
 No contract here is satisfied because the code stopped throwing. Each has a
@@ -984,6 +1123,11 @@ drawing shared the error. Every row now names the thing it actually renders.
 | §E classes | `scripts/verify/classes.mjs` — greyscale all fourteen rigs through `heroFrame()` on the DEFAULT KIT, 28 views each; assert the worst pair >= 8 cells and that nothing breaks into islands (§E-2b) |
 | death screen | `scripts/verify/death.mjs` — assert the words reach the FRAME after `WORDS_AT`, that changing a number in the report moves pixels, and that removing the kept line costs painted pixels |
 | weather | `scripts/verify/weather.mjs` — field counts scale with the frame area, so a raster move cannot silently thin a storm |
+| §H field scale | `scripts/verify/field.mjs` A — assert an integer scale at all four window sizes and the visible rows within two of FF6's fourteen |
+| §H camera | `field.mjs` B — 1360 walked frames per window; assert no void, the player centred whenever the clamp is not biting, and no frame-to-frame jump larger than the walk speed |
+| §H panel | `field.mjs` C — the King's words and the hero as two rectangles, at every scale, with the camera clamped at both map edges; assert they do not intersect |
+| §H lattice | `field.mjs` D — wrap the context for a drawn frame and assert every world-layer `fillRect`/`drawImage` coordinate is a whole world pixel |
+| §H storm | `field.mjs` E2 — count the particles inside the visible rect and the screen area they paint; assert the zoom does not thin the field's weather |
 | all | `scripts/verify/determinism.mjs` — no `Math.random()` in a draw path |
 
 
@@ -997,6 +1141,7 @@ drawing shared the error. Every row now names the thing it actually renders.
 - `web/js/monsterart.js`, `web/js/apex.js` — the monster/elite/apex rungs (§B)
 - `web/js/bosses.js`, `web/js/bossart.js` — boss art, the 64 and 96 rungs (§B)
 - `web/js/tiles.js` — terrain and autotiling
+- `web/js/overworld.js` — `fieldScale()`, `fieldView()` and the field camera (§H)
 - `web/js/spellfx.js` — spell effects, all keyed to `heroX`/`enemyX` (§F-7)
 - `web/js/lootart.js` — item art by rarity, and the per-class weapon families (§E)
 - `gauntlet/classes.py` — the six classes, authoritative (§E-1)

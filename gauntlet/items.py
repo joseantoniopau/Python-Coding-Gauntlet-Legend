@@ -1039,6 +1039,73 @@ CATALOGUE.extend([
 ])
 
 
+# --------------------------------------------------------------------------
+# THE FIVE ZONE COMPANION DROPS
+# --------------------------------------------------------------------------
+#
+# `zonecompanions.DROPS` is a MANIFEST, exactly as `hunters.TROPHIES` is: that
+# module does not own this file, so it wrote the five rows down in this file's
+# own `Item` field order and said that whoever wired the arc should transcribe
+# them. This is that transcription, and `zonecompanions.validate()` is the
+# thing that catches a drift rather than a comment promising there will not be
+# one — it cross-checks slot and rarity against `BY_ID` the moment these exist.
+#
+# WHY THEY MUST BE HERE AND NOT ONLY THERE. `zonecompanions.advance()` grants a
+# drop by appending its id to `state["inventory"]`, which is the one-line path
+# engine.py already uses everywhere it hands over gear. An id the catalogue has
+# never heard of is not an error anywhere — it is simply invisible:
+# `engine._item()` returns None for it, the loadout loop skips anything `_item`
+# cannot resolve, and `Game.equip` refuses with "you do not carry that". That
+# would make `skate_irons` — slot `feet`, and the thing §4.1 makes control
+# conditional on being EQUIPPED — a slot that can never be filled. The item the
+# arc is designed to make impossible to miss would be impossible to see.
+#
+# EFFECTS ARE EMPTY ON PURPOSE, and that is the manifest's own instruction. All
+# five are ZONE MECHANICS, not stat sticks: what they do lives in overworld.js
+# (the slide, the light mask, the sluice) and in the pack, read off the item's
+# PRESENCE in the bag. A number here would be a second, quieter reward on top of
+# the mechanic, and the arc's whole claim is that the item is strictly WORSE
+# than the person — `validate()` proves that on `with_them` vs `with_item`, and
+# a stat line here would be it silently paying some of the loss back.
+#
+# `source="quest"` because every one of them is handed over by a person, by
+# name, in a scene — never rolled, never in a chest, never on the ground. They
+# are `hidden=False`: they are meant to be looked at in the bag.
+
+ZONE_DROP_IDS: tuple = ("the_slate", "the_lamp", "skate_irons", "the_dart",
+                        "the_gear")
+
+CATALOGUE.extend([
+    _i(id='the_slate', name="The Slate", slot='trinket', rarity='UNCOMMON',
+       element='NEUTRAL', source="quest", icon="scroll", effects={},
+       flavour="A schoolteacher's slate, blank, with the chalk still tied to "
+               "the frame by a length of string that has been re-knotted more "
+               "than once."),                          # thessaly_brun, home
+    _i(id='the_lamp', name="The Lamp", slot='trinket', rarity='RARE',
+       element='BRUTE', source="quest", icon="lantern", effects={},
+       flavour="A runner's lamp, cut off short at the hip so it cannot catch "
+               "on anything, with a burn ladder up the handle where twelve "
+               "years of reaching past a wick have marked it."),
+                                                        # josa_fell, the_dark
+    _i(id='skate_irons', name="Skate Irons", slot='feet', rarity='RARE',
+       element='COLD', source="quest", icon="boots", effects={},
+       flavour="Strap-on irons off a rigger's kit, filed flat on the inside "
+               "edge by somebody who has spent a life judging distances in "
+               "bad light and would rather arrive where she aimed."),
+                                                        # hessa_dunmar, the_snow
+    _i(id='the_dart', name="The Poison Dart", slot='trinket', rarity='RARE',
+       element='POISON', source="quest", icon="thorn", effects={},
+       flavour="A Stringwood thorn, hollowed, charged with dried pitch, and "
+               "carried in a bone tube that is older than the thorn and has "
+               "held a great many of them."),           # halla_vane, the_green
+    _i(id='the_gear', name="The Mechanical Gear", slot='trinket', rarity='RARE',
+       element='FIRE', source="quest", icon="gear", effects={},
+       flavour="A spare sluice gear, cut for the seized gates and never "
+               "fitted, with the tooth-count scratched on the boss of it in a "
+               "lift engineer's hand."),                # greave, the_fire
+])
+
+
 def trophy_manifest_matches() -> list:
     """Every place this transcription could have drifted from hunters.py.
 
@@ -1838,6 +1905,13 @@ def roll_drop(*, difficulty: str, rank: str, luck: float, is_boss: bool,
     candidates = [it for it in CATALOGUE
                   if it.rarity == rarity and not it.hidden
                   and it.source != "upgrade"     # earned forms are never found
+                  # HANDED OVER IS NOT FOUND. A `quest` item is given by a named
+                  # person, in a scene, at a moment the arc chose — the five zone
+                  # companion drops are the whole of this source today. Leaving
+                  # them in the ordinary pool put a zone mechanic in a random
+                  # chest: measured at 158 of 4,275 rolled items, 3.7%, which is
+                  # the Lamp arriving before Josa Fell has said a word.
+                  and it.source != "quest"
                   and (it.source != "boss" or is_boss)]
     if skill:
         themed = [it for it in candidates if it.skill == skill]
