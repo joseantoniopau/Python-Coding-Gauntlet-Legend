@@ -77,13 +77,44 @@ area is an untaught lesson.
 
 THE FIRST MEETING IS SUPPOSED TO BE A DEFEAT
 --------------------------------------------
-At readiness zero an apex is fifty-two casts long and hits at 1.55x. That is not
-a fight the design expects you to win; it is a fight the design expects you to
-LOOK AT and leave, which is why leaving is free and why the telegraph starts
-twenty seconds before the creature exists. The intended shape of a first
-encounter is: hear it, see it, try it, run, go and fix the thing it showed you
-was missing, come back. The second meeting is twenty-six casts at 1.00x, and
-that is a real fight you can win.
+At readiness zero an apex is TWICE as long as it is at readiness a hundred, and
+hits harder into the bargain. That is not a fight the design expects you to win;
+it is a fight the design expects you to LOOK AT and leave, which is why leaving
+is free and why the telegraph starts twenty seconds before the creature exists.
+The intended shape of a first encounter is: hear it, see it, try it, run, go and
+fix the thing it showed you was missing, come back. The second meeting is half
+the length at 1.00x, and that is a real fight you can win.
+
+HOW LONG IS TWICE AS LONG: THE CHAPTER RAMP
+-------------------------------------------
+It used to be twenty-six casts prepared and fifty-two unprepared IN EVERY
+REGION, which meant the first hunter a player ever meets and the last one before
+the portal cost the same afternoon. Section B2 fixes that. Length now ramps
+along `curriculum.CHAPTERS`, three casts a rung:
+
+    chapter I    14 casts prepared   28 unprepared   strike 1.25x  TEACHES
+    chapter V    26 casts prepared   52 unprepared   strike 1.37x  TESTS
+    chapter XI   44 casts prepared   88 unprepared   strike 1.55x  TESTS
+
+Chapter V is the anchor and it is exactly what this file always said — the two
+constants CASTS_AT_READY and CASTS_AT_UNREADY keep their names and their values
+and now describe one rung instead of all eleven. Fourteen is inside the ordinary
+elite band this game already uses, which is the whole of section B3: an early
+apex is an ORDINARY-LENGTH FIGHT WEARING AN EXAM SHEET, short enough to lose,
+read, fix and come back to in one sitting, and only the later ones are long
+enough to be an occasion.
+
+The chapter is read off the GROUND — `curriculum.CHAPTERS[i].region`, the map's
+own statement about which chapter is taught where — and never off the player. A
+player who walks into the Graph Wastes during chapter III meets a chapter-VIII
+apex at full chapter-VIII length. Two lines:
+
+    THE CHAPTER SAYS HOW BIG THE PLACE IS.
+    READINESS SAYS WHERE IN THE PLACE YOU LAND.
+
+Fighting all seventeen once costs 520 landed lines prepared and 1040 unprepared.
+The flat design cost 442 and 884, so the total barely moved; what changed is
+that the first one is now 46% cheaper and the last one 69% dearer.
 
 WHAT THIS MODULE DOES NOT OWN
 -----------------------------
@@ -128,6 +159,12 @@ __all__ = [
     "BANDS", "band_for",
     "Scaling", "scale_for", "expected_cast_damage",
     "CASTS_AT_READY", "CASTS_AT_UNREADY", "STRIKE_AT_READY", "STRIKE_AT_UNREADY",
+    "CHAPTERS", "CHAPTER_COUNT", "CHAPTER_ANCHOR", "CHAPTER_FOR_REGION",
+    "CASTS_PER_CHAPTER", "UNREADY_RATIO", "STRIKE_AT_UNREADY_FLOOR",
+    "TEACHING_CHAPTERS", "TEACHES", "TESTS",
+    "chapter_for_region", "chapter_view", "casts_at_ready", "casts_at_unready",
+    "strike_at_unready", "stance_for_chapter", "pace_for", "ramp_table",
+    "playthrough_cost",
     "HUNT_STATES", "STATE_SPEED", "Hunt", "Moment", "new_hunt", "spawn_check",
     "hunt_step",
     "telegraph", "TELEGRAPH",
@@ -285,6 +322,11 @@ class Apex:
             "required_rung": self.required_rung,
             "exam_difficulty": self.exam_difficulty,
             "trophy": self.trophy,
+            # The ramp, per creature, so a roster row is self-describing and
+            # the client never has to join it against another table to say how
+            # long this one is. Derived at read time; nothing is stored.
+            "chapter": chapter_for_region(self.region),
+            "pace": pace_for(self.region),
         }
 
 
@@ -1189,7 +1231,7 @@ def readiness_from_game(state: dict, effects: dict | None, region_id: str, *,
 
 
 # ---------------------------------------------------------------------------
-# B2. What readiness buys, in casts
+# B1. What readiness buys, in casts
 # ---------------------------------------------------------------------------
 #
 # THE AUTHORED NUMBER IS CASTS. Hit points are derived from it.
@@ -1215,26 +1257,329 @@ def readiness_from_game(state: dict, effects: dict | None, region_id: str, *,
 # incoming multiplier a third lower — it does not buy you a free kill, because a
 # free kill is a fight with no typing in it and this game has nothing else.
 
-CASTS_AT_READY = 26      # readiness 100. Longer than any elite encounter, and
-                         # inside the "8 to 20 is the band, above 20 is a chore"
-                         # rule only because it is the area's biggest moment and
-                         # is meant to be remembered.
-CASTS_AT_UNREADY = 52    # readiness 0. Exactly double, and NOT a fight you are
-                         # expected to win. See "the first meeting is supposed
-                         # to be a defeat" in the module docstring.
+# THESE TWO ARE NO LONGER THE WHOLE GAME'S NUMBERS. THEY ARE CHAPTER V's.
+#
+# They kept their names and their values through the chapter ramp in B2 on
+# purpose: every other rung is derived from them by `casts_at_ready`, the
+# anchor is the chapter the Pass and the Marsh sit on, and `self_check` asserts
+# that `casts_at_ready(CHAPTER_ANCHOR) == CASTS_AT_READY`. A reader who arrives
+# here first and stops reading has an outdated picture rather than a wrong one.
+CASTS_AT_READY = 26      # readiness 100, AT CHAPTER V. Longer than any elite
+                         # encounter, and inside the "8 to 20 is the band, above
+                         # 20 is a chore" rule only because it is the area's
+                         # biggest moment and is meant to be remembered. The
+                         # chapter-I rung IS inside that band, at fourteen.
+CASTS_AT_UNREADY = 52    # readiness 0, at chapter V. Exactly double, and NOT a
+                         # fight you are expected to win. See "the first meeting
+                         # is supposed to be a defeat" in the module docstring.
+                         # The doubling is now UNREADY_RATIO and holds at every
+                         # chapter rather than at this one.
 
-STRIKE_AT_READY = 1.00   # what it hits for, as a multiple of a normal elite
-STRIKE_AT_UNREADY = 1.55
+STRIKE_AT_READY = 1.00   # what it hits for, as a multiple of a normal elite.
+                         # FLAT ACROSS ALL ELEVEN CHAPTERS: a prepared player is
+                         # fighting the fight the area was built to hand them,
+                         # and that fight gets no discount for being early.
+STRIKE_AT_UNREADY = 1.55 # readiness 0 AT CHAPTER XI, and the ceiling of the
+                         # ramp in B3. The floor is STRIKE_AT_UNREADY_FLOOR.
 
 # A ceiling on the derived pool, so an absurd loadout cannot produce an absurd
-# number. Reached only by a rung-nine counter-element build, which is a player
-# who has earned the right to see a big number.
-HP_CAP = 2400
+# number. It has to sit ABOVE the largest pool the ramp can legitimately ask
+# for, or the cap silently shortens a fight below its own `target_casts` and the
+# client's bar and the engine's tally stop agreeing about the same creature —
+# which is the one thing `hunt_view()["fight"]` exists to prevent. The old 2400
+# was comfortably above a flat fifty-two casts and is not above eighty-eight.
+# `_pool_cap_is_never_reached` sweeps the whole legal space and reports the
+# largest pool it found; `self_check` FAILS if that number ever reaches here.
+HP_CAP = 3600
+
+
+# ---------------------------------------------------------------------------
+# B2. THE CHAPTER RAMP: how big the place is
+# ---------------------------------------------------------------------------
+#
+# THE HUNT WAS TWENTY-SIX TO FIFTY-TWO CASTS EVERYWHERE, WHICH MEANT THE
+# VILLAGE AND THE CASTLE COST THE SAME AFTERNOON.
+#
+# That was the one number in this file that was authored once and then applied
+# seventeen times, and it is the number a player feels most. The Margin-Walker
+# is the first hunter anybody meets — it should be a lesson you can sit through
+# in one session. The Unnamed is the last thing walking the overworld before
+# the portal — it should be an event. Charging the same twenty-six casts for
+# both says neither.
+#
+# So length now ramps, and the axis it ramps along is the CHAPTER, because the
+# chapter is the unit of progress this game actually has: `curriculum.CHAPTERS`
+# is eleven rungs, each one names the region it is taught in, and the player
+# reads their own position in the game off it.
+#
+# WHY THIS IS NOT A LEVEL CHECK, WHICH IS THE ONLY THING THIS FILE FORBIDS
+#
+# The chapter used here is A PROPERTY OF THE GROUND, not of the player. It is
+# derived from `curriculum.CHAPTERS[i].region` — the map's own statement about
+# which chapter is taught where — and it is the same integer for everybody who
+# ever stands in that region. A player who walks into the Graph Wastes during
+# chapter III meets a chapter-VIII apex, at full chapter-VIII length, and a
+# player who comes back at chapter XI meets exactly the same one.
+#
+# Stated as the two-line division this whole module rests on:
+#
+#     THE CHAPTER SAYS HOW BIG THE PLACE IS.
+#     READINESS SAYS WHERE IN THE PLACE YOU LAND.
+#
+# Nothing here reads xp, level or mastery, and `_reads_no_progression` still
+# greps this file's own source to prove it. `curriculum.CHAPTERS` is consulted
+# for `.id`, `.title` and `.region` and for nothing else.
+#
+# HOW A REGION GETS A CHAPTER
+#
+# Ten of the seventeen regions are named by a chapter outright. The other seven
+# are the ones the curriculum passes through without stopping — the Stringwood,
+# the Caverns, the Pass, the Citadel, the Canopy, the Tower — and they inherit
+# the chapter of the last named region before them in world order, because that
+# is the chapter you are working on while you are standing in them. The tail
+# (the Castle) inherits the last chapter for the same reason.
+#
+# Where a region is named by TWO chapters — Python Village is both chapter I
+# and chapter II — the EARLIER one wins. An apex starts hunting you once you
+# have cleared three encounters and stayed a hundred and fifty seconds, which
+# is early in your time in a region, so the chapter you arrive on is the chapter
+# you meet it on.
+
+CHAPTERS = tuple(curriculum.CHAPTERS)
+CHAPTER_COUNT = len(CHAPTERS)
+
+
+def _chapter_by_region() -> dict:
+    """region id -> chapter index. Derived from the curriculum, never typed.
+
+    Forward-filled in WORLD ORDER, which is the order a player walks them in,
+    so an unclaimed region reads as the chapter that was open when they got
+    there. `self_check` prints the whole map so the fill is inspectable.
+    """
+    anchors: dict = {}
+    for index, chapter in enumerate(CHAPTERS):
+        anchors.setdefault(chapter.region, index)
+    out: dict = {}
+    running = 0
+    for row in world.REGIONS:
+        running = anchors.get(row["id"], running)
+        out[row["id"]] = running
+    return out
+
+
+CHAPTER_FOR_REGION = _chapter_by_region()
+
+# The rung the two legacy constants below describe. Chapter V is the Pass and
+# the Marsh, it is the middle of the eleven, and it is the region every worked
+# example and the default `curve()` in this file already points at. Anchoring
+# here is what lets CASTS_AT_READY and CASTS_AT_UNREADY keep both their names
+# and their values through a change that makes them vary.
+CHAPTER_ANCHOR = CHAPTER_FOR_REGION["twin_pointer_pass"]     # 4, chapter V
+
+# Three casts per chapter, which over the eleven rungs takes the prepared fight
+# from fourteen to forty-four. Fourteen is inside the ordinary elite band this
+# game already uses ("8 to 20 is the band, above 20 is a chore") and that is the
+# point of section B3: the FIRST apex is an ordinary-length fight wearing an
+# exam sheet, and only the later ones are long enough to be an occasion.
+CASTS_PER_CHAPTER = 3
+
+
+def chapter_for_region(region_id: str) -> int:
+    """Which chapter's ground this is. A map fact, not a player fact."""
+    return CHAPTER_FOR_REGION.get(region_id, 0)
+
+
+def _clamp_chapter(chapter: int) -> int:
+    return max(0, min(CHAPTER_COUNT - 1, int(chapter)))
+
+
+def chapter_view(chapter: int) -> dict:
+    """The chapter, in the words the player already sees on the ladder."""
+    row = CHAPTERS[_clamp_chapter(chapter)]
+    title = row.title
+    numeral = title.split(".", 1)[0].strip() if "." in title else str(chapter + 1)
+    return {"index": _clamp_chapter(chapter), "number": _clamp_chapter(chapter) + 1,
+            "id": row.id, "title": title, "numeral": numeral}
+
+
+# -- what the ramp pays out, per chapter ------------------------------------
+#
+# READINESS STILL HALVES THE FIGHT, AT EVERY CHAPTER, AND THAT IS AN INVARIANT
+# RATHER THAN A COINCIDENCE.
+#
+# The old pair was 26 and 52 and the doubling was a fact about two typed
+# numbers. Now that both ends move, the doubling is the thing being preserved:
+# the unprepared length is DERIVED from the prepared one by UNREADY_RATIO, so
+# there is no chapter at which a tuning pass can quietly make preparation worth
+# less. `self_check` asserts it over all eleven rungs, and it asserts that the
+# legacy constants still agree with the anchor rung, so the two names at the top
+# of this section cannot drift away from the table they now describe.
+
+UNREADY_RATIO = 2.0      # readiness 0 is exactly twice readiness 100. Everywhere.
+
+
+def casts_at_ready(chapter: int) -> int:
+    """How many landed lines this chapter's apex is, at readiness 100."""
+    return CASTS_AT_READY + CASTS_PER_CHAPTER * (_clamp_chapter(chapter)
+                                                 - CHAPTER_ANCHOR)
+
+
+def casts_at_unready(chapter: int) -> int:
+    """...and at readiness 0. Twice the above, by construction."""
+    return int(round(casts_at_ready(chapter) * UNREADY_RATIO))
+
+
+# -- B3. EARLY APEXES TEACH, LATE ONES TEST ---------------------------------
+#
+# Length is most of this, and the ramp above is most of the answer: the first
+# apex a player meets is fourteen casts prepared and twenty-eight unprepared,
+# which is a thing you can lose, look at, fix and come back to inside one
+# sitting. Fifty-two was not. A first lesson that costs an afternoon is a first
+# lesson most players take exactly once, and the lesson they actually take from
+# it is "do not go near those".
+#
+# The second half is HOW HARD IT HITS WHILE IT IS TEACHING YOU. An unprepared
+# player at chapter I has a twenty-point bar, no ward, no potions and no
+# companion, and 1.55x into that is the harshest ratio in the game arriving at
+# the exact moment the player is least able to read why. So the unprepared
+# strike ramps too — 1.25x at chapter I, 1.55x at chapter XI — and the PREPARED
+# strike stays flat at 1.00x at every chapter, because a prepared player is
+# fighting the fight the area was built to hand them and that fight does not get
+# a discount for being early.
+#
+# What that buys, concretely: the early apex leaves you standing long enough to
+# watch the tell fire twice. `Apex.tell` is authored for every one of the
+# seventeen and it is the only thing in this feature a player can LEARN as
+# opposed to buy, and a creature that flattens you before the second telegraph
+# has taught nothing.
+#
+# STRIKE_AT_UNREADY keeps its name and its value: it is now the CEILING of the
+# ramp rather than a flat rate, and `tests/test_hunters.py` pins it at 1.55 for
+# exactly the reason it always did — one blow must never take a quarter of the
+# bar. The floor is a new number and it is the only one here that is not derived.
+
+STRIKE_AT_UNREADY_FLOOR = 1.25    # chapter I. Hard, and survivable enough to read.
+
+# Where the ramp stops teaching and starts testing. Chapters I-IV are the four
+# rungs before `curriculum` starts naming algorithm families the player did not
+# choose; they are also, not by accident, the four regions with the shortest
+# apexes. An apex on a TEACHES chapter is a lesson with a health bar. An apex on
+# a TESTS chapter is the practical.
+TEACHING_CHAPTERS = 4
+TEACHES = "TEACHES"
+TESTS = "TESTS"
+
+_STANCE_LINE = {
+    TEACHES: "A lesson. Short enough to lose, read, fix and come back to "
+             "inside one sitting.",
+    TESTS: "A practical. It is long, it hits at full weight, and walking away "
+           "is still free.",
+}
+
+
+def strike_at_unready(chapter: int) -> float:
+    """Incoming multiplier at readiness 0, ramped across the eleven chapters.
+
+    Linear between STRIKE_AT_UNREADY_FLOOR and STRIKE_AT_UNREADY so that the
+    two named constants are the two ends and nothing in between is typed.
+    """
+    chapter = _clamp_chapter(chapter)
+    span = max(1, CHAPTER_COUNT - 1)
+    fraction = chapter / span
+    return round(STRIKE_AT_UNREADY_FLOOR
+                 + (STRIKE_AT_UNREADY - STRIKE_AT_UNREADY_FLOOR) * fraction, 3)
+
+
+def stance_for_chapter(chapter: int) -> str:
+    return TEACHES if _clamp_chapter(chapter) < TEACHING_CHAPTERS else TESTS
+
+
+def pace_for(region_id: str) -> dict:
+    """Everything the ramp says about one region, in one row.
+
+    The row a designer reads, the row `Scaling` folds into its payload, and the
+    row the client can render beside the readiness readout so a player can see
+    that the length they are being quoted is a property of WHERE THEY ARE
+    STANDING rather than of how well they have done.
+    """
+    chapter = chapter_for_region(region_id)
+    stance = stance_for_chapter(chapter)
+    return {
+        "region": region_id,
+        "chapter": chapter,
+        "chapter_view": chapter_view(chapter),
+        "casts_ready": casts_at_ready(chapter),
+        "casts_unready": casts_at_unready(chapter),
+        "strike_ready": STRIKE_AT_READY,
+        "strike_unready": strike_at_unready(chapter),
+        "stance": stance,
+        "stance_line": _STANCE_LINE[stance],
+    }
+
+
+def ramp_table() -> list:
+    """The ramp, chapter by chapter, with the regions that sit on each rung.
+
+    Section A of the brief asks for this table reported rather than asserted,
+    so it is a function and `self_check` prints it. A chapter with no regions on
+    it is not a defect: Python Village is chapter I and chapter II both, and the
+    apex meets you on the first of them, so rung II is defined and currently
+    unoccupied. It stays defined so that a chapter that later gains a region
+    gains a length with it.
+    """
+    rows = []
+    for chapter in range(CHAPTER_COUNT):
+        regions = [r["id"] for r in world.REGIONS
+                   if chapter_for_region(r["id"]) == chapter]
+        rows.append({
+            **chapter_view(chapter),
+            "casts_ready": casts_at_ready(chapter),
+            "casts_unready": casts_at_unready(chapter),
+            "strike_ready": STRIKE_AT_READY,
+            "strike_unready": strike_at_unready(chapter),
+            "stance": stance_for_chapter(chapter),
+            "regions": regions,
+            "apexes": [APEX_BY_REGION[r].id for r in regions
+                       if r in APEX_BY_REGION],
+        })
+    return rows
+
+
+def playthrough_cost() -> dict:
+    """What fighting every apex once costs, in landed lines.
+
+    One landed line is one graded submission is one cleared encounter, so this
+    number is directly comparable to the size of the corpus. Reported for both
+    ends of the readiness axis and against the flat 26/52 this replaced, because
+    the honest headline is not the total — it is that the total barely moved
+    while the SHAPE of it changed completely.
+    """
+    ready = sum(casts_at_ready(chapter_for_region(a.region)) for a in APEXES)
+    unready = sum(casts_at_unready(chapter_for_region(a.region)) for a in APEXES)
+    flat_ready = CASTS_AT_READY * len(APEXES)
+    return {
+        "apexes": len(APEXES),
+        "prepared_casts": ready,
+        "unprepared_casts": unready,
+        "was_flat_prepared": flat_ready,
+        "was_flat_unprepared": CASTS_AT_UNREADY * len(APEXES),
+        "delta_prepared": ready - flat_ready,
+        "shortest": min(casts_at_ready(chapter_for_region(a.region))
+                        for a in APEXES),
+        "longest": max(casts_at_ready(chapter_for_region(a.region))
+                       for a in APEXES),
+    }
 
 
 @dataclass
 class Scaling:
-    """The apex, sized for one specific player, at one specific moment."""
+    """The apex, sized for one specific player, at one specific moment.
+
+    `chapter` and `pace` are NEW and they are additive: every existing key keeps
+    its name, its type and its meaning, so `web/js/huntui.js` and `main.js`
+    (both of which read `scaling.target_casts`) need no change to keep working
+    and one line each to start saying WHY the number is what it is.
+    """
     apex: str
     region: str
     readiness: int
@@ -1246,6 +1591,11 @@ class Scaling:
     matchup: str
     elements: tuple
     blurb: str
+    # Defaulted so that every positional construction already in the tree —
+    # engine.py builds a blank `Scaling(apex.id, region_id, 0, "", 0, 0, 1.0,
+    # 1.0, "", (), "")` when a region has no apex — keeps working untouched.
+    chapter: int = 0
+    pace: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {"apex": self.apex, "region": self.region,
@@ -1254,7 +1604,12 @@ class Scaling:
                 "strike_multiplier": round(self.strike_multiplier, 3),
                 "per_cast_damage": round(self.per_cast_damage, 2),
                 "matchup": self.matchup, "elements": list(self.elements),
-                "blurb": self.blurb}
+                "blurb": self.blurb,
+                # The two ends of this region's band, shipped beside the number
+                # actually in force, so the client can draw "31 of a possible
+                # 23-46" without a second copy of the ramp in JavaScript.
+                "chapter": self.chapter,
+                "pace": dict(self.pace)}
 
 
 def expected_cast_damage(apex: Apex, loadout: Loadout) -> tuple:
@@ -1287,9 +1642,20 @@ def scale_for(region_id: str, loadout: Loadout | None = None, *,
     lo = loadout or Loadout()
     r = ready or readiness(region_id, lo)
 
+    # THE TWO AXES, IN THE ORDER THEY ARE READ.
+    #
+    # The chapter picks the band this region's fight lives in; readiness picks
+    # the point inside it. Swapping that order would be the level check this
+    # file exists to refuse: a band chosen by the player's progress rather than
+    # by the ground would make the same creature a different size for two people
+    # standing in the same doorway.
+    chapter = chapter_for_region(region_id)
+    low, high = casts_at_ready(chapter), casts_at_unready(chapter)
+    hardest = strike_at_unready(chapter)
+
     fraction = max(0.0, min(1.0, r.score / 100.0))
-    casts = CASTS_AT_UNREADY + (CASTS_AT_READY - CASTS_AT_UNREADY) * fraction
-    strike = STRIKE_AT_UNREADY + (STRIKE_AT_READY - STRIKE_AT_UNREADY) * fraction
+    casts = high + (low - high) * fraction
+    strike = hardest + (STRIKE_AT_READY - hardest) * fraction
 
     per_cast, kind = expected_cast_damage(apex, lo)
     hp = min(HP_CAP, int(round(casts * per_cast)))
@@ -1300,6 +1666,7 @@ def scale_for(region_id: str, loadout: Loadout | None = None, *,
         strike_multiplier=strike, per_cast_damage=per_cast,
         matchup=kind, elements=apex.elements,
         blurb=band_blurb(r.score),
+        chapter=chapter, pace=pace_for(region_id),
     )
 
 
@@ -1310,15 +1677,24 @@ def curve(region_id: str = "twin_pointer_pass", *,
     Section B of the brief asks for the curve to be reported. This is it: the
     same apex at five readiness scores, with the cast count and the incoming
     multiplier each one produces. `self_check` calls it and prints the table.
+
+    The default region is the Pass, which is CHAPTER_ANCHOR's ground, so this
+    curve still runs from CASTS_AT_UNREADY down to CASTS_AT_READY exactly as it
+    did before the ramp existed. Pass any other region and the two ends move to
+    that chapter's band; `ramp_table()` is the across-chapters view.
     """
     apex = apex_for(region_id)
+    chapter = chapter_for_region(region_id)
+    low, high = casts_at_ready(chapter), casts_at_unready(chapter)
+    hardest = strike_at_unready(chapter)
     rows = []
     for score in (0, 25, 50, 75, 100):
         fraction = score / 100.0
-        casts = CASTS_AT_UNREADY + (CASTS_AT_READY - CASTS_AT_UNREADY) * fraction
-        strike = STRIKE_AT_UNREADY + (STRIKE_AT_READY - STRIKE_AT_UNREADY) * fraction
+        casts = high + (low - high) * fraction
+        strike = hardest + (STRIKE_AT_READY - hardest) * fraction
         rows.append({
             "readiness": score, "band": band_for(score),
+            "chapter": chapter,
             "casts": int(round(casts)),
             "strike_multiplier": round(strike, 3),
             "bounty_metal": _metal_units(score),
@@ -2381,6 +2757,11 @@ def client_payload() -> dict:
             "global_cooldown": GLOBAL_COOLDOWN_S,
             "scent_halflife": SCENT_HALFLIFE_S,
         },
+        # The ramp, so the client can say "44 casts because this is chapter XI"
+        # without a second copy of the table in JavaScript. Static for the life
+        # of the process, like everything else in this payload.
+        "ramp": ramp_table(),
+        "chapter_for_region": dict(CHAPTER_FOR_REGION),
         "scent_lag": dict(SCENT_LAG_PX),
         "scent_mode": dict(SCENT_MODE),
         "guarantees": escape_guarantees(),
@@ -2761,6 +3142,123 @@ def _full_lifecycle() -> dict:
             "terminated": hunt.state == "DORMANT"}
 
 
+def _docstring_ramp_rows_are_live() -> dict:
+    """The three rows in the module docstring, checked against the functions.
+
+    `_prose_matches_the_data` already makes the argument for this: English is
+    what the player and the next maintainer read, so a table in a docstring is
+    either verified or it is decoration that will be wrong within two tuning
+    passes. This one is narrow on purpose — it checks the three rows it can
+    parse and claims nothing about the rest of the prose.
+    """
+    import re
+    text = __doc__ or ""
+    wanted = {
+        "I": (0, casts_at_ready(0), casts_at_unready(0), strike_at_unready(0)),
+        "V": (CHAPTER_ANCHOR, CASTS_AT_READY, CASTS_AT_UNREADY,
+              strike_at_unready(CHAPTER_ANCHOR)),
+        "XI": (CHAPTER_COUNT - 1, casts_at_ready(CHAPTER_COUNT - 1),
+               casts_at_unready(CHAPTER_COUNT - 1),
+               strike_at_unready(CHAPTER_COUNT - 1)),
+    }
+    bad = []
+    for numeral, (_index, ready, unready, strike) in wanted.items():
+        pattern = (rf"chapter {numeral}\s+{ready} casts prepared\s+"
+                   rf"{unready} unprepared\s+strike {strike:.2f}x")
+        if not re.search(pattern, text):
+            bad.append(f"chapter {numeral}: docstring does not say "
+                       f"{ready}/{unready} at {strike:.2f}x")
+    return {"checked": bool(text), "mismatches": bad}
+
+
+def _ramp_holds() -> dict:
+    """The four things the chapter ramp promises, checked rather than claimed.
+
+    1. The legacy constants still describe the anchor rung, so a reader who
+       trusts CASTS_AT_READY has not been lied to.
+    2. Readiness halves the fight at EVERY chapter, not just at the anchor.
+    3. The ramp is strictly increasing. A chapter that bought nothing would be
+       a rung a player cannot feel, and a flat spot is where a ramp starts
+       quietly becoming a constant again.
+    4. Every region resolves to a chapter that exists.
+    """
+    ready = [casts_at_ready(c) for c in range(CHAPTER_COUNT)]
+    unready = [casts_at_unready(c) for c in range(CHAPTER_COUNT)]
+    strikes = [strike_at_unready(c) for c in range(CHAPTER_COUNT)]
+    halves = all(u == r * 2 for r, u in zip(ready, unready))
+    rising = all(b > a for a, b in zip(ready, ready[1:]))
+    strike_rising = all(b >= a for a, b in zip(strikes, strikes[1:]))
+    orphans = sorted(r["id"] for r in world.REGIONS
+                     if r["id"] not in CHAPTER_FOR_REGION)
+    return {
+        "anchor_chapter": CHAPTER_ANCHOR,
+        "anchor_matches_legacy_constants": (
+            casts_at_ready(CHAPTER_ANCHOR) == CASTS_AT_READY
+            and casts_at_unready(CHAPTER_ANCHOR) == CASTS_AT_UNREADY),
+        "readiness_halves_at_every_chapter": halves,
+        "ramp_is_strictly_rising": rising,
+        "strike_ramp_never_falls": strike_rising,
+        "strike_ends": [strikes[0], strikes[-1]],
+        "strike_ends_are_the_named_constants": (
+            strikes[0] == STRIKE_AT_UNREADY_FLOOR
+            and strikes[-1] == STRIKE_AT_UNREADY),
+        "casts_ready": ready,
+        "casts_unready": unready,
+        "regions_without_a_chapter": orphans,
+        "holds": (casts_at_ready(CHAPTER_ANCHOR) == CASTS_AT_READY
+                  and casts_at_unready(CHAPTER_ANCHOR) == CASTS_AT_UNREADY
+                  and halves and rising and strike_rising and not orphans),
+    }
+
+
+def _pool_cap_is_never_reached() -> dict:
+    """HP_CAP must be a guard against nonsense, not a lid on the design.
+
+    A capped pool is a fight that ends before `target_casts` is reached, which
+    puts the client's bar and the engine's tally on different arithmetic about
+    the same creature. So the cap has to sit above the largest pool the ramp can
+    legitimately produce, and the honest way to know that is to go and measure
+    it rather than to reason about it: every region, every rung, every element a
+    player can actually strike with, at the readiness that loadout really earns.
+    """
+    worst = {"pool": 0}
+    for apex in APEXES:
+        chapter = chapter_for_region(apex.region)
+        low, high = casts_at_ready(chapter), casts_at_unready(chapter)
+        # The pool is `casts x per_cast`, and those two pull in OPPOSITE
+        # directions: the loadout that hits hardest is the loadout that scores
+        # highest and therefore gets the shortest fight. The largest pool is
+        # somewhere in the middle — a huge blade carried by somebody who did
+        # none of the other four components — so the sweep has to include the
+        # stripped shapes as well as the complete one or it will report a
+        # maximum that is merely a local one.
+        kits = (
+            {"armour_points": 10, "bar_bonus": 12,
+             "companion_tier": "LEGENDARY", "potions": {"hefty": 2}},
+            {"armour_points": 0, "bar_bonus": 0,
+             "companion_tier": "", "potions": {}},
+            {"armour_points": 5, "bar_bonus": 6,
+             "companion_tier": "BEGINNER", "potions": {"minor": 1}},
+        )
+        for rung in range(10):
+          for kit in kits:
+            for element in list(elements.ELEMENT_IDS) + [elements.NEUTRAL]:
+                lo = Loadout(weapon_element=element, weapon_rung=rung,
+                             armour_resist={}, **kit)
+                score = readiness(apex.region, lo).score
+                fraction = max(0.0, min(1.0, score / 100.0))
+                casts = high + (low - high) * fraction
+                per_cast, _kind = expected_cast_damage(apex, lo)
+                pool = int(round(casts * per_cast))
+                if pool > worst["pool"]:
+                    worst = {"pool": pool, "apex": apex.id, "rung": rung,
+                             "element": element, "readiness": score,
+                             "casts": int(round(casts)),
+                             "per_cast": round(per_cast, 2)}
+    return {**worst, "cap": HP_CAP, "headroom": HP_CAP - worst["pool"],
+            "holds": worst["pool"] < HP_CAP}
+
+
 def _worked_examples() -> list:
     """Three real players against three real apexes, with real numbers.
 
@@ -2864,6 +3362,9 @@ def self_check() -> dict:
     prose = _prose_matches_the_data()
     anchor = _damage_unit_drift()
     pet_copy = _pet_tier_drift()
+    ramp = _ramp_holds()
+    pool_cap = _pool_cap_is_never_reached()
+    docstring_rows = _docstring_ramp_rows_are_live()
 
     ok = (len(APEXES) == len(world.REGIONS)
           and len(set(ids)) == len(ids)
@@ -2884,6 +3385,8 @@ def self_check() -> dict:
           and APEX_MAX_SPEED < PLAYER_WALK_SPEED
           and CASTS_AT_READY < CASTS_AT_UNREADY
           and STRIKE_AT_READY < STRIKE_AT_UNREADY
+          and ramp["holds"] and pool_cap["holds"]
+          and not docstring_rows["mismatches"]
           and not (anchor.get("checked") and anchor.get("drifted"))
           and not (pet_copy.get("checked") and pet_copy.get("drifted")))
 
@@ -2929,6 +3432,17 @@ def self_check() -> dict:
         "pet_tier_copy": pet_copy,
         "curve": curve("twin_pointer_pass"),
         "worked_examples": _worked_examples(),
+
+        # -- B2/B3: the chapter ramp
+        "chapters": CHAPTER_COUNT,
+        "chapter_anchor": CHAPTER_ANCHOR,
+        "chapter_for_region": dict(CHAPTER_FOR_REGION),
+        "ramp": ramp,
+        "docstring_ramp_rows": docstring_rows,
+        "ramp_table": ramp_table(),
+        "pace": {a.region: pace_for(a.region) for a in APEXES},
+        "playthrough_cost": playthrough_cost(),
+        "pool_cap": pool_cap,
 
         # -- C: the hunt
         "states": list(HUNT_STATES),

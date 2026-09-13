@@ -21,10 +21,12 @@
  *     and six BEATS inside the idle loop, which each moving part reads at its
  *     own rate. Uniform motion is the tell of cheap animation, and the fix is
  *     not more frames, it is parts that disagree about where they are.
- *   Three PHASES. The fight already had six (world.BOSS_PHASES); until now the
- *     art did not know about any of them. Now the armour opens along authored
- *     fault lines, the plate spalls, and a core lights inside and throws its
- *     light back onto the creature's own bone and chrome.
+ *   Six PHASES, and they are the fight's own. gauntlet/bestiary.py advances a
+ *     boss phase when a graded submission empties that phase's health pool and
+ *     hands over `art_phase`; the armour opens along authored fault lines, the
+ *     contour is bitten away, the plate is holed, a limb goes, a core lights
+ *     inside and throws its light back onto the creature's own bone and
+ *     chrome, and the last form grows.
  *   Separate animated parts: a jaw, a wing, a tail, an orbiting skull, a chain.
  *   A contre-jour rim in the boss's own colour, because the stage is near-black
  *     and a near-black creature on it is a hole, not a silhouette.
@@ -50,13 +52,16 @@
  *     Now the contre-jour rim, the rune glow and the ember ramp rotate to it.
  *     It costs nothing: a remap of light already on the sprite cannot raise a
  *     colour count, and the harness checks that it does not.
- *   A PHASE THAT CHANGES THE SHAPE. Phase 1 cracks; phase 2 goes through. The
- *     plate is holed at the fault lines and the creature LOSES A LIMB — the
- *     dragon a wing, the colossus its maul, the Interpreter its hat. The
- *     hydra, whose opening line is about growing heads, grows one. A phase you
+ *   SIX STAGES, EVERY ONE OF WHICH MOVES THE SILHOUETTE. It cracks, it is
+ *     chipped off at the edge, the fault lines go through, it LOSES A LIMB —
+ *     the dragon a wing, the colossus its maul, the Interpreter its hat; the
+ *     hydra, whose opening line is about growing heads, grows one — the core
+ *     opens, and the last form puts spines out of its own outline. A phase you
  *     can only see by reading the health bar is a number, and the silhouette
  *     is the only part of a sprite that survives a screen shake, a map scale
- *     and a player who is looking at their own code instead.
+ *     and a player who is looking at their own code instead. Measured per
+ *     stage AND per stage-to-stage step in scripts/verify/bossforms.mjs, which
+ *     fails the roster if any turn moves none.
  *
  * Fifteen colours, and this file now holds to it. The whole bestiary is inside
  * the budget — worst case fifteen exactly — which it was not before: the way
@@ -70,12 +75,13 @@
  * second copy of it would drift.
  *
  * Determinism: every sprite is keyed on (archetype, colour, frame, phase, beat)
- * and cached. Wear, pitting and the fault lines come from rng(hash(key)), so
- * the Hash Titan has the same scars in every session forever and cracks in the
- * same places every time it is brought to its second phase. Nothing allocates
- * inside a render loop: a whole fight's working set is 45 canvases, warmBoss()
- * builds one phase of it in one call, and 3600 drawn frames after that cost
- * zero allocations.
+ * and cached. Wear, pitting, the fault lines, the chips and the spines all come
+ * from rng(hash(key)), so the Hash Titan has the same scars in every session
+ * forever and is bitten in the same places every time it is brought to the same
+ * stage. Nothing allocates inside a render loop: one STAGE of a fight is 15
+ * canvases, warmBoss() builds one in one call — fx.js calls it on the phase
+ * turn, before the flash — and the drawn frames after that cost zero
+ * allocations.
  */
 
 /* Single line on purpose: the project's parse check strips /^import.*$/ per
@@ -83,7 +89,7 @@
 import { ramp, mix, shade, rng, hash, drawGrid, applyRim, rimLowLeft, normalise, shiftRows, bobGrid, sinkRows, squashRows, widenRows, drawGroundShadow } from './sprites.js';
 import { bossLook, dressGrid, elementPalette, wantsRim, ingestHunters, ELEMENT_IDS } from './bossart.js';
 
-export const BOSS_ART_VERSION = 3;
+export const BOSS_ART_VERSION = 4;   // 4: six art stages, wired to the fight's real phase
 
 /* One box height for every boss, so the battle layer never has to special-case
  * a vertical offset. Width is the only thing that varies: the winged and the
@@ -466,17 +472,21 @@ function fracture(grid, seed, phase, faults) {
   const w = Math.max(...grid.map(r => r.length));
   const cells = normalise(grid, w).map(r => r.split(''));
   const rand = rng(hash(`${seed}|fault`) || 7);
-  const glow = phase >= 2 ? 'U' : 'u';
+  const wide = phase >= BOSS_PHASE.BREACHED;
+  const glow = phase >= BOSS_PHASE.LIT ? 'U' : 'u';
   for (let i = 0; i < faults.length; i++) {
     const f = faults[i];
-    const len = (f[2] || 10) + (phase >= 2 ? 6 : 0);
-    fissure(cells, f[0] | 0, f[1] | 0, len, rand, glow, phase >= 2);
-    if (phase >= 2) fissure(cells, (f[0] | 0) + 2, (f[1] | 0) + 3, Math.round(len * 0.6), rand, glow, false);
+    /* Two pixels longer per stage. A fissure that stops growing after stage 1
+     * is the reason the interior stopped saying anything: the six stages have
+     * to keep spending, and this is the cheapest place to spend. */
+    const len = (f[2] || 10) + phase * 2;
+    fissure(cells, f[0] | 0, f[1] | 0, len, rand, glow, wide);
+    if (wide) fissure(cells, (f[0] | 0) + 2, (f[1] | 0) + 3, Math.round(len * 0.6), rand, glow, false);
   }
   /* Spall: chips knocked off the plate around each fault. Cheap, and it is
    * what stops the cracks reading as drawn-on lines. */
   for (const f of faults) {
-    for (let n = 0; n < (phase >= 2 ? 7 : 4); n++) {
+    for (let n = 0; n < 3 + phase * 2; n++) {
       const y = (f[1] | 0) + Math.floor(rand() * 12);
       const x = (f[0] | 0) - 3 + Math.floor(rand() * 7);
       const row = cells[y];
@@ -487,7 +497,7 @@ function fracture(grid, seed, phase, faults) {
   return cells.map(r => r.join(''));
 }
 
-/* Phase 2 does not crack the plate, it goes THROUGH it. At the midpoint of
+/* BREACHED does not crack the plate, it goes THROUGH it. At the midpoint of
  * each authored fault the mass is burned away to transparent and the rim of
  * the opening is left white-hot, so the stage is visible through the creature.
  *
@@ -501,17 +511,23 @@ function fracture(grid, seed, phase, faults) {
  *
  * Ragged by rng(hash(seed)), so a given creature is holed in exactly the same
  * places in every session, and the same places every time it is brought back
- * to phase 2 inside one fight. */
+ * to that stage inside one fight. */
 function breach(grid, phase, faults, seed) {
-  if (phase < BOSS_PHASE.CORE || !faults || !faults.length) return grid;
+  if (phase < BOSS_PHASE.BREACHED || !faults || !faults.length) return grid;
   const w = Math.max(...grid.map(r => r.length));
   const cells = normalise(grid, w).map(r => r.split(''));
   const rand = rng(hash(`${seed}|breach`) || 11);
-  for (let i = 0; i < Math.min(2, faults.length); i++) {
+  /* One more fault opens per stage, and the openings widen once the core is
+   * lit. Holding it at two would have made stages 3, 4 and 5 identical here,
+   * and this pass is the one that moves the most silhouette. */
+  const opened = Math.max(1, Math.min(faults.length,
+    phase - BOSS_PHASE.BREACHED + 1));
+  const bigger = phase >= BOSS_PHASE.LIT ? 1 : 0;
+  for (let i = 0; i < opened; i++) {
     const f = faults[i];
     const cx = (f[0] | 0) + 1;
     const cy = (f[1] | 0) + Math.round((f[2] || 10) * 0.55);
-    const rh = 3, rw = 4;
+    const rh = 3 + bigger, rw = 4 + bigger;
     for (let dy = -rh; dy <= rh; dy++) {
       const row = cells[cy + dy];
       if (!row) continue;
@@ -536,6 +552,201 @@ function breach(grid, phase, faults, seed) {
           || (cells[cy + dy + 1] && cells[cy + dy + 1][x] === T)
           || row[x - 1] === T || row[x + 1] === T;
         if (near) row[x] = rand() < 0.55 ? 'U' : 'u';
+      }
+    }
+  }
+  return cells.map(r => r.join(''));
+}
+
+
+/* ---------------- the contour, taken away ----------------
+ * The fix for the defect the measurement found: at the old look 1 three of the
+ * fifteen archetypes moved ZERO silhouette cells, because look 1 was fissures
+ * and a fissure is interior. `breach` solved this for look 2 by holing the
+ * plate, and holing the plate is a big, structural, expensive-looking event
+ * that should not be the FIRST thing that happens to a boss.
+ *
+ * So: the stage before the holes bites the EDGE. Pieces come off the contour
+ * near the authored fault lines — which is where a blow would actually take
+ * them off — and the outline moves without the creature having lost anything
+ * it was carrying. Read from the map, from under a screen shake, and by a
+ * player looking at their own code, it says the same thing the fissures say to
+ * a player staring at the sprite: that is not the thing that walked in.
+ *
+ * It removes whatever is at the edge, outline included, because removing the
+ * mass under an outline and leaving the outline is a drawing of a chip rather
+ * than a chip. applyRim runs after every damage pass for exactly this reason
+ * and re-lights whatever contour it is given.
+ *
+ * Deterministic on (seed, stage): the Hash Titan is bitten in the same places
+ * in every session, and in the same places every time a fight is brought back
+ * to that stage.
+ */
+function spall(grid, phase, faults, seed) {
+  if (phase < BOSS_PHASE.CHIPPED || !faults || !faults.length) return grid;
+  const w = Math.max(...grid.map(r => r.length));
+  const cells = normalise(grid, w).map(r => r.split(''));
+  const rand = rng(hash(`${seed}|spall|${phase}`) || 13);
+  const mid = w / 2;
+  /* Bites per fault, per stage. Five numbers rather than a formula because the
+   * jump from 1 to 2 wants to be small — stage 2 is already opening holes —
+   * and the jump into 5 wants to be the largest thing on the ladder. */
+  const BITES = [0, 5, 7, 9, 11, 14];
+  const bites = BITES[Math.min(phase, BITES.length - 1)];
+  for (const f of faults) {
+    const fx = f[0] | 0, fy = f[1] | 0, len = Math.max(4, (f[2] || 10));
+    /* Which way is out. A fault on the left half opens to the left. */
+    const dir = fx < mid ? -1 : 1;
+    for (let n = 0; n < bites; n++) {
+      const y = fy - 2 + Math.floor(rand() * (len + 4));
+      const take = 2 + Math.floor(rand() * 3);
+      /* TWO rows per bite, not one. A one-row notch is four or five pixels and
+       * the silhouette measurement normalises to a 24x24 grid, where five
+       * pixels spread over two cells flips neither of them: the pixel count
+       * moves and the shape does not, which is exactly the failure mode this
+       * pass exists to fix. A notch two rows deep clears the threshold. */
+      for (let dy = 0; dy < 2; dy++) {
+        const row = cells[y + dy];
+        if (!row) continue;
+        /* Walk in from the outside of this row until something is there, then
+         * take a few of it. Walking in from the FRAME edge rather than from
+         * the fault is what makes this a contour operation: whatever is
+         * furthest out on this row is what comes off, whether that is plate, a
+         * horn or the hem of a robe. */
+        let x = dir < 0 ? 0 : row.length - 1;
+        let guard = 0;
+        while (guard++ < row.length && row[x] === T) x += dir < 0 ? 1 : -1;
+        if (guard >= row.length) continue;
+        for (let k = 0; k < take; k++) {
+          const tx = x + (dir < 0 ? k : -k);
+          if (tx < 0 || tx >= row.length) break;
+          const ch = row[tx];
+          /* An eye, a lit core and a white-hot rim are the creature's identity
+           * at every size. Everything else on the edge is expendable. */
+          if (ch === 'w' || ch === 'W' || ch === 'k' || ch === 'U') break;
+          row[tx] = T;
+        }
+      }
+    }
+  }
+  /* And a pass that does NOT read the faults, because three of the fifteen
+   * archetypes carry their fault anchors deep in the interior — a robe seam, a
+   * sternum — and a contour operation anchored on an interior point takes
+   * almost nothing off the edge. These bites are spread down the whole body and
+   * alternate sides, so every creature loses edge everywhere rather than only
+   * where it happens to be authored to crack. */
+  const [ftop, fbot] = filledBounds(cells.map(r => r.join('')));
+  const span = Math.max(1, fbot - ftop);
+  for (let n = 0; n < phase * 3; n++) {
+    const y = ftop + Math.floor(rand() * span);
+    const dir = (n % 2) ? 1 : -1;
+    const take = 2 + Math.floor(rand() * 3);
+    for (let dy = 0; dy < 2; dy++) {
+      const row = cells[y + dy];
+      if (!row) continue;
+      let x = dir < 0 ? 0 : row.length - 1;
+      let guard = 0;
+      while (guard++ < row.length && row[x] === T) x += dir < 0 ? 1 : -1;
+      if (guard >= row.length) continue;
+      for (let k = 0; k < take; k++) {
+        const tx = x + (dir < 0 ? k : -k);
+        if (tx < 0 || tx >= row.length) break;
+        const ch = row[tx];
+        if (ch === 'w' || ch === 'W' || ch === 'k' || ch === 'U') break;
+        row[tx] = T;
+      }
+    }
+  }
+  return cells.map(r => r.join(''));
+}
+
+/* ---------------- the contour, put out ----------------
+ * The last stage is the only one that ADDS, and it has to, because five stages
+ * of subtraction ends a fight with a boss that is visibly smaller than the one
+ * that walked in — which is the opposite of the thing the phase ladder is
+ * saying. The final form grows.
+ *
+ * Two growths, and both are derived from the silhouette rather than authored,
+ * so every archetype gets one whether or not it has a `grow` part:
+ *
+ *   SPINES off the top contour, where there is headroom. The tip is the rune
+ *     glow glyph rather than body mass, for two reasons: it is what a creature
+ *     lit from the inside would look like putting something out, and 'u' is in
+ *     MAP_FEATURE, so a one-cell spine survives the 0.72 reduction into the map
+ *     form instead of being averaged away.
+ *   SPURS off the widest rows of the upper body, for the creatures with their
+ *     heads against the top of the box — a behemoth has no headroom and would
+ *     otherwise be the one boss whose last phase adds nothing.
+ *
+ * Both write only into transparent cells, so nothing that was drawn is
+ * overwritten, and both run before applyRim, so what they add is lit as part of
+ * the creature rather than pasted onto it.
+ */
+function crown(grid, phase, seed) {
+  if (phase < BOSS_PHASE.CROWNED) return grid;
+  const w = Math.max(...grid.map(r => r.length));
+  const cells = normalise(grid, w).map(r => r.split(''));
+  const h = cells.length;
+  const rand = rng(hash(`${seed}|crown`) || 17);
+  const tops = new Array(w).fill(-1);
+  for (let x = 0; x < w; x++) {
+    for (let y = 0; y < h; y++) {
+      if (cells[y][x] !== T) { tops[x] = y; break; }
+    }
+  }
+  const filled = tops.map((y, x) => (y >= 0 ? x : -1)).filter(x => x >= 0);
+  if (!filled.length) return grid;
+  const x0 = filled[0], x1 = filled[filled.length - 1];
+  /* The tip glyph, chosen from what this creature ALREADY renders. A spine
+   * tipped with a glow the boss does not otherwise carry is one more rendered
+   * colour, and four of these archetypes paint exactly fifteen — the budget —
+   * so a hard-coded 'u' put the knight over it. Everything in this list is
+   * already on the sprite by the time crown() runs. Writing bare 'B' instead
+   * looked right and was not: applyRim resolves 'B' into FOUR tones of the
+   * body ramp, and a knight that renders ten colours at stage 4 came out of
+   * stage 5 at sixteen — one over the whole file's budget — for the sake of a
+   * few spines. Two glyphs, both already paid for, cost nothing. */
+  const has = (g) => cells.some(r => r.indexOf(g) >= 0);
+  const tip = ['U', 'u', 'W', 'H'].find(has) || 'L';
+  const stem = ['L', 'H', 'g', 'b', 'B'].find(has) || 'B';
+
+  // 1. spines, every third column across the middle two thirds of the mass
+  const from = x0 + Math.round((x1 - x0) * 0.18);
+  const to = x1 - Math.round((x1 - x0) * 0.18);
+  for (let x = from; x <= to; x += 3) {
+    const top = tops[x];
+    if (top < 0) continue;
+    const room = Math.min(top, 5);
+    if (room < 2) continue;
+    const len = 2 + Math.floor(rand() * Math.min(3, room - 1));
+    for (let i = 1; i <= len; i++) {
+      const y = top - i;
+      if (y < 0) break;
+      if (cells[y][x] !== T) break;
+      cells[y][x] = i === len ? tip : stem;
+      // A two-wide base, so a spine reads as growing OUT of the shoulder
+      // rather than balancing on it.
+      if (i === 1 && x + 1 < w && cells[y][x + 1] === T) cells[y][x + 1] = stem;
+    }
+  }
+
+  // 2. spurs, off the widest rows of the upper half
+  const band = Math.max(1, Math.round(h * 0.22));
+  for (let n = 0; n < 6; n++) {
+    const y = band + Math.floor(rand() * Math.max(1, Math.round(h * 0.34)));
+    const row = cells[y];
+    if (!row) continue;
+    for (const dir of [-1, 1]) {
+      let x = dir < 0 ? 0 : w - 1;
+      let guard = 0;
+      while (guard++ < w && row[x] === T) x += dir < 0 ? 1 : -1;
+      if (guard >= w) continue;
+      const len = 2 + Math.floor(rand() * 3);
+      for (let i = 1; i <= len; i++) {
+        const ox = dir < 0 ? x - i : x + i;   // outward, away from the mass
+        if (ox < 0 || ox >= w) break;
+        if (row[ox] !== T) break;
+        row[ox] = i === len ? tip : stem;
       }
     }
   }
@@ -585,13 +796,15 @@ function stampMasked(grid, src, ox, oy) {
 }
 
 function ignite(grid, phase, core) {
-  if (phase < 2) return grid;
+  if (phase < BOSS_PHASE.LIT) return grid;
   const hot = grid.map(row => row.replace(/U/g, 'W').replace(/u/g, 'U'));
   return core ? stampMasked(hot, CORE_OPEN, core[0] - 3, core[1] - 3) : hot;
 }
 
+/* The anchor before the furnace. Stages 1 to 3 carry a seed where the core
+ * will open; ignite() takes over at LIT and would only be overwriting it. */
 function ember(grid, phase, core) {
-  if (phase !== 1 || !core) return grid;
+  if (phase < BOSS_PHASE.CHIPPED || phase >= BOSS_PHASE.LIT || !core) return grid;
   return stampMasked(grid, CORE_SEED, core[0] - 2, core[1] - 2);
 }
 
@@ -656,41 +869,72 @@ export function frameIndex(frame) {
 /* ================================================================
  * PHASES
  * ================================================================
- * The fight already has phases. gauntlet/world.py BOSS_PHASES names six of
- * them — recognize, explain, implement, edges, complexity, variant — and
- * fx.bossIntro lights one pip per phase before the first cast. Until now none
- * of that reached the art: the creature that opened the fight was, pixel for
- * pixel, the creature that closed it.
+ * The fight has phases and now they are real. gauntlet/bestiary.py advances
+ * one when a phase's health pool empties, which takes a graded submission, and
+ * hands the client `art_phase` — the stage below — in the phase-turn beat.
  *
- * Six art states would be six sprite sets nobody can tell apart. Three can be
- * read across a room, so the six fight phases fold onto three looks:
+ * This file shipped with THREE looks (whole, cracked, core) and the argument
+ * for three was sound: six sprite sets nobody can tell apart is not six
+ * phases. But the fold was made against a fight that never turned, so it was
+ * never tested, and it had two defects the measurement found the moment a real
+ * phase reached it:
  *
- *   whole    intact. This is the thing that walked in.
- *   cracked  armour opened along its real seams, plate chipped, the light on
- *            it gone cold. It has been hurt and it is not hiding it.
- *   core     the fissures are lit from inside, the core is open, and the
- *            creature's own light is falling on its bone and its chrome.
+ *   1. Two adjacent phases landed on the same look, which means a phase turn
+ *      that changes nothing on screen. The flash fires, the boss speaks, the
+ *      tell says it got stronger, and the creature is pixel-identical. That is
+ *      worse than no phase at all, because it teaches the player that the
+ *      banner is decoration.
+ *   2. The one look that reads at any size — the SILHOUETTE — only moved at
+ *      look 2. Look 1 was fissures, and a fissure is interior detail: invisible
+ *      at map scale, invisible under a screen shake, invisible to a player who
+ *      is looking at their own code. Three of the fifteen archetypes moved
+ *      literally zero silhouette cells at look 1.
  *
- * bossPhase() takes whatever the caller already has — a world.py phase key, a
- * phase index out of a count, fx's lit-pip count, or a health fraction — and
- * returns one of the three. Nothing new has to be plumbed for the art to start
- * answering the fight.
+ * So: SIX stages, each of which moves the outline, cumulative, and each of
+ * which is a different KIND of change rather than more of the last one.
+ *
+ *   0 whole      intact. This is the thing that walked in.
+ *   1 chipped    the plate is fissured AND the contour is bitten: pieces are
+ *                gone off the edge near the authored fault lines.
+ *   2 breached   the holes go through. The stage is visible through it.
+ *   3 shorn      it loses the part it was carrying — a wing, a maul, a hat —
+ *                or, for the one creature whose opening line is about growing
+ *                heads, it grows one.
+ *   4 lit        the core is open, the fissures are seams of light, and a
+ *                third fault opens. The creature's own light is on its bone.
+ *   5 crowned    the final form: spines out of its own silhouette, everything
+ *                it had left to put out, put out.
+ *
+ * Six stages of GEOMETRY, three of LIGHT. bossPalette and bossart.dressGrid
+ * keep the three they were written against — see lightPhase() — because the
+ * palette contract is shared with another file and the brief is explicit that
+ * colour is not the part that has to move.
  */
-export const BOSS_PHASE = Object.freeze({ WHOLE: 0, CRACKED: 1, CORE: 2 });
-export const BOSS_PHASE_NAMES = Object.freeze(['whole', 'cracked', 'core']);
+export const BOSS_PHASE = Object.freeze({
+  WHOLE: 0, CHIPPED: 1, BREACHED: 2, SHORN: 3, LIT: 4, CROWNED: 5,
+  /* The two names this file shipped with. Kept, because they are a public seam
+   * — scripts/verify/bossseam.mjs calls bossPhase('cracked') and
+   * phaseIndex('core') by name — and pointed at the stage that means what they
+   * used to mean: cracked was "hurt and not hiding it", core was "burning from
+   * the inside". */
+  CRACKED: 1, CORE: 4,
+});
+export const BOSS_PHASE_NAMES = Object.freeze(
+  ['whole', 'chipped', 'breached', 'shorn', 'lit', 'crowned']);
 export const BOSS_PHASE_COUNT = BOSS_PHASE_NAMES.length;
 
-/* The six fight phases of world.BOSS_PHASES, mapped onto the three looks. The
- * break lands where the fight's own difficulty breaks: naming and explaining
- * cost it nothing, implementing opens it, and the last two are fought against
- * something already burning. */
+/* The six fight phases of world.BOSS_PHASES and gauntlet/bestiary.py's boss
+ * phase keys, mapped one to one now that there are six of each. A four-phase
+ * region boss does not use all six; artStageFor() stretches its four across
+ * them, which is the same arithmetic bestiary.art_phase() does server-side. */
 export const BOSS_PHASE_FOR_KEY = Object.freeze({
-  recognize: 0, explain: 0,
-  implement: 1, edges: 1,
-  complexity: 2, variant: 2,
+  recognize: 0, explain: 1, implement: 2, edges: 3, complexity: 4, variant: 5,
   // the encounter kinds, for a caller holding those instead
-  pattern_encounter: 0, communication: 0, code_battle: 1,
-  edge_case_trap: 1, complexity_duel: 2, memory_ambush: 2,
+  pattern_encounter: 0, communication: 1, code_battle: 2,
+  edge_case_trap: 3, complexity_duel: 4, memory_ambush: 5,
+  // the art stage names themselves, and the two legacy ones
+  whole: 0, chipped: 1, breached: 2, shorn: 3, lit: 4, crowned: 5,
+  cracked: 1, core: 4,
 });
 
 export function phaseIndex(phase) {
@@ -701,32 +945,66 @@ export function phaseIndex(phase) {
   return row === undefined ? 0 : row;
 }
 
-/* Accepts, in order of preference: an explicit art phase; a world.py phase key
- * or an index-out-of-count; fx's pipsLit/pips; a health fraction. Anything it
- * cannot read is phase 0, because a boss that arrives already cracked has
+/* Phase n of a fight with `phases` phases, as an art stage.
+ *
+ * MUST AGREE WITH gauntlet/bestiary.py art_phase(). Ceiling division, not
+ * rounding: both pin phase 0 to stage 0 and the last phase to the last stage,
+ * and the ceiling additionally spends a four-phase boss's three turns on the
+ * loud stages (breached, lit, crowned) rather than on the quietest one. The
+ * result is distinct for every phase at any phase count from two to six, which
+ * is the whole claim: every phase turn moves the outline. */
+export function artStageFor(phase, phases) {
+  const total = phases | 0;
+  if (total <= 1) return 0;
+  const n = Math.max(0, Math.min(total - 1, phase | 0));
+  return Math.ceil((n * (BOSS_PHASE_COUNT - 1)) / (total - 1));
+}
+
+/* The LIGHT stage, 0..2. bossPalette() and bossart.dressGrid() were written
+ * against three and both clamp to three; the six above are geometry. Splitting
+ * them is deliberate rather than lazy — the palette is a shared contract with
+ * bossart.js and the requirement is that the OUTLINE move, not the hue. */
+export function lightPhase(stage) {
+  const st = phaseIndex(stage);
+  if (st <= BOSS_PHASE.WHOLE) return 0;
+  return st >= BOSS_PHASE.LIT ? 2 : 1;
+}
+
+/* Accepts, in order of preference: an explicit art stage; a phase key; a live
+ * fight's {phase, phases}; fx's pip count; a health fraction. Anything it
+ * cannot read is stage 0, because a boss that arrives already cracked has
  * thrown away the only moment where cracking it means something. */
 export function bossPhase(state) {
   if (state === undefined || state === null) return 0;
   if (typeof state === 'number') {
-    // A bare number is a fraction of health remaining when it is in [0,1] and
-    // not a whole number; otherwise it is an art phase index.
-    if (state > 0 && state < 1) return state > 0.66 ? 0 : state > 0.33 ? 1 : 2;
+    // A bare number is a fraction of health remaining when it is in (0,1) and
+    // not a whole number; otherwise it is an art stage index.
+    if (state > 0 && state < 1) {
+      return Math.max(0, Math.min(BOSS_PHASE_COUNT - 1,
+        Math.round((1 - state) * (BOSS_PHASE_COUNT - 1))));
+    }
     return phaseIndex(state);
   }
   if (typeof state === 'string') return phaseIndex(state);
+  /* The server's own word for it, in both spellings, and it wins over every
+   * inference below. This is the fix for the defect that made all of this
+   * dead code: the fight knew its phase, the art knew how to draw one, and
+   * nothing ever carried the number from one to the other. */
+  if (state.art_phase !== undefined) return phaseIndex(state.art_phase);
   if (state.artPhase !== undefined) return phaseIndex(state.artPhase);
   if (state.phaseKey !== undefined) return phaseIndex(state.phaseKey);
-  const of = (n, total) => {
-    if (!(total > 1)) return 0;
-    const t = Math.max(0, Math.min(1, n / (total - 1)));
-    return t < 0.34 ? 0 : t < 0.7 ? 1 : 2;
-  };
   if (typeof state.phase === 'string') return phaseIndex(state.phase);
-  if (Number.isFinite(state.phase) && Number.isFinite(state.phases)) return of(state.phase, state.phases);
-  if (Number.isFinite(state.pipsLit) && Number.isFinite(state.pips)) return of(state.pipsLit - 1, state.pips);
+  if (Number.isFinite(state.phase) && Number.isFinite(state.phases)) {
+    return artStageFor(state.phase, state.phases);
+  }
+  /* fx's pip row. `pipsLit` counts the phases STILL STANDING (setEnemyHp lights
+   * one per remaining phase), so progress is pips - pipsLit. Legacy: fx passes
+   * an explicit phase now and nothing should be arriving here. */
+  if (Number.isFinite(state.pipsLit) && Number.isFinite(state.pips)) {
+    return artStageFor(state.pips - state.pipsLit, state.pips);
+  }
   if (Number.isFinite(state.hp) && Number.isFinite(state.hpMax) && state.hpMax > 0) {
-    const left = state.hp / state.hpMax;
-    return left > 0.66 ? 0 : left > 0.33 ? 1 : 2;
+    return bossPhase(Math.max(0.0001, Math.min(0.9999, state.hp / state.hpMax)));
   }
   if (Number.isFinite(state.phase)) return phaseIndex(state.phase);
   return 0;
@@ -2341,7 +2619,7 @@ const ART = {
     stage: { scale: 1.75, sink: 11, bias: -8 },
     core: null,                                       // the reliquary is authored in the ribs
     faults: [[26, 8, 12], [38, 8, 12], [19, 26, 7], [45, 26, 7]],
-    shed: 'soul',                                // phase 2: the soul in its orbit goes out
+    shed: 'soul',                                // shorn: the soul in its orbit goes out
     parts: [
       { name: 'hem', grid: LICH_HEM, ox: 16, oy: 53, behind: true,
         frames: [[0, 0], [0, 1], [-1, -1], [2, 2], [-2, 1]],
@@ -2362,7 +2640,7 @@ const ART = {
     stage: { scale: 1.5, sink: 4, bias: 0 },
     core: [55, 40],                                   // furnace behind the sternum
     faults: [[30, 26, 12], [52, 34, 14], [60, 46, 10]],
-    shed: 'wing',                                // phase 2: a wing is torn off at the shoulder
+    shed: 'wing',                                // shorn: a wing is torn off at the shoulder
     parts: [
       // The wing is the slowest thing on the creature and the jaw the fastest.
       // One clock, four rates: nothing is ever at the top of its arc twice.
@@ -2391,7 +2669,7 @@ const ART = {
     stage: { scale: 1.75, sink: 9, bias: -8 },
     core: [32, 29],                                   // the reactor under the breastplate
     faults: [[24, 23, 14], [40, 23, 14], [32, 44, 12]],
-    shed: 'shield',                                // phase 2: the rubric-shield is struck out of its hand
+    shed: 'shield',                                // shorn: the rubric-shield is struck out of its hand
     parts: [
       { name: 'shield', grid: KNIGHT_SHIELD, ox: 1, oy: 29,
         frames: [[0, 0], [0, 1], [-1, -2], [2, 2], [-3, -4]],
@@ -2409,7 +2687,7 @@ const ART = {
     stage: { scale: 1.75, sink: 10, bias: -8 },
     core: null,
     faults: [[22, 28, 14], [43, 28, 14]],
-    shed: 'keys',                                // phase 2: the ring of keys snaps off the belt
+    shed: 'keys',                                // shorn: the ring of keys snaps off the belt
     parts: [
       { name: 'keys', grid: TITAN_CHAIN, ox: 46, oy: 27,
         frames: [[0, 0], [1, 1], [-2, -1], [3, 3], [-3, 2]],
@@ -2424,7 +2702,7 @@ const ART = {
     stage: { scale: 1.75, sink: 10, bias: -8 },
     core: null,
     faults: [[20, 30, 14], [45, 32, 12]],
-    shed: 'maul',                                // phase 2: it drops the maul
+    shed: 'maul',                                // shorn: it drops the maul
     parts: [
       { name: 'maul', grid: COLOSSUS_MAUL, ox: 1, oy: 44,
         frames: [[0, 0], [0, 1], [2, -18], [6, 4], [-4, 2]],
@@ -2438,7 +2716,9 @@ const ART = {
     stage: { scale: 1.5, sink: 4, bias: 0 },
     core: [48, 46],
     faults: [[36, 44, 12], [60, 44, 12]],
-    /* The only creature here that GAINS mass at phase 2. Everything else in
+    /* The only creature here that GAINS mass where everything else loses it —
+     * so `shorn` is where the head comes out rather than where a limb comes
+     * off; see partsFor. Everything else in
      * the roster loses a limb; this one's taunt is "for every duplicate you
      * fail to skip, I grow another head", and a boss whose art contradicts its
      * own opening line is worse than one with no art at all. */
@@ -2472,7 +2752,7 @@ const ART = {
     stage: { scale: 1.75, sink: 12, bias: -8 },
     core: null,
     faults: [[16, 30, 10], [46, 30, 10]],
-    shed: 'ragR',                                // phase 2: half the shroud is torn away
+    shed: 'ragR',                                // shorn: half the shroud is torn away
     parts: [
       { name: 'ragL', grid: WRAITH_TAIL, ox: 12, oy: 50, behind: true,
         frames: [[0, 0], [1, 1], [-2, -1], [3, 2], [-2, 1]],
@@ -2489,7 +2769,7 @@ const ART = {
     stage: { scale: 1.75, sink: 10, bias: -8 },
     core: [32, 30],
     faults: [[14, 24, 14], [50, 24, 14]],
-    shed: 'tail',                                // phase 2: the tail is severed
+    shed: 'tail',                                // shorn: the tail is severed
     parts: [
       { name: 'tail', grid: BEHEMOTH_TAIL, ox: 0, oy: 34, behind: true,
         frames: [[0, 0], [1, 1], [-2, -2], [3, 2], [-3, 3]],
@@ -2504,7 +2784,7 @@ const ART = {
     stage: { scale: 1.75, sink: 9, bias: -8 },
     core: null,
     faults: [[14, 32, 14], [48, 32, 14]],
-    shed: 'runeB',                                // phase 2: the second rune goes dark
+    shed: 'runeB',                                // shorn: the second rune goes dark
     parts: [
       { name: 'runeA', grid: GOLEM_RUNE, ox: 5, oy: 21,
         frames: [[0, 0], [0, 2], [2, -4], [-4, 6], [1, 3]],
@@ -2521,7 +2801,7 @@ const ART = {
     stage: { scale: 1.75, sink: 9, bias: -8 },
     core: [32, 36],
     faults: [[22, 44, 14], [42, 44, 14]],
-    shed: 'branch',                                // phase 2: a limb comes off — the literal kind
+    shed: 'branch',                                // shorn: a limb comes off — the literal kind
     parts: [
       { name: 'branch', grid: ENT_BRANCH, ox: 4, oy: 34,
         frames: [[0, 0], [1, 1], [-2, -2], [4, 3], [-3, 1]],
@@ -2536,7 +2816,7 @@ const ART = {
     stage: { scale: 1.75, sink: 10, bias: -8 },
     core: null,
     faults: [[10, 25, 8], [50, 25, 8]],
-    shed: 'skullB',                                // phase 2: one of the bound skulls breaks up
+    shed: 'skullB',                                // shorn: one of the bound skulls breaks up
     parts: [
       { name: 'skullA', grid: NECRO_SKULL, ox: 48, oy: 24,
         frames: [[0, 0], [1, 2], [3, -3], [-7, 4], [2, 3]],
@@ -2553,7 +2833,7 @@ const ART = {
     stage: { scale: 1.75, sink: 9, bias: -8 },
     core: [32, 30],
     faults: [[16, 32, 14], [48, 32, 14]],
-    shed: 'piston',                                // phase 2: the piston blows out of its housing
+    shed: 'piston',                                // shorn: the piston blows out of its housing
     parts: [
       // The gear indexes a quarter turn on every beat, so it keeps turning
       // while the rest of the machine is standing still. That is the whole
@@ -2575,7 +2855,7 @@ const ART = {
     stage: { scale: 1.75, sink: 10, bias: -8 },
     core: [32, 33],
     faults: [[18, 40, 12], [46, 40, 12]],
-    shed: 'wingR',                                // phase 2: the right wing is taken off
+    shed: 'wingR',                                // shorn: the right wing is taken off
     parts: [
       // The two wings run at the same rate half a turn apart, so the downbeat
       // of one is the upbeat of the other and the thing never looks pinned.
@@ -2600,7 +2880,7 @@ const ART = {
     stage: { scale: 1.5, sink: 4, bias: 0 },
     core: [62, 44],
     faults: [[50, 38, 12], [64, 52, 12]],
-    shed: 'fin',                                // phase 2: the dorsal fin shears away
+    shed: 'fin',                                // shorn: the dorsal fin shears away
     parts: [
       // The coils run slow and a third of a turn apart, so the animal swims
       // along its own length instead of pulsing like a ring.
@@ -2640,7 +2920,7 @@ const ART = {
     stage: { scale: 1.5, sink: 4, bias: 0 },
     core: [66, 43],
     faults: [[54, 37, 12], [68, 51, 12]],
-    shed: 'hat',                                // phase 2: the hat comes off. It does not pick it up.
+    shed: 'hat',                                // shorn: the hat comes off. It does not pick it up.
     parts: [
       { name: 'staff', grid: INTERP_STAFF, ox: 84, oy: 8, behind: true,
         frames: [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]],
@@ -3220,14 +3500,25 @@ function partOffset(part, frame, beat) {
   return [(part.ox | 0) + (f[0] | 0) + dx, (part.oy | 0) + (f[1] | 0) + dy];
 }
 
-/* The parts THIS phase has. Phase 2 is where a boss stops being the same
- * object: `shed` names the part it loses, `grow` the parts it puts out. Both
- * change the SILHOUETTE, which is the whole point — phases 0 and 1 differ by
- * light and fissures, and a fissure is not visible from the map or through a
- * screen shake. A limb is. */
+/* The parts THIS stage has, and the two stages that change them.
+ *
+ *   SHORN   it loses the part it was carrying: a wing torn off at the
+ *           shoulder, the colossus's maul, the Interpreter's hat. For the one
+ *           archetype authored with a `grow` and no `shed` — the hydra, whose
+ *           opening line is about growing heads — this is where the head comes
+ *           out instead, which is the same event said the other way round.
+ *   CROWNED both: whatever it had left to lose is gone and whatever it had to
+ *           put out is out.
+ *
+ * A limb is the largest silhouette change available and it costs nothing to
+ * draw, because the part was already authored — it is simply not stamped. */
 function partsFor(art, phase) {
   const base = art.parts || [];
-  if (phase < BOSS_PHASE.CORE) return base;
+  if (phase < BOSS_PHASE.SHORN) return base;
+  if (phase < BOSS_PHASE.CROWNED) {
+    if (art.shed) return base.filter(p => p.name !== art.shed);
+    return art.grow ? base.concat(art.grow) : base;
+  }
   const kept = art.shed ? base.filter(p => p.name !== art.shed) : base;
   return art.grow ? kept.concat(art.grow) : kept;
 }
@@ -3407,12 +3698,14 @@ function assembleMap(key, frame, phase, rawKey, element) {
    * the torso. The creature is damaged and then made small, in that order,
    * which is also the order it happens to it. */
   grid = fracture(grid, `${key}:${frame}:${phase}`, phase, art.faults);
+  grid = spall(grid, phase, art.faults, `${key}:${frame}`);
   grid = breach(grid, phase, art.faults, `${key}:${phase}`);
   grid = ember(grid, phase, art.core);
   grid = ignite(grid, phase, art.core);
+  grid = crown(grid, phase, `${key}:${frame}`);
   /* Dressed at battle scale and THEN reduced — see dress() for why this is the
    * order the "same creature" claim depends on. */
-  grid = dress(grid, rawKey, element, frame, 0, phase);
+  grid = dress(grid, rawKey, element, frame, 0, lightPhase(phase));
   grid = despeckle(reduceGrid(grid, boxW - MAP_INSET * 2, BOSS_MAP_H - MAP_INSET * 2));
   const box = blank(boxW, BOSS_MAP_H);
   stamp(box, grid, MAP_INSET, MAP_INSET);
@@ -3431,13 +3724,15 @@ export function bossMapSprite(spriteKey, colour, frame = 0, opts = {}) {
   const art = ART[key];
   const base = colour || art.colour;
   const f = Math.min(frameIndex(frame), BOSS_FRAME.BREATHE);
-  const ph = bossPhase(opts && opts.phase !== undefined ? opts.phase : 0);
+  opts = optsOf(opts);
+  const ph = bossPhase(opts.phase !== undefined ? opts.phase : 0);
   const el = elementFor(spriteKey, opts);
   const cacheKey = `M|${key}|${lookOf(spriteKey).id}|${base}|${f}|${ph}|${el || '-'}`;
   const hit = cacheGet(cacheKey);
   if (hit) return hit;
   const { canvas, ctx } = offscreen(art.wide ? BOSS_MAP_WIDE_W : BOSS_MAP_W, BOSS_MAP_H);
-  drawGrid(ctx, assembleMap(key, f, ph, spriteKey, el), bossPalette(base, art.accent, ph, el));
+  drawGrid(ctx, assembleMap(key, f, ph, spriteKey, el),
+    bossPalette(base, art.accent, lightPhase(ph), el));
   return cachePut(cacheKey, canvas);
 }
 
@@ -3465,34 +3760,45 @@ const spriteCache = new Map();
  * twice for the crossing.
  *
  * A fight's working set is ONE creature: two idle frames x six beats, plus the
- * three action frames, all of it x three phases = 45 canvases. A region's is
- * one boss marker: two frames x three phases = 6. The bound that actually
- * matters is the pathological one, a caller warming everything:
+ * three action frames = 15 canvases per stage, and a fight that runs its whole
+ * phase ladder touches all six stages, so 90. A region marker is two frames x
+ * six stages = 12. Both doubled when the phase ladder went from three stages to
+ * six, and the cap went with them.
  *
- *   battle  32 looks x 3 phases x (2 x 6 beats + 3 frames)  = 1440
- *   map     32 looks x 3 phases x 2 frames                  =  192
- *                                                             ----
- *                                                             1632
+ * The bound that CANNOT be covered, and it is worth saying so rather than
+ * quietly missing it, is a caller warming every look at every stage:
  *
- * so the cap sits just above that and nothing any caller can legitimately ask
- * for ever thrashes. (It was 640 against a set of 675 — one archetype was
- * added to the roster after the number was written, and the arithmetic was not
- * redone. Then it was 832 against 15 ARCHETYPES, and the unit changed under it:
- * the theme layer keys on the LOOK, so the fourteen named bosses, the
- * seventeen apexes and the final trial are thirty-two distinct entries where
- * there used to be fifteen. scripts/verify/bossforms.mjs warms the whole roster
- * and counts rebuilds, so the next time the unit changes it is a failing
- * harness rather than a slow frame nobody attributes to this.)
+ *   battle  32 looks x 6 stages x 15  = 2880
+ *   map     32 looks x 6 stages x  2  =  384
+ *                                       ----
+ *                                       3264   ~52MB of RGBA
  *
- * Worth being plain about what this cap costs: full, at 64x64 RGBA, it is
- * roughly 27MB, and it is only ever full if a caller warms every creature in
- * the game at every phase — a codex screen or this project's art harness. A
- * fight holds fifteen canvases and a region holds six. */
-const CACHE_CAP = 1792;
+ * That is a codex screen warming the entire bestiary, and paying fifty
+ * megabytes of resident canvas so it never regenerates is the wrong trade. It
+ * evicts, and what it evicts costs a regeneration rather than a defect. The
+ * LRU below is what makes that safe: the entries a live fight is touching stay
+ * hot, so the screen that thrashes is the one nobody is fighting on.
+ *
+ * (It was 640 against a set of 675 — one archetype was added to the roster
+ * after the number was written, and the arithmetic was not redone. Then it was
+ * 832 against 15 ARCHETYPES, and the unit changed under it: the theme layer
+ * keys on the LOOK, so the fourteen named bosses, the seventeen apexes and the
+ * final trial are thirty-two distinct entries where there used to be fifteen.
+ * scripts/verify/bossforms.mjs warms the whole ARCHETYPE roster at every stage
+ * — 15 x 6 x 17 = 1530, inside this cap — and counts rebuilds, so the next time
+ * the unit changes it is a failing harness rather than a slow frame nobody
+ * attributes to this.) */
+const CACHE_CAP = 2048;
+/* Exported so the harness can print the real number instead of a copy of it.
+ * bossforms.mjs was reporting "cap 832" against a cap that had been 1792 for
+ * two passes, which is exactly the kind of stale literal this whole file spends
+ * its comments arguing against. */
+export const BOSS_CACHE_CAP = CACHE_CAP;
 
-/* True LRU rather than insertion order. With three phases in play the oldest
- * INSERTED entry is frequently the current phase's idle frame, and evicting
- * that would regenerate a sprite every time the idle loop came round. */
+/* True LRU rather than insertion order, and with six stages in play it is
+ * doing more work than it was with three: the oldest INSERTED entry is
+ * frequently the current stage's idle frame, and evicting that would
+ * regenerate a sprite every time the idle loop came round. */
 function cacheGet(key) {
   const hit = spriteCache.get(key);
   if (hit === undefined) return undefined;
@@ -3510,6 +3816,19 @@ function cachePut(key, value) {
   return value;
 }
 
+/* The fourth argument is an options bag, and half the callers in the tree pass
+ * a bare phase number there instead — scripts/verify/apex.mjs has been passing
+ * `p` positionally and silently getting stage 0 for every one of its six
+ * stages. Accepting the number costs one line and turns a whole verification
+ * loop from a no-op into a measurement. A string is a phase key for the same
+ * reason. */
+function optsOf(opts) {
+  if (opts === null || opts === undefined) return {};
+  const t = typeof opts;
+  if (t === 'number' || t === 'string') return { phase: opts };
+  return opts;
+}
+
 /* One boss, one frame, one colour. Deterministic and cached forever: the same
  * Hash Titan carries the same pitting in every session. */
 export function bossSprite(spriteKey, colour, frame = 0, opts = {}) {
@@ -3517,7 +3836,8 @@ export function bossSprite(spriteKey, colour, frame = 0, opts = {}) {
   const art = ART[key];
   const base = colour || art.colour;
   const f = frameIndex(frame);
-  const ph = bossPhase(opts && opts.phase !== undefined ? opts.phase : 0);
+  opts = optsOf(opts);
+  const ph = bossPhase(opts.phase !== undefined ? opts.phase : 0);
   /* Beats only run on the two idle frames. The action frames already move
    * every part to an authored extreme, and giving them a sub-beat would
    * multiply the cache to hide a difference nobody can see in 240ms. */
@@ -3537,22 +3857,29 @@ export function bossSprite(spriteKey, colour, frame = 0, opts = {}) {
   if (hit) return hit;
 
   let grid = assemble(key, f, beat, ph);
-  if (art.wear) grid = patina(grid, `${key}:${base}:${f}`, art.wear + ph * 0.05, 'd');
-  // Damage before shading: applyRim derives light from the silhouette, and a
-  // fissure opened after the fact would be lit as if the plate were still shut.
+  if (art.wear) grid = patina(grid, `${key}:${base}:${f}`, art.wear + ph * 0.03, 'd');
+  /* Damage before shading: applyRim derives light from the silhouette, and a
+   * fissure opened after the fact would be lit as if the plate were still shut.
+   *
+   * The order inside the damage block is the order of the stages, because each
+   * pass reads what the last one wrote: cracks, then the contour bitten off
+   * around them, then holes through what is left, then the light behind the
+   * holes, then whatever the thing puts out at the end. */
   grid = fracture(grid, `${key}:${f}:${ph}`, ph, art.faults);
+  grid = spall(grid, ph, art.faults, `${key}:${f}`);
   grid = breach(grid, ph, art.faults, `${key}:${ph}`);
   grid = ember(grid, ph, art.core);
   grid = ignite(grid, ph, art.core);
+  grid = crown(grid, ph, `${key}:${f}`);
   /* The element, as geometry, before the light. Same reason the damage passes
    * run before it: applyRim derives the light from the silhouette, and a spur
    * grown after the fact would be an unlit spur on a lit creature. */
-  grid = dress(grid, spriteKey, el, f, beat, ph);
+  grid = dress(grid, spriteKey, el, f, beat, lightPhase(ph));
   grid = rimPass(applyRim(grid));
 
   const w = art.wide ? BOSS_WIDE_W : BOSS_W;
   const { canvas, ctx } = offscreen(w, BOSS_H);
-  drawGrid(ctx, grid, bossPalette(base, art.accent, ph, el));
+  drawGrid(ctx, grid, bossPalette(base, art.accent, lightPhase(ph), el));
   return cachePut(cacheKey, canvas);
 }
 
@@ -4001,7 +4328,13 @@ export function bossInfo(key) {
     element: bossElement(artKey),
     parts: (art.parts || []).map(p => p.name),
     sheds: art.shed || null,
+    shedsAt: BOSS_PHASE_NAMES[art.shed ? BOSS_PHASE.SHORN : BOSS_PHASE.CROWNED],
     grows: (art.grow || []).map(p => p.name),
+    /* The one archetype authored with a grow and no shed loses nothing at
+     * SHORN and grows there instead — see partsFor. Reported, rather than left
+     * for a reader to work out from two nulls. */
+    growsAt: BOSS_PHASE_NAMES[(art.grow && !art.shed)
+      ? BOSS_PHASE.SHORN : BOSS_PHASE.CROWNED],
     frames: BOSS_FRAME_NAMES.slice(),
     phases: BOSS_PHASE_NAMES.slice(),
     beats: BOSS_BEATS,

@@ -17,9 +17,24 @@ as prose and progress bars rather than as invisible thresholds:
    demands one, and every hard wall is a shortcut or the Castle. No region is
    ever reachable *only* through a hard wall; `verify_no_orphans` proves it.
 
-2. WORLD_EVENTS. Twenty-six beats that fire when the player has earned them and
+2. WORLD_EVENTS. Forty-two beats that fire when the player has earned them and
    then change the world: a road opens, a region transforms, a boss wakes up, the
    sky goes wrong. Triggers are evidence or exploration, never elapsed time.
+   Fourteen of them are key drops and two of them are the Standing Portal.
+
+2b. KEYS, ROADS AND THE PORTAL. Fourteen bosses, fourteen keys (world.KEYS),
+   fourteen hard-walled roads that open when the matching boss dies, and one
+   portal in Python Village that needs all fourteen. A key is DERIVED from
+   `cleared_bosses`, so there is no second ledger to fall out of step. Every key
+   road is a second way to somewhere already reachable, which is what makes it
+   safe to make it hard: `verify_no_orphans` deletes every wall and the sixteen
+   mortal regions are still one connected map, and `self_check` re-proves it
+   from a keyless save standing in each of the seventeen regions in turn.
+
+   THE PORTAL GATES THE STORY CLIMAX AND NEVER THE PRACTICAL. Interview Mode is
+   a measurement, reachable from the menu at any time with no keys, no roads and
+   no bosses. `finalexam.sealed()` is the one capability check in this game;
+   `portal_blocks()` is a question with a permanent answer, not a second one.
 
 3. THE LEVEL CURVE, deepened. `world.level_for` grows 18% per level forever,
    which is fine to level 20 and absurd by level 40 (one level there costs
@@ -47,6 +62,14 @@ except through `advance()`. It reads, all optional and all forward-filled:
     state["world"]                           — this module's own sub-state
 `pets` and `dungeons_cleared` are owned by other systems; we only ever read ids
 out of them, so a save written before those systems existed still works.
+
+THE KEYS ADD NOTHING TO THIS LIST. There is no `state["keys"]`, on purpose:
+`world.keys_held(state["cleared_bosses"])` is the whole implementation, so every
+save that has ever existed already holds exactly the keys its owner earned and
+there is nothing to migrate, nothing to lose and no second ledger to disagree
+with the kill list. The same is true of the Standing Portal, which is a function
+of the same fact. `state["world"]["events_fired"]` gains sixteen ids as a
+consequence of play, which `_merge` forward-fills like any other.
 """
 from __future__ import annotations
 
@@ -155,6 +178,24 @@ class Needs:
     @staticmethod
     def event(event_id: str) -> Need:
         return Need("event", event_id)
+
+    # -- keys. A key is proof you were somewhere and beat what lived there, so
+    # -- it is DERIVED from cleared_bosses and never stored twice. See
+    # -- world.KEYS for the fourteen and for what each one opens.
+
+    @staticmethod
+    def key(key_id: str) -> Need:
+        return Need("key", key_id)
+
+    @staticmethod
+    def keys(count: int) -> Need:
+        return Need("keys", value=count)
+
+    @staticmethod
+    def all_keys() -> Need:
+        """Every key in the realm. The Standing Portal's need, and nothing
+        else's — a gate this expensive may exist exactly once."""
+        return Need("keys", value=len(world.KEYS))
 
     @staticmethod
     def discovered(route_id: str) -> Need:
@@ -308,6 +349,22 @@ def need_status(need: Need, prog: dict) -> dict:
     if kind == "discovery":
         met = need.key in prog["discovered"]
         return {"met": met, "ratio": 1.0 if met else 0.0, "label": "undiscovered"}
+
+    if kind == "key":
+        key = world.KEY_BY_ID.get(need.key)
+        name = key["name"] if key else need.key
+        # Read straight off the bosses. There is no key ledger to fall out of
+        # step with the kill list, because there is no key ledger.
+        met = bool(key) and key["boss"] in prog["cleared_bosses"]
+        boss = world.BOSS_BY_ID.get(key["boss"], {}) if key else {}
+        return {"met": met, "ratio": 1.0 if met else 0.0,
+                "label": f"carry {name}" if met
+                         else f"take {name} from {boss.get('name', 'its holder')}"}
+
+    if kind == "keys":
+        have = len(world.keys_held(prog["cleared_bosses"]))
+        return {"met": have >= need.value, "ratio": _ratio(have, need.value),
+                "label": f"keys {have}/{int(need.value)}"}
 
     if kind == "all":
         parts = [need_status(p, prog) for p in need.parts]
@@ -567,6 +624,99 @@ ROUTES = [
           "A single cable from the tower's summit to the village bell. The "
           "Oracle calls it amortised. The ride down takes eleven seconds.",
           wall=True, two_way=False, danger=1),
+
+    # --- the key roads. Fourteen bosses, fourteen keys, fourteen roads that
+    # --- were always drawn and never open. Each one is HARD (wall=True) and
+    # --- each one is a SECOND way to somewhere the player can already walk to,
+    # --- which is the whole reason it is safe to make it hard: delete every
+    # --- wall in this list and the sixteen mortal regions are still one
+    # --- connected map. verify_no_orphans() proves that rather than promising
+    # --- it, and self_check proves it again from a thousand random saves.
+    #
+    # --- Read the destinations top to bottom and the shape is deliberate: the
+    # --- early keys widen the map sideways, and the late ones — the Leaf, the
+    # --- Ring, the Undo, the Written Tree — all come home. By the time you are
+    # --- holding thirteen of these, every road you opened last leads back to
+    # --- the village, which is where the fourteenth one is standing.
+    Route("rt_indexed_road", "The Indexed Road", "hashmap_highlands", "dp_ruins",
+          "road", Needs.key("key_one_rune"),
+          "The Titan's key fits a lock at the plateau's south edge that nobody "
+          "had a name for. Behind it, one road, straight to the Ruins, with no "
+          "searching at either end.", wall=True, danger=26),
+    Route("rt_sorted_run", "The Sorted Run", "array_caverns",
+          "stringwood_labyrinth", "road", Needs.key("key_skipped_head"),
+          "The Hydra was lying across the run in nine places at once. Sorted, "
+          "it is one road. It was always one road.", wall=True, danger=11),
+    Route("rt_single_pass", "The Single-Pass Road", "sliding_window_marsh",
+          "complexity_tower", "road", Needs.key("key_unbroken_frame"),
+          "Marsh to tower without doubling back once. The Oracle has been "
+          "asking for a road like this for a decade and refusing to explain "
+          "why the old one offended her.", wall=True, danger=23),
+    Route("rt_both_ends", "Both Ends Road", "twin_pointer_pass", "graph_wastes",
+          "road", Needs.key("key_shorter_wall"),
+          "Two parties set out from opposite ends of this road in the year of "
+          "the Shattering. The Behemoth was standing where they would have "
+          "met. It is not standing there now.", wall=True, danger=24),
+    Route("rt_turned_hall", "The Turned Hall", "matrix_citadel",
+          "stack_queue_mines", "tunnel", Needs.key("key_quarter_turn"),
+          "A hall in the Citadel's west wing, turned a quarter turn in place, "
+          "which puts its far door level with the top of the ore line. Nothing "
+          "was allocated to hold it while it turned.", wall=True, danger=18),
+    Route("rt_in_order_walk", "The In-Order Walk", "binary_tree_canopy",
+          "dp_ruins", "drop", Needs.key("key_bounded_branch"),
+          "Left, then the branch itself, then right, all the way down, and the "
+          "order you come out in is the order the Ruins are numbered in. The "
+          "Dragon was the reason nobody had ever finished the walk.",
+          wall=True, danger=26),
+    Route("rt_root_to_leaf", "The Root-to-Leaf Road", "binary_tree_canopy",
+          "python_village", "road", Needs.key("key_counted_leaf"),
+          "One path from the highest leaf to the root, and the root of this "
+          "country is a village square with a bell in it. The Ent had been "
+          "standing on the last stretch, insisting it was a leaf.",
+          wall=True, danger=22),
+    Route("rt_shortest_hop", "The Shortest Hop", "graph_wastes", "python_village",
+          "road", Needs.key("key_ring_of_light"),
+          "The Cartographer sets the Ring down in the Wastes and the light goes "
+          "out in rings until one of them touches the village bell. Four hops. "
+          "It was four hops the entire time.", wall=True, danger=24),
+    Route("rt_discard_line", "The Discard Line", "sliding_window_marsh",
+          "graph_wastes", "road", Needs.key("key_discarded_maximum"),
+          "A causeway of everything the marsh threw away, laid end to end and "
+          "walkable. What it threw away could never have won. What it kept is "
+          "still in front.", wall=True, danger=24),
+    Route("rt_undo_stair", "The Undo Stair", "matrix_citadel", "python_village",
+          "stair", Needs.key("key_other_undo"),
+          "Every change made to this realm, walked backwards, one step per "
+          "change, ending in the square. The Automaton had the stair and no "
+          "intention of implementing it.", wall=True, danger=18),
+    Route("rt_amortised_run", "The Amortised Run", "complexity_tower",
+          "coding_coliseum", "drop", Needs.key("key_amortised_step"),
+          "One expensive step off the summit and then a long cheap glide onto "
+          "the sand. Averaged over the whole descent it is the cheapest road in "
+          "the realm, which the Wyrm found personally insulting.",
+          wall=True, danger=25),
+    Route("rt_written_down", "The Road Written Down", "recursive_forest",
+          "python_village", "road", Needs.key("key_written_tree"),
+          "The forest, serialised: one line of road that can be read back into "
+          "the whole wood exactly, and read forward into the village gate. The "
+          "Lich wrote it. The Lich could never read it back.",
+          wall=True, danger=20),
+    Route("rt_reproduction_road", "The Reproduction Road", "debugging_dungeon",
+          "coding_coliseum", "road", Needs.key("key_reproduced_fault"),
+          "The Armorer walks cracked plate down this road to the Coliseum, "
+          "where a fault can be made to happen again on demand, to the second. "
+          "You cannot fix what you cannot reproduce.", wall=True, danger=25),
+    # The fourteenth. It runs the OTHER way down the road you always had out of
+    # the castle, and it exists so that having beaten the Interviewer you may
+    # walk back into the exam hall from your own village whenever you like.
+    # It is a convenience, not a permission: the practical needs no key and no
+    # road, and `world.portal_gates("practical")` is False forever.
+    Route("rt_road_back_in", "The Road Back In", "python_village",
+          "null_kings_castle", "road", Needs.key("key_unlabelled"),
+          "The Long Walk Back, walked the other way. Nothing on the signposts "
+          "and nothing at the gate. You know where it goes because you have "
+          "been, which was always the qualification.",
+          wall=True, two_way=False, danger=32),
 
     # --- the Castle. The one hard wall the story insists on: it is the exam
     # --- hall, and walking in early would not be freedom, it would be a lie
@@ -872,6 +1022,178 @@ WORLD_EVENTS = (
               "the same afternoon and every one of them says a version of: it "
               "knows your name now, and it is going to ask you to say it.",
         herald="The Null is spreading."),
+    # -- the fourteen keys. One event per key, firing in the payload of the
+    # -- submission that killed the boss, because a drop the player has to go
+    # -- and look at a menu to discover is not a drop. Each one announces
+    # -- exactly the road its key opens, and `self_check` refuses to let an
+    # -- event announce a road that is not open at the moment it fires.
+    WorldEvent(
+        id="ev_key_one_rune", title="The One-Rune Key",
+        need=Needs.key("key_one_rune"),
+        changes=(Change("route_open", "rt_indexed_road", ""),
+                 Change("npc", "vela_the_tollkeeper",
+                        "she wants to see it, and she wants to see it twice")),
+        prose="The Titan had been holding it the entire fight, which is why it "
+              "never struck you. There is a lock at the plateau's south edge "
+              "that nobody has had a name for in a generation, and this is its "
+              "name. Behind the lock is a road to the Ruins with no searching "
+              "at either end of it.",
+        herald="The Indexed Road is open.", region="hashmap_highlands"),
+    WorldEvent(
+        id="ev_key_skipped_head", title="The Skipped Head",
+        need=Needs.key("key_skipped_head"),
+        changes=(Change("route_open", "rt_sorted_run", ""),),
+        prose="Eight heads grew back. The ninth did not, because you walked "
+              "past the duplicate instead of fighting it, and a head that was "
+              "never fought has nothing to grow back from. The run out of the "
+              "caverns to the Stringwood is one road once it is sorted.",
+        herald="The Sorted Run is open.", region="array_caverns"),
+    WorldEvent(
+        id="ev_key_unbroken_frame", title="The Unbroken Frame",
+        need=Needs.key("key_unbroken_frame"),
+        changes=(Change("route_open", "rt_single_pass", ""),
+                 Change("sky", "clearing", "the marsh light stops flickering")),
+        prose="It starved. What is left of it is a frame of cold light with no "
+              "seam anywhere in it, and laid flat across the reeds it makes a "
+              "road to the tower that never doubles back. The Oracle has been "
+              "asking for this road for ten years without once explaining what "
+              "was wrong with the old one.",
+        herald="The Single-Pass Road is open.", region="sliding_window_marsh"),
+    WorldEvent(
+        id="ev_key_shorter_wall", title="The Shorter Wall",
+        need=Needs.key("key_shorter_wall"),
+        changes=(Change("route_open", "rt_both_ends", ""),
+                 Change("npc", "the_ranger", "walking it from the far end")),
+        prose="Two bits, one filed down, and the Behemoth is no longer standing "
+              "in the middle of the road where the two parties from either end "
+              "would have met. The Ranger sets off from the Wastes side at the "
+              "same moment you set off from the pass. You meet in the middle. "
+              "He says that is the only correct way to open a road.",
+        herald="Both Ends Road is open.", region="twin_pointer_pass"),
+    WorldEvent(
+        id="ev_key_quarter_turn", title="The Quarter Turn",
+        need=Needs.key("key_quarter_turn"),
+        changes=(Change("route_open", "rt_turned_hall", ""),
+                 Change("region_state", "matrix_citadel", "stirring")),
+        prose="The west hall turns ninety degrees, in place, with nothing "
+              "allocated anywhere to hold it while it turns, and stops with its "
+              "far door level with the top of the ore line. The Golem had been "
+              "the thing preventing that, on the grounds that it could not be "
+              "done without a second hall to put the first one in.",
+        herald="The Turned Hall is open.", region="matrix_citadel"),
+    WorldEvent(
+        id="ev_key_bounded_branch", title="The Bounded Branch",
+        need=Needs.key("key_bounded_branch"),
+        changes=(Change("route_open", "rt_in_order_walk", ""),
+                 Change("region_state", "binary_tree_canopy", "stirring")),
+        prose="A branch with a floor and a ceiling carved along it. Carry the "
+              "bounds down instead of comparing each thing to the things "
+              "directly under it, and the walk comes out of the canopy in "
+              "exactly the order the Ruins are numbered in. Nobody had ever "
+              "finished the walk. The Dragon was why.",
+        herald="The In-Order Walk is open.", region="binary_tree_canopy"),
+    WorldEvent(
+        id="ev_key_counted_leaf", title="The Leaf That Counted",
+        need=Needs.key("key_counted_leaf"),
+        changes=(Change("route_open", "rt_root_to_leaf", ""),
+                 Change("npc", "the_cartographer",
+                        "redrawing the village sheet, which she has not "
+                        "touched in years")),
+        prose="One leaf, pressed flat, and a road under it that runs from the "
+              "highest branch in the country down to the root, and the root of "
+              "this country is a square with a bell in it. The Ent had been "
+              "standing on the last stretch for eleven years insisting that a "
+              "node with one child was a leaf and the road therefore ended "
+              "there.",
+        herald="The Root-to-Leaf Road reaches the village.",
+        region="binary_tree_canopy"),
+    WorldEvent(
+        id="ev_key_ring_of_light", title="The Ring of Light",
+        need=Needs.key("key_ring_of_light"),
+        changes=(Change("route_open", "rt_shortest_hop", ""),
+                 Change("sky", "ash", "the lattice keeps its shape and starts "
+                                      "to glow along one line")),
+        prose="The Cartographer sets it down in the ash and the light leaves it "
+              "in rings, every ruin at the same distance lighting at the same "
+              "moment, until one ring touches the village bell and stops. Four "
+              "hops. She sits down in the road. It was four hops the whole "
+              "time and she has been walking eleven.",
+        herald="The Shortest Hop runs from the Wastes to the village.",
+        region="graph_wastes"),
+    WorldEvent(
+        id="ev_key_discarded_maximum", title="The Discarded Maximum",
+        need=Needs.key("key_discarded_maximum"),
+        changes=(Change("route_open", "rt_discard_line", ""),),
+        prose="Everything the marsh threw away, laid end to end across the "
+              "reeds and walkable. None of it could ever have won again; that "
+              "is the only reason it was thrown. What is still being carried is "
+              "at the front, where it has always been, and the Titan is at the "
+              "bottom of the pile it was calling max() on.",
+        herald="The Discard Line crosses the marsh.",
+        region="sliding_window_marsh"),
+    WorldEvent(
+        id="ev_key_other_undo", title="The Other Undo",
+        need=Needs.key("key_other_undo"),
+        changes=(Change("route_open", "rt_undo_stair", ""),
+                 Change("npc", "the_archivist",
+                        "taking the stair down, backwards, out of principle")),
+        prose="It was on a hook by the door the whole time, labelled for "
+              "whoever came back and finished the job. The stair it opens walks "
+              "every change ever made to this realm backwards, one step per "
+              "change, and comes out in the village square about four hundred "
+              "steps before you were born.",
+        herald="The Undo Stair reaches the village square.",
+        region="matrix_citadel"),
+    WorldEvent(
+        id="ev_key_amortised_step", title="The Amortised Step",
+        need=Needs.key("key_amortised_step"),
+        changes=(Change("route_open", "rt_amortised_run", ""),
+                 Change("npc", "the_chronomancer",
+                        "at the bottom of the run, timing it")),
+        prose="One expensive step off the summit and then a long cheap glide "
+              "onto the sand, and averaged across the whole descent it is the "
+              "cheapest road in the realm. The Wyrm took this personally to the "
+              "end. Correct is not the same as fast, and it had spent an age "
+              "being the difference.",
+        herald="The Amortised Run drops onto the Coliseum sand.",
+        region="complexity_tower"),
+    WorldEvent(
+        id="ev_key_written_tree", title="The Written Tree",
+        need=Needs.key("key_written_tree"),
+        changes=(Change("route_open", "rt_written_down", ""),
+                 Change("region_state", "recursive_forest", "stirring")),
+        prose="The whole wood folded down into one line of road that can be "
+              "read back into the wood exactly, and read forward into the "
+              "village gate. The Lich could always write. What it could never "
+              "once do, in four hundred years of trying, was read its own "
+              "handwriting back.",
+        herald="The Road Written Down leads home.", region="recursive_forest"),
+    WorldEvent(
+        id="ev_key_reproduced_fault", title="The Reproduced Fault",
+        need=Needs.key("key_reproduced_fault"),
+        changes=(Change("route_open", "rt_reproduction_road", ""),
+                 Change("shop", "armorer_upgrades",
+                        "she will take Coliseum work now")),
+        prose="It works on your machine. So you made it fail on your machine, "
+              "on purpose, twice in a row, and there was nowhere left for the "
+              "Demon to stand. The Armorer starts walking cracked plate down "
+              "the new road to the Coliseum, where a fault can be made to "
+              "happen again on demand, to the second.",
+        herald="The Reproduction Road is open.", region="debugging_dungeon"),
+    WorldEvent(
+        id="ev_key_unlabelled", title="The Unlabelled Key",
+        need=Needs.key("key_unlabelled"),
+        changes=(Change("route_open", "rt_road_back_in", ""),
+                 Change("npc", "the_interviewer",
+                        "at the village end of it, not the castle end")),
+        prose="Nothing is stamped on it. No region, no pattern, no difficulty, "
+              "no name. You know what it opens because you recognised it, which "
+              "was the whole of the examination. It runs the Long Walk Back the "
+              "other way, so the exam hall is now a morning's walk from your "
+              "own gate whenever you want it. It was always a morning's walk. "
+              "Nobody had ever had a reason to come back.",
+        herald="The Road Back In is open.", region="null_kings_castle"),
+
     WorldEvent(
         id="ev_castle_visible", title="The Castle Becomes Visible",
         need=Needs.bosses(7),
@@ -899,6 +1221,41 @@ WORLD_EVENTS = (
               "shorter than the others.",
         herald="The Castle is open. Nothing inside it is labelled.",
         region="null_kings_castle"),
+    # -- the Standing Portal. The first event is the promise, and it fires on
+    # -- the very first key so that fourteen means something for the whole rest
+    # -- of the game rather than arriving as a surprise at the end. The second
+    # -- is the ending's door. Neither of them touches the practical: see
+    # -- world.portal_gates, and see PORTAL below.
+    WorldEvent(
+        id="ev_portal_wakes", title="Something in the Square Lights Up",
+        need=Needs.keys(1),
+        changes=(Change("npc", "the_standing_portal",
+                        "it has been in the square the entire game"),
+                 Change("region_state", "python_village", "stirring")),
+        prose="There is a door frame standing in the village square behind the "
+              "bell, with no door in it and no wall around it, in the gap "
+              "everybody assumed was part of the founders' cellar. It has "
+              "fourteen wards cut into the lintel. One of them is now lit. "
+              "BYTE, who has stood next to this thing every day of your life, "
+              "says: yes. I did know. You could not have opened it.",
+        herald="The Standing Portal has one ward lit. There are fourteen.",
+        region="python_village"),
+    WorldEvent(
+        id="ev_portal_opens", title="The Standing Portal Opens",
+        need=Needs.all_keys(),
+        changes=(Change("npc", "the_standing_portal", "open"),
+                 Change("sky", "dawn", "over the village, first of anywhere"),
+                 Change("fast_travel", "the_portal",
+                        "the square, to the room under the square")),
+        prose="Fourteen wards, fourteen things that were holding them, and not "
+              "one of them is holding anything now. The frame stops being a "
+              "frame. What is on the other side is a room underneath the place "
+              "that taught you to read, and the castle was built on top of the "
+              "far end of the same room specifically so that nobody would have "
+              "to look at it. You end where you began. That was not a "
+              "consolation prize; that was the shape of the thing all along.",
+        herald="The Standing Portal is open. All fourteen keys are yours.",
+        region="python_village"),
     WorldEvent(
         id="ev_realm_restored", title="The Realm Stands",
         need=Needs.restored(8),
@@ -925,6 +1282,129 @@ WORLD_EVENTS = (
 )
 
 EVENT_BY_ID = {e.id: e for e in WORLD_EVENTS}
+
+
+# ---------------------------------------------------------------------------
+# The key ring and the Standing Portal
+# ---------------------------------------------------------------------------
+# world.py owns what the fourteen keys ARE — their names, whose they were, what
+# each is proof of. This module owns what they DO, which is roads. The two are
+# joined by one string per key (`world.KEYS[i]["opens"]` is a route id in this
+# file) and `verify_no_orphans()` refuses to let that string be wrong: every key
+# must name a real road, every key road must be gated on exactly that key, and
+# no key road may be the only way to anywhere.
+#
+# THE PORTAL AND THE PRACTICAL. Said once more here, where the gate is actually
+# evaluated, because this is the line that would be easiest to cross by accident
+# and the most damaging to cross. The Standing Portal gates the STORY CLIMAX.
+# The Interview Mode practical is a MEASUREMENT and is reachable from the menu
+# at any time with no keys, no roads, no bosses and no portal —
+# `finalexam.sealed()` is the one capability check in this game and nothing
+# here is a second one. `portal_blocks()` exists so that a caller can ask that
+# question out loud instead of remembering the answer.
+
+PORTAL = world.THE_STANDING_PORTAL
+PORTAL_NEED = Needs.all_keys()
+PORTAL_REGION = world.THE_STANDING_PORTAL["region"]
+
+KEY_ROUTE = {key["id"]: key["opens"] for key in world.KEYS}
+
+
+def portal_open(prog: dict) -> bool:
+    """All fourteen, or not open. There is no partial credit on a door."""
+    return need_status(PORTAL_NEED, prog)["met"]
+
+
+def portal_blocks(what: str) -> bool:
+    """Does the portal stand in front of `what`? Never the measurement.
+
+    Delegates to world.portal_gates so there is exactly one answer in the
+    codebase. Anything unrecognised is not gated: the default is open, because
+    a door that locks things nobody has thought of yet is a door that will one
+    day lock the exam.
+    """
+    return world.portal_gates(what)
+
+
+def keyring_view(prog: dict) -> dict:
+    """Fourteen keys, what each one is, and what each one opened.
+
+    This is the payload behind E: a key in hand opens a road, and the road has
+    a name and a destination the player can read before they walk it.
+    """
+    held = set(world.keys_held(prog["cleared_bosses"]))
+    rows = []
+    for key in world.KEYS:
+        route = ROUTE_BY_ID.get(key["opens"])
+        boss = world.BOSS_BY_ID.get(key["boss"], {})
+        rows.append({
+            "id": key["id"], "name": key["name"],
+            "held": key["id"] in held,
+            "boss": key["boss"], "boss_name": boss.get("name", key["boss"]),
+            "region": key["region"],
+            "region_name": world.REGION_BY_ID[key["region"]]["name"],
+            "sigil": key["sigil"], "colour": key["colour"],
+            "line": key["line"],
+            "opens": key["opens"], "opens_name": key["opens_name"],
+            "route_name": route.name if route else "",
+            "route_from": route.frm if route else "",
+            "route_to": route.to if route else "",
+            "route_to_name": world.REGION_BY_ID[route.to]["name"] if route else "",
+            "route_open": key["id"] in held,
+            "route_prose": route.prose if route else "",
+            "one_way": bool(route and not route.two_way),
+        })
+    return {
+        "keys": rows,
+        "held": len(held),
+        "total": len(world.KEYS),
+        "percent": round(100 * _ratio(len(held), len(world.KEYS))),
+        "roads_opened": [row["route_name"] for row in rows if row["held"]],
+        "note": "A key is proof you were somewhere and beat what lived there. "
+                "It is derived from the kill, so it cannot be lost, sold or "
+                "desynchronised from the thing it is proof of.",
+    }
+
+
+def portal_view(prog: dict) -> dict:
+    """The Standing Portal, as the village square renders it.
+
+    Readable from the first key onward, on purpose: fourteen is only a number
+    worth caring about if you can see the counter the whole way up.
+    """
+    ring = keyring_view(prog)
+    is_open = ring["held"] >= len(world.KEYS)
+    missing = [row for row in ring["keys"] if not row["held"]]
+    status = need_status(PORTAL_NEED, prog)
+    return {
+        "id": PORTAL["id"], "name": PORTAL["name"],
+        "region": PORTAL_REGION,
+        "region_name": world.REGION_BY_ID[PORTAL_REGION]["name"],
+        "where": PORTAL["where"], "blurb": PORTAL["blurb"], "law": PORTAL["law"],
+        "sprite": PORTAL["sprite"], "colour": PORTAL["colour"],
+        "accent": PORTAL["accent"],
+        "open": is_open,
+        "held": ring["held"], "required": len(world.KEYS),
+        "percent": ring["percent"],
+        "requirement": status["label"],
+        "line": PORTAL["open_line"] if is_open else PORTAL["locked_line"],
+        "wards": [{"key": row["id"], "name": row["name"], "lit": row["held"],
+                   "colour": row["colour"], "sigil": row["sigil"]}
+                  for row in ring["keys"]],
+        "missing": [{"key": row["id"], "name": row["name"],
+                     "boss": row["boss"], "boss_name": row["boss_name"],
+                     "region": row["region"], "region_name": row["region_name"]}
+                    for row in missing],
+        "seen": ring["held"] >= 1 or "ev_portal_wakes" in prog["events_fired"],
+        # The whole point, restated in the payload so a client cannot render
+        # this panel without the sentence being right there in the data.
+        "gates": list(world.PORTAL_GATES),
+        "never_gates": list(world.PORTAL_NEVER_GATES),
+        "practical_requires_keys": False,
+        "note": "This portal gates the story climax. The Interview Mode "
+                "practical is a measurement and is reachable from the menu at "
+                "any time with no keys at all.",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1330,6 +1810,13 @@ def region_view(region_id: str, prog: dict) -> dict:
                      for d in DUNGEONS_BY_REGION.get(region_id, [])],
         "pet": next((p for p in PETS if p["region"] == region_id
                      and p["id"] not in prog["pets"]), None),
+        # The keys this ground owes or has already paid, so the map screen can
+        # draw a key on a region rather than hiding the whole system in a menu.
+        "keys": [{"id": k["id"], "name": k["name"], "boss": k["boss"],
+                  "held": k["id"] in prog["keys"], "colour": k["colour"],
+                  "opens": k["opens_name"]}
+                 for k in world.KEYS_BY_REGION.get(region_id, [])],
+        "portal": portal_view(prog) if region_id == PORTAL_REGION else None,
     }
 
 
@@ -1501,6 +1988,10 @@ def snapshot(state: dict, skills=None, *, readiness: dict | None = None) -> dict
         "chapter_ratio": chapter_ratio,
         "chapter_index": curriculum.frontier(shimmed),
         "cleared_bosses": cleared_bosses,
+        # Keys, derived. Never read out of the save — there is nothing in the
+        # save to read. See world.keys_held.
+        "keys": set(world.keys_held(cleared_bosses)),
+        "keys_held": len(world.keys_held(cleared_bosses)),
         "items": carried,
         "secrets": set(state.get("secrets_found") or []),
         "quests": quests,
@@ -1691,6 +2182,8 @@ def world_map(state: dict, skills=None, *, readiness: dict | None = None) -> dic
         "fast_travel": prog["fast_travel"],
         "restored": prog["restored_count"],
         "events": events_view(prog),
+        "keys": keyring_view(prog),
+        "portal": portal_view(prog),
         "level": next_level_summary(prog["xp"]),
         "prestige": prestige(prog),
     }
@@ -1887,6 +2380,31 @@ def things_to_do(state: dict, skills=None, *, readiness: dict | None = None,
                    "action": {"kind": "boss", "boss": boss["id"]}})
             break
 
+    # 3b. The keys. One of the two things this game now ends on, so it sits
+    #     directly under the boss that would hand one over. When the portal is
+    #     open it outranks nearly everything, because at that point there is
+    #     exactly one thing left in the realm the player has not seen.
+    if portal_open(prog):
+        offer({"id": "do_portal", "kind": "portal", "priority": 0.5,
+               "title": "Step through the Standing Portal",
+               "region": PORTAL_REGION,
+               "why": "Fourteen keys, fourteen things that were holding them. "
+                      "The frame in the village square is a doorway now, and "
+                      "it opens on the room under the place you started.",
+               "action": {"kind": "portal", "portal": PORTAL["id"]}})
+    elif prog["keys_held"]:
+        nearest = next((k for k in world.KEYS if k["id"] not in prog["keys"]), None)
+        if nearest:
+            boss = world.BOSS_BY_ID.get(nearest["boss"], {})
+            offer({"id": "do_keys", "kind": "keys", "priority": 3.5,
+                   "title": f"Take {nearest['name']} from "
+                            f"{boss.get('name', 'its holder')}",
+                   "region": nearest["region"],
+                   "why": f"{prog['keys_held']} of {len(world.KEYS)} wards lit "
+                          f"on the portal in the village square. This one opens "
+                          f"{nearest['opens_name']}.",
+                   "action": {"kind": "boss", "boss": nearest["boss"]}})
+
     # 4. A dungeon that is open and unfinished.
     for dungeon in DUNGEONS:
         if dungeon["id"] in prog["dungeons"] or dungeon["region"] not in within:
@@ -2004,9 +2522,58 @@ def verify_no_orphans() -> dict:
     bad_regions = [f"{e.id}:{c.target}" for e in WORLD_EVENTS for c in e.changes
                    if c.kind == "region_state" and c.target not in world.REGION_BY_ID]
 
+    # -- the keys. Four separate ways this could be wrong, all of them silent
+    # -- if nobody checks: a key that opens nothing, a key road gated on the
+    # -- wrong key (or on nothing), two keys claiming the same road, and — the
+    # -- one that would actually break the game — a key road that is the only
+    # -- way into somewhere. The last is already covered by the connectivity
+    # -- proof above, because every key road is a wall and the proof deletes
+    # -- every wall; it is asserted here again by name so the reason is written
+    # -- down next to the thing it protects.
+    key_routes = [r for r in ROUTES if r.need.kind == "key"]
+    bad_keys = [k["id"] for k in world.KEYS if k["opens"] not in ROUTE_BY_ID]
+    bad_key_bosses = [k["id"] for k in world.KEYS
+                      if k["boss"] not in world.BOSS_BY_ID]
+    mismatched = []
+    for key in world.KEYS:
+        route = ROUTE_BY_ID.get(key["opens"])
+        if route is None:
+            continue
+        if route.need.kind != "key" or route.need.key != key["id"]:
+            mismatched.append(f'{key["id"]}:{key["opens"]}')
+        if not route.wall:
+            # A soft key road would be walkable without the key, which makes
+            # the key decorative.
+            mismatched.append(f'{key["id"]}:{key["opens"]}:not-a-wall')
+    unclaimed = [r.id for r in key_routes
+                 if r.need.key not in world.KEY_BY_ID]
+    doubled = [r.id for r in key_routes
+               if sum(1 for k in world.KEYS if k["opens"] == r.id) != 1]
+    keyed_regions = {r.frm for r in key_routes} | {r.to for r in key_routes}
+    key_only_regions = [region for region in mortal
+                        if region in keyed_regions and region not in seen]
+    portal_in_village = PORTAL_REGION == "python_village"
+    portal_needs_all = (PORTAL_NEED.kind == "keys"
+                        and int(PORTAL_NEED.value) == len(world.KEYS))
+    portal_seals_nothing = not any(portal_blocks(name)
+                                   for name in world.PORTAL_NEVER_GATES)
+
     return {
         "mortal_regions": len(mortal),
         "connected_without_hard_gates": len(missing) == 0,
+        "keys": len(world.KEYS),
+        "bosses": len(world.BOSSES),
+        "one_key_per_boss": len(world.KEY_BY_BOSS) == len(world.BOSSES),
+        "key_routes": len(key_routes),
+        "bad_keys": bad_keys,
+        "bad_key_bosses": bad_key_bosses,
+        "mismatched_key_routes": mismatched,
+        "unclaimed_key_routes": unclaimed,
+        "doubled_key_routes": doubled,
+        "key_only_regions": key_only_regions,
+        "portal_in_first_village": portal_in_village,
+        "portal_needs_every_key": portal_needs_all,
+        "portal_never_gates_the_practical": portal_seals_nothing,
         "orphans": missing,
         "bad_routes": bad_routes,
         "bad_event_routes": bad_changes,
@@ -2100,7 +2667,10 @@ def self_check(trials: int = 500, seed: int = 20260911) -> dict:
     mortal = {r["id"] for r in world.REGIONS if r["id"] != "null_kings_castle"}
     failures = {"connectivity": [], "no_open_route": [], "nothing_to_do": [],
                 "monotonicity": [], "castle_shut_when_open": [],
-                "castle_is_a_trap": [], "announced_but_shut": []}
+                "castle_is_a_trap": [], "announced_but_shut": [],
+                "key_road_disagrees": [], "portal_disagrees": [],
+                "portal_gated_the_practical": [], "keyless_stranded": [],
+                "keyless_nothing_to_do": [], "key_ladder_stranded": []}
     min_reach = 99
     min_routes = 99
     min_todo = 99
@@ -2165,7 +2735,25 @@ def self_check(trials: int = 500, seed: int = 20260911) -> dict:
                     failures["announced_but_shut"].append(
                         (trial, event.id, change.target))
 
-        # 6. getting stronger never closes a road
+        # 6. a key opens exactly the road it names, and that road is shut
+        #    until the key is held. Both directions matter: a road that opens
+        #    early makes the key a souvenir, and a road that stays shut with
+        #    the key in hand is a promise the world did not keep.
+        for key in world.KEYS:
+            route = ROUTE_BY_ID[key["opens"]]
+            held = key["id"] in prog["keys"]
+            passable = route_status(route, prog, frm=route.frm)["passable"]
+            if passable != held:
+                failures["key_road_disagrees"].append((trial, key["id"], held))
+
+        # 7. the portal is open exactly when all fourteen are in hand, and it
+        #    has never in any state stood in front of the measurement.
+        if portal_open(prog) != (len(prog["keys"]) == len(world.KEYS)):
+            failures["portal_disagrees"].append((trial, len(prog["keys"])))
+        if any(portal_blocks(name) for name in world.PORTAL_NEVER_GATES):
+            failures["portal_gated_the_practical"].append(trial)
+
+        # 8. getting stronger never closes a road
         better = _upgrade(state)
         advance(better)
         better_prog = snapshot(better)
@@ -2174,6 +2762,65 @@ def self_check(trials: int = 500, seed: int = 20260911) -> dict:
             now = route_status(route, better_prog)
             if was["passable"] and not now["passable"]:
                 failures["monotonicity"].append((trial, route.id))
+
+    # -- THE KEYLESS PROOF -------------------------------------------------
+    # The sharp edge of a key economy is the player who cannot beat the boss.
+    # Fourteen locked roads must never cost that player a destination or an
+    # afternoon, so: take every state again with the kill list emptied, stand
+    # the player in each of the seventeen regions in turn, and require the whole
+    # mortal map to still be reachable and the board to still hold three things.
+    keyless_rng = random.Random(seed + 1)
+    keyless_min_reach = 99
+    keyless_min_todo = 99
+    keyless_states = 0
+    for trial in range(trials):
+        state = _random_state(keyless_rng)
+        state["cleared_bosses"] = []          # has beaten nothing, ever
+        advance(state)
+        prog = snapshot(state)
+        keyless_states += 1
+        within = reachable(prog)
+        keyless_min_reach = min(keyless_min_reach, len(within & mortal))
+        if not mortal <= within:
+            failures["keyless_stranded"].append(
+                (trial, prog["region"], sorted(mortal - within)))
+        todo = things_to_do(state, limit=99)
+        keyless_min_todo = min(keyless_min_todo, len(todo))
+        if len(todo) < 3:
+            failures["keyless_nothing_to_do"].append((trial, prog["region"]))
+
+    # -- THE KEY LADDER ----------------------------------------------------
+    # Zero keys through fourteen, standing in every region at every rung. The
+    # random sweep above covers the middle of that distribution; this covers all
+    # of it, including the two ends it would almost never draw.
+    ladder_rows = []
+    for count in range(len(world.KEYS) + 1):
+        cleared = [k["boss"] for k in world.KEYS[:count]]
+        opened = set()
+        for region in world.REGIONS:
+            state = {
+                "player": {"level": 1, "xp": 0, "region": region["id"]},
+                "skills": {}, "cleared_bosses": list(cleared),
+                "quests_completed": [], "pets": [], "dungeons_cleared": [],
+                "stats": {}, "unspent_points": 0,
+                "story": {"fired": [], "chains": {}},
+                "world": new_world_state(),
+            }
+            advance(state)
+            prog = snapshot(state)
+            within = reachable(prog)
+            opened |= {status["id"] for status in open_routes(prog)}
+            if not mortal <= within:
+                failures["key_ladder_stranded"].append(
+                    (count, region["id"], sorted(mortal - within)))
+            if len(things_to_do(state, limit=99)) < 3:
+                failures["key_ladder_stranded"].append((count, region["id"], "todo"))
+        ladder_rows.append({
+            "keys": count,
+            "key_roads_open": sum(1 for k in world.KEYS[:count]
+                                  if k["opens"] in opened),
+            "portal": count >= len(world.KEYS),
+        })
 
     # The curve, in numbers, against the one it deepens.
     curve = []
@@ -2190,7 +2837,16 @@ def self_check(trials: int = 500, seed: int = 20260911) -> dict:
         and not statics["orphans"] and not statics["bad_routes"] \
         and not statics["bad_event_routes"] and not statics["bad_event_dungeons"] \
         and not statics["bad_event_bosses"] and not statics["bad_event_regions"] \
-        and statics["always_unconditional"] and statics["always_available"] >= 3
+        and statics["always_unconditional"] and statics["always_available"] >= 3 \
+        and statics["one_key_per_boss"] and not statics["bad_keys"] \
+        and not statics["bad_key_bosses"] \
+        and not statics["mismatched_key_routes"] \
+        and not statics["unclaimed_key_routes"] \
+        and not statics["doubled_key_routes"] \
+        and not statics["key_only_regions"] \
+        and statics["portal_in_first_village"] \
+        and statics["portal_needs_every_key"] \
+        and statics["portal_never_gates_the_practical"]
 
     return {
         "trials": trials,
@@ -2213,6 +2869,18 @@ def self_check(trials: int = 500, seed: int = 20260911) -> dict:
         "mean_candidates": round(todo_total / max(trials, 1), 2),
         "mean_events_fired": round(events_total / max(trials, 1), 2),
         "castle_open_states": castle_open_states,
+        "keys": len(world.KEYS),
+        "key_roads": sum(1 for r in ROUTES if r.need.kind == "key"),
+        "key_events": sum(1 for e in WORLD_EVENTS if e.need.kind == "key"),
+        "keyless_states": keyless_states,
+        "keyless_min_mortal_regions_reachable": keyless_min_reach,
+        "keyless_min_things_to_do": keyless_min_todo,
+        "key_ladder_rungs": len(ladder_rows),
+        "key_ladder": ladder_rows,
+        "portal_region": PORTAL_REGION,
+        "portal_requires": len(world.KEYS),
+        "portal_gates": list(world.PORTAL_GATES),
+        "portal_never_gates": list(world.PORTAL_NEVER_GATES),
         "failures": {key: len(rows) for key, rows in failures.items()},
         "examples": {key: rows[:3] for key, rows in failures.items() if rows},
         "curve": curve,

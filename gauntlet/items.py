@@ -1364,6 +1364,55 @@ CONSUMABLES = {
 
 
 # --------------------------------------------------------------------------
+# The keyring — which is NOT in this file, and this is the note saying why
+# --------------------------------------------------------------------------
+#
+# Fourteen bosses drop fourteen keys and the keys open fourteen roads. None of
+# them is an Item, none of them is in CATALOGUE, none of them has a slot, a
+# rarity, an effect or a drop rate, and `roll_drop` can never produce one.
+#
+# THE REASON, because "it would have been easier as an item" is true and wrong:
+#
+#   A KEY IS NOT OWNED, IT IS PROVED. `world.keys_held(cleared_bosses)` derives
+#   the ring from the kill list. There is no state["keys"], so there is no
+#   second ledger to fall out of step with the first, no sell, no drop, no
+#   accidental disenchant, no slot conflict, and no inventory bug that can take
+#   back a road the player has already walked. A save written before any of
+#   this existed already holds exactly the keys its owner earned.
+#
+#   AN ITEM MAY CHANGE THE ECONOMICS OF AN ENCOUNTER. That is the rule at the
+#   top of this file and every entry in CATALOGUE obeys it. A key changes the
+#   MAP. Those are different systems and mixing them is how a key ends up with
+#   a rarity colour and a +2 to something.
+#
+# `keyring_rows` below is the only thing this module has to say about them: a
+# formatter, so the inventory screen can draw the ring beside the satchel
+# without either side inventing a second vocabulary for it. It reads world and
+# owns nothing.
+
+
+def keyring_rows(cleared_bosses) -> list:
+    """The fourteen keys as inventory rows. Derived; grants nothing.
+
+    Shaped like the item rows beside them — id, name, blurb, colour, a held
+    flag — so one list renderer draws both. `rarity` is deliberately absent:
+    a key is not loot and giving it a tier would invite somebody to roll one.
+    """
+    return [{
+        "id": key["id"],
+        "name": key["name"],
+        "kind": "KEY",
+        "held": bool(key["held"]),
+        "colour": key["colour"],
+        "sigil": key["sigil"],
+        "blurb": key["line"],
+        "opens": key["opens_name"],
+        "from": key["boss_name"],
+        "region": key["region_name"],
+    } for key in world.keyring(cleared_bosses)]
+
+
+# --------------------------------------------------------------------------
 # Secrets — hidden content with real discovery conditions
 # --------------------------------------------------------------------------
 

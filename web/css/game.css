@@ -115,6 +115,65 @@ h1, h2, h3, .pixel { font-family: 'Press Start 2P', 'Courier New', monospace; }
 }
 #topbar .nav { display: flex; gap: 6px; }
 
+/* ---------- the health bar as an alarm ----------
+ *
+ * The vitals live in #topbar, which sits outside .screen, so they are on every
+ * screen including the overworld. What they did NOT do is insist.
+ *
+ * At DIRE — a tenth of the bar, the same threshold gauntlet/upkeep.py starts the
+ * sound at — the bar itself beats. The tempo is NOT authored here: JS sets
+ * --beat-ms from upkeep's own BPM, so the glow, the red pulse on the sprite and
+ * the thump in the ears are one heartbeat rather than three things that happen
+ * to be happening. upkeep.py asserts pulse_hz == bpm/60 for exactly this reason.
+ *
+ * The band above it (CRITICAL, a quarter) glows without beating and without
+ * sound — a warning you have to look up to notice, before the room starts
+ * making a noise at you. */
+#topbar .vital .bar { transition: box-shadow 200ms ease; }
+
+#topbar .vital.critical .bar {
+  box-shadow: 0 0 0 1px var(--red), 0 0 10px -2px var(--red);
+}
+#topbar .vital.critical i { background: var(--red); }
+
+#topbar .vital.dire .bar {
+  box-shadow: 0 0 0 1px var(--red), 0 0 14px -1px var(--red);
+  animation: vital-beat var(--beat-ms, 500ms) ease-in-out infinite;
+}
+#topbar .vital.dire i {
+  background: var(--red);
+  animation: vital-glow var(--beat-ms, 500ms) ease-in-out infinite;
+}
+#topbar .vital.dire label { color: var(--red); }
+
+/* Two thumps and a rest, like the sound: the bar swells, drops, swells a little
+   less, then holds. A single sine would read as a pulsing light rather than as
+   something alive. */
+@keyframes vital-beat {
+  0%   { transform: scaleY(1);    }
+  12%  { transform: scaleY(1.45); }
+  24%  { transform: scaleY(1);    }
+  36%  { transform: scaleY(1.25); }
+  50%  { transform: scaleY(1);    }
+  100% { transform: scaleY(1);    }
+}
+@keyframes vital-glow {
+  0%   { filter: brightness(1);    }
+  12%  { filter: brightness(1.9);  }
+  24%  { filter: brightness(1);    }
+  36%  { filter: brightness(1.5);  }
+  50%  { filter: brightness(1);    }
+  100% { filter: brightness(1);    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Still unmistakably an alarm, just not a moving one. */
+  #topbar .vital.dire .bar,
+  #topbar .vital.dire i { animation: none; }
+  #topbar .vital.dire .bar { box-shadow: 0 0 0 2px var(--red), 0 0 16px -1px var(--red); }
+  #topbar .vital.dire i { filter: brightness(1.6); }
+}
+
 /* ---------- screens ---------- */
 .screen { flex: 1; display: none; overflow: hidden; }
 .screen.active { display: flex; }

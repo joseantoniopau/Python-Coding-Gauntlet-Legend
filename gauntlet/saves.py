@@ -43,13 +43,24 @@ MANUAL_SLOTS = 8          # named slots the player picks between, 1..8
 AUTOSAVE_RING = 4         # rolling, so a bad autosave cannot eat the good one
 UNDO_RING = 4             # pre-load snapshots; deep enough to undo an undo
 
+ANCHOR_RING = 3           # where death wakes you. see THE ANCHOR RING below
+
 KIND_MANUAL = "manual"
 KIND_AUTO = "auto"
 KIND_UNDO = "undo"
-KINDS = (KIND_MANUAL, KIND_AUTO, KIND_UNDO)
+KIND_ANCHOR = "anchor"
 
-_RING_SIZE = {KIND_MANUAL: MANUAL_SLOTS, KIND_AUTO: AUTOSAVE_RING, KIND_UNDO: UNDO_RING}
-_PREFIX = {KIND_MANUAL: "slot", KIND_AUTO: "auto", KIND_UNDO: "undo"}
+# KINDS is the SAVE SCREEN's list and stays what it was: eight slots, four
+# autosaves, four undos, sixteen rows. Anchors are a fourth kind that the save
+# screen deliberately does not show — see below — so they live in ALL_KINDS and
+# every id/ring helper takes ALL_KINDS while `list_slots` still defaults to KINDS.
+KINDS = (KIND_MANUAL, KIND_AUTO, KIND_UNDO)
+ALL_KINDS = KINDS + (KIND_ANCHOR,)
+
+_RING_SIZE = {KIND_MANUAL: MANUAL_SLOTS, KIND_AUTO: AUTOSAVE_RING,
+              KIND_UNDO: UNDO_RING, KIND_ANCHOR: ANCHOR_RING}
+_PREFIX = {KIND_MANUAL: "slot", KIND_AUTO: "auto", KIND_UNDO: "undo",
+           KIND_ANCHOR: "anchor"}
 _KIND_BY_PREFIX = {v: k for k, v in _PREFIX.items()}
 
 # The moments worth autosaving at. Permissive on purpose: another agent adding a
@@ -61,7 +72,58 @@ AUTOSAVE_EVENTS = {
     "quest_turned_in": "Quest turned in",
     "level_gained": "Level gained",
     "session_end": "Session ended",
+    # Written once at boot by death.ensure_wake_point(). A player who dies in
+    # their first fight, before any of the events above has fired, still has
+    # somewhere to wake up. Nothing may dead-end, death included.
+    "game_started": "Game started",
+    "companion_fell": "A companion fell",
 }
+
+
+# ---------------------------------------------------------------------------
+# THE ANCHOR RING — where dying puts you back
+# ---------------------------------------------------------------------------
+#
+# gauntlet/death.py needs to answer one question — "where does the player wake
+# up?" — and it may never answer "nowhere". The autosave ring cannot be trusted
+# to hold that answer, for an arithmetic reason rather than a stylistic one.
+#
+# The ring is four deep. `engine._autosave` throttles `encounter_cleared` to one
+# write every 180 seconds, and every OTHER event calls `autosave` directly,
+# unthrottled. So four cleared encounters spread over twelve minutes evict the
+# whole ring, including the `region_entered` write that was the only sensible
+# place to wake somebody. A player who fought their way to the bottom of a
+# dungeon would die and be handed back a checkpoint four fights old — which is
+# not the threat the brief asked for, it is a lottery.
+#
+# So the anchor ring is separate, three deep, and only the events below may
+# write it. Three for the same reason AUTOSAVE_RING is four: one bad anchor must
+# not be able to destroy the good one before it.
+#
+# WHAT IS NOT IN HERE, AND IT IS THE DESIGN DECISION OF THIS FILE:
+# `encounter_cleared`. It stays an autosave, because a crash should cost one
+# fight. It is NOT an anchor, because a checkpoint after every single encounter
+# means dying costs you the fight you were in and nothing else, and a threat
+# that costs one fight is not a threat. The gap between anchors — a region, a
+# boss, a turn-in, a level — is exactly the stretch of loot and gold and minutes
+# the player asked to be able to lose.
+ANCHOR_EVENTS = frozenset({
+    "region_entered",       # the brief: "each new area auto saves"
+    "boss_defeated",        # the brief: "or after a boss fight"
+    "quest_turned_in",
+    "level_gained",
+    "session_end",
+    "game_started",
+})
+
+# Named rather than merely absent, so that the next person to read this file
+# finds a decision instead of an omission.
+NOT_AN_ANCHOR = frozenset({
+    "encounter_cleared",    # would make death cost one fight. see above
+    "companion_fell",       # mid-dungeon, and often mid-fight
+    "pre_load",
+    "manual",
+})
 
 EXPORT_KIND = "gauntlet-save-slot"
 EXPORT_GAME_KIND = "gauntlet-save-game"
@@ -129,7 +191,7 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
 
 
 def slot_id(kind: str, ordinal: int) -> str:
-    if kind not in KINDS:
+    if kind not in ALL_KINDS:
         raise SaveError(f"Unknown save kind {kind!r}.")
     size = _RING_SIZE[kind]
     low = 1 if kind == KIND_MANUAL else 0
@@ -509,17 +571,33 @@ def _default_name(kind: str, ordinal: int) -> str:
         return f"Slot {ordinal}"
     if kind == KIND_AUTO:
         return f"Autosave {ordinal + 1}"
+    if kind == KIND_ANCHOR:
+        return f"Waking point {ordinal + 1}"
     return f"Before load {ordinal + 1}"
 
 
 def save_to_slot(conn: sqlite3.Connection, ordinal, state: dict, *,
                  name: str = "", note: str = "", readiness: dict | None = None,
-                 include_history: bool = True) -> dict:
+                 include_history: bool = True,
+                 allow_in_battle: bool = False) -> dict:
     """Write the live state into one of the named slots the player picks."""
     kind, number = parse_slot_id(ordinal)
     if kind != KIND_MANUAL:
         raise SaveError("save_to_slot writes named slots only; use autosave() "
                         "or snapshot_for_undo() for the rings.")
+    # THE BATTLE LOCK, at the only door manual saves go through.
+    #
+    # The brief: "the player can save whenever but not during a battle." The
+    # check lives in death.py because death.py is what makes it matter and what
+    # defines what a battle is, and it is enforced HERE rather than in the server
+    # so that a second caller — a CLI, a test, a later pass — cannot walk around
+    # it. `allow_in_battle` exists for the one legitimate exception: a tool that
+    # is deliberately snapshotting a fight, such as a bug report.
+    if not allow_in_battle:
+        from . import death                   # local: death imports us
+        lock = death.battle_lock(state)
+        if lock is not None:
+            raise SaveError(lock["message"])
     return _write(conn, KIND_MANUAL, number, state, name=name, note=note,
                   reason="manual", readiness=readiness,
                   include_history=include_history)
@@ -533,6 +611,10 @@ def autosave(conn: sqlite3.Connection, state: dict, reason: str, *,
     good saves out of the ring with copies of the same moment."""
     ensure_schema(conn)
     _, state_sha, _ = _encode({"state": state})
+    # The anchor is written FIRST and independently of the dedup below, because
+    # the two rings answer different questions and must not be able to starve
+    # each other. See THE ANCHOR RING at the top of this file.
+    anchored = anchor(conn, state, reason, note=note, readiness=readiness)
     newest = conn.execute(
         "SELECT summary FROM save_slots WHERE kind = ? ORDER BY updated_at DESC"
         " LIMIT 1", (KIND_AUTO,)).fetchone()
@@ -546,6 +628,7 @@ def autosave(conn: sqlite3.Connection, state: dict, reason: str, *,
     ordinal = _ring_slot(conn, KIND_AUTO)
     written = _write(conn, KIND_AUTO, ordinal, state, reason=reason, note=note,
                      readiness=readiness, include_history=include_history)
+    written["anchor"] = anchored
     # Stamp the state fingerprint into the stored summary so the next autosave
     # can tell "nothing happened" from "something happened that looks similar".
     row = _require_row(conn, written["slot_id"])
@@ -556,6 +639,105 @@ def autosave(conn: sqlite3.Connection, state: dict, reason: str, *,
     conn.commit()
     written["summary"] = summary
     return written
+
+
+def _state_sha(state: dict) -> str:
+    return _encode({"state": state})[1]
+
+
+def _newest_row(conn: sqlite3.Connection, kind: str):
+    return conn.execute(
+        "SELECT * FROM save_slots WHERE kind = ? ORDER BY updated_at DESC LIMIT 1",
+        (kind,)).fetchone()
+
+
+def anchor(conn: sqlite3.Connection, state: dict, reason: str, *,
+           note: str = "", readiness: dict | None = None) -> dict | None:
+    """Write a WAKING POINT, if this reason earns one.
+
+    Returns None when the reason is not an anchor event (which is most of them)
+    or when the newest anchor already holds this exact state. Never raises for a
+    reason it does not recognise: an unknown reason is simply not an anchor, so a
+    later pass inventing a new autosave trigger cannot accidentally move where
+    death puts people, and cannot crash the save path by trying.
+    """
+    ensure_schema(conn)
+    if reason not in ANCHOR_EVENTS:
+        return None
+    sha = _state_sha(state)
+    newest = _newest_row(conn, KIND_ANCHOR)
+    if newest is not None:
+        try:
+            if json.loads(newest["summary"] or "{}").get("state_sha") == sha:
+                return None
+        except ValueError:
+            pass
+    ordinal = _ring_slot(conn, KIND_ANCHOR)
+    written = _write(conn, KIND_ANCHOR, ordinal, state, reason=reason, note=note,
+                     readiness=readiness, include_history=False)
+    row = _require_row(conn, written["slot_id"])
+    try:
+        summary = json.loads(row["summary"] or "{}")
+    except ValueError:
+        summary = {}
+    summary["state_sha"] = sha
+    conn.execute("UPDATE save_slots SET summary = ? WHERE slot_id = ?",
+                 (json.dumps(summary), written["slot_id"]))
+    conn.commit()
+    written["summary"] = summary
+    return written
+
+
+def anchors(conn: sqlite3.Connection) -> list:
+    """Every waking point on disk, newest first, corrupt ones dropped."""
+    ensure_schema(conn)
+    rows = conn.execute(
+        "SELECT slot_id FROM save_slots WHERE kind = ? ORDER BY updated_at DESC",
+        (KIND_ANCHOR,)).fetchall()
+    out = []
+    for row in rows:
+        if verify_slot(conn, row["slot_id"])["status"] == "ok":
+            out.append(describe(conn, row["slot_id"]))
+    return out
+
+
+def wake_slot(conn: sqlite3.Connection) -> dict | None:
+    """The slot death should put the player back into: the most recent READABLE
+    waking point or named slot, whichever is newer.
+
+    A manual slot counts because the player chose to write it, and the brief says
+    they may save wherever they like. An autosave does NOT count: `list_slots`
+    will happily show it, but waking at the fight you cleared ninety seconds ago
+    is the toothless version of this feature.
+
+    Corrupt rows are skipped rather than refused. This function is the one that
+    must always have an answer, so it degrades — a damaged anchor falls through
+    to the one before it, and a save file with nothing readable in it returns
+    None, which `death.die` turns into a start-of-game wake rather than a wall.
+    """
+    ensure_schema(conn)
+    rows = conn.execute(
+        "SELECT slot_id FROM save_slots WHERE kind IN (?, ?)"
+        " ORDER BY updated_at DESC", (KIND_ANCHOR, KIND_MANUAL)).fetchall()
+    for row in rows:
+        if verify_slot(conn, row["slot_id"])["status"] == "ok":
+            return describe(conn, row["slot_id"])
+    return None
+
+
+def seal_snapshot(conn: sqlite3.Connection, sid) -> dict:
+    """Mark an undo row spent without loading it.
+
+    death.py writes the dying state into the undo ring so a bug in the death path
+    is recoverable by hand, and then calls this, because `undo_load` must not be
+    able to hand the player back the moment before they died. That would make
+    dying free, which is the one thing this whole feature is not.
+    """
+    target = _canonical_id(sid)
+    _require_row(conn, target)
+    conn.execute("UPDATE save_slots SET consumed = 1 WHERE slot_id = ?", (target,))
+    conn.commit()
+    return describe(conn, target)
 
 
 def snapshot_for_undo(conn: sqlite3.Connection, state: dict, *, note: str = "",

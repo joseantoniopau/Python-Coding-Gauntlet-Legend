@@ -688,3 +688,11 @@ class TestTransferSurvives(TransferTest):
         payload.pop("transfer_encounters")
         self.assertTrue(game.import_save(payload)["ok"])
         self.assertEqual(game.transfer_report()["served"], 0)
+
+
+# Runnable on its own. tests/run_all.py discovers this file too, but the
+# suite is long enough that it gets killed mid-run on some machines, and a file
+# that exits 0 without running anything is worse than one that fails.
+if __name__ == "__main__":
+    import unittest
+    unittest.main(verbosity=2)

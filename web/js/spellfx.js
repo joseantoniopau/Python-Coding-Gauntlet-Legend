@@ -41,7 +41,7 @@
  */
 import { rng, hash, shade, mix } from './sprites.js';
 
-export const SPELLFX_VERSION = '1.1.0';
+export const SPELLFX_VERSION = '1.2.0';
 
 /* Logical stage units. Same numbers as fx.js STAGE; overridable per effect. */
 export const STAGE_GEOM = Object.freeze({
@@ -2655,4 +2655,1486 @@ export function toFxEffect(effect) {
     set t(v) { effect.step(Math.max(0, v - effect.t)); },
     draw(ctx) { effect.draw(ctx); },
   };
+}
+
+/* ======================================================================
+ * THE UNMAKING — the picture of gauntlet/unmaking.py, and the mirror of
+ * web/js/transform.js
+ * ======================================================================
+ *
+ * transform.js is five acts that BUILD. RAISE puts the arms up. CHARGE crawls
+ * fourteen bolts INWARD to the figure over the longest act in the sequence.
+ * DISCHARGE whites the screen out on one frame. REVEAL brings the figure back
+ * lit from inside, twelve per cent wider, with the earned rank printed in gold
+ * under chrome lettering reading "BY THE SOURCE — I NAME IT". HOLD sits on it.
+ *
+ * This is the same five acts, on the same figure, at the same marks, running
+ * the other way. gauntlet/unmaking.py names them and states the mirror itself:
+ *
+ *     transform.js   here      what changes
+ *     RAISE       -> REACH     he raises nothing; one hand opens, palm up, and
+ *                              stays open for the whole spell
+ *     CHARGE      -> TAKE      fourteen things travel OUTWARD to that hand,
+ *                              same count, same attention, reversed flow
+ *     DISCHARGE   -> STRIP     black at the white-out's speed, and it does not
+ *                              come back up
+ *     REVEAL      -> REVEAL    lit by nothing, ordinary width, one word in bone
+ *     HOLD        -> HOLD      a blank editor and a cursor. No figure, no
+ *                              lettering, no him.
+ *
+ * WHERE THE AUTHORITY LIVES, WHICH IS NOT HERE
+ * --------------------------------------------
+ * gauntlet/unmaking.py owns the clock, the fourteen dispossessions, their
+ * order, their motifs, their ramps and every word spoken. This module owns
+ * pixels. Pass `unmaking.cinematic()` straight through to `begin({cinematic})`
+ * and the renderer takes its whole timeline from it — act boundaries, beat
+ * starts, `take_seconds` per dispossession, the palette, the lettering. Change
+ * a duration in Python and the picture changes with it; nothing has to be
+ * edited twice.
+ *
+ * There is an authored fallback timeline for the case where nothing is passed,
+ * so the module is drawable and testable on its own. It is the silent cut: the
+ * acts collapse to their animation lengths and every beat gets the default
+ * 0.85s. Its act lengths are exactly twice transform.js's, which is the same
+ * statement the long version makes at greater length — everything he does takes
+ * twice as long as the player's triumph did, because he is not hurrying.
+ *
+ * THE SPELL EXPLAINS THE SEAL. IT MUST NOT CHANGE IT.
+ * ---------------------------------------------------
+ * `UNMAKING_ORDER` is finalexam.CRUTCHES, in unmaking.take_ids() order, and
+ * `reconcileUnmaking()` reports the two-way difference against whatever list
+ * actually arrives. HOLDOUT is deliberately absent: it is a capability in the
+ * same vocabulary and it is NOT a crutch, so nothing leaves the screen for it.
+ * Nothing here calls anything, reads a save, or touches a capability;
+ * finalexam.sealed() stays the one check in the codebase and this file cannot
+ * reach it. Nothing here renders problem content: the fourteen fixtures are
+ * abstract shapes and the only text drawn is the lettering unmaking.py wrote.
+ *
+ * LEARNING NEVER DEAD-ENDS, and the last two acts are that in pictures. REVEAL
+ * holds the player alone, unlit, un-rimmed, unarmoured, at their ordinary
+ * width, for twice as long as the transformation's triumphant hold. HOLD is an
+ * empty editor with a cursor in it. He has taken back everything he ever handed
+ * over, which is everything he had, and what is left on screen is the two
+ * things he never gave.
+ *
+ * HOW IT IS DRAWN
+ * ---------------
+ * Opaque, always. No alpha ramps, no gradients: every pixel is one of the
+ * fifteen colours unmaking.py's PALETTE names as (ramp, shade) pairs into
+ * palette.js, and partial coverage is a 4x4 Bayer dither between two of them,
+ * anchored to the screen grid so it does not crawl when a band moves. That is
+ * how this art was made on the hardware it is pretending to be from, and it has
+ * a second use: the fifteen-colour budget stops being an assertion and becomes
+ * a count off the raster. The count FALLS as the beats land, because a ramp
+ * retires with the thing it belonged to — and it rises exactly once, at
+ * UNLIMITED_TIME, which is the one dispossession that ADDS something.
+ *
+ * Deterministic: noise() and the sequence's own clock, never Math.random,
+ * never a wall clock. Cached: every dither tile is rasterised once and blitted
+ * thereafter, so a warm frame is drawImage calls and fillRects and nothing else.
+ */
+import { RAMPS } from './palette.js';
+
+/* ---------------- the fourteen, in the order the game took them ----------
+ * gauntlet/unmaking.py take_ids(), which is finalexam.CRUTCHES sorted by ladder
+ * rung: the twelve the bosses took in the order they took them, then the two
+ * the exam alone takes, and the Hand last of all — it is the only one he has to
+ * ask for rather than simply remove. */
+export const UNMAKING_ORDER = Object.freeze([
+  'HINTS', 'MENTOR', 'WEAKNESS_MAP', 'PROBES', 'PET', 'VISUALS', 'PATTERN',
+  'BUILD', 'COACH', 'UNLIMITED_TIME', 'ITEMS', 'SOLUTION', 'SKILL_STATE',
+  'OBLIGING_HAND',
+]);
+
+/* Named so that a reader who goes looking for the one that is missing finds a
+ * reason instead of an oversight. */
+export const UNMAKING_EXCLUDED = Object.freeze({
+  HOLDOUT: 'A capability, not a crutch. Nothing is taken from the player by it, '
+    + 'so nothing leaves the screen for it.',
+});
+
+export const UNMAKING_ACT_IDS = Object.freeze(['REACH', 'TAKE', 'STRIP', 'REVEAL', 'HOLD']);
+
+/* unmaking.py MIRRORS, restated here so the two files can be checked against
+ * each other by a harness rather than by a person reading both. */
+export const UNMAKING_MIRRORS = Object.freeze({
+  REACH: 'RAISE', TAKE: 'CHARGE', STRIP: 'DISCHARGE', REVEAL: 'REVEAL', HOLD: 'HOLD',
+});
+
+/* transform.js ACTS, in seconds, for the ratio the fallback timeline holds to. */
+const TRANSFORM_ACTS = Object.freeze({
+  RAISE: 0.55, CHARGE: 1.15, DISCHARGE: 0.45, REVEAL: 0.95, HOLD: 1.10,
+});
+
+/* unmaking.py's motif per crutch. Fourteen motifs for fourteen crutches, no two
+ * the same, because a dispossession that looks like another one is not specific
+ * to the thing lost. Each is painted by its own function below. */
+export const UNMAKING_MOTIFS = Object.freeze({
+  HINTS: 'EXTINGUISH', MENTOR: 'ABSENT', WEAKNESS_MAP: 'UNMARK', PROBES: 'SPEND',
+  PET: 'VANISH', VISUALS: 'DRAIN', PATTERN: 'BLANK', BUILD: 'UNDRESS',
+  COACH: 'REMOVE', UNLIMITED_TIME: 'ADD', ITEMS: 'EMPTY', SOLUTION: 'FACE_DOWN',
+  SKILL_STATE: 'REDACT', OBLIGING_HAND: 'LIFT',
+});
+
+/* The ramp each dispossession is drawn in, from unmaking.py. */
+export const UNMAKING_RAMPS = Object.freeze({
+  HINTS: 'gold', MENTOR: 'void', WEAKNESS_MAP: 'frost', PROBES: 'violet',
+  PET: 'bone', VISUALS: 'arcane', PATTERN: 'stone', BUILD: 'chrome',
+  COACH: 'stone', UNLIMITED_TIME: 'ember', ITEMS: 'chrome', SOLUTION: 'frost',
+  SKILL_STATE: 'violet', OBLIGING_HAND: 'blood',
+});
+
+/* Given the ids that actually arrived, is the spell taking exactly what the
+ * exam takes? Both directions, because one direction is not a proof. */
+export function reconcileUnmaking(ids) {
+  const theirs = Array.isArray(ids) ? ids.map(String) : [];
+  const mine = new Set(UNMAKING_ORDER);
+  const them = new Set(theirs);
+  return {
+    matches: UNMAKING_ORDER.every((id) => them.has(id)) && theirs.every((id) => mine.has(id)),
+    missing: UNMAKING_ORDER.filter((id) => !them.has(id)),   // exam takes, spell does not show
+    extra: theirs.filter((id) => !mine.has(id)),             // spell takes, exam does not
+    count: theirs.length,
+  };
+}
+
+/* ---------------- fifteen colours ----------------
+ * unmaking.py PALETTE, as (ramp, shade) pairs into palette.js. Resolved once at
+ * module load and keyed by RAMPSHADE so the art can name a colour the same way
+ * the Python does. Nothing in this sequence paints a colour that is not one of
+ * these fifteen. */
+const PALETTE_SPEC = Object.freeze([
+  ['VOID0', 'void', 0], ['VOID2', 'void', 2], ['VOID4', 'void', 4],
+  ['VIOLET1', 'violet', 1], ['VIOLET3', 'violet', 3],
+  ['ARCANE4', 'arcane', 4],
+  ['CHROME1', 'chrome', 1], ['CHROME4', 'chrome', 4],
+  ['BONE2', 'bone', 2], ['BONE4', 'bone', 4],
+  ['GOLD3', 'gold', 3], ['EMBER3', 'ember', 3], ['FROST3', 'frost', 3],
+  ['STONE1', 'stone', 1], ['BLOOD2', 'blood', 2],
+]);
+
+export const UNMAKING_PALETTE = Object.freeze(PALETTE_SPEC.reduce((m, [key, ramp, shade]) => {
+  m[key] = (RAMPS[ramp] && RAMPS[ramp][shade]) || '#151420';
+  return m;
+}, {}));
+
+export const UNMAKING_PALETTE_SPEC = Object.freeze(
+  PALETTE_SPEC.map(([key, ramp, shade]) => Object.freeze({ key, ramp, shade })));
+
+const PALETTE_KEYS = Object.freeze(PALETTE_SPEC.map((e) => e[0]));
+
+/* One step down. Used twice on purpose: it is how a colour retires when its
+ * dispossession completes, and it is how a fixture goes grey while it is still
+ * on screen. Two tables would drift; one cannot. */
+const RAMP_DOWN = Object.freeze({
+  VOID0: 'VOID0', VOID2: 'VOID0', VOID4: 'VOID2',
+  VIOLET1: 'VOID2', VIOLET3: 'VIOLET1',
+  ARCANE4: 'VIOLET3',
+  CHROME1: 'STONE1', CHROME4: 'CHROME1',
+  BONE2: 'STONE1', BONE4: 'BONE2',
+  GOLD3: 'BONE2', EMBER3: 'BLOOD2', FROST3: 'CHROME1',
+  STONE1: 'VOID0', BLOOD2: 'VIOLET1',
+});
+
+/* Which beat — or which act — retires which colour. A ramp used by two
+ * dispossessions retires on the later of them, because it is still carrying
+ * something until then. Ten entries, so fifteen become five. */
+const PALETTE_DEATH = Object.freeze({
+  GOLD3: 'HINTS',              // the rungs on the wall
+  VOID4: 'MENTOR',             // the second shadow
+  BONE4: 'PET',                // the last warm thing at the player's feet
+  ARCANE4: 'VISUALS',
+  CHROME4: 'ITEMS',            // chrome carried the build and then the belt
+  FROST3: 'SOLUTION',          // frost carried the tactical read and then the page
+  VIOLET3: 'SKILL_STATE',      // your own figures were the last thing that was yours
+  BLOOD2: 'OBLIGING_HAND',     // the Hand's own colour goes into his palm with it
+  EMBER3: 'STRIP',             // the clock he ADDED outlives every beat and dies with the room
+  CHROME1: 'STRIP',            // "the interface chrome goes with it"
+});
+
+/* The five still reachable on the last frame. */
+export const UNMAKING_SURVIVORS = Object.freeze(
+  PALETTE_KEYS.filter((k) => !PALETTE_DEATH[k]));
+
+/* ---------------- the fallback timeline ----------------
+ * Only for a caller with no payload. Act lengths are exactly twice
+ * transform.js's; TAKE is the sum of its beats at unmaking.py's default
+ * `take` of 0.85s, the same way the real one is. */
+const FALLBACK_TAKE = 0.85;
+
+function fallbackTimeline(order) {
+  const n = Math.max(1, order.length);
+  const lens = {
+    REACH: TRANSFORM_ACTS.RAISE * 2,
+    TAKE: FALLBACK_TAKE * n,
+    STRIP: TRANSFORM_ACTS.DISCHARGE * 2,
+    REVEAL: TRANSFORM_ACTS.REVEAL * 2,
+    HOLD: TRANSFORM_ACTS.HOLD * 2,
+  };
+  const acts = [];
+  let at = 0;
+  for (const id of UNMAKING_ACT_IDS) {
+    acts.push({ id, at, seconds: lens[id], end: at + lens[id] });
+    at += lens[id];
+  }
+  const take0 = acts[1].at;
+  const beats = order.map((crutch, index) => ({
+    index, crutch,
+    at: take0 + index * FALLBACK_TAKE,
+    take: FALLBACK_TAKE,
+    end: take0 + (index + 1) * FALLBACK_TAKE,
+    motif: UNMAKING_MOTIFS[crutch] || 'EXTINGUISH',
+    ramp: UNMAKING_RAMPS[crutch] || 'void',
+    shake: 0, flash: 0, line: '',
+  }));
+  return { acts, beats, total: at, source: 'fallback' };
+}
+
+/* unmaking.cinematic() -> the shape this renderer drives from. Everything it
+ * reads is optional; a payload missing a field falls back to the authored
+ * number for that field rather than to nothing, so a partially wired server
+ * still plays something honest. */
+function timelineFrom(payload, order) {
+  const fb = fallbackTimeline(order);
+  if (!payload || typeof payload !== 'object') return fb;
+  const rawActs = Array.isArray(payload.acts) ? payload.acts : [];
+  const acts = UNMAKING_ACT_IDS.map((id, i) => {
+    const a = rawActs.find((x) => x && x.id === id);
+    if (!a || !(a.seconds > 0)) return { ...fb.acts[i] };
+    const at = Number.isFinite(a.at) ? a.at : fb.acts[i].at;
+    return { id, at, seconds: a.seconds, end: at + a.seconds };
+  });
+  const rawBeats = Array.isArray(payload.beats) ? payload.beats : [];
+  const beats = order.map((crutch, index) => {
+    const b = rawBeats.find((x) => x && x.crutch === crutch);
+    const base = fb.beats[index];
+    if (!b) return { ...base };
+    return {
+      index, crutch,
+      at: Number.isFinite(b.at) ? b.at : base.at,
+      take: b.take_seconds > 0 ? b.take_seconds : base.take,
+      end: Number.isFinite(b.end) ? b.end : base.end,
+      motif: b.motif || base.motif,
+      ramp: b.ramp || base.ramp,
+      shake: Number.isFinite(b.shake) ? b.shake : 0,
+      flash: Number.isFinite(b.flash) ? b.flash : 0,
+      line: typeof b.line === 'string' ? b.line : '',
+    };
+  });
+  const total = acts[acts.length - 1].end;
+  return { acts, beats, total, source: 'cinematic' };
+}
+
+/* The lettering. THE WORDS ARE NOT THIS MODULE'S — unmaking.py owns them, for
+ * the same reason the transformation's phrase lives in the story bible and not
+ * in transform.js's head. `phrase` rides REACH the way "BY THE SOURCE" rides
+ * the raise; `oath` lands on REVEAL the way "I NAME IT" does; `title` is where
+ * transform.js prints the earned rank in gold, and here it is one word in bone.
+ *
+ * With nothing supplied the card draws its plate with the lettering absent.
+ * That is not a placeholder. It is the correct picture of this moment in a game
+ * whose villain erased the nouns, and it is unmistakable in review. */
+export const UNMAKING_CARD_FIELDS = Object.freeze(['phrase', 'oath', 'title']);
+
+export function unmakingCardFrom(payload) {
+  const src = payload && typeof payload === 'object' ? payload : {};
+  const spell = src.spell && typeof src.spell === 'object' ? src.spell : src;
+  const pick = (v) => (typeof v === 'string' ? v.trim().toUpperCase() : '');
+  return {
+    phrase: pick(spell.phrase),
+    oath: pick(spell.oath),
+    title: pick(spell.title !== undefined ? spell.title : spell.reveal_title),
+  };
+}
+
+/* ---------------- opaque drawing primitives ----------------
+ * fillRect and drawImage and nothing else. No strokes, no arcs, no gradients,
+ * no globalAlpha: a canvas that is asked only for rectangles is a canvas whose
+ * output can be counted, and the fifteen-colour claim is a count. */
+
+function urect(ctx, col, x, y, w, h) {
+  if (!col) return;
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(w) || !Number.isFinite(h)) return;
+  const rw = px(w), rh = px(h);
+  if (rw < 1 || rh < 1) return;
+  ctx.fillStyle = col;
+  ctx.fillRect(px(x), px(y), rw, rh);
+}
+
+/* 4x4 ordered dither, the hardware's own way of saying "half". Nine levels is
+ * every step the eye can pick out at this pixel size and it keeps the tile
+ * cache small: 0 and 8 never rasterise anything, they are a plain fill. */
+const BAYER4 = Object.freeze([0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5]);
+const DITHER_TILE = 32;
+const DITHER_LEVELS = 8;
+
+function ditherCanvas(a, b, level) {
+  return cachedCanvas(`unmk:${a}:${b}:${level}`, DITHER_TILE, DITHER_TILE, (c) => {
+    const th = level * 2;
+    for (let y = 0; y < DITHER_TILE; y++) {
+      for (let x = 0; x < DITHER_TILE; x++) {
+        c.fillStyle = BAYER4[(y & 3) * 4 + (x & 3)] < th ? b : a;
+        c.fillRect(x, y, 1, 1);
+      }
+    }
+  });
+}
+
+const wrap32 = (v) => ((v % DITHER_TILE) + DITHER_TILE) % DITHER_TILE;
+
+/* Screen-aligned, so a band that moves one pixel does not make the whole
+ * dither pattern crawl with it. The tile is anchored to the canvas grid and
+ * the target rect takes a source sub-rectangle out of it. */
+function udither(ctx, a, b, level, x, y, w, h) {
+  if (!a || !b) return;
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(w) || !Number.isFinite(h)) return;
+  const l = clamp(Math.round(level), 0, DITHER_LEVELS);
+  if (l <= 0) return urect(ctx, a, x, y, w, h);
+  if (l >= DITHER_LEVELS) return urect(ctx, b, x, y, w, h);
+  if (a === b) return urect(ctx, a, x, y, w, h);
+  const X = px(x), Y = px(y), W = px(w), H = px(h);
+  if (W < 1 || H < 1) return;
+  const cv = ditherCanvas(a, b, l);
+  if (!cv) return urect(ctx, l < DITHER_LEVELS / 2 ? a : b, X, Y, W, H);
+  const ax = X - wrap32(X), ay = Y - wrap32(Y);
+  for (let ty = ay; ty < Y + H; ty += DITHER_TILE) {
+    const y0 = Math.max(Y, ty), y1 = Math.min(Y + H, ty + DITHER_TILE);
+    if (y1 <= y0) continue;
+    for (let tx = ax; tx < X + W; tx += DITHER_TILE) {
+      const x0 = Math.max(X, tx), x1 = Math.min(X + W, tx + DITHER_TILE);
+      if (x1 <= x0) continue;
+      ctx.drawImage(cv, x0 - tx, y0 - ty, x1 - x0, y1 - y0, x0, y0, x1 - x0, y1 - y0);
+    }
+  }
+  return undefined;
+}
+
+/* A limb as a march of squares rather than a stroke. lineTo would be invisible
+ * to the raster harness and soft on a real canvas; this is how the sprite work
+ * in this game draws a limb anyway. */
+function ulimb(ctx, col, x0, y0, x1, y1, thick) {
+  if (!Number.isFinite(x0) || !Number.isFinite(y0) || !Number.isFinite(x1) || !Number.isFinite(y1)) return;
+  const t = Math.max(1, px(thick));
+  const dx = x1 - x0, dy = y1 - y0;
+  const n = Math.max(1, Math.ceil(Math.max(Math.abs(dx), Math.abs(dy)) / Math.max(1, t * 0.5)));
+  for (let i = 0; i <= n; i++) {
+    const q = i / n;
+    urect(ctx, col, x0 + dx * q - t / 2, y0 + dy * q - t / 2, t, t);
+  }
+}
+
+/* A tapered slab stack: the torso, and anything else that is wider at the top.
+ * Rows of whole pixels, which is what makes the edge read as a staircase the
+ * way a 16-bit sprite's does instead of as an antialiased ramp. */
+function uwedge(ctx, col, cx, yTop, yBot, wTop, wBot, rows) {
+  const n = Math.max(1, rows | 0);
+  const h = (yBot - yTop) / n;
+  if (!(h > 0)) return;
+  for (let i = 0; i < n; i++) {
+    const q = n === 1 ? 0 : i / (n - 1);
+    const ww = lerp(wTop, wBot, q);
+    urect(ctx, col, cx - ww / 2, yTop + i * h, ww, h + 1);
+  }
+}
+
+/* A one-colour dither: only the lit cells are painted, the rest of the tile is
+ * left transparent. This is how a thing goes out here — pixels stop being
+ * there, in a pattern, rather than a whole shape getting quieter. An alpha ramp
+ * would be a fade, and a fade says "a thing happened"; this says "he is taking
+ * it". */
+function screenCanvas(col, level) {
+  return cachedCanvas(`unmks:${col}:${level}`, DITHER_TILE, DITHER_TILE, (c) => {
+    const th = level * 2;
+    c.fillStyle = col;
+    for (let y = 0; y < DITHER_TILE; y++) {
+      for (let x = 0; x < DITHER_TILE; x++) {
+        if (BAYER4[(y & 3) * 4 + (x & 3)] < th) c.fillRect(x, y, 1, 1);
+      }
+    }
+  });
+}
+
+function uscreen(ctx, col, level, x, y, w, h) {
+  if (!col) return;
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(w) || !Number.isFinite(h)) return;
+  const l = clamp(Math.round(level), 0, DITHER_LEVELS);
+  if (l <= 0) return;
+  if (l >= DITHER_LEVELS) return urect(ctx, col, x, y, w, h);
+  const X = px(x), Y = px(y), W = px(w), H = px(h);
+  if (W < 1 || H < 1) return;
+  const cv = screenCanvas(col, l);
+  if (!cv) return;
+  const ax = X - wrap32(X), ay = Y - wrap32(Y);
+  for (let ty = ay; ty < Y + H; ty += DITHER_TILE) {
+    const y0 = Math.max(Y, ty), y1 = Math.min(Y + H, ty + DITHER_TILE);
+    if (y1 <= y0) continue;
+    for (let tx = ax; tx < X + W; tx += DITHER_TILE) {
+      const x0 = Math.max(X, tx), x1 = Math.min(X + W, tx + DITHER_TILE);
+      if (x1 <= x0) continue;
+      ctx.drawImage(cv, x0 - tx, y0 - ty, x1 - x0, y1 - y0, x0, y0, x1 - x0, y1 - y0);
+    }
+  }
+  return undefined;
+}
+
+
+/* Cells still lit in a strip of `n` as it drains. Reaches 0 exactly at p = 1
+ * and never flickers back on, which a naive round() does at the boundaries. */
+function cellsLeft(n, p) {
+  if (p <= 0) return n;
+  if (p >= 1) return 0;
+  return Math.max(0, n - Math.floor(p * n + 1e-6));
+}
+
+/* A token crossing the frame: a march of squares, shrinking as it goes, on a
+ * path that sags. transform.js crawls its bolts inward to the figure with a
+ * hashed jag; this is the same figure with the traffic reversed, which is the
+ * single most important thing about the whole sequence. */
+function utravel(ctx, col, x0, y0, x1, y1, q, size, seed) {
+  const e = easeIn(clamp(q, 0, 1));
+  const x = lerp(x0, x1, e);
+  const y = lerp(y0, y1, e) - Math.sin(Math.PI * e) * size * 2.2;
+  const s = Math.max(1, size * (1 - e * 0.55));
+  urect(ctx, col, x - s / 2, y - s / 2, s, s);
+  /* three specks of wake, so it reads as travelling rather than as a rect that
+   * is somewhere else this frame */
+  for (let i = 1; i <= 3; i++) {
+    const b = clamp(e - i * 0.07, 0, 1);
+    const bx = lerp(x0, x1, b) + (noise(seed, i) - 0.5) * size;
+    const by = lerp(y0, y1, b) - Math.sin(Math.PI * b) * size * 2.2;
+    urect(ctx, col, bx, by, Math.max(1, s * 0.4), Math.max(1, s * 0.4));
+  }
+}
+
+export class Unmaking {
+  constructor(opts = {}) {
+    this.active = false;
+    this.t = 0;
+    this.order = UNMAKING_ORDER.slice();
+    this.card = { phrase: '', oath: '', title: '' };
+    this.cardSupplied = false;
+    this.gone = new Set();
+    this.shakeHint = 0;
+    this.flashHint = 0;
+    this._live = {};
+    this._stage = -1;
+    this._fired = new Uint8Array(this.order.length);
+    this._actFired = new Uint8Array(UNMAKING_ACT_IDS.length);
+    /* One scratch object for geometry, mutated in place. A cinematic that
+     * allocates per frame is a cinematic with a hitch in it. */
+    this.g = { w: 0, h: 0, cx: 0, ground: 0, u: 1, top: 0, palmX: 0, palmY: 0, open: 0 };
+    this.onDeparture = null;
+    this.onAct = null;
+    this.onDone = null;
+    this._configure(opts);
+  }
+
+  /* opts:
+   *   cinematic     the object gauntlet/unmaking.py cinematic() returns, passed
+   *                 through unchanged. Supplies acts, beats, lettering, motion.
+   *   crutches      string[] override for the order (defaults to the payload's
+   *                 beat order, then to UNMAKING_ORDER)
+   *   card          {phrase, oath, title} override
+   *   reducedMotion bool override
+   *   onDeparture   (crutch, index, beat) => void   at the start of each beat
+   *   onAct         (actId, index) => void
+   *   onDone        () => void
+   */
+  begin(opts = {}) {
+    this._configure(opts);
+    this.active = true;
+    this.t = 0;
+    this.gone.clear();
+    this._fired.fill(0);
+    this._actFired.fill(0);
+    this._stage = -1;
+    this._advance();
+    this._fireAct();
+    return this;
+  }
+
+  update(dt) {
+    if (!this.active) return this;
+    /* Clamp rather than trust: a backgrounded tab hands back several seconds,
+     * and a sequence that skips four dispossessions because the window lost
+     * focus has lost the only thing it was for. */
+    const d = Number.isFinite(dt) && dt > 0 ? Math.min(dt, 0.1) : 0;
+    this.t += d;
+    this._advance();
+    this._fireAct();
+    this._fireBeats();
+    if (this.t >= this.total) this.cancel();
+    return this;
+  }
+
+  /* A point on the clock, without firing anything. For a host that scrubs and
+   * for the harness, which looks at forty frames without playing them. */
+  seek(seconds) {
+    this.t = clamp(Number.isFinite(seconds) ? seconds : 0, 0, this.total);
+    this._advance();
+    return this;
+  }
+
+  cancel() {
+    if (!this.active) return this;
+    this.active = false;
+    const cb = this.onDone;
+    this.onDone = null;
+    if (cb) { try { cb(); } catch (e) { /* a callback never stalls art */ } }
+    return this;
+  }
+
+  /* unmaking.py's skip contract: allowed, but only once the first dispossession
+   * has finished, so a key that was already down cannot eat the spell. This
+   * jumps to the last frame and holds there, still active — the player does not
+   * have to watch it, but they do not get to walk in without the picture. */
+  get skipAllowedAt() { return this.beats.length ? this.beats[0].end : this.total; }
+  canSkip() { return this.t >= this.skipAllowedAt; }
+
+  skipToEnd() {
+    this.t = this.total - 1e-4;
+    this._advance();
+    this._fireAct();
+    this._fireBeats();
+    return this;
+  }
+
+  get progress() { return this.total > 0 ? clamp(this.t / this.total, 0, 1) : 1; }
+  get act() { return this.actId; }
+  get departed() { return this.order.filter((id) => this.gone.has(id)); }
+  get remaining() { return this.order.filter((id) => !this.gone.has(id)); }
+
+  /* What he is saying right now, for a host that renders dialogue in its own
+   * UI. This module draws the lettering and nothing else: a cinematic renderer
+   * that also owns the subtitle layer is a renderer nobody can restyle, and the
+   * game already has a dialogue surface with its own typography.
+   *
+   * Act lines and beat lines are one list here because they are one list to the
+   * player. `final` marks unmaking.py's last line, which is the one the host
+   * should let sit before it dismisses. */
+  speaking() {
+    for (const l of this.lines) {
+      if (this.t >= l.at && this.t < l.end) return l;
+    }
+    for (const b of this.beats) {
+      if (this.t >= b.at && this.t < b.end && b.line) {
+        return { text: b.line, crutch: b.crutch, act: this.actId, final: false };
+      }
+    }
+    return null;
+  }
+
+  /* Distinct colours currently reachable. Fifteen at the start, five at the
+   * end; the harness counts the same number off the raster. */
+  livePaletteCount() {
+    const seen = new Set();
+    for (const k of PALETTE_KEYS) seen.add(this._live[k]);
+    return seen.size;
+  }
+
+  /* --- internals ------------------------------------------------------- */
+
+  _configure(opts = {}) {
+    const cine = opts.cinematic && typeof opts.cinematic === 'object' ? opts.cinematic : this.cinematic;
+    if (cine) this.cinematic = cine;
+
+    if (Array.isArray(opts.crutches) && opts.crutches.length) {
+      this.order = opts.crutches.map(String);
+    } else if (cine && Array.isArray(cine.beats) && cine.beats.length) {
+      const ids = cine.beats.map((b) => b && b.crutch).filter(Boolean).map(String);
+      if (ids.length) this.order = ids;
+    }
+    this.reconciliation = reconcileUnmaking(this.order);
+    if (this._fired.length !== this.order.length) this._fired = new Uint8Array(this.order.length);
+
+    if (opts.reducedMotion !== undefined) this.reducedMotion = !!opts.reducedMotion;
+    else if (cine && cine.motion) this.reducedMotion = String(cine.motion).toUpperCase() === 'REDUCED';
+    else if (this.reducedMotion === undefined) this.reducedMotion = false;
+
+    const tl = timelineFrom(cine, this.order);
+    this.acts = tl.acts;
+    this.beats = tl.beats;
+    this.total = tl.total;
+    this.timelineSource = tl.source;
+    /* Spoken lines that belong to an act rather than to a dispossession —
+     * REACH's three and REVEAL's six. Flattened once here rather than walked
+     * every frame. */
+    this.lines = [];
+    if (cine && Array.isArray(cine.acts)) {
+      for (const a of cine.acts) {
+        if (!a || !Array.isArray(a.lines)) continue;
+        for (const l of a.lines) {
+          if (!l || typeof l.text !== 'string') continue;
+          this.lines.push({
+            text: l.text, act: a.id, crutch: '',
+            at: Number.isFinite(l.at) ? l.at : 0,
+            end: Number.isFinite(l.end) ? l.end : 0,
+            final: !!l.final,
+          });
+        }
+      }
+    }
+
+    if (opts.card !== undefined) this.card = unmakingCardFrom(opts.card);
+    else if (cine) this.card = unmakingCardFrom(cine);
+    this.cardSupplied = !!(this.card.phrase || this.card.oath || this.card.title);
+
+    if (opts.onDeparture !== undefined) this.onDeparture = typeof opts.onDeparture === 'function' ? opts.onDeparture : null;
+    if (opts.onAct !== undefined) this.onAct = typeof opts.onAct === 'function' ? opts.onAct : null;
+    if (opts.onDone !== undefined) this.onDone = typeof opts.onDone === 'function' ? opts.onDone : null;
+    this._stage = -1;
+    this._advance();
+  }
+
+  /* The whole world state, recomputed from `t` and nothing else, so a scrubbed
+   * frame and a played frame are the same frame. */
+  _advance() {
+    let idx = 0;
+    for (let i = this.acts.length - 1; i >= 0; i--) {
+      if (this.t >= this.acts[i].at) { idx = i; break; }
+    }
+    this.actIndex = idx;
+    this.actId = this.acts[idx].id;
+
+    this.gone.clear();
+    let shake = 0, flash = 0;
+    for (const b of this.beats) {
+      const p = clamp((this.t - b.at) / Math.max(0.01, b.take), 0, 1);
+      b.p = p;
+      if (p >= 1) this.gone.add(b.crutch);
+      if (p > 0 && p < 1) {
+        /* Advisory, in the manner of the spellfx hints: nothing here reads
+         * them, and an effect that is drawn and never read still looks right. */
+        const env = arc(p);
+        if (b.shake > 0) shake = Math.max(shake, b.shake * env);
+        if (b.flash > 0) flash = Math.max(flash, b.flash * env);
+      }
+    }
+    this.shakeHint = this.reducedMotion ? 0 : shake;
+    this.flashHint = this.reducedMotion ? 0 : flash;
+
+    /* He reaches over REACH and the hand stays open for the rest of the spell.
+     * transform.js's RAISE puts the arms up and leaves them up; this is the
+     * same gesture belonging to the other person. */
+    const r = this.acts[0];
+    this.g.open = clamp((this.t - r.at) / Math.max(0.01, r.seconds), 0, 1);
+
+    const stage = this.gone.size * 8 + this.actIndex;
+    if (stage !== this._stage) { this._stage = stage; this._resolveLive(); }
+  }
+
+  _resolveLive() {
+    for (let i = 0; i < PALETTE_KEYS.length; i++) {
+      const k = PALETTE_KEYS[i];
+      let key = k;
+      for (let n = 0; n < 8 && this._deadColour(key); n++) key = RAMP_DOWN[key];
+      this._live[k] = UNMAKING_PALETTE[key];
+    }
+  }
+
+  _deadColour(key) {
+    const trigger = PALETTE_DEATH[key];
+    if (!trigger) return false;
+    const i = UNMAKING_ACT_IDS.indexOf(trigger);
+    if (i >= 0) return this.actIndex >= i;
+    return this.gone.has(trigger);
+  }
+
+  _col(key) { return this._live[key] || UNMAKING_PALETTE.VOID0; }
+
+  /* n steps further down the ramp, then resolved. */
+  _ramp(key, n) {
+    let k = key;
+    for (let i = 0; i < n && RAMP_DOWN[k]; i++) k = RAMP_DOWN[k];
+    return this._col(k);
+  }
+
+  _beat(crutch) {
+    for (const b of this.beats) if (b.crutch === crutch) return b;
+    return null;
+  }
+
+  _p(crutch) { const b = this._beat(crutch); return b ? (b.p || 0) : 0; }
+
+  /* Where we are inside an act, 0..1. */
+  _phase(id) {
+    const a = this.acts[UNMAKING_ACT_IDS.indexOf(id)];
+    if (!a) return 0;
+    if (this.t <= a.at) return 0;
+    if (this.t >= a.end) return 1;
+    return (this.t - a.at) / Math.max(0.01, a.seconds);
+  }
+
+  _fireAct() {
+    const i = this.actIndex;
+    if (this._actFired[i]) return;
+    this._actFired[i] = 1;
+    if (this.onAct) { try { this.onAct(this.actId, i); } catch (e) { /* never stalls art */ } }
+  }
+
+  _fireBeats() {
+    for (let i = 0; i < this.beats.length; i++) {
+      const b = this.beats[i];
+      if (this._fired[i] || !(b.p > 0)) continue;
+      this._fired[i] = 1;
+      if (this.onDeparture) {
+        try { this.onDeparture(b.crutch, i, b); } catch (e) { /* never stalls art */ }
+      }
+    }
+  }
+
+  /* --- the frame ------------------------------------------------------- */
+
+  /* transform.js's marks, exactly: unit is h/80, the ground is at 0.78h, the
+   * body is 22 units tall and the figure stands at the centre. It has to be the
+   * same person at the same size or the two sequences are about two people.
+   *
+   * The one addition is his hand, at the right edge, at waist height. */
+  _geom(w, h) {
+    const g = this.g;
+    g.w = w; g.h = h; g.cx = w / 2;
+    g.u = h * 0.0125;
+    g.ground = h * 0.78;
+    g.top = g.ground - g.u * 22;
+    g.palmX = w - g.u * 8;
+    g.palmY = g.ground - g.u * 11;
+    /* The light leaves in fourteen steps rather than on a curve: the frame
+     * loses a piece of itself each time, and between times nothing happens. */
+    const n = Math.max(1, this.beats.length);
+    let d = this.gone.size;
+    for (const b of this.beats) if (b.p > 0 && b.p < 1) d += b.p;
+    g.drain = clamp(d / n, 0, 1);
+    return g;
+  }
+
+  draw(ctx, w, h) {
+    if (!ctx || !(w > 0) || !(h > 0)) return this;
+    const g = this._geom(w, h);
+    this._room(ctx, g);
+    this._beam(ctx, g);
+
+    /* The room, back to front. Every one of these was standing around the
+     * player a minute ago. */
+    this._fxHints(ctx, g);
+    this._fxVisuals(ctx, g);
+    this._fxSkillState(ctx, g);
+    this._fxBuildBand(ctx, g);
+    this._fxPattern(ctx, g);
+    this._fxClock(ctx, g);
+    this._fxWeakness(ctx, g);
+    this._fxSolution(ctx, g);
+    this._fxTable(ctx, g);
+    this._fxCoach(ctx, g);
+    this._fxShadows(ctx, g);
+    this._fxProbes(ctx, g);
+    this._fxPet(ctx, g);
+    this._figure(ctx, g);
+    this._palm(ctx, g);
+    this._tokens(ctx, g);
+
+    this._strip(ctx, g);
+    this._card(ctx, g);
+    return this;
+  }
+
+  /* --- the room, and the light going the wrong way --------------------- */
+
+  /* transform.js drains the backdrop toward the figure and climbs a beam out of
+   * the floor. Here the room is already lit when the sequence opens — it is the
+   * light the player won — and it is pulled DOWN into the floor a step at a
+   * time. The bands do not fade: their top edge descends, so the dark eats them
+   * from above, which is the motion of a tide going out rather than a dimmer. */
+  _room(ctx, g) {
+    const d = g.drain;
+    urect(ctx, this._col('VOID0'), 0, 0, g.w, g.h);
+
+    const lightTop = lerp(g.h * 0.10, g.ground, d);
+    const span = g.ground - lightTop;
+    if (span > 3) {
+      const bh = span / 3;
+      udither(ctx, this._col('VOID0'), this._col('VIOLET1'), 2, 0, lightTop, g.w, bh);
+      udither(ctx, this._col('VOID0'), this._col('VIOLET1'), 5, 0, lightTop + bh, g.w, bh);
+      urect(ctx, this._col('VIOLET1'), 0, lightTop + bh * 2, g.w, span - bh * 2 + 1);
+    }
+
+    urect(ctx, this._col('VOID2'), 0, g.ground, g.w, g.h - g.ground);
+    urect(ctx, this._col('STONE1'), 0, g.ground, g.w, Math.max(1, g.u * 0.5));
+
+    /* The Source itself, two rows at the ground line: the only genuinely bright
+     * thing in the opening frame, and the first thing to narrow. */
+    if (this.actIndex <= 1) {
+      const srcW = g.w * 0.94 * (1 - d);
+      if (srcW > 3) {
+        urect(ctx, this._col('VIOLET3'), g.cx - srcW / 2, g.ground - 2, srcW, 2);
+        udither(ctx, this._col('VOID2'), this._col('VIOLET3'), 3,
+          g.cx - srcW / 2, g.ground, srcW, Math.max(1, g.u * 1.2));
+      }
+    }
+  }
+
+  /* transform.js crawls jagged bolts UP into the figure over its long act. Same
+   * column, ticks running DOWN it, narrowing as it goes: the light is being
+   * drawn out of the player and into the floor. */
+  _beam(ctx, g) {
+    if (this.actIndex > 1) return;
+    const d = g.drain;
+    const lightTop = lerp(g.h * 0.10, g.ground, d);
+    const span = g.ground - lightTop;
+    const wB = g.w * 0.28 * (1 - d);
+    if (span < 4 || wB < 3) return;
+    udither(ctx, this._col('VIOLET1'), this._col('VIOLET3'), 3, g.cx - wB / 2, lightTop, wB, span);
+    const core = wB * 0.34;
+    if (core >= 2) {
+      udither(ctx, this._col('VIOLET3'), this._col('ARCANE4'), 3, g.cx - core / 2, lightTop, core, span);
+    }
+    const travel = this.reducedMotion ? 0 : (this.t * 26) % span;
+    const th = Math.max(1, g.u * 0.3);
+    for (let i = 0; i < 7; i++) {
+      const y = lightTop + (((i / 7) * span + travel) % span);
+      urect(ctx, this._col('VIOLET3'), g.cx - wB / 2, y, wB, th);
+    }
+  }
+
+  /* --- his hand ---------------------------------------------------------
+   * "One hand opens, palm up, at waist height, and stays open for the whole
+   * spell." He is never shown, never lit and never loud: an arm entering from
+   * the edge of the frame in the room's own dark, one value up from the wall,
+   * so you can see it without being shown it. Everything that leaves goes here.
+   *
+   * The gauntlet ends up sitting in it, which is the only time in the sequence
+   * that anything is in his hand rather than passing through it. */
+  _palm(ctx, g) {
+    if (this.actIndex >= 2) return;
+    const u = g.u, x = g.palmX, y = g.palmY;
+    const open = this.g.open;
+    const col = this._col('STONE1');
+    urect(ctx, col, x + u * 3, y - u * 0.6, g.w - (x + u * 3), u * 2.4);   // forearm, off-frame
+    urect(ctx, col, x - u * 2.6, y, u * 6.0, u * 1.8);                     // palm
+    /* Four fingers, spreading over REACH and then held. Nothing about him
+     * moves again after this. */
+    for (let i = 0; i < 4; i++) {
+      const spread = open * u * (1.1 + i * 0.35);
+      urect(ctx, col, x - u * 2.6 + i * u * 1.5, y - spread, Math.max(1, u * 1.1), spread + u * 0.6);
+    }
+    urect(ctx, col, x + u * 3.2, y + u * 0.4, Math.max(1, u * 1.0), u * 1.4);  // thumb
+    /* What he is already holding by the end. */
+    if (this.gone.has('OBLIGING_HAND')) {
+      urect(ctx, this._ramp('BLOOD2', 1), x - u * 1.6, y - u * 1.2, u * 3.4, u * 1.4);
+    }
+  }
+
+  /* Everything that leaves crosses the frame to that hand. transform.js's
+   * fourteen bolts crawl inward over its longest act; these are the same
+   * fourteen, outward, over the same act. Two do not travel, and both
+   * exceptions are the point: the clock is ADDED, and the belt's contents are
+   * laid out on the table by the door rather than taken. */
+  _tokens(ctx, g) {
+    if (this.actIndex >= 2) return;
+    for (const b of this.beats) {
+      const p = b.p || 0;
+      if (!(p > 0.6) || p >= 1) continue;
+      if (b.motif === 'ADD') continue;
+      const q = (p - 0.6) / 0.4;
+      const home = this._home(b.crutch, g);
+      const to = b.motif === 'EMPTY' ? this._home('__TABLE__', g) : { x: g.palmX, y: g.palmY - g.u };
+      utravel(ctx, this._rampOf(b, 0), home.x, home.y, to.x, to.y, q, g.u * 1.6, b.index * 31 + 7);
+    }
+  }
+
+  /* Where each thing stands, so the fixture and its token agree without either
+   * of them owning the number. */
+  _home(crutch, g) {
+    const u = g.u, cx = g.cx, ground = g.ground;
+    switch (crutch) {
+      case 'HINTS':          return { x: cx - u * 22, y: ground - u * 14 };
+      case 'MENTOR':         return { x: cx + u * 8, y: ground - u * 0.5 };
+      case 'WEAKNESS_MAP':   return { x: cx + u * 27, y: ground - u * 8 };
+      case 'PROBES':         return { x: cx - u * 12, y: ground - u * 13 };
+      case 'PET':            return { x: cx - u * 8, y: ground - u * 2 };
+      case 'VISUALS':        return { x: cx - u * 13, y: ground - u * 23 };
+      case 'PATTERN':        return { x: cx + u * 16, y: ground - u * 22 };
+      case 'BUILD':          return { x: cx, y: ground - u * 31 };
+      case 'COACH':          return { x: cx - u * 18, y: ground - u * 3 };
+      case 'UNLIMITED_TIME': return { x: cx + u * 28, y: ground - u * 24 };
+      case 'ITEMS':          return { x: cx + u * 3, y: ground - u * 11 };
+      case 'SOLUTION':       return { x: cx + u * 37, y: ground - u * 8 };
+      case 'SKILL_STATE':    return { x: cx - u * 17, y: ground - u * 20 };
+      case 'OBLIGING_HAND':  return { x: cx - u * 7, y: ground - u * 12 };
+      case '__TABLE__':      return { x: cx - u * 27, y: ground - u * 4 };
+      default:               return { x: cx, y: ground - u * 11 };
+    }
+  }
+
+  /* The top of a beat's own ramp, n steps down. A ramp that has retired
+   * resolves through the same table everything else does. */
+  _rampOf(beat, n) {
+    const key = RAMP_TOP[beat.ramp] || 'STONE1';
+    return this._ramp(key, n);
+  }
+
+  /* --- the fourteen motifs, one each -------------------------------------
+   * unmaking.py authors a motif per crutch and audits that no two are alike.
+   * These are those fourteen, painted. */
+
+  /* EXTINGUISH — "The five rungs on the chamber wall go out from the top down,
+   * one for each, and then the wall they were cut into goes with them." */
+  _fxHints(ctx, g) {
+    const p = this._p('HINTS');
+    const wallP = clamp((p - 0.7) / 0.3, 0, 1);
+    if (wallP >= 1) return;
+    const u = g.u;
+    const x = g.cx - u * 26, y = g.top - u * 2, w = u * 8, h = g.ground - y;
+    udither(ctx, this._col('VOID0'), this._col('STONE1'), Math.round(8 * (1 - wallP)), x, y, w, h);
+    const lit = cellsLeft(5, clamp(p / 0.7, 0, 1));
+    for (let i = 5 - lit; i < 5; i++) {
+      urect(ctx, this._col('GOLD3'), x + u, y + u * 3 + i * u * 3.4, w - u * 2, Math.max(1, u * 0.7));
+    }
+  }
+
+  /* ABSENT — "The second shadow on the floor beside the player's own shortens,
+   * finishes, and is not replaced by anything." The player's own shadow stays
+   * on the floor for the rest of the sequence, which is what makes the other
+   * one's absence a shape rather than a nothing. */
+  _fxShadows(ctx, g) {
+    const u = g.u;
+    urect(ctx, this._col('STONE1'), g.cx - u * 5, g.ground + u * 0.5, u * 10, Math.max(1, u * 0.9));
+    const p = this._p('MENTOR');
+    if (p >= 1) return;
+    const len = u * 9 * (1 - easeIn(p));
+    if (len < 1) return;
+    urect(ctx, this._col('VOID4'), g.cx + u * 6, g.ground + u * 0.5, len, Math.max(1, u * 0.9));
+  }
+
+  /* UNMARK — "The soft places marked on the enemy stop being marked. The
+   * outline holds; the thing inside it stops having a shape anybody
+   * recognises." The outline is the last thing to go, and while it is still
+   * there it is full of noise. */
+  _fxWeakness(ctx, g) {
+    const p = this._p('WEAKNESS_MAP');
+    if (p >= 1) return;
+    const u = g.u;
+    const x = g.cx + u * 23, y = g.ground - u * 14, w = u * 9, h = u * 12;
+    const th = Math.max(1, u * 0.5);
+    const col = this._col('FROST3');
+    const marks = cellsLeft(5, clamp(p / 0.6, 0, 1));
+    /* the thing inside, losing its shape */
+    const scramble = clamp((p - 0.2) / 0.5, 0, 1);
+    for (let r = 0; r < 6; r++) {
+      for (let c = 0; c < 4; c++) {
+        const on = noise(r * 13 + c, Math.floor(scramble * 6));
+        if (on > 0.5 - scramble * 0.25) continue;
+        urect(ctx, this._ramp('FROST3', 2), x + u * 1 + c * u * 1.9, y + u * 1 + r * u * 1.8, u * 1.4, u * 1.3);
+      }
+    }
+    for (let i = 0; i < marks; i++) {
+      urect(ctx, col, x + u * 1.6 + (i % 3) * u * 2.6, y + u * 2 + Math.floor(i / 3) * u * 4.4, u * 1.6, Math.max(1, u * 0.7));
+    }
+    /* the outline, which holds */
+    const gone = clamp((p - 0.72) / 0.28, 0, 1);
+    if (gone < 1) {
+      const o = this._ramp('FROST3', Math.floor(gone * 3));
+      urect(ctx, o, x, y, w, th); urect(ctx, o, x, y + h - th, w, th);
+      urect(ctx, o, x, y, th, h); urect(ctx, o, x + w - th, y, th, h);
+    }
+  }
+
+  /* SPEND — "The probe tokens on the rail turn over and are gone, spent
+   * without having been used on anything." Each token flips: its width goes to
+   * nothing, comes back edge-lit, and then it is not there. */
+  _fxProbes(ctx, g) {
+    const p = this._p('PROBES');
+    if (p >= 1) return;
+    const u = g.u;
+    const x = g.cx - u * 15, y = g.ground - u * 13, w = u * 8;
+    const railP = clamp((p - 0.75) / 0.25, 0, 1);
+    if (railP < 1) urect(ctx, this._ramp('VIOLET1', 0), x, y, w * (1 - railP), Math.max(1, u * 0.4));
+    for (let i = 0; i < 3; i++) {
+      const own = clamp((p / 0.75) * 3 - (2 - i), 0, 1);     // the last one bought goes first
+      if (own >= 1) continue;
+      const flip = Math.abs(Math.cos(own * Math.PI));
+      const tw = Math.max(1, u * 1.8 * flip);
+      urect(ctx, flip < 0.25 ? this._col('ARCANE4') : this._col('VIOLET3'),
+        x + u * 0.9 + i * u * 2.6 - tw / 2, y - u * 1.9, tw, u * 1.8);
+    }
+  }
+
+  /* VANISH — "The animal is simply not there any more. No sound, no going, no
+   * gap left in the air where it was standing." So there is no transition. On
+   * one frame there is a companion and on the next there is not, and the rest
+   * of the beat is the floor where it was. */
+  _fxPet(ctx, g) {
+    if (this._p('PET') > 0.18) return;
+    const u = g.u;
+    const x = g.cx - u * 8, y = g.ground - u * 3.4;
+    const col = this._col('BONE4');
+    urect(ctx, col, x - u * 2.0, y, u * 4.0, u * 2.0);
+    urect(ctx, col, x + u * 1.4, y - u * 1.4, u * 1.8, u * 1.8);
+    urect(ctx, col, x + u * 2.9, y - u * 1.9, Math.max(1, u * 0.6), Math.max(1, u * 0.7));
+    for (let i = 0; i < 4; i++) {
+      urect(ctx, this._ramp('BONE4', 1), x - u * 1.8 + i * u * 1.1, y + u * 2.0, Math.max(1, u * 0.6), u * 1.4);
+    }
+  }
+
+  /* DRAIN — "The picture of the work running freezes mid-step, drains to the
+   * caption rail beneath it, and then the rail drains too." The freeze comes
+   * first and it is the worst part: a visualiser that has stopped is harder to
+   * look at than an empty panel. */
+  _fxVisuals(ctx, g) {
+    const p = this._p('VISUALS');
+    const railP = clamp((p - 0.6) / 0.4, 0, 1);
+    if (railP >= 1) return;
+    const u = g.u;
+    const x = g.cx - u * 18, y = g.ground - u * 28, w = u * 11, h = u * 9;
+    const railY = y + h + u * 0.8;
+    const fall = clamp((p - 0.2) / 0.4, 0, 1);
+    urect(ctx, this._ramp('VIOLET1', 0), x, y, w, h);
+    const frozen = p > 0 || this.reducedMotion;
+    const tick = frozen ? 3 : Math.floor(this.t * 5);
+    for (let r = 0; r < 4; r++) {
+      for (let c = 0; c < 5; c++) {
+        if (noise(r * 17 + c, tick) < 0.42) continue;
+        const cy = lerp(y + u * 1 + r * u * 2, railY, easeIn(fall));
+        if (cy > railY - u * 0.4) continue;
+        urect(ctx, this._col('ARCANE4'), x + u * 1 + c * u * 1.9, cy, u * 1.3, u * 1.2);
+      }
+    }
+    urect(ctx, this._col('ARCANE4'), x, railY, w * (1 - railP), Math.max(1, u * 0.8));
+  }
+
+  /* BLANK — "The label over the door blanks. Then the doors stop being over
+   * anything, and are only doors." The lintel goes; the posts stay, because a
+   * door with nothing written over it is still a door and that is the joke he
+   * is making. */
+  _fxPattern(ctx, g) {
+    /* The posts outlive the label, but they do not outlive the room: STRIP
+     * takes everything the player did not personally learn, and it does not
+     * come back up. */
+    if (this.actIndex >= 2) return;
+    const p = this._p('PATTERN');
+    const u = g.u;
+    const x = g.cx + u * 12, y = g.ground - u * 24, w = u * 9;
+    const th = Math.max(1, u * 0.8);
+    urect(ctx, this._ramp('STONE1', 0), x, y + u * 3, th, g.ground - y - u * 3);
+    urect(ctx, this._ramp('STONE1', 0), x + w - th, y + u * 3, th, g.ground - y - u * 3);
+    const lintelP = clamp((p - 0.5) / 0.5, 0, 1);
+    if (lintelP < 1) {
+      urect(ctx, this._ramp('STONE1', Math.floor(lintelP * 2)), x, y + u * 2, w, th);
+      const lit = cellsLeft(5, clamp(p / 0.4, 0, 1));
+      for (let i = 0; i < lit; i++) {
+        urect(ctx, this._col('BONE4'), x + u * 0.8 + i * u * 1.6, y, u * 1.1, u * 1.4);
+      }
+    }
+  }
+
+  /* UNDRESS — "The gear lights along the status band go out in the order they
+   * were earned, so the oldest one the player ever won is the last to go."
+   * Newest first, left is oldest. The hero's own armour and the rim light on it
+   * are the same beat: see _armour and _rim. */
+  _fxBuildBand(ctx, g) {
+    const p = this._p('BUILD');
+    const bandP = clamp((p - 0.8) / 0.2, 0, 1);
+    if (bandP >= 1) return;
+    const u = g.u;
+    const x = g.cx - u * 20, y = g.ground - u * 32, w = u * 40;
+    urect(ctx, this._ramp('CHROME1', Math.floor(bandP * 2)), x, y, w * (1 - bandP), Math.max(1, u * 2.2));
+    const lit = cellsLeft(7, clamp(p / 0.8, 0, 1));
+    for (let i = 0; i < lit; i++) {
+      urect(ctx, this._col('CHROME4'), x + u * 1.5 + i * u * 5.4, y + u * 0.6, u * 3.0, Math.max(1, u * 1.0));
+    }
+  }
+
+  /* REMOVE — "The chair the debrief is given from is folded and carried out of
+   * the frame by nobody." It folds first, then it goes left, and nothing is
+   * carrying it. */
+  _fxCoach(ctx, g) {
+    const p = this._p('COACH');
+    if (p >= 1) return;
+    const u = g.u;
+    const fold = clamp(p / 0.45, 0, 1);
+    const slide = easeIn(clamp((p - 0.45) / 0.55, 0, 1)) * (g.cx - u * 18 + u * 10);
+    const x = g.cx - u * 18 - slide;
+    const col = this._ramp('STONE1', 0);
+    const seatY = g.ground - u * 4 + fold * u * 3.2;
+    const legH = u * 4 * (1 - fold);
+    urect(ctx, col, x - u * 2.6, seatY, u * 5.2, Math.max(1, u * 0.8));
+    urect(ctx, col, x - u * 2.6, seatY - u * 5 * (1 - fold), Math.max(1, u * 0.8), u * 5 * (1 - fold));
+    if (legH >= 1) {
+      urect(ctx, col, x - u * 2.2, seatY, Math.max(1, u * 0.7), legH);
+      urect(ctx, col, x + u * 1.6, seatY, Math.max(1, u * 0.7), legH);
+    }
+  }
+
+  /* ADD — "A clock that was never on that wall is on that wall, already
+   * running, already behind." The only thing in the sequence that ARRIVES, the
+   * only warm colour in the palette, and the only thing still moving once the
+   * beats are done. Nothing travels to his hand for this one. */
+  _fxClock(ctx, g) {
+    /* It outlives every other fixture on the stage, because it is the only one
+     * he put there. It does not outlive STRIP: he takes the room back too. */
+    if (this.actIndex >= 2) return;
+    const p = this._p('UNLIMITED_TIME');
+    if (p <= 0.12) return;
+    const u = g.u;
+    const x = g.cx + u * 24, y = g.ground - u * 28, s = u * 8;
+    urect(ctx, this._ramp('EMBER3', 2), x, y, s, s);
+    urect(ctx, this._col('EMBER3'), x, y, s, Math.max(1, u * 0.5));
+    urect(ctx, this._col('EMBER3'), x, y + s - Math.max(1, u * 0.5), s, Math.max(1, u * 0.5));
+    urect(ctx, this._col('EMBER3'), x, y, Math.max(1, u * 0.5), s);
+    urect(ctx, this._col('EMBER3'), x + s - Math.max(1, u * 0.5), y, Math.max(1, u * 0.5), s);
+    /* already running, already behind */
+    const a = this.reducedMotion ? 2.1 : this.t * 1.9;
+    const cxx = x + s / 2, cyy = y + s / 2, r = s * 0.34;
+    ulimb(ctx, this._col('EMBER3'), cxx, cyy, cxx + Math.cos(a) * r, cyy + Math.sin(a) * r, u * 0.6);
+  }
+
+  /* EMPTY — "The belt goes flat. Everything that was on it is on the table by
+   * the door, laid out in a row, tidily, in the order it was bought." The only
+   * thing in the sequence that goes somewhere other than his hand, and it is
+   * the tidiness that is unpleasant. */
+  _fxItems(ctx, g) {
+    const p = this._p('ITEMS');
+    const u = g.u;
+    if (p < 1) {
+      const flat = clamp((p - 0.5) / 0.5, 0, 1);
+      const h = Math.max(1, u * (1.6 - flat * 1.0));
+      urect(ctx, this._ramp('CHROME1', Math.floor(flat * 2)), g.cx - u * 4.6, g.ground - u * 11, u * 9.2, h);
+      const lit = cellsLeft(5, clamp(p / 0.5, 0, 1));
+      for (let i = 0; i < lit; i++) {
+        urect(ctx, this._col('CHROME4'), g.cx - u * 4.0 + i * u * 1.9, g.ground - u * 11.6, u * 1.4, u * 1.6);
+      }
+    }
+  }
+
+  _fxTable(ctx, g) {
+    if (this.actIndex >= 2) return;
+    const p = this._p('ITEMS');
+    const u = g.u;
+    const x = g.cx - u * 32, y = g.ground - u * 5, w = u * 11;
+    urect(ctx, this._ramp('STONE1', 0), x, y, w, Math.max(1, u * 0.8));
+    urect(ctx, this._ramp('STONE1', 0), x + u * 0.6, y, Math.max(1, u * 0.7), u * 5);
+    urect(ctx, this._ramp('STONE1', 0), x + w - u * 1.3, y, Math.max(1, u * 0.7), u * 5);
+    /* laid out in the order it was bought, one appearing per rung of the drain */
+    const laid = 5 - cellsLeft(5, clamp(p / 0.5, 0, 1));
+    for (let i = 0; i < laid; i++) {
+      urect(ctx, this._col('CHROME4'), x + u * 1.2 + i * u * 1.9, y - u * 1.4, u * 1.4, u * 1.4);
+    }
+  }
+
+  /* FACE_DOWN — "The page that turns up after a scored attempt turns itself
+   * face down, in advance, for a page that has not been dealt yet." It does not
+   * go out. It rotates: edge on, and then back to full size with nothing
+   * written on it, which is worse. */
+  _fxSolution(ctx, g) {
+    const p = this._p('SOLUTION');
+    if (p >= 1) return;
+    const u = g.u;
+    const x = g.cx + u * 33, y = g.ground - u * 13, w = u * 8, h = u * 11;
+    const turn = clamp(p / 0.7, 0, 1);
+    const ww = Math.max(1, w * Math.abs(Math.cos(turn * Math.PI)));
+    urect(ctx, this._ramp('FROST3', turn > 0.5 ? 2 : 0), x + (w - ww) / 2, y, ww, h);
+    if (turn <= 0.5) {
+      for (let i = 0; i < 4; i++) {
+        const lw = (ww - u * 2) * (i === 3 ? 0.55 : 1);
+        if (lw < 1) continue;
+        urect(ctx, this._col('BONE4'), x + (w - ww) / 2 + u, y + u * 1.6 + i * u * 2.2, lw, Math.max(1, u * 0.8));
+      }
+    }
+  }
+
+  /* REDACT — "The player's own figures go blank a field at a time — mastery,
+   * stage, dependence — oldest reading last." A field does not vanish: it is
+   * replaced by a solid bar the same width, which is what a redaction is. */
+  _fxSkillState(ctx, g) {
+    const p = this._p('SKILL_STATE');
+    const frameP = clamp((p - 0.82) / 0.18, 0, 1);
+    if (frameP >= 1) return;
+    const u = g.u;
+    const x = g.cx - u * 21, y = g.ground - u * 22, w = u * 9;
+    urect(ctx, this._ramp('VIOLET1', Math.floor(frameP * 2)), x, y, w, u * 7.4);
+    for (let i = 0; i < 3; i++) {
+      const yy = y + u * 0.9 + i * u * 2.3;
+      const own = clamp((p / 0.82) * 3 - (2 - i), 0, 1);     // oldest reading last
+      if (own >= 0.5) {
+        urect(ctx, this._ramp('VIOLET3', 1), x + u * 0.8, yy, w - u * 1.6, u * 1.5);
+      } else {
+        for (let c = 0; c < 4; c++) {
+          urect(ctx, this._col('VIOLET3'), x + u * 1.0 + c * u * 1.8, yy, u * 1.2, u * 1.5);
+        }
+      }
+    }
+  }
+
+  /* --- the figure ------------------------------------------------------- */
+
+  /* transform.js's silhouette, part for part. The arms run the other way: it
+   * starts at lift = 1, because the player walked in having just won, and
+   * REACH brings them down — "Hold your hands where I can see them. I will need
+   * them empty." The lowered pose extends transform.js's own arm formula past
+   * its lift = 0, which is arms-horizontal; that sequence never needed a
+   * hanging arm because it only ever went up. */
+  _figure(ctx, g) {
+    const u = g.u, cx = g.cx, ground = g.ground, top = g.top;
+    const hidden = this.actIndex >= 4 ? clamp(this._phase('HOLD') / 0.25, 0, 1) : 0;
+    if (hidden >= 1) return;
+    const body = this.actIndex >= 3 ? this._col('STONE1') : this._col('VOID2');
+    const skin = this._col('BONE2');
+    const lift = 1 - easeIn(clamp(this._phase('REACH'), 0, 1));
+    const buildP = this._p('BUILD');
+
+    urect(ctx, body, cx - u * 3.2, ground - u * 9, u * 2.4, u * 9);
+    urect(ctx, body, cx + u * 0.8, ground - u * 9, u * 2.4, u * 9);
+    uwedge(ctx, body, cx, top + u * 5, ground - u * 8, u * 9.2, u * 6.0, 10);
+    urect(ctx, body, cx - u * 1.6, top + u * 1.4, u * 3.2, u * 3.6);
+    urect(ctx, skin, cx - u * 1.1, top + u * 2.3, u * 2.2, u * 2.0);
+
+    const shy = top + u * 5.6;
+    for (const side of [-1, 1]) {
+      const shx = cx + side * u * 4.2;
+      const hx = shx + side * u * (1.0 + lift * 3.6);
+      const hy = shy - lift * u * 9 + (1 - lift) * u * 7;
+      ulimb(ctx, body, shx, shy, hx, hy, u * 2.1);
+      urect(ctx, skin, hx - u * 0.7, hy - u * 0.7, u * 1.4, u * 1.4);
+      if (side < 0) this._fxHand(ctx, g, shx, shy, hx, hy);
+    }
+
+    this._armour(ctx, g, buildP);
+    this._fxItems(ctx, g);
+    this._rim(ctx, g, buildP);
+
+    /* HOLD dithers the figure away rather than cutting it: "No figure, no
+     * lettering, no him." */
+    if (hidden > 0) {
+      uscreen(ctx, this._col('VOID0'), Math.round(DITHER_LEVELS * hidden),
+        cx - u * 7, top, u * 14, ground - top + u * 2);
+    }
+  }
+
+  /* UNDRESS on the body. The trim greys through three steps of the ramp while
+   * the plates are still on, and only then do the plates come off. Greying
+   * first is the point: the armour stops being lit before it stops being there,
+   * so the player watches it become decoration and then watches it go. */
+  _armour(ctx, g, p) {
+    if (p >= 1) return;
+    const u = g.u, cx = g.cx, top = g.top;
+    const greyStep = Math.floor(clamp(p / 0.6, 0, 1) * 3);
+    const fall = easeIn(clamp((p - 0.6) / 0.4, 0, 1)) * (g.ground - top - u * 3);
+    const y0 = top + u * 5.6 + fall;
+    if (y0 > g.ground) return;
+    const plate = this._ramp('CHROME1', greyStep);
+    const trim = this._ramp('CHROME4', greyStep);
+    uwedge(ctx, plate, cx, y0, y0 + u * 6.4, u * 8.4, u * 7.2, 5);
+    urect(ctx, trim, cx - u * 4.2, y0, u * 8.4, Math.max(1, u * 0.5));
+    urect(ctx, trim, cx - u * 3.6, y0 + u * 6.4, u * 7.2, Math.max(1, u * 0.5));
+    urect(ctx, plate, cx - u * 5.6, y0 - u * 0.4, u * 2.2, u * 2.0);
+    urect(ctx, plate, cx + u * 3.4, y0 - u * 0.4, u * 2.2, u * 2.0);
+  }
+
+  /* THE RIM LIGHT FAILING.
+   * §8 of the bible: one hot rim from a low source, on everything. transform.js
+   * draws it in chrome and turns it UP at the reveal. Here it walks down the
+   * ramp in four steps and is then not drawn at all — and because CHROME4 also
+   * retires when the belt goes, the top of that ramp is gone underneath it. The
+   * rim fails from both ends, and after this nothing in the sequence has an
+   * edge light on it again. REVEAL is lit by nothing. */
+  _rim(ctx, g, p) {
+    const step = Math.floor(clamp(p, 0, 1) * 4);
+    if (step >= 4 || this.actIndex >= 2) return;
+    const u = g.u, cx = g.cx, top = g.top;
+    const rim = this._ramp('CHROME4', step);
+    const th = Math.max(1, u * 0.4);
+    const rows = 10, y0 = top + u * 5, y1 = g.ground - u * 8;
+    const rh = (y1 - y0) / rows;
+    for (let i = 0; i < rows; i++) {
+      const q = rows === 1 ? 0 : i / (rows - 1);
+      const ww = lerp(u * 9.2, u * 6.0, q);
+      urect(ctx, rim, cx - ww / 2, y0 + i * rh, th, rh + 1);
+    }
+    urect(ctx, rim, cx - u * 1.6, top + u * 1.4, th, u * 3.6);
+    urect(ctx, rim, cx - u * 3.2, g.ground - u * 9, th, u * 9);
+  }
+
+  /* LIFT — "The gauntlet lifts off finger by finger, unhurried, and settles
+   * into his palm, which is open, and has been open since the fourth chapter."
+   * Five fingers leave one at a time and each one crosses the frame on its own;
+   * the cuff goes last. It is the longest take in the spell and it is the only
+   * dispossession he has to ask for. */
+  _fxHand(ctx, g, shx, shy, hx, hy) {
+    const p = this._p('OBLIGING_HAND');
+    if (p >= 1) return;
+    const u = g.u;
+    const gx = lerp(shx, hx, 0.62), gy = lerp(shy, hy, 0.62);
+    const cuffP = clamp((p - 0.62) / 0.38, 0, 1);
+    if (cuffP < 1) {
+      urect(ctx, this._ramp('BLOOD2', Math.floor(cuffP * 2)),
+        gx - u * 1.5, gy - u * 1.5, u * 3.0, u * 3.0);
+    }
+    const fingers = cellsLeft(5, clamp(p / 0.62, 0, 1));
+    for (let i = 0; i < fingers; i++) {
+      urect(ctx, this._col('BLOOD2'), gx - u * 1.3 + i * u * 0.62, gy - u * 2.5, Math.max(1, u * 0.5), u * 1.1);
+    }
+    /* each finger crosses on its own, which is what "unhurried" looks like */
+    for (let i = 0; i < 5; i++) {
+      const own = clamp((p / 0.62) * 5 - i, 0, 1);
+      if (!(own > 0) || own >= 1) continue;
+      utravel(ctx, this._col('BLOOD2'), gx, gy - u * 2, g.palmX, g.palmY - u, own, u * 1.1, 900 + i * 13);
+    }
+  }
+
+  /* --- STRIP, REVEAL and HOLD -------------------------------------------
+   * transform.js peaks on a full-screen white in the first quarter of its
+   * DISCHARGE and falls off it into a lit reveal. This goes to black at the
+   * same speed and does not come back up. Not alpha: whole pixels, eight
+   * dithered steps, then the room is gone and so is the interface chrome.
+   *
+   * REVEAL brings the figure back the same way, which is why the player
+   * resolves one pixel pattern at a time instead of appearing. */
+  _strip(ctx, g) {
+    const dark = this._col('VOID0');
+    if (this.actIndex === 2) {
+      const p = this._phase('STRIP');
+      uscreen(ctx, dark, Math.round(DITHER_LEVELS * clamp(p / 0.25, 0, 1)), 0, 0, g.w, g.h);
+      return;
+    }
+    if (this.actIndex === 3) {
+      const p = this._phase('REVEAL');
+      const level = Math.round(DITHER_LEVELS * (1 - clamp(p / 0.18, 0, 1)));
+      uscreen(ctx, dark, level, 0, 0, g.w, g.h);
+      return;
+    }
+    if (this.actIndex === 4) {
+      /* "This holds a blank editor and a cursor. No figure, no lettering, no
+       * him." The last thing in the game that is still lit is the place the
+       * player types. */
+      const p = this._phase('HOLD');
+      const q = clamp((p - 0.2) / 0.25, 0, 1);
+      if (q <= 0) return;
+      const x = px(g.w * 0.12), y = px(g.h * 0.20), w = px(g.w * 0.76), h = px(g.h * 0.60);
+      uscreen(ctx, this._col('STONE1'), Math.round(DITHER_LEVELS * q), x, y, w, h);
+      urect(ctx, this._col('VOID2'), x, y, w, 1);
+      urect(ctx, this._col('VOID2'), x, y + h - 1, w, 1);
+      const blink = this.reducedMotion ? 1 : (Math.floor(this.t * 1.8) % 2);
+      if (q >= 1 && blink) {
+        urect(ctx, this._col('BONE2'), x + g.u * 2, y + g.u * 2, Math.max(1, g.u * 0.9), g.u * 2.4);
+      }
+    }
+  }
+
+  /* --- the lettering ----------------------------------------------------
+   * Same typeface, same mark on the screen as transform.js, opposite spirit.
+   * PHRASE rides REACH the way "BY THE SOURCE" rides the raise, under a chrome
+   * bevel that loses a step of the ramp for every four things taken, so by the
+   * end of TAKE the lettering is flat. OATH lands on REVEAL the way "I NAME IT"
+   * does, and it is drawn with no bevel and no shadow at all: transform.js's
+   * card is an object with a light on it, and this one is a statement.
+   *
+   * Where transform.js prints the earned rank in gold, this prints one word in
+   * bone. HOLD prints nothing. */
+  _card(ctx, g) {
+    if (!ctx.fillText) return;
+    const size = Math.max(12, Math.round(g.h * 0.062));
+    const step = Math.min(3, Math.floor(this.gone.size / 4));
+    const y = g.h * 0.20;
+    if (this.actIndex <= 1) {
+      this._plate(ctx, g, this.card.phrase, g.cx, y, size, step);
+      return;
+    }
+    if (this.actIndex !== 3) return;
+    if (this._phase('REVEAL') < 0.18) return;
+    ctx.save();
+    ctx.font = `${Math.round(size * 1.05)}px "Press Start 2P", monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    if (this.card.oath) {
+      ctx.fillStyle = this._col('BONE2');
+      ctx.fillText(this.card.oath, g.cx, y);
+    }
+    if (this.card.title) {
+      ctx.font = `${Math.round(size * 0.42)}px "Press Start 2P", monospace`;
+      ctx.fillStyle = this._col('BONE2');
+      ctx.fillText(this.card.title, g.cx, y + size * 0.95);
+    }
+    ctx.restore();
+  }
+
+  _plate(ctx, g, text, cx, y, size, step) {
+    const face = this._ramp('CHROME4', step);
+    const under = this._ramp('CHROME1', step);
+    const shadow = this._col('VOID0');
+    if (!text) {
+      /* The card with its name taken out of it — which is, precisely, what he
+       * did to the world, and is also how an unwired payload shows up. */
+      const w = Math.min(g.w * 0.62, size * 16), h = size * 1.35;
+      urect(ctx, shadow, cx - w / 2 + 4, y - h / 2 + 5, w, h);
+      urect(ctx, under, cx - w / 2, y - h / 2, w, h);
+      urect(ctx, face, cx - w / 2, y - h / 2, w, Math.max(1, g.u * 0.4));
+      return;
+    }
+    ctx.save();
+    ctx.font = `${size}px "Press Start 2P", monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = shadow;
+    ctx.fillText(text, cx + 4, y + 5);
+    ctx.fillStyle = under;
+    ctx.fillText(text, cx, y + 2);
+    ctx.fillStyle = face;
+    ctx.fillText(text, cx, y);
+    ctx.restore();
+  }
+}
+
+/* The top of each ramp unmaking.py names, in this module's palette keys. */
+const RAMP_TOP = Object.freeze({
+  void: 'VOID4', violet: 'VIOLET3', arcane: 'ARCANE4', chrome: 'CHROME4',
+  bone: 'BONE4', gold: 'GOLD3', ember: 'EMBER3', frost: 'FROST3',
+  stone: 'STONE1', blood: 'BLOOD2',
+});
+
+/* The one call a host should need: hand it unmaking.cinematic() and drive it.
+ *
+ * NAME CLASH, ON PURPOSE, AND HOW TO AVOID IT. web/js/unmakingfx.js renders the
+ * same spell the other way: in situ, on the player's real sprite, non-blocking,
+ * no lettering, the Green Index rather than a palette blowout. It exports a
+ * `createUnmaking` of its own. The two are alternatives, not layers — one is
+ * the cutscene in transform.js's mould with the title card, the other is
+ * weather over the scene the player is already in — and a host that wants both
+ * names in scope should import this module namespaced, the way fx.js already
+ * does, or use the unambiguous alias below. */
+export function createUnmaking(opts = {}) { return new Unmaking(opts); }
+export const createUnmakingCinematic = createUnmaking;
+
+/* Rasterise every dither tile the sequence will ask for before the first frame.
+ * A cold cache costs a hundred small canvases and the frame it would cost them
+ * on is the frame the player is watching. */
+export function warmUnmaking(opts = {}) {
+  const made = makeCanvas(320, 180);
+  if (!made) return 0;
+  const before = canvasCache.size;
+  const u = new Unmaking(opts);
+  const steps = 240;
+  for (let i = 0; i <= steps; i++) {
+    u.seek((u.total * i) / steps);
+    try { u.draw(made.ctx, 320, 180); } catch (e) { /* a cold warm-up is not fatal */ }
+  }
+  /* Four places take a dither level that moves with the clock rather than a
+   * fixed one: the hint wall going, the figure dithering away under HOLD, and
+   * the two halves of STRIP. A sweep only warms the levels it happens to land
+   * on, so those are built outright. Both colours involved are survivors, so
+   * this is twenty-one tiles in total however long the sequence runs. */
+  for (let l = 1; l < DITHER_LEVELS; l++) {
+    ditherCanvas(u._col('VOID0'), u._col('STONE1'), l);
+    screenCanvas(u._col('VOID0'), l);
+    screenCanvas(u._col('STONE1'), l);
+  }
+  return canvasCache.size - before;
+}
+
+/* The palette as it stands at a point on the clock, for the harness and for
+ * anyone who wants the count without reading pixels. */
+export function unmakingPaletteAt(seconds, opts = {}) {
+  const u = new Unmaking(opts);
+  u.seek(seconds);
+  const live = {};
+  for (const k of PALETTE_KEYS) live[k] = u._col(k);
+  return { act: u.actId, departed: u.departed, count: u.livePaletteCount(), live };
 }

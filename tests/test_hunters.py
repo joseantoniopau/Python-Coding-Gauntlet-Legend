@@ -367,6 +367,10 @@ class TestPreparationIsTheCurve(unittest.TestCase):
         strikes = [r["strike_multiplier"] for r in rows]
         self.assertEqual(casts, sorted(casts, reverse=True))
         self.assertEqual(strikes, sorted(strikes, reverse=True))
+        # The Pass is CHAPTER_ANCHOR's ground, which is why these two legacy
+        # constants are still the right ends for this particular curve.
+        self.assertEqual(H.chapter_for_region("twin_pointer_pass"),
+                         H.CHAPTER_ANCHOR)
         self.assertEqual(casts[0], H.CASTS_AT_UNREADY)
         self.assertEqual(casts[-1], H.CASTS_AT_READY)
         for a, b in zip(casts, casts[1:]):
@@ -375,28 +379,44 @@ class TestPreparationIsTheCurve(unittest.TestCase):
     def test_very_hard_when_you_are_new_and_normal_to_hard_once_you_upgrade(self):
         """The brief's two sentences, as numbers, in every region.
 
-        "Very hard" is read as: at least forty-five casts, and it hits at more
-        than 1.4x. "Normal to hard" is read as: no more than thirty-six, at no
-        more than 1.2x. The gap between them has to be worth the trip to the
-        forge, so the unprepared fight is also required to be at least 1.35
-        times the length of the prepared one.
+        THE THRESHOLDS ARE NOW THE CHAPTER'S, NOT THE GAME'S. They used to be
+        two literals — at least forty-five casts unprepared, no more than
+        thirty-six prepared — which were true when every apex in the game was
+        26/52. Since `hunters.casts_at_ready` ramps the band along
+        `curriculum.CHAPTERS`, a literal here would be asserting the flat design
+        the ramp replaced: chapter I is 14/28 and chapter XI is 44/88, and both
+        of those fail a forty-five-cast floor for opposite reasons.
+
+        So "very hard" is read as: within ten percent of this chapter's
+        unprepared length, at very nearly this chapter's unprepared multiplier,
+        and above 1.2x in absolute terms wherever you are. "Normal to hard" is
+        read as: inside half again this chapter's prepared length, at no more
+        than 1.2x. The gap between them has to be worth the trip to the forge,
+        so the unprepared fight is also required to be at least 1.35 times the
+        length of the prepared one, and that one IS chapter-independent because
+        it is a statement about preparation rather than about depth.
         """
         for region in REGIONS:
             apex = H.apex_for(region)
+            chapter = H.chapter_for_region(region)
+            long_fight = H.casts_at_unready(chapter)
+            short_fight = H.casts_at_ready(chapter)
+            hardest = H.strike_at_unready(chapter)
             with self.subTest(region):
                 new = fight(region, unprepared())
                 done = fight(region, did_the_work(apex))
 
                 self.assertLess(new["readiness"], 25, "a newcomer scored well")
                 self.assertEqual(H.band_for(new["readiness"]), "UNPREPARED")
-                self.assertGreaterEqual(new["real_casts"], 45)
-                self.assertGreater(new["strike"], 1.4)
+                self.assertGreaterEqual(new["real_casts"], long_fight * 0.90)
+                self.assertGreater(new["strike"], 1.2)
+                self.assertGreater(new["strike"], hardest - 0.10)
 
                 self.assertGreaterEqual(done["readiness"], 50,
                                         "doing the area's work did not reach "
                                         "the band the area was built for")
                 self.assertIn(done["band"], ("READY", "SEASONED"))
-                self.assertLessEqual(done["real_casts"], 36)
+                self.assertLessEqual(done["real_casts"], short_fight * 1.45)
                 self.assertLessEqual(done["strike"], 1.2)
 
                 self.assertGreaterEqual(
@@ -434,9 +454,17 @@ class TestPreparationIsTheCurve(unittest.TestCase):
                                    ("prepared", did_the_work(apex)),
                                    ("worst", the_worst_loadout(apex))):
                 row = fight(region, loadout)
+                # RELATIVE, because the ramp made the fights longer. The drift
+                # between the authored count and the measured one is the
+                # per-cast integer rounding in elements.resolve_damage, which is
+                # a PERCENTAGE of the fight rather than a fixed number of casts:
+                # four casts was 8% of a flat fifty-two and is 5% of a
+                # chapter-XI eighty-eight. Holding the absolute number would
+                # tighten the test on exactly the fights that got longer.
+                slack = max(4, int(round(row["target_casts"] * 0.08)))
                 with self.subTest(f"{region}/{label}"):
                     self.assertLessEqual(
-                        abs(row["real_casts"] - row["target_casts"]), 4,
+                        abs(row["real_casts"] - row["target_casts"]), slack,
                         f"authored {row['target_casts']} casts, measured "
                         f"{row['real_casts']}")
 
@@ -478,6 +506,111 @@ class TestPreparationIsTheCurve(unittest.TestCase):
 # 3. Never unwinnable
 # ---------------------------------------------------------------------------
 
+class TestTheChapterRamp(unittest.TestCase):
+    """Section A of the fifth brief: the hunt ramps, and readiness still halves
+    it at every rung of the ramp."""
+
+    def test_the_chapter_comes_from_the_ground_and_not_from_the_player(self):
+        """The one thing that would turn this into the level check the whole
+        module exists to refuse. A region's chapter is a map fact: it is derived
+        from curriculum.CHAPTERS[i].region, it takes no player argument, and it
+        is the same integer for everybody who ever stands there."""
+        import inspect
+        import re
+        source = inspect.getsource(H.chapter_for_region) + \
+            inspect.getsource(H._chapter_by_region)
+        # Docstrings and comments stripped first, the same way
+        # `_reads_no_progression` does it: the prose in this module talks about
+        # players constantly, because that is the argument of the file, and the
+        # difference worth asserting is between saying so and doing so.
+        code = re.sub(r'"""(?:.|\n)*?"""', "", source)
+        code = re.sub(r"#[^\n]*", "", code)
+        for forbidden in ("state", "skills", "player", "xp", "level",
+                          "mastery"):
+            self.assertNotIn(forbidden, code,
+                             f"the chapter map reads {forbidden}")
+        first = H.chapter_for_region("graph_wastes")
+        self.assertEqual(first, H.chapter_for_region("graph_wastes"))
+        self.assertEqual(H._reads_no_progression()["hits"], [])
+
+    def test_every_region_lands_on_a_chapter_that_exists(self):
+        for row in world.REGIONS:
+            chapter = H.chapter_for_region(row["id"])
+            with self.subTest(row["id"]):
+                self.assertIn(chapter, range(H.CHAPTER_COUNT))
+
+    def test_readiness_halves_the_fight_at_every_chapter(self):
+        """The invariant, not the coincidence. It used to be true because 26 and
+        52 were both typed; now the second is derived from the first."""
+        for chapter in range(H.CHAPTER_COUNT):
+            with self.subTest(chapter=chapter):
+                self.assertEqual(H.casts_at_unready(chapter),
+                                 H.casts_at_ready(chapter) * 2)
+        for region in REGIONS:
+            rows = H.curve(region)
+            with self.subTest(region):
+                self.assertEqual(rows[0]["casts"], rows[-1]["casts"] * 2)
+
+    def test_the_ramp_rises_and_never_flattens(self):
+        ready = [H.casts_at_ready(c) for c in range(H.CHAPTER_COUNT)]
+        strikes = [H.strike_at_unready(c) for c in range(H.CHAPTER_COUNT)]
+        for a, b in zip(ready, ready[1:]):
+            self.assertGreater(b, a, "a chapter bought no length")
+        for a, b in zip(strikes, strikes[1:]):
+            self.assertGreater(b, a, "a chapter bought no weight")
+        self.assertEqual(strikes[0], H.STRIKE_AT_UNREADY_FLOOR)
+        self.assertEqual(strikes[-1], H.STRIKE_AT_UNREADY)
+
+    def test_the_two_legacy_constants_still_describe_the_anchor_rung(self):
+        """CASTS_AT_READY and CASTS_AT_UNREADY kept their names through a change
+        that made them vary. They now describe chapter V, and if they ever stop
+        describing it, everything that still imports them is quietly wrong."""
+        self.assertEqual(H.casts_at_ready(H.CHAPTER_ANCHOR), H.CASTS_AT_READY)
+        self.assertEqual(H.casts_at_unready(H.CHAPTER_ANCHOR),
+                         H.CASTS_AT_UNREADY)
+
+    def test_the_first_apex_is_a_lesson_and_the_last_is_an_event(self):
+        """Section B. The earliest apex has to be short enough to lose, read,
+        fix and come back to; the deepest has to be long enough to remember."""
+        first = H.pace_for("python_village")
+        last = H.pace_for("null_kings_castle")
+        self.assertEqual(first["stance"], H.TEACHES)
+        self.assertEqual(last["stance"], H.TESTS)
+        # Inside the ordinary elite band this game already uses: 8 to 20 casts.
+        self.assertLessEqual(first["casts_ready"], 20)
+        self.assertGreaterEqual(first["casts_ready"], 8)
+        # And it hits softly enough that the tell can fire twice.
+        self.assertLess(first["strike_unready"], last["strike_unready"])
+        self.assertGreater(last["casts_ready"], first["casts_ready"] * 2.5)
+
+    def test_the_pool_cap_never_binds(self):
+        """A capped pool ends the fight before target_casts is reached, which
+        puts the client's bar and the engine's tally on different arithmetic
+        about the same creature."""
+        verdict = H._pool_cap_is_never_reached()
+        self.assertTrue(verdict["holds"],
+                        f"largest legitimate pool {verdict['pool']} reached "
+                        f"HP_CAP {verdict['cap']}")
+
+    def test_the_ramp_is_shipped_to_the_client_exactly_once(self):
+        payload = H.client_payload()
+        self.assertEqual(len(payload["ramp"]), H.CHAPTER_COUNT)
+        self.assertEqual(payload["chapter_for_region"],
+                         {r["id"]: H.chapter_for_region(r["id"])
+                          for r in world.REGIONS})
+        for row in payload["ramp"]:
+            self.assertEqual(row["casts_unready"], row["casts_ready"] * 2)
+
+    def test_a_full_playthrough_is_reported_rather_than_guessed(self):
+        cost = H.playthrough_cost()
+        self.assertEqual(cost["apexes"], len(H.APEXES))
+        self.assertEqual(cost["unprepared_casts"], cost["prepared_casts"] * 2)
+        self.assertEqual(
+            cost["prepared_casts"],
+            sum(H.casts_at_ready(H.chapter_for_region(a.region))
+                for a in H.APEXES))
+
+
 class TestNeverUnwinnable(unittest.TestCase):
 
     def test_the_mismatch_is_priced_once_and_not_twice(self):
@@ -485,17 +618,19 @@ class TestNeverUnwinnable(unittest.TestCase):
 
         An underprepared player has a LONGER fight and does LESS damage per
         cast. If the pool were authored in hit points those two would multiply
-        and fifty-two casts would become two hundred. The pool is derived from
-        the player's own damage instead, so the worst loadout in the game must
-        come out near the authored fifty-two rather than near four times it.
+        and a fifty-two cast fight would become two hundred. The pool is derived
+        from the player's own damage instead, so the worst loadout in the game
+        must come out near THIS CHAPTER'S unprepared length rather than near
+        four times it.
         """
         for region in REGIONS:
             apex = H.apex_for(region)
+            ceiling = H.casts_at_unready(H.chapter_for_region(region))
             worst = fight(region, the_worst_loadout(apex))
             best = fight(region, did_the_work(apex))
             with self.subTest(region):
                 self.assertLessEqual(
-                    worst["real_casts"], H.CASTS_AT_UNREADY + 4,
+                    worst["real_casts"], ceiling + 4,
                     "the wrong element bought a second penalty")
                 self.assertLess(
                     worst["real_casts"] / best["real_casts"],
@@ -529,9 +664,14 @@ class TestNeverUnwinnable(unittest.TestCase):
                 pool -= E.resolve_damage(base, loadout.weapon_element, defender,
                                          roll=0.0, can_inflict=False).damage
                 casts += 1
+            ceiling = H.casts_at_unready(H.chapter_for_region(region))
             with self.subTest(region):
                 self.assertLess(casts, 10000, "the fight did not terminate")
-                self.assertLessEqual(casts, 80,
+                # Was a flat eighty, which was the old CASTS_AT_UNREADY plus
+                # half again. The bound that matters is "this fight is not
+                # longer than the one the chapter authored for a player with
+                # nothing", and that number now depends on the chapter.
+                self.assertLessEqual(casts, ceiling + 6,
                                      f"{casts} casts is a wall with a health "
                                      f"bar, not a fight")
 

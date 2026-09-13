@@ -697,3 +697,11 @@ class TheReadinessLineIsHonest(GameTest):
         self.assertTrue(healers["ok"], healers["failures"])
         ending = finale.self_check()
         self.assertTrue(ending["ok"], ending["failures"])
+
+
+# Runnable on its own. tests/run_all.py discovers this file too, but the
+# suite is long enough that it gets killed mid-run on some machines, and a file
+# that exits 0 without running anything is worse than one that fails.
+if __name__ == "__main__":
+    import unittest
+    unittest.main(verbosity=2)

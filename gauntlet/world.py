@@ -176,6 +176,275 @@ BOSSES = [
 
 BOSS_BY_ID = {b["id"]: b for b in BOSSES}
 
+
+# ---------------------------------------------------------------------------
+# The fourteen keys
+# ---------------------------------------------------------------------------
+#
+# A key is not an inventory trinket. It is PROOF YOU WERE SOMEWHERE AND BEAT
+# WHAT LIVED THERE, and that is why it is derived rather than stored: a key is
+# held exactly when its boss is in `state["cleared_bosses"]`, and there is no
+# second ledger that can disagree with the first one. A save written before this
+# table existed already contains every key its owner earned, which is the only
+# way to add a currency to a shipped game without a migration.
+#
+# Each row carries the id of the ROAD it opens. progression.py owns the road —
+# the geography is not world.py's business past the region list — so the link is
+# a plain string and `progression.verify_no_orphans()` proves that every one of
+# these names a real route gated on exactly this key. Two halves of one fact,
+# checked, rather than two facts that drift.
+#
+# `line` is what the key proves, in the voice of the thing that was holding it.
+# It is not a hint: read all fourteen end to end and you learn nothing about any
+# problem you could not already state.
+
+KEYS = [
+    {"id": "key_one_rune", "name": "The One-Rune Key", "boss": "hash_titan",
+     "region": "hashmap_highlands", "sigil": "rune", "colour": "#e8a33d",
+     "opens": "rt_indexed_road",
+     "opens_name": "The Indexed Road — the plateau straight down into the Ruins",
+     "line": "Cut to one vault and no other. It does not open doors faster. It "
+             "opens the door you already knew the name of."},
+    {"id": "key_skipped_head", "name": "The Skipped Head",
+     "boss": "three_sum_hydra", "region": "array_caverns",
+     "sigil": "hydra", "colour": "#4fb783",
+     "opens": "rt_sorted_run",
+     "opens_name": "The Sorted Run — the numbered halls out into the Stringwood",
+     "line": "One of its heads never grew back, because you walked past the "
+             "duplicate instead of fighting it. That is the whole trick and it "
+             "looks like nothing."},
+    {"id": "key_unbroken_frame", "name": "The Unbroken Frame",
+     "boss": "window_wraith", "region": "sliding_window_marsh",
+     "sigil": "frame", "colour": "#7f6ad6",
+     "opens": "rt_single_pass",
+     "opens_name": "The Single-Pass Road — the marsh to the foot of the Tower",
+     "line": "A frame with no seam in it. The Wraith ate restarts and you never "
+             "gave it one, so what is left is a single pass, hardened."},
+    {"id": "key_shorter_wall", "name": "The Shorter Wall",
+     "boss": "twin_behemoth", "region": "twin_pointer_pass",
+     "sigil": "sabers", "colour": "#c4553f",
+     "opens": "rt_both_ends",
+     "opens_name": "Both Ends Road — the pass across into the Graph Wastes",
+     "line": "Two bits, one filed down. You move the short one. Everybody who "
+             "has ever lost this fight moved the tall one and lost the width "
+             "for nothing."},
+    {"id": "key_quarter_turn", "name": "The Quarter Turn",
+     "boss": "matrix_golem", "region": "matrix_citadel",
+     "sigil": "golem", "colour": "#8a8f9c",
+     "opens": "rt_turned_hall",
+     "opens_name": "The Turned Hall — the Citadel through to the Mines",
+     "line": "It turns ninety degrees and stops. In place, with nothing "
+             "allocated to hold it while it turned. The Golem never forgave "
+             "that."},
+    {"id": "key_bounded_branch", "name": "The Bounded Branch",
+     "boss": "tree_dragon", "region": "binary_tree_canopy",
+     "sigil": "dragon", "colour": "#3f9c5a",
+     "opens": "rt_in_order_walk",
+     "opens_name": "The In-Order Walk — the canopy down into the lit Ruins",
+     "line": "A branch with a floor and a ceiling carved on it. The Dragon lost "
+             "the moment you stopped comparing it to its children and started "
+             "carrying the bounds down."},
+    {"id": "key_counted_leaf", "name": "The Leaf That Counted",
+     "boss": "path_sum_ent", "region": "binary_tree_canopy",
+     "sigil": "ent", "colour": "#6b8f3f",
+     "opens": "rt_root_to_leaf",
+     "opens_name": "The Root-to-Leaf Road — the canopy all the way home to the "
+                   "village",
+     "line": "One leaf, pressed flat. A node with one child is not a leaf, and "
+             "the Ent held that distinction against the realm for eleven years."},
+    {"id": "key_ring_of_light", "name": "The Ring of Light",
+     "boss": "graph_necromancer", "region": "graph_wastes",
+     "sigil": "necromancer", "colour": "#6a4f8f",
+     "opens": "rt_shortest_hop",
+     "opens_name": "The Shortest Hop — the Wastes to the village, in one line",
+     "line": "It expands in rings when you set it down. Every ruin at the same "
+             "distance lights at the same moment, which is what the "
+             "Necromancer could not survive being watched doing."},
+    {"id": "key_discarded_maximum", "name": "The Discarded Maximum",
+     "boss": "rolling_titan", "region": "sliding_window_marsh",
+     "sigil": "titan", "colour": "#3f7f9c",
+     "opens": "rt_discard_line",
+     "opens_name": "The Discard Line — the marsh out onto the Wastes lattice",
+     "line": "Heavier at one end. Everything it is carrying can still win; "
+             "everything it threw away could not. The Titan was carrying all of "
+             "it and calling max() on the pile."},
+    {"id": "key_other_undo", "name": "The Other Undo",
+     "boss": "editor_automaton", "region": "matrix_citadel",
+     "sigil": "automaton", "colour": "#b0763f",
+     "opens": "rt_undo_stair",
+     "opens_name": "The Undo Stair — the Citadel back down to the village square",
+     "line": "The one you did not implement. The Automaton kept it on a hook by "
+             "the door for anyone who came back and finished the job."},
+    {"id": "key_amortised_step", "name": "The Amortised Step",
+     "boss": "complexity_wyrm", "region": "complexity_tower",
+     "sigil": "wyrm", "colour": "#3f6f9c",
+     "opens": "rt_amortised_run",
+     "opens_name": "The Amortised Run — the Tower's summit onto the Coliseum sand",
+     "line": "Expensive once, cheap every other time, and the average is the "
+             "number that was true all along. Correct is not the same as fast. "
+             "This is the difference, cast in brass."},
+    {"id": "key_written_tree", "name": "The Written Tree",
+     "boss": "serialization_lich", "region": "recursive_forest",
+     "sigil": "lich", "colour": "#8f3f6f",
+     "opens": "rt_written_down",
+     "opens_name": "The Road Written Down — the deep forest home to the village",
+     "line": "A forest folded into one line you can read back exactly. The Lich "
+             "could write. It had simply never once managed to read its own "
+             "handwriting."},
+    {"id": "key_reproduced_fault", "name": "The Reproduced Fault",
+     "boss": "bug_demon", "region": "debugging_dungeon",
+     "sigil": "demon", "colour": "#c43f4f",
+     "opens": "rt_reproduction_road",
+     "opens_name": "The Reproduction Road — the forge cells out to the Coliseum",
+     "line": "It works on your machine. Then you made it fail on your machine, "
+             "on purpose, twice in a row, and the Demon had nowhere left to "
+             "stand."},
+    {"id": "key_unlabelled", "name": "The Unlabelled Key",
+     "boss": "the_interviewer", "region": "null_kings_castle",
+     "sigil": "interviewer", "colour": "#d8d8e0",
+     "opens": "rt_road_back_in",
+     "opens_name": "The Road Back In — the village gate to the castle, whenever "
+                   "you want it",
+     "line": "Nothing is stamped on it. No region, no pattern, no difficulty. "
+             "You know what it opens because you recognised it, which was the "
+             "entire examination."},
+]
+
+KEY_BY_ID = {k["id"]: k for k in KEYS}
+KEY_BY_BOSS = {k["boss"]: k for k in KEYS}
+KEY_IDS = tuple(k["id"] for k in KEYS)
+KEYS_BY_REGION: dict = {}
+for _k in KEYS:
+    KEYS_BY_REGION.setdefault(_k["region"], []).append(_k)
+
+
+def key_for_boss(boss_id: str) -> dict | None:
+    """The key that boss was holding, or None. There is one per boss."""
+    return KEY_BY_BOSS.get(boss_id)
+
+
+def keys_held(cleared_bosses) -> list:
+    """Which of the fourteen the player has, in table order.
+
+    DERIVED, not stored. Beating the boss is the possession; there is nothing to
+    drop, nothing to sell, and no way for an inventory bug to take one back.
+    """
+    cleared = set(cleared_bosses or ())
+    return [k["id"] for k in KEYS if k["boss"] in cleared]
+
+
+def holds_key(cleared_bosses, key_id: str) -> bool:
+    key = KEY_BY_ID.get(key_id)
+    return bool(key) and key["boss"] in set(cleared_bosses or ())
+
+
+def keyring(cleared_bosses) -> list:
+    """Every key with its held flag, for the map screen and the portal panel."""
+    cleared = set(cleared_bosses or ())
+    return [{**k, "held": k["boss"] in cleared,
+             "boss_name": BOSS_BY_ID.get(k["boss"], {}).get("name", k["boss"]),
+             "region_name": REGION_BY_ID.get(k["region"], {}).get("name",
+                                                                  k["region"])}
+            for k in KEYS]
+
+
+# ---------------------------------------------------------------------------
+# The Standing Portal
+# ---------------------------------------------------------------------------
+#
+# The last fight is in the first village. Not because that is tidy, but because
+# the thing you have to face has been standing under the place that taught you
+# to read for the whole game, and the castle was built on top of the other end
+# of the same room specifically in order to stop being able to see it.
+# FINAL_TRIAL["where"] has said so since before this portal existed.
+#
+# WHAT THE PORTAL GATES, SAID OUT LOUD, BECAUSE GETTING THIS WRONG WOULD RUIN
+# THE GAME:
+#
+#   IT GATES  the story climax. The mythic python wizard as a STORY event, the
+#             captives, the finale cutscene, the ending. Fourteen keys, which is
+#             every boss in the realm, which is a thing you earn.
+#
+#   IT NEVER  gates the practical. Interview Mode is a MEASUREMENT, not a
+#   GATES     reward: a player must be able to sit it at any time, from the
+#             menu, at level one, holding nothing, to find out where they stand.
+#             That is the entire point of this game. `finalexam.sealed()` is the
+#             one capability check and this portal is not a second one. Gating
+#             the measurement behind fourteen boss kills would make the one
+#             honest number in the game something you have to earn twice.
+#
+# `portal_gates()` below is that paragraph as code, so a caller can ask instead
+# of remembering.
+
+THE_STANDING_PORTAL = {
+    "id": "the_standing_portal",
+    "name": "THE STANDING PORTAL",
+    "region": "python_village",
+    "where": "In the village square, behind the bell, in the gap between the "
+             "founders' cellar and the wall everybody assumed it was part of.",
+    "blurb": "A door frame with no door and no wall around it, standing in the "
+             "square the way a sentence stands in an empty file. Fourteen "
+             "wards are cut into the lintel. Each one is the shape of a "
+             "keyhole, and each one is a different shape.",
+    "law": "The portal opens when all fourteen wards are answered and not one "
+           "key before. What is on the other side of it is the story's last "
+           "room. What is on the other side of it is NOT the practical: the "
+           "examination has never needed a key, a road, or this village's "
+           "permission, and it never will.",
+    "sprite": "portal", "colour": "#3f7f5a", "accent": "#e8c37d",
+    "locked_line": "Fourteen wards. The ones you have answered are lit. The "
+                   "ones you have not are not asking politely; they are simply "
+                   "not asking.",
+    "open_line": "Every ward is lit. The frame has stopped being a frame and "
+                 "started being a doorway, and it opens onto a room that is "
+                 "underneath the place you started.",
+}
+
+PORTAL_KEY_REQUIREMENT = len(KEYS)          # fourteen. All of them. No partial credit.
+
+# What the portal is allowed to stand in front of, and what it may never stand
+# in front of. Both lists are checked by tests rather than trusted.
+PORTAL_GATES = ("story_climax", "finale", "captives", "ending_cutscene",
+                "the_last_room")
+PORTAL_NEVER_GATES = ("practical", "interview", "interview_mode", "exam",
+                      "final_exam", "readiness", "diagnostic", "measurement",
+                      "retest", "training", "encounter")
+
+
+def portal_gates(what: str) -> bool:
+    """Does the Standing Portal stand in front of `what`?
+
+    False for anything measured, always, including things nobody has thought of
+    yet: the default answer is no. The portal is a story door.
+    """
+    key = (what or "").strip().lower()
+    if key in PORTAL_NEVER_GATES:
+        return False
+    return key in PORTAL_GATES
+
+
+def portal_status(cleared_bosses) -> dict:
+    """Fourteen wards, how many are lit, and which boss still has the rest."""
+    held = keys_held(cleared_bosses)
+    missing = [k for k in KEYS if k["id"] not in set(held)]
+    return {
+        **THE_STANDING_PORTAL,
+        "held": len(held),
+        "required": PORTAL_KEY_REQUIREMENT,
+        "open": len(held) >= PORTAL_KEY_REQUIREMENT,
+        "keys": keyring(cleared_bosses),
+        "missing": [{"id": k["id"], "name": k["name"], "boss": k["boss"],
+                     "boss_name": BOSS_BY_ID.get(k["boss"], {}).get("name", ""),
+                     "region": k["region"]} for k in missing],
+        "line": THE_STANDING_PORTAL["open_line"]
+                if len(held) >= PORTAL_KEY_REQUIREMENT
+                else THE_STANDING_PORTAL["locked_line"],
+        "gates": list(PORTAL_GATES),
+        "never_gates": list(PORTAL_NEVER_GATES),
+        "note": "The practical is reachable from the menu with no keys at all. "
+                "This portal gates the story, never the measurement.",
+    }
+
 # ---------------------------------------------------------------------------
 # The last trial
 # ---------------------------------------------------------------------------

@@ -530,3 +530,11 @@ class TestOverHTTP(GameTest):
         self.assertEqual(status, 409, payload)
         self.assertEqual(payload.get("error"), "sealed")
         self.assertTrue(payload.get("capability"))
+
+
+# Runnable on its own. tests/run_all.py discovers this file too, but the
+# suite is long enough that it gets killed mid-run on some machines, and a file
+# that exits 0 without running anything is worse than one that fails.
+if __name__ == "__main__":
+    import unittest
+    unittest.main(verbosity=2)

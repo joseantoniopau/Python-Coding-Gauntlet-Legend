@@ -125,6 +125,47 @@ class When:
     def flag(beat_id: str) -> Trigger:
         return Trigger("flag", beat_id)
 
+    # -- THE GEOGRAPHY CLAUSE ------------------------------------------------
+    # Everything above this line is evidence: what the player can do. None of it
+    # says anything about where the player has been, which is how a Coliseum NPC
+    # ended up commenting on the times of somebody standing in Python Village at
+    # level six. These three are the clause for PLACE, and every one of them is
+    # something the save can prove:
+    #
+    #   place(region)  you have been there. The plainest form.
+    #   key(key_id)    you hold the key that boss was carrying, which is a
+    #                  stronger statement than having been there — you went and
+    #                  you beat what lived there.
+    #   met(speaker)   this person has spoken to you before. A mentor who has
+    #                  never met you does not get to have an opinion about you.
+    #
+    # None of them may ever be attached to a trigger that reads a transient
+    # `event`: an event fires in the payload of one submission and never again,
+    # so a place clause that happens to be false at that instant would lose the
+    # beat permanently. `_gate_by_geography` refuses to do it, by name.
+
+    @staticmethod
+    def place(region_id: str) -> Trigger:
+        """You have been there. Same predicate as `region`, named for what it
+        is doing in a composite trigger."""
+        return Trigger("region_entered", region_id)
+
+    @staticmethod
+    def key(key_id: str) -> Trigger:
+        """You hold that key, which means you went and beat what was holding
+        it. Derived from cleared_bosses; see world.KEYS."""
+        return Trigger("key_held", key_id)
+
+    @staticmethod
+    def keys(count: int) -> Trigger:
+        return Trigger("keys_held", value=count)
+
+    @staticmethod
+    def met(speaker_id: str) -> Trigger:
+        """This person has already spoken to you, or you have stood in the
+        region they live in. Either is proof you two have met."""
+        return Trigger("speaker_met", speaker_id)
+
     @staticmethod
     def all_of(*parts: Trigger) -> Trigger:
         return Trigger("all", parts=tuple(parts))
@@ -236,6 +277,24 @@ def trigger_progress(trigger: Trigger, ctx: dict) -> dict:
         met = trigger.key in ctx.get("events", ())
         return {"label": _EVENT_LABELS.get(trigger.key, trigger.key),
                 "current": int(met), "required": 1, "met": met}
+    if kind == "key_held":
+        key = world.KEY_BY_ID.get(trigger.key)
+        # Read off the kill list. A key is not an item and there is no second
+        # ledger for an item bug to corrupt.
+        met = bool(key) and key["boss"] in ctx.get("cleared_bosses", ())
+        name = key["name"] if key else trigger.key
+        return {"label": f"Carry {name}", "current": int(met), "required": 1,
+                "met": met}
+    if kind == "keys_held":
+        cleared = ctx.get("cleared_bosses", ())
+        have = len(world.keys_held(cleared))
+        return {"label": "Keys of the realm", "current": have,
+                "required": int(trigger.value), "met": have >= trigger.value}
+    if kind == "speaker_met":
+        met = trigger.key in _met_speakers(ctx)
+        mentor = world.MENTORS.get(trigger.key, {})
+        return {"label": f"Meet {mentor.get('name', trigger.key.upper())}",
+                "current": int(met), "required": 1, "met": met}
     if kind == "flag":
         met = trigger.key in ctx.get("flags", ())
         return {"label": "Earlier in the story", "current": int(met), "required": 1,
@@ -298,6 +357,39 @@ _EVENT_LABELS = {
 }
 
 
+# Who said what, so that `met` can be derived rather than persisted. Built
+# lazily because the content tables it reads are defined further down the file,
+# and cached because it never changes after import.
+_SPEAKER_INDEX: dict = {}
+
+
+def _speaker_index() -> dict:
+    if not _SPEAKER_INDEX:
+        for beat in MAIN_QUEST:
+            _SPEAKER_INDEX[beat.id] = beat.speaker
+        for chain in SIDE_CHAINS:
+            for step in chain.steps:
+                _SPEAKER_INDEX[step.id] = chain.mentor
+        for milestone in MILESTONES:
+            _SPEAKER_INDEX[milestone.id] = milestone.speaker
+    return _SPEAKER_INDEX
+
+
+def _met_speakers(ctx: dict) -> set:
+    """Everyone who has spoken to this player, or whose region they have stood
+    in. Derived from state the save already keeps, so it works on a save written
+    before the clause existed and cannot be stranded by a missing key."""
+    supplied = ctx.get("met")
+    if supplied is not None:
+        return set(supplied)
+    index = _speaker_index()
+    met = {index[fired] for fired in ctx.get("flags", ()) if fired in index}
+    entered = set(ctx.get("regions_entered", ()))
+    met |= {region["mentor"] for region in world.REGIONS
+            if region["id"] in entered and region.get("mentor")}
+    return met
+
+
 def _pretty(skill: str) -> str:
     return skill.replace("_", " ").title()
 
@@ -307,6 +399,194 @@ def _chapter_index(chapter_id: str) -> int:
         if chapter.id == chapter_id:
             return index
     return 0
+
+
+# ---------------------------------------------------------------------------
+# Gating the story on geography
+# ---------------------------------------------------------------------------
+# THE BUG THIS FIXES. Chains fired on mastery alone, so a fast player standing
+# in Python Village at level six could be handed a scene in which the
+# Chronomancer — who lives in the Coliseum, sixteen regions away, and has never
+# laid eyes on them — comments on their times. Every line in this file is
+# authored for a place and was being delivered anywhere.
+#
+# THE FIX. Every durable beat gets a place clause in front of its evidence
+# clause, and it goes IN FRONT on purpose: `trigger_progress` on an `all`
+# reports the first unmet part, so the quest log says "Reach the Coliseum"
+# before it says "SPEED 30", which is the correct instruction in that order.
+#
+# THE THREE THINGS THIS IS NOT ALLOWED TO DO, all of them enforced below rather
+# than remembered:
+#
+#   1. It may never gate a trigger that reads a transient `event`. Those fire
+#      in the payload of one graded submission and never again; a place clause
+#      that happened to be false at that instant would delete the beat from the
+#      player's game forever. LEARNING NEVER DEAD-ENDS covers narrative too.
+#   2. It may never gate something that already proves place. A step gated on
+#      "defeat the Hash Titan" has already proved the player stood on the
+#      plateau, and a second clause saying so is noise in the log.
+#   3. It may never gate on a place that cannot be reached. Every one of the
+#      sixteen mortal regions is reachable from every other at any point in the
+#      game (progression.verify_no_orphans), so "have you been there" is always
+#      answerable by walking, which is the one thing a player can always do.
+
+_TRANSIENT_KINDS = ("event",)
+
+
+def _trigger_kinds(trigger: Trigger) -> set:
+    if trigger.kind in ("all", "any"):
+        out: set = set()
+        for part in trigger.parts:
+            out |= _trigger_kinds(part)
+        return out
+    return {trigger.kind}
+
+
+def _places_proved(trigger: Trigger) -> set:
+    """Every region this trigger already proves the player has stood in."""
+    if trigger.kind in ("all", "any"):
+        proved: set = set()
+        for part in trigger.parts:
+            proved |= _places_proved(part)
+        return proved
+    if trigger.kind == "region_entered":
+        return {trigger.key}
+    if trigger.kind == "boss_cleared":
+        boss = world.BOSS_BY_ID.get(trigger.key)
+        return {boss["region"]} if boss else set()
+    if trigger.kind == "key_held":
+        key = world.KEY_BY_ID.get(trigger.key)
+        return {key["region"]} if key else set()
+    return set()
+
+
+def _gate_on(trigger: Trigger, clause: Trigger) -> Trigger:
+    """Put `clause` in front of `trigger`, flattening rather than nesting so the
+    log does not have to walk three levels to name one missing thing."""
+    if trigger.kind == "all":
+        return Trigger("all", parts=(clause,) + tuple(trigger.parts))
+    return Trigger("all", parts=(clause, trigger))
+
+
+def needs_geography(trigger: Trigger, region: str) -> bool:
+    """Should this trigger be gated on being in `region`? The three refusals
+    above, in one predicate."""
+    if trigger.kind == "always":
+        return False
+    if _trigger_kinds(trigger) & set(_TRANSIENT_KINDS):
+        return False
+    if region not in world.REGION_BY_ID:
+        return False
+    return region not in _places_proved(trigger)
+
+
+# Filled in as the tables below are gated, and reported by `geography_report()`.
+# The numbers are the answer to "how many chains did you gate", and they are
+# computed rather than claimed.
+_GATED: dict = {"main": [], "chain_steps": [], "chains": [], "milestones": [],
+                "rival": [], "exempt_transient": [], "already_proved": []}
+
+
+def _gate_beats(beats: list) -> list:
+    out = []
+    for beat in beats:
+        if needs_geography(beat.trigger, beat.region):
+            _GATED["main"].append(beat.id)
+            beat = replace(beat, trigger=_gate_on(beat.trigger,
+                                                  When.place(beat.region)))
+        elif _trigger_kinds(beat.trigger) & set(_TRANSIENT_KINDS):
+            _GATED["exempt_transient"].append(beat.id)
+        else:
+            _GATED["already_proved"].append(beat.id)
+        out.append(beat)
+    return out
+
+
+def _gate_chains(chains: list) -> list:
+    out = []
+    for chain in chains:
+        steps = []
+        touched = False
+        for step in chain.steps:
+            if needs_geography(step.trigger, chain.region):
+                _GATED["chain_steps"].append(step.id)
+                touched = True
+                step = replace(step, trigger=_gate_on(
+                    step.trigger, When.place(chain.region)))
+            elif _trigger_kinds(step.trigger) & set(_TRANSIENT_KINDS):
+                _GATED["exempt_transient"].append(step.id)
+            else:
+                _GATED["already_proved"].append(step.id)
+            steps.append(step)
+        if touched:
+            _GATED["chains"].append(chain.id)
+        out.append(replace(chain, steps=tuple(steps)))
+    return out
+
+
+def _gate_milestones(milestones: list) -> list:
+    """Milestones take `met`, not `place`.
+
+    A milestone is a mentor noticing something you did, and the honest clause
+    for that is "this person has met you" rather than "you are standing in their
+    region" — BYTE follows you around and the Armorer does not.
+
+    Two deliberate exemptions. Anything keyed on a transient event is never
+    gated (see refusal 1). And the interviewer is never gated at all: the
+    Interviewer IS the measurement, the measurement is available from the menu
+    at any time, and a readiness readout that waits until you have walked
+    somewhere would be a worse readout.
+    """
+    out = []
+    for milestone in milestones:
+        speaker = milestone.speaker
+        transient = bool(_trigger_kinds(milestone.trigger)
+                         & set(_TRANSIENT_KINDS))
+        if transient or speaker in ("narrator", "interviewer") \
+                or speaker not in world.MENTORS:
+            _GATED["exempt_transient"].append(milestone.id)
+            out.append(milestone)
+            continue
+        _GATED["milestones"].append(milestone.id)
+        out.append(replace(milestone, trigger=_gate_on(
+            milestone.trigger, When.met(speaker))))
+    return out
+
+
+def _gate_meetings(meetings: list) -> list:
+    """KESTREL turns up in a named place. They should be in it."""
+    out = []
+    for meeting in meetings:
+        if needs_geography(meeting.trigger, meeting.place):
+            _GATED["rival"].append(f"rival_{meeting.index}")
+            meeting = replace(meeting, trigger=_gate_on(
+                meeting.trigger, When.place(meeting.place)))
+        else:
+            _GATED["already_proved"].append(f"rival_{meeting.index}")
+        out.append(meeting)
+    return out
+
+
+def geography_report() -> dict:
+    """How much of the story is gated on place, counted rather than claimed."""
+    chain_steps = sum(len(c.steps) for c in SIDE_CHAINS)
+    return {
+        "main_beats": len(MAIN_QUEST),
+        "main_beats_gated": len(_GATED["main"]),
+        "chains": len(SIDE_CHAINS),
+        "chains_gated": len(_GATED["chains"]),
+        "chain_steps": chain_steps,
+        "chain_steps_gated": len(_GATED["chain_steps"]),
+        "milestones": len(MILESTONES),
+        "milestones_gated": len(_GATED["milestones"]),
+        "rival_meetings": len(RIVAL_MEETINGS),
+        "rival_meetings_gated": len(_GATED["rival"]),
+        "exempt_transient": len(_GATED["exempt_transient"]),
+        "already_proved_place": len(_GATED["already_proved"]),
+        "gated_total": (len(_GATED["main"]) + len(_GATED["chain_steps"])
+                        + len(_GATED["milestones"]) + len(_GATED["rival"])),
+        "ids": {key: list(value) for key, value in _GATED.items()},
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -480,7 +760,29 @@ def new_story_state() -> dict:
         "favor": {},             # mentor id -> favour points
         "rival": {"meetings": 0, "conceded": False, "best_gap": 0.0},
         "session": {"step": 0, "complete": False},
+        # Every region the player has stood in, in arrival order. This is the
+        # geography clause's evidence; `note_region` is the only writer, and
+        # `build_context` folds in bosses and keys on top of it so an old save
+        # is never stranded by an empty list.
+        "regions_entered": [],
     }
+
+
+def note_region(story_state: dict, region_id: str) -> bool:
+    """Record that the player has stood in a region. The one write this module
+    asks the engine to make outside `apply`, and it is one line in `Game.move`.
+
+    Returns True the first time, so the caller can treat arrival as an event.
+    Unknown regions are ignored rather than stored — a geography gate built on
+    a typo would be a gate nobody could ever open.
+    """
+    if region_id not in world.REGION_BY_ID:
+        return False
+    entered = story_state.setdefault("regions_entered", [])
+    if region_id in entered:
+        return False
+    entered.append(region_id)
+    return True
 
 
 def build_context(state: dict, skills=None, *, readiness: dict | None = None,
@@ -507,8 +809,23 @@ def build_context(state: dict, skills=None, *, readiness: dict | None = None,
 
     story = state.get(STATE_KEY) or new_story_state()
     player = state.get("player", {})
-    entered = regions_entered if regions_entered is not None \
-        else story.get("regions_entered") or [player.get("region", "python_village")]
+    cleared = set(state.get("cleared_bosses", []))
+    # WHERE THE PLAYER HAS BEEN, and why it is derived rather than trusted.
+    #
+    # The engine keeps a list (see WIRING §3 and `note_region`), but three other
+    # things in the save are already PROOF of presence and none of them can be
+    # missing from an old save: you are standing here; you killed something that
+    # lives there; you are carrying the key it was holding. Folding all four
+    # together means a save written before this clause existed is not suddenly
+    # locked out of eleven mentor chains, which is exactly the kind of silent
+    # regression a geography gate invites.
+    entered = set(regions_entered) if regions_entered is not None \
+        else set(story.get("regions_entered") or ())
+    entered.add(player.get("region", "python_village"))
+    entered |= {world.BOSS_BY_ID[b]["region"] for b in cleared
+                if b in world.BOSS_BY_ID}
+    entered |= {world.KEY_BY_ID[k]["region"]
+                for k in world.keys_held(cleared) if k in world.KEY_BY_ID}
 
     class _Shim:
         """curriculum.frontier wants objects with a .mastery and .clears."""
@@ -524,7 +841,13 @@ def build_context(state: dict, skills=None, *, readiness: dict | None = None,
         "skills": folded,
         "region": player.get("region", "python_village"),
         "regions_entered": set(entered),
-        "cleared_bosses": set(state.get("cleared_bosses", [])),
+        "cleared_bosses": cleared,
+        # Derived, like the keys. `met` is left out of the dict on purpose when
+        # nothing has happened yet, so _met_speakers can fall back to computing
+        # it from flags and geography for any foreign context.
+        "met": _met_speakers({"flags": set(story.get("fired", [])),
+                              "regions_entered": set(entered)}),
+        "keys_held": set(world.keys_held(cleared)),
         "solved_count": len(state.get("solved_ids", [])),
         "level": int(player.get("level", 1)),
         "stats": dict(state.get("stats", {})),
@@ -950,7 +1273,7 @@ def _pay_in_kind(beats: list) -> list:
     return out
 
 
-MAIN_QUEST = _pay_in_kind(MAIN_QUEST)
+MAIN_QUEST = _gate_beats(_pay_in_kind(MAIN_QUEST))
 
 MAIN_BY_ID = {b.id: b for b in MAIN_QUEST}
 
@@ -1359,6 +1682,7 @@ SIDE_CHAINS = [
     ),
 ]
 
+SIDE_CHAINS = _gate_chains(SIDE_CHAINS)
 CHAIN_BY_ID = {c.id: c for c in SIDE_CHAINS}
 STEP_BY_ID = {s.id: (c, s) for c in SIDE_CHAINS for s in c.steps}
 
@@ -1443,6 +1767,9 @@ RIVAL_MEETINGS = [
         reward={"xp": 200, "title": "Peer", "set_piece": "scene_kestrel_concedes"},
     ),
 ]
+
+
+RIVAL_MEETINGS = _gate_meetings(RIVAL_MEETINGS)
 
 
 def rival_status(ctx: dict) -> dict:
@@ -1959,6 +2286,7 @@ MILESTONES = [
         reward={}),
 ]
 
+MILESTONES = _gate_milestones(MILESTONES)
 MILESTONE_BY_ID = {m.id: m for m in MILESTONES}
 
 
@@ -2731,6 +3059,13 @@ def validate() -> list:
             problems.append(f"{where}: unknown chapter {trigger.key!r}")
         if trigger.kind == "skill_stage" and trigger.text not in _STAGE_ORDER:
             problems.append(f"{where}: unknown stage {trigger.text!r}")
+        if trigger.kind == "key_held" and trigger.key not in world.KEY_BY_ID:
+            problems.append(f"{where}: unknown key {trigger.key!r}")
+        if trigger.kind == "keys_held" and not 1 <= trigger.value <= len(world.KEYS):
+            problems.append(f"{where}: {int(trigger.value)} keys is not a number "
+                            f"of keys this realm has")
+        if trigger.kind == "speaker_met" and trigger.key not in world.MENTORS:
+            problems.append(f"{where}: unknown speaker {trigger.key!r}")
 
     seen_ids = set()
     for beat in MAIN_QUEST:
@@ -2791,6 +3126,46 @@ def validate() -> list:
         check_trigger(tech.id, tech.requires)
         if not tech.effects:
             problems.append(f"{tech.id}: a technique with no effect is a lie")
+
+    # THE GEOGRAPHY CLAUSE'S ONE HARD RULE, checked rather than remembered: a
+    # place clause may never share a trigger with a transient event. The event
+    # fires in the payload of one graded submission and never again, so a place
+    # clause that is false at that instant deletes the beat from the player's
+    # game permanently. That is a narrative dead end and this codebase does not
+    # have those.
+    _PLACE_KINDS = ("region_entered", "key_held", "keys_held", "speaker_met")
+
+    def check_no_place_on_transient(where: str, trigger: Trigger):
+        kinds = _trigger_kinds(trigger)
+        if kinds & set(_PLACE_KINDS) and kinds & set(_TRANSIENT_KINDS):
+            problems.append(f"{where}: a place clause on a transient event "
+                            f"would lose the beat forever")
+
+    for beat in MAIN_QUEST:
+        check_no_place_on_transient(beat.id, beat.trigger)
+    for chain in SIDE_CHAINS:
+        for step in chain.steps:
+            check_no_place_on_transient(step.id, step.trigger)
+    for milestone in MILESTONES:
+        check_no_place_on_transient(milestone.id, milestone.trigger)
+    for meeting in RIVAL_MEETINGS:
+        check_no_place_on_transient(f"rival_{meeting.index}", meeting.trigger)
+
+    # Every durable beat must now be gated on place, or already prove it. A new
+    # chain step added without one is the exact bug this whole section exists to
+    # stop coming back.
+    for chain in SIDE_CHAINS:
+        for step in chain.steps:
+            if needs_geography(step.trigger, chain.region):
+                problems.append(f"{step.id}: no geography clause for "
+                                f"{chain.region!r}")
+    for beat in MAIN_QUEST:
+        if needs_geography(beat.trigger, beat.region):
+            problems.append(f"{beat.id}: no geography clause for {beat.region!r}")
+    for meeting in RIVAL_MEETINGS:
+        if needs_geography(meeting.trigger, meeting.place):
+            problems.append(f"rival_{meeting.index}: no geography clause for "
+                            f"{meeting.place!r}")
 
     cues = {step["id"] for step in FIRST_SESSION}
     if len(cues) != len(FIRST_SESSION):
@@ -2901,15 +3276,26 @@ route in server.py exposes it. Nothing in world.py changes.
    curriculum.frontier() increases across the attempt. All of them are already
    derivable — none needs new bookkeeping.
 
-3. ARRIVAL BEATS
-   Game.move() is the only other firing site. After writing the new region:
+3. ARRIVAL BEATS, AND THE GEOGRAPHY CLAUSE
+   Game.move() is the only other firing site, and it is now load-bearing rather
+   than a nicety, because thirty-three beats are gated on place. As shipped,
+   Game.move() writes player["region"] and nothing else, which means
+   build_context falls back to "wherever you are standing right now" — correct,
+   but stricter than intended. ONE LINE FIXES IT:
 
-       entered = self.state["story"].setdefault("regions_entered", [])
-       if region not in entered:
-           entered.append(region)
+       story.note_region(self.state["story"], region)   # in Game.move()
+
+   note_region returns True the first time, so arrival is also an event:
+
        ctx = story.build_context(self.state, self.skills,
                                  events=("region_entered",))
        return {"story": [...]}   # same loop as above
+
+   Nothing breaks without that line and nothing is lost by it: build_context
+   folds `regions_entered` together with the region of every cleared boss and
+   every held key, so a save written before any of this existed already proves
+   most of its own geography, and a durable beat that does not fire today fires
+   the next time the player is standing in the right place.
 
 4. TECHNIQUE EFFECTS
    Game.effects() folds one more source, alongside items:
@@ -2950,6 +3336,29 @@ route in server.py exposes it. Nothing in world.py changes.
    mentor, event, chapter, card, codex entry, scene, technique and companion id
    this module references, rejects an unknown reward key, checks the rival's lead
    never grows, and fails on an exclamation mark in authored prose.
+
+8. GEOGRAPHY, KEYS AND THE PORTAL
+   `When` gained three clauses for PLACE and they are how the story stops
+   speaking out of turn:
+
+       When.place(region_id)   you have stood there
+       When.key(key_id)        you hold that key, which means you went and beat
+                               what was holding it (world.KEYS; derived from
+                               state["cleared_bosses"], never stored)
+       When.keys(count)        you hold at least that many
+       When.met(speaker_id)    that mentor has spoken to you, or you have been
+                               to their region
+
+   Every durable beat in this file is now gated with one of them — see
+   `geography_report()` for the count, which is computed at import rather than
+   claimed in a comment — and `validate()` fails if a new one is added without
+   a clause, or if anybody ever attaches a place clause to a transient event.
+
+   The Standing Portal is progression.py's and world.py's. Story may gate a
+   beat on `When.keys(14)`, and the finale properly belongs behind it. Story may
+   NEVER gate anything on the practical being available: Interview Mode is a
+   measurement, it is reachable from the menu with no keys at all, and
+   finalexam.sealed() remains the one capability check in this game.
 
 WHAT THIS MODULE DELIBERATELY DOES NOT DO
    It never chooses a problem. Selection stays in adaptive.py and curriculum.py.

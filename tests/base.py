@@ -47,6 +47,31 @@ class GameTest(unittest.TestCase):
         return Game(db_path=self.data_dir / "save.sqlite3",
                     corpus_path=self.corpus_path)
 
+    def stand_where(self, game, boss_id):
+        """Walk to the region a boss lives in, and prove the road exists.
+
+        `Game.start_boss` refuses a boss the player is not standing in front of
+        — the reason is written there, and it is what makes
+        `story._places_proved` true rather than hopeful. A test that wants a
+        fight therefore has to make the journey a player makes, and this walks
+        it route by route rather than assigning the region, so a road that
+        closed would fail the test that depends on it instead of being skipped.
+        """
+        from gauntlet import progression, world
+        boss = world.BOSS_BY_ID[boss_id]
+        here = game.state["player"]["region"]
+        if boss["region"] == here:
+            return []
+        prog = progression.snapshot(game.state, game.skills,
+                                    readiness=game._readiness())
+        path = progression.path_between(prog, here, boss["region"])
+        self.assertTrue(path, f"no open road from {here} to {boss['region']}")
+        for route_id in path:
+            out = game.travel(route_id)
+            self.assertNotIn("error", out, f"{route_id}: {out.get('error')}")
+        self.assertEqual(game.state["player"]["region"], boss["region"])
+        return path
+
     def by_id(self, problem_id):
         for p in self.corpus:
             if p.id == problem_id:

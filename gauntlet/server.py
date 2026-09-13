@@ -851,6 +851,46 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 },
             })
 
+        # -- the keys and the door they open -------------------------------
+        #
+        # OPEN, and checked against all three questions in
+        # docs/10-sealed-views.md §1. The SWAP test: a key is a boss you beat,
+        # and it does not move when the question on the screen does. The
+        # IN-FORCE test: a key is derived from `cleared_bosses` and no seal
+        # suspends it. The SPEND test: it names bosses, roads and a door frame
+        # in a village square, and has never seen a problem.
+        #
+        # THE PORTAL PANEL IS ALSO WHERE A PLAYER WOULD MOST EASILY CONCLUDE
+        # THE EXAM IS BEHIND IT, which is why both payloads carry
+        # `practical`, from `Game.practical_access()`: the measurement is
+        # reachable from the menu with zero keys, and the screen that counts
+        # the keys is the screen that has to say so.
+        if path == "/api/keys":
+            return self._reply(g.keyring())
+        if path == "/api/portal":
+            return self._reply(g.portal())
+
+        # -- the one who is watching ---------------------------------------
+        # A read plus a small write — the rotation advances, so he does not
+        # open with the same sentence twice — which is the same bargain the
+        # town's voices already make, and it is why the engine saves after it.
+        #
+        # The seal is asked INSIDE, in `Game.antagonist_view`, and asked of the
+        # RUN rather than of an encounter: `antagonist.speak` consults
+        # `finalexam.sealed(encounter, capability)`, which is the right question
+        # but is unanswerable between two questions of a measured run, where
+        # there is no encounter. A measured run gets his standing and no lines.
+        if path == "/api/antagonist":
+            return self._reply(g.antagonist_view())
+
+        # -- the spell he casts before the practical -----------------------
+        # Read-only narration. It is NOT sealed: the spell is the reason the
+        # exam takes what it takes, and a player who cannot see the reason is
+        # simply told less about a rule that binds them either way. See
+        # docs/10-sealed-views.md — this is world, not problem.
+        if path == "/api/unmaking":
+            return self._reply(g.unmaking_view())
+
         # -- the final exam ------------------------------------------------
         if path == "/api/exam/ladder":
             return self._reply(g.exam_ladder())
@@ -942,17 +982,25 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self._reply(g.sage_board(region))
 
         # -- the hunt ------------------------------------------------------
-        # SEALED for the same reason as regalia: `hunt_view` computes readiness
-        # through `_readiness_for(region)` with `sealed` left at its default, so
-        # a measured run would be handed a preparation score that counts class
-        # bonuses it no longer has. A wrong number is worse than no number.
+        # DEGRADE — docs/10-sealed-views.md §4.F. This used to refuse outright,
+        # and the reason was sound at the time: `hunt_view` computed readiness
+        # with `sealed` at its default and would have reported a preparation
+        # score counting bonuses that are not in play.
+        #
+        # It is no longer the whole screen. Since the chapter ramp landed,
+        # everything except readiness is player-independent — `hunters.pace_for`
+        # returns the cast band, the strike multiplier and the teaching stance
+        # from the chapter and the region id alone — and
+        # `readiness_from_game` takes `build_sealed=`. The engine now passes the
+        # seal down and serves the view with the readiness readout at zero and a
+        # line saying why, which is strictly better than a 409: a refusal
+        # teaches the player nothing and a zeroed number teaches them exactly
+        # what the seal took.
         #
         # The payload carries `client`, which is hunters.client_payload() —
         # static for the life of the process and the bulk of the response.
         # Cache it; see api.js.
         if path == "/api/hunt":
-            if self._sealed(g):
-                return True
             region = self._region(one("region"))
             if region is False:
                 return True
@@ -1408,6 +1456,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self._fail(f"no sanctuary called {sanctuary_id!r}.", 404)
             return self._reply(g.sanctuary_rest(sanctuary_id))
 
+        # -- the spell has been shown once ---------------------------------
+        # A latch, not a grant: it only decides whether the NEXT cast is the
+        # full telling or the wordless short form. It hands out nothing, so it
+        # is not sealed.
+        if path == "/api/unmaking/seen":
+            return self._reply(g.mark_unmaking_seen())
+
         # -- the town's forty-seven voices ---------------------------------
         # POST rather than GET because both of these WRITE: the rotation
         # advances so the same person does not open with the same sentence
@@ -1488,6 +1543,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if report is None:
                 return True
             return self._reply(g.finale_scene(exam_report=report or None))
+        # -- the Standing Portal -------------------------------------------
+        # Stepping through changes the world, so it is a POST and it is sealed:
+        # the write clause, not the view rule. READING the portal is
+        # `/api/portal` above and is never sealed.
+        #
+        # NOTHING HERE GATES THE PRACTICAL. `/api/interview/start` does not
+        # consult this route, this state or the keyring, and
+        # `world.portal_gates()` answers False for every measured thing
+        # forever. If a future pass makes the exam ask this door for
+        # permission, it is a bug, and it is the worst one this file could have.
+        if path == "/api/portal/enter":
+            if self._sealed(g):
+                return True
+            return self._reply(g.enter_portal())
         if path == "/api/finale/coda":
             # Bookkeeping: the player watched the second half. Hands over
             # nothing, so it is not sealed.

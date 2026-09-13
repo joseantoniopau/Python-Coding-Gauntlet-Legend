@@ -119,20 +119,106 @@ class TestAcceptance(GameTest):
         self.assertEqual(entry.stage, 1)
 
     def test_10_bosses_test_genuine_mastery(self):
-        from gauntlet import world
+        """A boss is a LADDER, and every rung is a graded solve.
+
+        This test used to assert the opposite — one solved problem and the
+        boss was down — and that was the defect, not the specification. A
+        region boss now carries four to six phases, each with its own health
+        pool and its own problem, and the ONLY thing that empties a phase is a
+        submission that ran. The teaching phase is unchanged and still fires on
+        the first failure, because a boss must never become a wall.
+        """
+        from gauntlet import world, bestiary
         g = self.game()
         boss = world.BOSS_BY_ID["window_wraith"]
+        # A boss is fought where it lives. `Game.start_boss` refuses one the
+        # player is not standing in front of, so the walk is part of the test.
+        self.stand_where(g, boss["id"])
         payload = g.start_boss(boss["id"])
         self.assertEqual(len(payload["boss"]["phases"]), 6)
-        problem = g.by_id[payload["problem"]["id"]]
+        fight = payload["boss"]["fight"]
+        self.assertGreaterEqual(fight["phases"], 4)
+        self.assertEqual(fight["phase"], 0, "a boss opens whole")
+        self.assertTrue(payload["boss"]["key"], "every boss is holding a key")
+
         result = g.submit("def length_of_longest_substring(s):\n    return 0\n")
         self.assertFalse(result["solved"])
         self.assertTrue(result["boss"]["teaching_phase"],
                         "a boss must never become a wall")
-        g.start_boss(boss["id"])
-        win = g.submit(problem.canonical_solution)
-        self.assertTrue(win["boss"]["defeated"])
+        self.assertFalse(result["boss"]["defeated"])
+
+        # Walk the whole ladder. Each phase serves its own problem, and the
+        # phase turn arrives with the buffs that make the next one harder.
+        # A phase draws the KIND of problem bestiary.phase_kind names for it —
+        # name the family, state the approach, write it, survive the edges, name
+        # its cost — so a boss ladder runs through every entry kind the corpus
+        # has, not just the code editor. Answering each one the way the client
+        # does is the point of this dispatch rather than an inconvenience.
+        from gauntlet import puzzles
+
+        def answer(problem):
+            if problem.encounter_kind in puzzles.PUZZLE_KINDS:
+                return g.solve_puzzle(puzzles.answer_key(problem))
+            if problem.entry.get("kind") == "mcq":
+                return g.answer_mcq(problem.mcq.get("answer"))
+            return g.submit(problem.canonical_solution)
+
+        turns = 0
+        for _ in range(fight["phases"] + 2):
+            if g.encounter is None:
+                g.start_boss(boss["id"])
+            enc = g.encounter
+            out = answer(g.by_id[enc.problem_id])
+            event = out["boss"]
+            if event.get("advanced"):
+                turns += 1
+                beat = event["beat"]
+                self.assertTrue(beat["herald"], "a phase turn is announced")
+                self.assertTrue(beat["tell"], "and says what changed")
+                self.assertTrue(beat["state"]["kinds"], "and buffs the boss")
+                self.assertNotIn(boss["id"], g.state["cleared_bosses"],
+                                 "a phase is not the fight")
+                continue
+            if event.get("defeated"):
+                break
+        self.assertEqual(turns, fight["phases"] - 1,
+                         "every phase but the first is a turn")
         self.assertIn(boss["id"], g.state["cleared_bosses"])
+        # The key, which is derived rather than stored, and the road it opens.
+        self.assertIn(world.KEY_BY_BOSS[boss["id"]]["id"],
+                      world.keys_held(g.state["cleared_bosses"]))
+        self.assertIsNone(g.state["boss_fight"], "a cleared fight comes down")
+
+    def test_10b_the_portal_gates_the_story_and_never_the_practical(self):
+        """The sharpest edge in the whole build, checked from both sides.
+
+        The Standing Portal wants all fourteen keys and opens the story's last
+        room. The practical is a MEASUREMENT and is reachable from the menu at
+        any time with none of them. Both halves must be true.
+        """
+        from gauntlet import world
+        g = self.game()
+        self.assertEqual(g.portal()["held"], 0)
+        self.assertFalse(g.portal()["open"])
+        shut = g.enter_portal()
+        self.assertFalse(shut["ok"])
+        self.assertEqual(len(shut["missing"]), world.PORTAL_KEY_REQUIREMENT)
+
+        # ...and the exam, with nothing unlocked and nothing earned.
+        exam = g.start_interview("FINAL_EXAM")
+        self.assertNotIn("error", exam)
+        self.assertTrue(g.practical_access()["open"])
+        self.assertFalse(g.practical_access()["requires_keys"])
+        for name in ("practical", "interview", "exam", "measurement",
+                     "readiness", "diagnostic"):
+            self.assertFalse(world.portal_gates(name),
+                             f"the portal must never gate {name!r}")
+        g.finish_interview()
+
+        g.state["cleared_bosses"] = [k["boss"] for k in world.KEYS]
+        g.save()
+        self.assertTrue(g.portal()["open"])
+        self.assertTrue(g.enter_portal()["ok"])
 
     def test_11_interview_mode_disables_assistance(self):
         g = self.game()

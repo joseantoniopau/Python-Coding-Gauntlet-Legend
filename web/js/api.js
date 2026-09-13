@@ -70,6 +70,36 @@ export const api = {
     call('/api/boss/start', { method: 'POST', body: JSON.stringify({ boss_id: bossId }) }),
   bossLadder: (bossId) =>
     call('/api/boss/ladder', { method: 'POST', body: JSON.stringify({ boss_id: bossId }) }),
+
+  /* -- the keys, the roads they open, and the door that counts them --------
+   *
+   * Both GETs are WORLD by docs/10-sealed-views.md: a key is a boss you beat,
+   * it does not move when the question on the screen does, no seal suspends
+   * it, and it names no problem. So both are `call`, not `soft` — a refusal
+   * here would be a bug rather than a rule.
+   *
+   * `enterPortal` is a POST because stepping through changes the world, and it
+   * is `softPost` because "the wards are not answered" is an ANSWER the screen
+   * has to render — it comes back with the fourteen keys, which ones are dark,
+   * and which boss is still holding each. A 409 rendered as an exception would
+   * throw away the only useful part of the refusal.
+   *
+   * NONE OF THESE THREE IS ON THE PATH TO THE PRACTICAL. `startInterview`
+   * above does not consult them, and it never will: the exam is a measurement
+   * and is reachable from the menu with no keys at all. Every payload here
+   * carries `practical`, which says exactly that, so the screen that counts
+   * the keys is also the screen that tells the player the exam is not behind
+   * them. */
+  keys: () => call('/api/keys'),
+  portal: () => call('/api/portal'),
+  enterPortal: () => softPost('/api/portal/enter', {}),
+
+  /* The Null King, reading one line out of your file. `soft` because a
+   * measured run answers with no lines rather than an error, and because a
+   * villain who fails to load must never be able to stop a screen drawing. */
+  antagonist: () => soft('/api/antagonist'),
+  unmaking: () => soft('/api/unmaking'),
+  unmakingSeen: () => softPost('/api/unmaking/seen', {}),
   startInterview: (format, profile) =>
     call('/api/interview/start', {
       method: 'POST', body: JSON.stringify({ format, profile }),

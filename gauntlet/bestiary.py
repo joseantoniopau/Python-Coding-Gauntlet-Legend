@@ -2816,6 +2816,670 @@ def regenerate(vital: dict) -> int:
     return after - before
 
 # ---------------------------------------------------------------------------
+# THE PHASE LADDER: what makes a boss cost more than one line of Python
+# ---------------------------------------------------------------------------
+#
+# Everything above this line describes a boss as a STACK OF PHASES and then
+# never advances one. The phase list shipped, `Encounter.boss_phase` was
+# declared, nothing incremented it, and a region boss died to a single solved
+# problem. Six keys per boss promised a structure the fight did not have. This
+# section is that structure, and it is three decisions.
+#
+# DECISION 1: WHAT ADVANCES A PHASE
+# ---------------------------------
+# A phase has a health pool — it already did, `BossPhase.total_hp()`, 60 to 85
+# of it — and the phase turns when that pool empties. Exactly two things take
+# health off it, and both of them are the player typing Python:
+#
+#   A LANDED CAST            an incantation that parses, fills its holes with
+#                            names that are on the field, and is something the
+#                            standing enemy is actually weak to. 16 for the
+#                            idiom the phase exists to teach, 10 for an
+#                            ordinary hit, 0 for a resisted one. `strike()`
+#                            above already decides which; this section does not
+#                            form a second opinion about damage any more than
+#                            `Special.power` does.
+#   A PASSING SUBMISSION     the phase's graded problem, solved. It takes the
+#                            rest of the pool, whatever is left of it.
+#
+# Nothing else moves it. Not time, not gear, not a potion, not a hint, not a
+# level. That is "mastery moves only on graded evidence" applied to a health
+# bar, and it is why an HP threshold and a demanded pattern are not two
+# competing answers here: the pool is the threshold, and the only things that
+# can spend it are graded.
+#
+# THE FLOOR, and it is the load-bearing half of the rule: CASTS ALONE CANNOT
+# FINISH A PHASE. They stop at CAST_FLOOR_HP. The last point of every phase
+# belongs to the graded submission, so a boss costs EXACTLY one passing
+# submission per phase — four for a region boss, six for the Interviewer — and
+# no amount of cast fluency buys a way past the problem. The reverse floor is
+# the one that keeps learning from dead-ending: a passing submission clears the
+# phase AT EVERY RUNG OF THE LADDER, at any gear level, with the boss at its
+# angriest. A buff can make the fight longer and more expensive. It can never
+# make it unwinnable, because the thing that wins it is correct Python and
+# correct Python is not gated on anything in this section.
+#
+# DECISION 2: WHAT A PHASE TURN DOES TO THE BOSS
+# ----------------------------------------------
+# Six rungs, and they are six DIFFERENT kinds of stronger rather than six
+# multipliers on the same number. Everything they touch is something
+# gauntlet/elements.py already owns: the blow, the element chain a Defender
+# resolves against, the status a special inflicts, an armour profile, the focus
+# regen. Nothing here invents a combat mechanic; it turns existing knobs.
+#
+# Each boss uses PRESSURE first and RELENTLESS last, with the middle rungs
+# rotated by the boss's position in BOSSES. Authoring a private ladder for each
+# of the fourteen would be fourteen more things to drift; rotation guarantees
+# that no two neighbouring bosses escalate the same way, that every rung is
+# exercised somewhere in a playthrough, and that a given boss's ladder is the
+# same in every session forever.
+#
+# DECISION 3: THE FIGHT HAS TO READ
+# ---------------------------------
+# `phase_beat()` is the whole of it, and it is DATA rather than an animation:
+# the flash, the shake, the freeze, the herald the boss says, and the one line
+# that names what just changed. A player who is suddenly losing is owed the
+# sentence that says why. See the note above phase_beat for the timing.
+
+# The pool floor casts stop at. One point, because the point is not the number
+# — it is that the last of every phase is taken by graded evidence.
+#
+# There is deliberately no matching SUBMISSION_DAMAGE constant. A passing
+# submission is worth THE REST OF THE POOL, which is not a tunable number and
+# must not become one: the moment it is a number, someone raises a phase's HP
+# and a solve stops clearing a phase, and the no-dead-end floor is gone without
+# anybody editing the sentence that promises it. The rule lives in `land()` and
+# is proved by simulation in `_check_escalation`, over every boss and every
+# ground, rather than asserted here.
+CAST_FLOOR_HP = 1
+
+# What a cast that is NOT the phase's own demand lands for, once the DEMAND
+# rung is on the boss. Never zero — see that rung's `why`.
+DEMAND_LOCK_SCALE = 0.5
+
+# Ceilings. Every one of these exists so a late phase cannot cross the
+# no-dead-end floor, and every one of them is at or under the ceiling
+# elements.py already enforces.
+BLOW_CEIL = 2.00            # a boss may end at twice the blow it opened with
+ARMOUR_POINTS_CEIL = 6      # flat points; elements.resolve_damage still floors
+ARMOUR_CAP_CEIL = 0.40      # under elements.ARMOUR_POINT_CAP (0.50)
+REGEN_CEIL = 14             # focus per turn; more specials, not bigger ones
+
+# Mirrored from elements.OPPOSED so this module still loads and verifies with
+# elements.py absent, exactly as EXPECTED_INCANTATIONS mirrors the catalogue.
+# elements.py is authoritative at runtime; verify() reconciles both directions.
+EXPECTED_OPPOSED: dict = {
+    "FIRE": "COLD", "COLD": "FIRE",
+    "POISON": "BRUTE", "BRUTE": "POISON",
+    "LIGHTNING": "VOID", "VOID": "LIGHTNING",
+}
+# Mirrored from elements.STATUSES: status id -> the element that owns it. A
+# boss may only ever inflict the status belonging to an element it IS, which is
+# the same discipline SPECIALS holds to — no second private opinion about what
+# fire does.
+EXPECTED_STATUS_ELEMENT: dict = {
+    "POISONED": "POISON", "BURNING": "FIRE", "CHILLED": "COLD",
+    "SHOCKED": "LIGHTNING", "STAGGERED": "BRUTE", "VOIDED": "VOID",
+}
+
+# What a boss standing on ground with no weather becomes when a rung asks it to
+# become something. NEUTRAL is not an element — elements.py is explicit — so
+# there is nothing to borrow and nothing to oppose, and the alternative is a
+# phase turn that changes no number at all. VOID is the answer because it is
+# the one element in the wheel that is an absence rather than a weather: a
+# thing turning void in a calm region is turning into itself, which is also
+# what the Interviewer already is.
+NEUTRAL_ESCALATION_ELEMENT = "VOID"
+
+
+@dataclass(frozen=True)
+class PhaseBuff:
+    """One rung. `kind` is what the client switches on; the numbers are deltas
+    applied once, on the turn that awards this rung, and they accumulate."""
+    kind: str
+    label: str                # four words, for the phase banner
+    tell: str                 # the sentence that says what just changed
+    why: str                  # for the codex, and for whoever tunes this
+    blow: float = 0.0         # added to the blow multiplier
+    armour_points: int = 0    # added flat points on the boss's own armour
+    armour_cap: float = 0.0   # raises the fraction those points may remove
+    takes_element: bool = False   # accretes the opposed element of its ground
+    afflicts: bool = False        # its specials start leaving a mark
+    regen: int = 0            # added focus per its own turn
+    locks_demand: bool = False    # only the phase's demand lands signature
+
+    def to_dict(self) -> dict:
+        return {"kind": self.kind, "label": self.label, "tell": self.tell,
+                "why": self.why}
+
+
+# The six rungs. PRESSURE opens every ladder and RELENTLESS closes every one;
+# the four in between rotate. Each is a different SHAPE of stronger: a bigger
+# blow, a second element, a mark it did not leave, plate it did not wear, a
+# narrower demand, more turns spent doing things.
+PRESSURE = PhaseBuff(
+    "PRESSURE", "It stops pacing itself",
+    "Its blows land a third heavier from here.",
+    "The first turn has to be felt before it is understood. A heavier blow is "
+    "the one escalation that needs no explanation and no status bar, and it is "
+    "the only rung every boss gets, so every boss's second phase reads.",
+    blow=0.33)
+ELEMENT = PhaseBuff(
+    "ELEMENT", "It takes on the opposite",
+    "It is two elements now, and the second one is the counter to the first.",
+    "elements.Defender resolves against a CHAIN, not a single affinity, and a "
+    "boss accreting the element that opposes its own ground is the cheapest "
+    "honest way to make a loadout that was working stop working. It is "
+    "answerable — a different weapon, a different potion — which is what "
+    "separates it from a wall.",
+    takes_element=True)
+AFFLICTION = PhaseBuff(
+    "AFFLICTION", "It starts leaving marks",
+    "Its specials leave a status now. Check the pouch.",
+    "Everything it does up to here is arithmetic against the health bar. From "
+    "here it leaves something behind, which is the moment the pouch stops being "
+    "decoration. The status is always the one its own element owns.",
+    afflicts=True)
+ARMOUR = PhaseBuff(
+    "ARMOUR", "It closes the gaps",
+    "It shrugs part of every cast now. Heavy hits still get through.",
+    "Flat points, not resistance, and capped under elements.ARMOUR_POINT_CAP "
+    "so the documented worst case holds: a poorly-equipped player's casts get "
+    "slower, never useless, and elements.MIN_DAMAGE guarantees a floor of one. "
+    "The submission ignores it entirely, which is the no-dead-end rule showing "
+    "its working.",
+    armour_points=4, armour_cap=0.35)
+DEMAND = PhaseBuff(
+    "DEMAND", "It will only answer one thing",
+    "Only the idiom this phase demands lands full weight. Everything else "
+    "chips.",
+    "The one rung that is a teaching device wearing a buff. Interleaving is "
+    "what the bestiary trains and this is interleaving with a cost attached: "
+    "the wrong-but-legal idiom stops being merely suboptimal and starts being "
+    "visible. It never blocks a cast, because a blocked cast would punish the "
+    "experiment this whole file is built to encourage.",
+    locks_demand=True)
+RELENTLESS = PhaseBuff(
+    "RELENTLESS", "It stops waiting",
+    "It acts on every turn it can afford now, and it can afford most of them.",
+    "The last rung of every ladder, so every boss ends the same way: out of "
+    "patience. Focus regen rather than a damage number, because more TURNS is "
+    "more of everything it has already shown the player rather than a new "
+    "surprise in the last phase.",
+    blow=0.25, regen=4)
+
+ESCALATION: tuple = (PRESSURE, ELEMENT, AFFLICTION, ARMOUR, DEMAND, RELENTLESS)
+ESCALATION_BY_KIND: dict = {b.kind: b for b in ESCALATION}
+# The four that rotate. PRESSURE is always first and RELENTLESS always last.
+_ROTATING: tuple = (ELEMENT, AFFLICTION, ARMOUR, DEMAND)
+
+BOSS_ORDER: dict = {b.id: i for i, b in enumerate(BOSSES)}
+
+
+def ladder(boss) -> tuple:
+    """The rungs THIS boss climbs, one per phase turn.
+
+    Length is len(phases) - 1: the opening phase is not a turn. A four-phase
+    region boss therefore escalates three times and a six-phase Interviewer
+    five, which is the difference between them said in buffs rather than in
+    health.
+    """
+    boss = BOSS_BY_ID.get(boss, boss) if isinstance(boss, str) else boss
+    turns = max(0, len(boss.phases) - 1)
+    if turns <= 0:
+        return ()
+    if turns == 1:
+        return (PRESSURE,)
+    k = BOSS_ORDER.get(boss.id, 0)
+    middle = tuple(_ROTATING[(i + k) % len(_ROTATING)] for i in range(turns - 2))
+    return (PRESSURE,) + middle + (RELENTLESS,)
+
+
+def buffs_through(boss, phase: int) -> tuple:
+    """Every rung a boss standing in `phase` has already been awarded.
+
+    Phase 0 is the opening and carries none. Phase n carries the first n rungs
+    of its ladder, cumulatively, which is what makes the last phase the sum of
+    the fight rather than the latest thing that happened.
+    """
+    return ladder(boss)[:max(0, int(phase))]
+
+
+def buff_state(boss, phase: int, *, element: str = "") -> dict:
+    """The boss's combat numbers at this phase, as plain JSON.
+
+    `element` is the ground this fight stands on, handed IN for the same reason
+    `vitals()` demands it: the caller knows which region this is and this module
+    does not form a second opinion about the wheel. The element a boss ACCRETES
+    is the opposed one, which is elements.OPPOSED and is mirrored above.
+    """
+    ground = str(element or "")
+    rungs = buffs_through(boss, phase)
+    blow = 1.0
+    points, cap, regen = 0, 0.0, 0
+    chain = [ground] if ground in EXPECTED_OPPOSED else []
+    afflicts = locked = False
+    for rung in rungs:
+        blow += rung.blow
+        points += rung.armour_points
+        cap = max(cap, rung.armour_cap)
+        regen += rung.regen
+        afflicts = afflicts or rung.afflicts
+        locked = locked or rung.locks_demand
+        if rung.takes_element:
+            second = (EXPECTED_OPPOSED.get(ground, "")
+                      or NEUTRAL_ESCALATION_ELEMENT)
+            if second and second not in chain:
+                chain.append(second)
+    if afflicts and not chain:
+        # NEUTRAL GROUND. A rung that does nothing is worse than no rung: the
+        # player sees the phase turn, reads the tell, and nothing changes. So a
+        # boss that starts leaving marks where there is no weather to borrow
+        # takes VOID, for the reason in NEUTRAL_ESCALATION_ELEMENT.
+        chain.append(NEUTRAL_ESCALATION_ELEMENT)
+    inflicts = ""
+    if afflicts:
+        # The status belonging to the element it most recently became, which is
+        # the last link of the chain.
+        for eid in reversed(chain):
+            for sid, owner in EXPECTED_STATUS_ELEMENT.items():
+                if owner == eid:
+                    inflicts = sid
+                    break
+            if inflicts:
+                break
+    return {
+        "phase": int(phase),
+        "kinds": [r.kind for r in rungs],
+        "blow": round(min(BLOW_CEIL, blow), 3),
+        "armour_points": min(ARMOUR_POINTS_CEIL, points),
+        "armour_cap": round(min(ARMOUR_CAP_CEIL, cap), 3),
+        "elements": list(chain),
+        "element": chain[0] if chain else "",
+        "inflicts": inflicts,
+        "regen_bonus": min(REGEN_CEIL, regen),
+        "demand_locked": bool(locked),
+        "specials": specials_for(chain[-1] if chain else ground, is_boss=True),
+    }
+
+
+# ---------------------------------------------------------------------------
+# The fight, as plain JSON
+# ---------------------------------------------------------------------------
+# Everything below returns and mutates ordinary dicts. That is not a style
+# preference: a boss fight now spans four to six graded submissions, which is
+# long enough that it WILL be interrupted by a reload, and a fight that cannot
+# be written to the save file is a fight that gets lost.
+
+FIGHT_VERSION = 2
+
+
+# WHO OWNS THE PHASE COUNT, because two modules currently think they do.
+#
+# THIS FILE DOES. `Boss.phases` is four for a region boss and six for the
+# Interviewer, and that number is load-bearing here in a way it is nowhere else:
+# each phase carries its own HP pool, its own demanded incantations and its own
+# enemies, all authored and all verified against the 4-9 cast window. A seed
+# that changed the count would be changing a fight this file has checked.
+#
+# worldgen.BossSpec.phases and world.BOSS_PHASES are still exactly what they
+# were: the six NAMES, and which of them a given seed flags as demanded. They
+# label the fight. `phase_kind()` below is the bridge — it says which
+# `encounter_kind` each of THIS boss's phases asks a problem for, using the same
+# six keys — so the seeded flavour and the authored structure meet without
+# either overruling the other.
+#
+# If a seeded phase COUNT is ever genuinely wanted, the hook is an explicit
+# subset passed into open_fight and stored on the fight as a list of indices
+# into `boss.phases`; art_phase() and phase_kind() already stretch correctly to
+# any count from two to six. Do not shorten `boss.phases` itself.
+
+
+def open_fight(boss_id: str, *, element: str = "", rematch: int = 0) -> dict:
+    """The state one boss fight runs on. Store it; hand `view()` to the client.
+
+    `element` is the region's affinity (elements.affinity_for(region)) and is
+    optional: without it the ELEMENT rung has nothing to accrete and quietly
+    does nothing, which is the right failure — a missing element should not
+    stop a boss fight starting.
+    """
+    boss = BOSS_BY_ID.get(boss_id)
+    if boss is None:
+        return {}
+    rungs = ladder(boss)
+    fight = {
+        "v": FIGHT_VERSION,
+        "boss": boss.id, "name": boss.name, "form": boss.form,
+        "sprite": boss.sprite, "colour": boss.colour,
+        "region": boss.region, "chapter": boss.chapter, "skill": boss.skill,
+        "ground": str(element or ""),
+        "rematch": int(rematch),
+        "phase": 0,
+        "phases": len(boss.phases),
+        "ladder": [r.kind for r in rungs],
+        "hp": boss.phases[0].total_hp(),
+        "hp_max": boss.phases[0].total_hp(),
+        "pool": boss.total_hp(),            # the whole fight, for a long bar
+        "pool_max": boss.total_hp(),
+        "casts": 0, "landed": 0, "submits": 0, "solves": 0,
+        "cleared": False,
+        "log": [],
+    }
+    fight["buff"] = buff_state(boss, 0, element=fight["ground"])
+    return fight
+
+
+def _phase_of(fight: dict):
+    boss = BOSS_BY_ID.get((fight or {}).get("boss", ""))
+    if boss is None:
+        return None, None
+    idx = max(0, min(len(boss.phases) - 1, int(fight.get("phase", 0) or 0)))
+    return boss, boss.phases[idx]
+
+
+def land(fight: dict, *, kind: str, damage: int | None = None,
+         incantation: str = "", solved: bool | None = None) -> dict:
+    """One piece of graded evidence, applied. Mutates `fight`. Returns the event.
+
+    THE ONE CALL THE ENGINE MAKES. Two kinds and nothing else:
+
+        land(fight, kind="cast", damage=strike(...)["damage"],
+             incantation=move_id)
+        land(fight, kind="submit", solved=True)
+
+    `damage` is handed in rather than computed here because it has already been
+    through `strike()` and elements.resolve_damage by the time it arrives, and
+    this module does not generate damage. A cast with no damage passed falls
+    back to BASE_DAMAGE so a caller that has not wired the damage pipe yet still
+    gets a fight that moves.
+
+    The event carries `turned` (the phase changed), `cleared` (the boss is
+    down), and `beat` (what the client plays). A caller that reads nothing but
+    `cleared` still behaves correctly, which is deliberate: the old one-solve
+    behaviour degrades into the new one rather than breaking against it.
+    """
+    boss, phase = _phase_of(fight)
+    if boss is None or fight.get("cleared"):
+        return {"landed": False, "turned": False, "cleared": bool(
+            (fight or {}).get("cleared")), "damage": 0, "beat": None,
+            "line": ""}
+    before = int(fight.get("hp", 0) or 0)
+    turned_from = int(fight.get("phase", 0) or 0)
+    dealt = 0
+    line = ""
+
+    if kind == "cast":
+        fight["casts"] = int(fight.get("casts", 0)) + 1
+        hit = BASE_DAMAGE if damage is None else max(0, int(damage))
+        if hit and fight.get("buff", {}).get("demand_locked"):
+            # DEMAND: the phase's own idiom lands whole, everything else chips.
+            # Never zero. A cast that does nothing is a cast the player stops
+            # making, and the experiment is the thing being trained.
+            if incantation and incantation not in phase.demands:
+                hit = max(1, int(round(hit * DEMAND_LOCK_SCALE)))
+        # THE FLOOR. Casts grind a phase down to its last point and stop there.
+        dealt = max(0, min(hit, before - CAST_FLOOR_HP))
+        if dealt:
+            fight["landed"] = int(fight.get("landed", 0)) + 1
+        fight["hp"] = before - dealt
+        line = (f"{boss.name} takes {dealt}." if dealt
+                else f"{boss.name} is down to its last point of this phase. "
+                     f"Finish it with the problem.")
+    elif kind == "submit":
+        fight["submits"] = int(fight.get("submits", 0)) + 1
+        if not solved:
+            # A failed submission is a spent turn and nothing else. The Blitz
+            # rule, applied to the boss: nothing is lost but the turn.
+            return {"landed": False, "turned": False, "cleared": False,
+                    "damage": 0, "hp": before, "hp_max": fight.get("hp_max", 0),
+                    "phase": turned_from, "beat": None,
+                    "line": f"{boss.name} is still standing. Nothing is lost "
+                            f"but the turn."}
+        fight["solves"] = int(fight.get("solves", 0)) + 1
+        dealt = before
+        fight["hp"] = 0
+        line = f"{phase.label} falls."
+    else:
+        return {"landed": False, "turned": False, "cleared": False,
+                "damage": 0, "beat": None, "line": ""}
+
+    fight["pool"] = max(0, int(fight.get("pool", 0)) - dealt)
+    turned = False
+    beat = None
+    if fight["hp"] <= 0:
+        turned = True
+        if turned_from + 1 >= len(boss.phases):
+            fight["cleared"] = True
+            fight["phase"] = turned_from
+            fight["hp"] = 0
+        else:
+            fight["phase"] = turned_from + 1
+            nxt = boss.phases[fight["phase"]]
+            fight["hp"] = nxt.total_hp()
+            fight["hp_max"] = nxt.total_hp()
+            fight["buff"] = buff_state(boss, fight["phase"],
+                                       element=fight.get("ground", ""))
+            beat = phase_beat(fight, turned_from=turned_from)
+    fight["log"] = (list(fight.get("log", []))[-11:]
+                    + [{"kind": kind, "damage": dealt, "phase": turned_from}])
+    return {"landed": bool(dealt), "damage": dealt, "hp": fight["hp"],
+            "hp_max": fight["hp_max"], "phase": fight["phase"],
+            "phases": len(boss.phases), "turned": turned,
+            "cleared": bool(fight.get("cleared")), "beat": beat, "line": line}
+
+
+
+# ---------------------------------------------------------------------------
+# THE BEAT: how a phase turn reads
+# ---------------------------------------------------------------------------
+# A player has to see the phase turn, see it get stronger, and be told why they
+# are suddenly losing. That is three separate jobs and they land in three
+# separate places, in this order, over PHASE_TURN_MS:
+#
+#   0ms     FREEZE. The stage holds for `freeze_ms`. The single cheapest way to
+#           make a hit feel like an event is to stop time for a sixth of a
+#           second, and it costs no art.
+#   0ms     FLASH and SHAKE. White at `flash`, camera at `shake`. This is the
+#           "something happened" and it is over in 300ms.
+#   140ms   THE ART TURNS. `art_phase` is what web/js/bosses.js draws, and at
+#           this beat the silhouette changes: plate holed, a limb gone, a crown
+#           out. Under the flash, so the creature is different when the white
+#           clears rather than transforming in front of an unoccupied eye.
+#   420ms   THE HERALD. The boss's own line for the phase it is entering, which
+#           is already authored — BossPhase.line — and is the reason nothing new
+#           had to be written for fourteen bosses.
+#   1100ms  THE TELL. One sentence naming what changed, from the rung. This is
+#           the part that answers "why am I suddenly losing", and it is the part
+#           that is easiest to cut and must not be.
+#
+# Every number below is milliseconds and every one of them is the client's to
+# scale for reduced motion — except the two text holds, which are reading time
+# and must not be cut.
+
+PHASE_TURN_MS = 1900
+PHASE_TURN_FREEZE_MS = 180
+PHASE_TURN_FLASH = 0.92        # 0..1, the white
+PHASE_TURN_SHAKE = 8           # pixels, the camera
+PHASE_TURN_ART_MS = 140        # when the silhouette changes
+PHASE_TURN_HERALD_MS = 420     # when the boss speaks
+PHASE_TURN_TELL_MS = 1100      # when the reason lands
+
+
+def phase_beat(fight: dict, *, turned_from: int = -1) -> dict:
+    """The phase turn, as data the client can drive. No animation here."""
+    boss, phase = _phase_of(fight)
+    if boss is None:
+        return {}
+    idx = int(fight.get("phase", 0) or 0)
+    rungs = ladder(boss)
+    rung = rungs[idx - 1] if 0 < idx <= len(rungs) else None
+    return {
+        "kind": "PHASE_TURN",
+        "boss": boss.id, "name": boss.name,
+        "sprite": boss.sprite, "colour": boss.colour,
+        "from": int(turned_from), "phase": idx, "phases": len(boss.phases),
+        "phase_key": phase.key, "phase_label": phase.label,
+        "demands": list(phase.demands),
+        "teaches": phase.teaches,
+        # The art stage web/js/bosses.js draws. Handed over explicitly rather
+        # than left to be inferred from a health fraction, which is what the
+        # client was doing and is why the art never moved: the fight's phase and
+        # the art's phase were two different numbers that never met.
+        "art_phase": art_phase(idx, len(boss.phases)),
+        # NOT "kind" — the beat's own `kind` is "PHASE_TURN", and a second key
+        # by that name silently won the dict and deleted it.
+        "problem_kind": phase_kind(idx, len(boss.phases)),
+        "herald": phase.line,
+        "tell": rung.tell if rung else "",
+        "label": rung.label if rung else phase.label,
+        "buff": rung.to_dict() if rung else None,
+        "state": dict(fight.get("buff") or {}),
+        "ms": PHASE_TURN_MS,
+        "freeze_ms": PHASE_TURN_FREEZE_MS,
+        "flash": PHASE_TURN_FLASH,
+        "shake": PHASE_TURN_SHAKE,
+        "art_at_ms": PHASE_TURN_ART_MS,
+        "herald_at_ms": PHASE_TURN_HERALD_MS,
+        "tell_at_ms": PHASE_TURN_TELL_MS,
+        "sound": "boss_phase",
+    }
+
+
+# web/js/bosses.js draws six art stages. A boss with four phases must still end
+# on the last one, so the mapping is stretched rather than truncated: first
+# phase is always the intact creature, last phase is always the final form, and
+# the stages in between are spread evenly. Distinct by construction for any
+# phase count from two to six, which is what "every phase looks different"
+# means when the phase counts disagree.
+ART_STAGES = 6
+
+# What KIND of problem each phase asks for, mirrored from world.BOSS_PHASES and
+# matching `problem.encounter_kind`. Six of them, stretched across a boss's own
+# phase count by exactly the same arithmetic as the art stage — deliberately the
+# same, because they are the same escalation seen twice: the phase where you are
+# asked to recognise the family is the phase where the creature is still intact,
+# and the disguised variant is fought against the thing with spines out.
+#
+# This is the rule the engine needs to serve a DIFFERENT problem per phase. It
+# is a preference, not a requirement: a boss whose family has nothing of this
+# kind falls back to the authored problem rather than refusing to start, because
+# LEARNING NEVER DEAD-ENDS outranks a tidy phase sequence.
+EXPECTED_PHASE_KINDS: tuple = (
+    "PATTERN_ENCOUNTER",    # name the family
+    "COMMUNICATION",        # state the approach
+    "CODE_BATTLE",          # write it
+    "EDGE_CASE_TRAP",       # survive the hidden trials
+    "COMPLEXITY_DUEL",      # name its cost
+    "MEMORY_AMBUSH",        # the disguised rematch
+)
+
+
+def phase_kind(phase: int, phases: int) -> str:
+    """The `encounter_kind` the engine should draw this phase's problem from."""
+    return EXPECTED_PHASE_KINDS[art_phase(phase, phases)]
+
+
+def art_phase(phase: int, phases: int) -> int:
+    if phases <= 1:
+        return 0
+    n = max(0, min(int(phases) - 1, int(phase)))
+    # Ceiling, not rounding. Both land the last phase on the last stage; the
+    # ceiling additionally biases a four-phase boss onto the LOUDER stages —
+    # breached, lit, crowned — instead of spending one of its three turns on
+    # the quietest one. A six-phase boss gets all six either way.
+    return -(-n * (ART_STAGES - 1) // (int(phases) - 1))
+
+
+def view(fight: dict) -> dict:
+    """What the client needs to draw the fight. Safe on a missing or stale
+    fight: an empty dict, which every caller can treat as "no boss"."""
+    boss, phase = _phase_of(fight)
+    if boss is None:
+        return {}
+    idx = int(fight.get("phase", 0) or 0)
+    return {
+        "boss": boss.id, "name": boss.name, "form": boss.form,
+        "sprite": boss.sprite, "colour": boss.colour, "premise": boss.premise,
+        "phase": idx, "phases": len(boss.phases),
+        "phase_key": phase.key, "phase_label": phase.label,
+        "line": phase.line, "teaches": phase.teaches,
+        "demands": list(phase.demands),
+        "art_phase": art_phase(idx, len(boss.phases)),
+        # `problem.encounter_kind` the engine should draw this phase's problem
+        # from. Spelled the same in the beat; see phase_beat.
+        "problem_kind": phase_kind(idx, len(boss.phases)),
+        "hp": int(fight.get("hp", 0)), "hp_max": int(fight.get("hp_max", 1)),
+        "pool": int(fight.get("pool", 0)),
+        "pool_max": int(fight.get("pool_max", 1)),
+        # The pip row the client already draws: one per phase, lit for the ones
+        # still standing. fx.setEnemyHp(pips_lit, pips) drives it unchanged.
+        "pips": len(boss.phases),
+        "pips_lit": 0 if fight.get("cleared") else max(
+            0, len(boss.phases) - idx),
+        "buff": dict(fight.get("buff") or {}),
+        "ladder": [r.kind for r in ladder(boss)],
+        "cleared": bool(fight.get("cleared")),
+        "casts": int(fight.get("casts", 0)),
+        "submits": int(fight.get("submits", 0)),
+        "solves": int(fight.get("solves", 0)),
+        # Said plainly because the fight's shape is not guessable from a health
+        # bar: the player is owed the knowledge that this costs one solve per
+        # phase before they decide to start it.
+        "costs": f"{len(boss.phases)} graded solves, one per phase",
+    }
+
+
+def special_mark(fight: dict, special: dict | str | Special) -> str:
+    """What a special the boss just fired leaves behind, at this phase.
+
+    Empty until the AFFLICTION rung, whole afterwards. The rule lives here
+    rather than at the call site because it is the one place the two halves
+    meet: SPECIALS already says what each special inflicts, and buff_state says
+    whether this boss has earned the right to inflict anything yet. An engine
+    that read `special["inflicts"]` directly would hand a phase-1 boss a status
+    it has not climbed to.
+
+    Returns the SPECIAL's own status, never the ladder's guess, so a boss that
+    is two elements still marks with whichever of them it actually swung.
+    """
+    if not (fight or {}).get("buff", {}).get("inflicts"):
+        return ""
+    if isinstance(special, str):
+        row = SPECIAL_BY_ID.get(special)
+        return row.inflicts if row is not None else ""
+    if isinstance(special, Special):
+        return special.inflicts
+    return str((special or {}).get("inflicts", "") or "")
+
+
+def boss_vitals(fight: dict) -> dict:
+    """`vitals()` for the boss as it stands RIGHT NOW, buffs folded in.
+
+    Rebuilt on a phase turn rather than mutated in place, because focus should
+    not survive a phase change: a boss that banked focus in the phase it lost
+    would open the next one with a free special, and the player has just earned
+    the opposite of that.
+    """
+    boss, phase = _phase_of(fight)
+    if boss is None:
+        return {}
+    state = dict(fight.get("buff") or {})
+    row = vitals(hp=int(fight.get("hp_max", phase.total_hp())),
+                 element=state.get("element", "") or fight.get("ground", ""),
+                 is_boss=True)
+    row["regen"] = min(REGEN_CEIL, int(row["regen"]) + int(
+        state.get("regen_bonus", 0) or 0))
+    row["specials"] = list(state.get("specials") or row["specials"])
+    row["elements"] = list(state.get("elements") or ())
+    row["blow"] = float(state.get("blow", 1.0))
+    row["armour_points"] = int(state.get("armour_points", 0))
+    row["armour_cap"] = float(state.get("armour_cap", 0.0))
+    row["inflicts"] = state.get("inflicts", "")
+    row["phase"] = int(fight.get("phase", 0))
+    return row
+
+
+# ---------------------------------------------------------------------------
 # Self-check
 # ---------------------------------------------------------------------------
 # Four invariants, and every one of them is something that would reach the
@@ -3140,6 +3804,229 @@ def _check_bosses(problems: list) -> list:
     return rows
 
 
+
+def _live_elements():
+    """gauntlet.elements if it is importable, else None. Same lazy shape as
+    `_live_catalogue`: this module must load and verify on its own."""
+    try:
+        from . import elements as live
+        return live
+    except Exception:                      # pragma: no cover - optional import
+        return None
+
+
+def _check_escalation(problems: list) -> list:
+    """The phase ladder, and the floor underneath it.
+
+    Five invariants, and the fourth is the one that matters most: a boss at its
+    angriest must still fall to correct Python. Everything else here is shape.
+    """
+    rows = []
+    grounds = ["", *sorted(EXPECTED_OPPOSED)]
+    seen_kinds: set = set()
+    ladders: dict = {}
+    for boss in BOSSES:
+        rungs = ladder(boss)
+        ladders[boss.id] = tuple(r.kind for r in rungs)
+        seen_kinds |= set(ladders[boss.id])
+        turns = len(boss.phases) - 1
+        if len(rungs) != turns:
+            problems.append(
+                f"boss {boss.id!r} has {len(boss.phases)} phases but "
+                f"{len(rungs)} escalation rungs; it needs one per phase turn")
+        if turns >= 2 and (rungs[0] is not PRESSURE or rungs[-1] is not RELENTLESS):
+            problems.append(
+                f"boss {boss.id!r} does not open on PRESSURE and close on "
+                f"RELENTLESS; every ladder is meant to read the same at both "
+                f"ends")
+
+        # 1. THE ART MOVES EVERY PHASE. Distinct stages, first intact, last
+        #    final form. bosses.js draws these; a repeat is a phase the player
+        #    cannot see.
+        stages = [art_phase(i, len(boss.phases)) for i in range(len(boss.phases))]
+        if len(set(stages)) != len(stages):
+            problems.append(
+                f"boss {boss.id!r} maps two phases onto art stage "
+                f"{sorted(set(s for s in stages if stages.count(s) > 1))}; one "
+                f"of its phase turns would change nothing on screen")
+        if stages[0] != 0 or stages[-1] != ART_STAGES - 1:
+            problems.append(
+                f"boss {boss.id!r} art stages run {stages[0]}..{stages[-1]}; "
+                f"they must open intact and close on the final form")
+
+        # 2. THE CEILINGS. Every one of these is what keeps the last phase
+        #    inside the no-dead-end floor.
+        last = buff_state(boss, len(boss.phases) - 1, element="FIRE")
+        if last["blow"] > BLOW_CEIL:
+            problems.append(f"boss {boss.id!r} ends at blow {last['blow']}, "
+                            f"over the {BLOW_CEIL} ceiling")
+        if last["armour_points"] > ARMOUR_POINTS_CEIL:
+            problems.append(f"boss {boss.id!r} ends at {last['armour_points']} "
+                            f"armour points, over {ARMOUR_POINTS_CEIL}")
+        if last["armour_cap"] > ARMOUR_CAP_CEIL:
+            problems.append(f"boss {boss.id!r} ends at armour cap "
+                            f"{last['armour_cap']}, over {ARMOUR_CAP_CEIL}")
+        if last["regen_bonus"] > REGEN_CEIL:
+            problems.append(f"boss {boss.id!r} ends at +{last['regen_bonus']} "
+                            f"regen, over {REGEN_CEIL}")
+
+        # 3. A BOSS MAY ONLY INFLICT WHAT IT IS.
+        for ground in grounds:
+            state = buff_state(boss, len(boss.phases) - 1, element=ground)
+            mark = state["inflicts"]
+            if not mark:
+                continue
+            if mark not in EXPECTED_STATUS_ELEMENT:
+                problems.append(f"boss {boss.id!r} inflicts unknown status "
+                                f"{mark!r}")
+            elif EXPECTED_STATUS_ELEMENT[mark] not in state["elements"]:
+                problems.append(
+                    f"boss {boss.id!r} on {ground or 'neutral'} ground inflicts "
+                    f"{mark!r}, which belongs to an element it is not")
+
+        # 4. NO INERT RUNG. Every phase turn must change at least one number
+        #    the fight reads, on every ground the boss could stand on. A rung
+        #    that changes nothing is a phase turn that lies: the player sees the
+        #    flash, reads the tell, and the fight is identical.
+        for ground in grounds:
+            prev = buff_state(boss, 0, element=ground)
+            for i in range(1, len(boss.phases)):
+                now = buff_state(boss, i, element=ground)
+                moved = [k for k in ("blow", "armour_points", "armour_cap",
+                                     "elements", "inflicts", "regen_bonus",
+                                     "demand_locked", "specials")
+                         if now[k] != prev[k]]
+                if not moved:
+                    problems.append(
+                        f"boss {boss.id!r} phase {i} on {ground or 'neutral'} "
+                        f"ground awards {ladders[boss.id][i - 1]} and changes "
+                        f"nothing; the rung is inert there")
+                prev = now
+
+        # 4. THE FLOOR. Graded evidence always wins; casts alone never do.
+        for ground in grounds:
+            fight = open_fight(boss.id, element=ground)
+            for _ in range(len(boss.phases)):
+                if fight.get("cleared"):
+                    break
+                land(fight, kind="submit", solved=True)
+            if not fight.get("cleared"):
+                problems.append(
+                    f"boss {boss.id!r} on {ground or 'neutral'} ground survives "
+                    f"{len(boss.phases)} passing submissions; a solve must "
+                    f"clear a phase at every rung of the ladder")
+            if int(fight.get("solves", 0)) != len(boss.phases):
+                problems.append(
+                    f"boss {boss.id!r} took {fight.get('solves')} solves for "
+                    f"{len(boss.phases)} phases; the cost must be exactly one "
+                    f"graded solve per phase")
+        grind = open_fight(boss.id, element="FIRE")
+        for _ in range(400):
+            land(grind, kind="cast", damage=SIGNATURE_DAMAGE,
+                 incantation=(boss.phases[0].demands or ("bind",))[0])
+        if grind.get("cleared") or int(grind.get("phase", 0)) != 0:
+            problems.append(
+                f"boss {boss.id!r} advances on casts alone; the last point of "
+                f"every phase belongs to a graded submission")
+        # And a wrong-but-legal cast under DEMAND still does something.
+        locked = open_fight(boss.id, element="FIRE")
+        locked["buff"] = dict(locked["buff"], demand_locked=True)
+        before = int(locked["hp"])
+        land(locked, kind="cast", damage=BASE_DAMAGE, incantation="__not_demanded__")
+        if int(locked["hp"]) >= before:
+            problems.append(
+                f"boss {boss.id!r} takes nothing from an undemanded cast under "
+                f"DEMAND; a cast that does nothing is a cast nobody makes")
+
+        # 6. THE CLIENT CONTRACT. Every key the client and the engine are told
+        #    to read, actually read back, on a real turn. Cheap, and it catches
+        #    the class of mistake that does not raise: a dict literal with the
+        #    same key twice silently keeps the last one, which is how the beat
+        #    lost its own "kind" to the problem kind it also carries.
+        walk = open_fight(boss.id, element="FIRE")
+        need_view = ("boss", "phase", "phases", "phase_key", "art_phase",
+                     "problem_kind", "hp", "hp_max", "pips", "pips_lit",
+                     "buff", "ladder", "cleared", "costs")
+        missing = [k for k in need_view if k not in view(walk)]
+        if missing:
+            problems.append(f"boss {boss.id!r} view() is missing {missing}")
+        for i in range(1, len(boss.phases)):
+            ev = land(walk, kind="submit", solved=True)
+            beat = ev.get("beat") or {}
+            if beat.get("kind") != "PHASE_TURN":
+                problems.append(
+                    f"boss {boss.id!r} phase {i} beat kind is "
+                    f"{beat.get('kind')!r}, not 'PHASE_TURN'")
+            if beat.get("art_phase") != art_phase(i, len(boss.phases)):
+                problems.append(
+                    f"boss {boss.id!r} phase {i} beat art_phase "
+                    f"{beat.get('art_phase')!r} disagrees with art_phase()")
+            if beat.get("problem_kind") not in EXPECTED_PHASE_KINDS:
+                problems.append(
+                    f"boss {boss.id!r} phase {i} beat problem_kind "
+                    f"{beat.get('problem_kind')!r} is not an encounter kind")
+            if not beat.get("herald") or not beat.get("tell"):
+                problems.append(
+                    f"boss {boss.id!r} phase {i} turns without a herald or "
+                    f"without a tell; the player is not told why they are "
+                    f"suddenly losing")
+
+        rows.append({"id": boss.id, "phases": len(boss.phases),
+                     "ladder": list(ladders[boss.id]), "stages": stages,
+                     "solves": len(boss.phases),
+                     "blow": last["blow"], "armour": last["armour_points"]})
+
+    missing = [b.kind for b in ESCALATION if b.kind not in seen_kinds]
+    if missing:
+        problems.append(
+            f"escalation rungs {missing} are authored and never reached by any "
+            f"boss; a rung nobody meets is a rung that has not been tested")
+    order = [b.id for b in BOSSES]
+    for a, b in zip(order, order[1:]):
+        if ladders[a] == ladders[b]:
+            problems.append(
+                f"bosses {a!r} and {b!r} escalate identically; the rotation "
+                f"exists so no two in a row feel the same")
+
+    # 5. RECONCILE WITH world.py and elements.py, both authoritative at runtime.
+    try:
+        from . import world as _world
+        world_kinds = tuple(p["kind"] for p in _world.BOSS_PHASES)
+    except Exception:                      # pragma: no cover - optional import
+        world_kinds = ()
+    if world_kinds and world_kinds != EXPECTED_PHASE_KINDS:
+        problems.append(
+            f"EXPECTED_PHASE_KINDS {list(EXPECTED_PHASE_KINDS)} has drifted from "
+            f"world.BOSS_PHASES {list(world_kinds)}")
+    for boss in BOSSES:
+        kinds = [phase_kind(i, len(boss.phases)) for i in range(len(boss.phases))]
+        if len(set(kinds)) != len(kinds):
+            problems.append(
+                f"boss {boss.id!r} asks for the same problem kind in two phases; "
+                f"a phase that repeats the last one's shape is a rematch, not a "
+                f"phase")
+
+    live = _live_elements()
+    if live is not None:
+        for eid, opposed in EXPECTED_OPPOSED.items():
+            if live.OPPOSED.get(eid) != opposed:
+                problems.append(
+                    f"EXPECTED_OPPOSED says {eid} opposes {opposed!r}; "
+                    f"elements.py says {live.OPPOSED.get(eid)!r}")
+        for sid, owner in EXPECTED_STATUS_ELEMENT.items():
+            row = live.STATUSES.get(sid)
+            if row is None:
+                problems.append(f"status {sid!r} is not in elements.STATUSES")
+            elif row.element != owner:
+                problems.append(
+                    f"status {sid!r} belongs to {owner!r} here and "
+                    f"{row.element!r} in elements.py")
+        if ARMOUR_CAP_CEIL > live.ARMOUR_POINT_CAP:
+            problems.append(
+                f"ARMOUR_CAP_CEIL {ARMOUR_CAP_CEIL} is over "
+                f"elements.ARMOUR_POINT_CAP {live.ARMOUR_POINT_CAP}")
+    return rows
+
 def _check_context(problems: list) -> None:
     """The context has to actually build, for every fight, without raising."""
     for enc in ENCOUNTERS:
@@ -3201,6 +4088,7 @@ def verify() -> dict:
     incantations = _check_incantations(problems)
     encounters = _check_encounters(problems)
     bosses = _check_bosses(problems)
+    escalation = _check_escalation(problems)
     _check_context(problems)
     _check_vitals(problems)
 
@@ -3235,6 +4123,9 @@ def verify() -> dict:
                                   for c in CHAPTER_ORDER},
         "bosses": len(BOSSES),
         "boss_phases": sum(len(b.phases) for b in BOSSES),
+        "escalation": escalation,
+        "escalation_rungs": len(ESCALATION),
+        "boss_solves": sum(len(b.phases) for b in BOSSES),
         "effects": len(EFFECTS),
         "effect_families": len(EFFECT_FAMILIES),
         "incantations": incantations,
@@ -3258,6 +4149,8 @@ def main() -> int:                         # pragma: no cover - authoring tool
     print(f"bosses       {report['bosses']}  "
           f"phases {report['boss_phases']}  "
           f"casts {min(boss_slow)}-{max(boss_slow)}")
+    print(f"escalation   {report['escalation_rungs']} rungs; "
+          f"{report['boss_solves']} graded solves across the roster")
     print(f"effects      {report['effects']} across "
           f"{report['effect_families']} families")
     inc = report["incantations"]

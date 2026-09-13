@@ -39,6 +39,74 @@ function freq(note) {
 
 const up = (note, semis) => freq(note) * Math.pow(2, semis / 12);
 
+/* ---------------------------------------------------------------- the heart
+ *
+ * gauntlet/upkeep.py owns these two numbers and asserts that its own
+ * `pulse_hz` is literally `bpm / 60`, so the red pulse on the sprite and the
+ * thump underneath it are the same rate. They are named here rather than left
+ * as literals inside heartbeatInterval() because the death sequence below is
+ * DERIVED from them, and a sequence derived from a magic number is a sequence
+ * nobody can check. scripts/verify/death.mjs reads upkeep.py and fails if the
+ * two files ever stop agreeing.
+ */
+export const BPM_ONSET = 72;          // upkeep.BPM_ONSET: a resting heart
+export const BPM_MAX = 132;           // upkeep.BPM_MAX: at zero health
+
+/* The alarm's own two spans, taken off heartbeat()'s body so the death beats
+ * can continue them instead of guessing at a shape that sounds similar. */
+const HEART_GAIN_MIN = 0.16;          // gain at severity 0
+const HEART_GAIN_SPAN = 0.20;         // ... and how much severity 1 adds
+const HEART_HZ_MAX = 58;              // pitch at severity 0
+const HEART_HZ_SPAN = 12;             // ... and how far severity 1 drops it
+
+/* DEATH. The alarm's ramp, run backwards and then off the end of it.
+ *
+ *   132  BPM_MAX      the rate the alarm is already at when health hits zero,
+ *                     so the first death beat is the alarm's next beat and the
+ *                     seam is inaudible
+ *    72  BPM_ONSET    the floor of upkeep's ramp — the resting heart the alarm
+ *                     has spent the whole fight climbing away from. The heart
+ *                     comes back to rest
+ *    39  72 x (72/132), the same geometric step continued once more, below
+ *                     anything the alarm has a number for
+ *
+ * Which BANDS actually sound is upkeep.py's business and it moves — at the time
+ * of writing only DIRE does, so the slowest beat the player can ever have heard
+ * is 108 BPM, 556ms. The first death gap is 833ms. Whatever the bands do next,
+ * the first thing that happens when you die is the heart missing.
+ *
+ * Periods 455ms, 833ms, 1538ms. The gaps are 833ms then 1538ms, 1.85x, and the
+ * first gap is already 1.83x the 455ms the player has been hearing — the heart
+ * does not ease off, it misses. That stumble is the moment the player
+ * understands, and it is why the sequence starts slowing on beat one rather
+ * than politely holding tempo for a bar first.
+ */
+export const DEATH_BEAT_BPM = Object.freeze([
+  BPM_MAX,
+  BPM_ONSET,
+  Math.round((BPM_ONSET * BPM_ONSET) / BPM_MAX),
+]);
+
+/** Period of each death beat, milliseconds. [455, 833, 1538] */
+export const DEATH_BEAT_MS = Object.freeze(
+  DEATH_BEAT_BPM.map(bpm => Math.round(60000 / bpm)));
+
+/** When each death beat sounds, milliseconds from the start. [0, 833, 2371]
+ *
+ * Beat n+1 falls one period of ITS OWN tempo after beat n, which is what makes
+ * every gap longer than the last. */
+export const DEATH_BEAT_AT = Object.freeze(DEATH_BEAT_MS.reduce(
+  (at, ms, i) => (i === 0 ? [0] : at.concat(at[i - 1] + ms)), []));
+
+/** The silence after the third beat: one more of the last interval it held.
+ *
+ * Not the next step of the geometric ramp — that is 2816ms and is far too long
+ * to hold a black screen for. The ear extrapolates the most recent interval it
+ * heard, so holding exactly 1538ms puts the end of the silence on the beat that
+ * did not come. The player feels the absence land rather than merely waiting
+ * through it. */
+export const DEATH_SILENCE_MS = DEATH_BEAT_MS[DEATH_BEAT_MS.length - 1];
+
 /* ------------------------------------------------------------------ songs
  *
  * Lanes are read one sixteenth at a time.
@@ -965,18 +1033,128 @@ class MetalRig {
    */
   heartbeat(severity = 1) {
     if (!this.enabled || !this._build()) return false;
-    const t = this.ctx.currentTime + 0.005;
-    const G = this.sfxBus;
     const sev = Math.max(0, Math.min(1, severity));
-    const gain = 0.16 + sev * 0.20;
-    const f = 58 - sev * 12;            // lower and heavier the worse it gets
-
-    // lub: the bigger, duller thump
-    this._tone(t, 0.16, gain, { from: f, to: f * 0.62, type: 'sine', lp: 240, dest: G });
-    // DUB: tighter, a beat behind, and it closes the pair
-    this._tone(t + 0.17, 0.13, gain * 0.82,
-               { from: f * 1.12, to: f * 0.66, type: 'sine', lp: 260, dest: G });
+    this._heart(this.ctx.currentTime + 0.005, {
+      gain: HEART_GAIN_MIN + sev * HEART_GAIN_SPAN,
+      f: HEART_HZ_MAX - sev * HEART_HZ_SPAN,   // lower and heavier the worse it gets
+    });
     return true;
+  }
+
+  /** One beat, at a stated pitch, weight and stretch. Factored out of
+   *  heartbeat() rather than written beside it, because the death sequence has
+   *  to be audibly THE SAME HEART and the only way to guarantee that is for
+   *  there to be one shaper. heartbeat()'s own defaults are the numbers it
+   *  always used, so the alarm is unchanged to the sample.
+   *
+   *  `stretch` scales the whole envelope with the tempo: a slow heart has a
+   *  long systole, so a beat at 39 BPM is not a beat at 132 BPM with more
+   *  silence after it. `pair` is the DUB — the second, tighter thump that
+   *  CLOSES the pair. A heart that is stopping does not close, so the last
+   *  beat of the death sequence passes pair: false and is a lub alone.
+   */
+  _heart(when, { f = 46, gain = 0.36, stretch = 1, pair = true, dest } = {}) {
+    const G = dest || this.sfxBus;
+    const s = Math.max(0.25, stretch);
+    // lub: the bigger, duller thump
+    this._tone(when, 0.16 * s, gain,
+               { from: f, to: f * 0.62, type: 'sine', lp: 240, dest: G });
+    if (!pair) return;
+    // DUB: tighter, a beat behind, and it closes the pair
+    this._tone(when + 0.17 * s, 0.13 * s, gain * 0.82,
+               { from: f * 1.12, to: f * 0.66, type: 'sine', lp: 260, dest: G });
+  }
+
+  /* ------------------------------------------------- the heart, stopping
+   *
+   * THE INVERSION. The alarm above has spent the whole fight speeding this
+   * heart UP, from BPM_ONSET 72 to BPM_MAX 132. Death is the same heart going
+   * the other way, and the player who has been listening to it climb hears it
+   * fall. That is the entire effect: three beats, each slower, quieter and
+   * lower than the one before, and then nothing.
+   *
+   * NOT ONE OF THESE NUMBERS IS INVENTED. Every one is upkeep.py's own two
+   * constants, continued:
+   *
+   *   TEMPO   132 -> 72 -> 39. The first is BPM_MAX, exactly the rate the alarm
+   *           is running at when health hits zero, so beat one is literally the
+   *           alarm's next beat and the seam is inaudible. The second is
+   *           BPM_ONSET, the FLOOR of upkeep's ramp — the resting heart it has
+   *           spent the whole fight climbing away from. The heart comes back to
+   *           rest. The third continues the same geometric step once more,
+   *           72 x (72/132) = 39, below anything the alarm has a number for.
+   *           Which BANDS actually sound is upkeep's business and it moves; at
+   *           the time of writing the slowest beat a player can ever have heard
+   *           is 108 BPM, 556ms, and the first death gap is 833ms. Whatever the
+   *           bands do next, the first thing that happens when you die is the
+   *           heart missing.
+   *   PITCH   46 -> 40 -> 34 Hz. The alarm's pitch runs 58 Hz at onset down to
+   *           46 Hz on the floor, a span of 12. 46 is where it ends, and death
+   *           carries on down the same slope at half a span a beat. Half,
+   *           because a full span per beat lands the third at 22 Hz, which is
+   *           under hearing and arrives as a click rather than a heart.
+   *   WEIGHT  0.36 -> 0.26 -> 0.16. The alarm's gain runs 0.16 to 0.36. Death
+   *           walks it back down at half a span a beat, so the last beat of a
+   *           life is exactly as loud as the first beat of the warning was.
+   *   STRETCH each beat's envelope scales with its own period, 1x, 1.83x,
+   *           3.38x. The third beat is more than half a second of low sine,
+   *           alone, unclosed.
+   *
+   * Scheduled against the AUDIO clock in one call, not from a timer. The three
+   * intervals are the whole point of this beat and setTimeout drifts four to
+   * fifteen milliseconds a tick and is throttled outright in a background tab —
+   * the same reason the music scheduler at the top of this file exists.
+   */
+  deathBeatShape(index) {
+    const i = Math.max(0, Math.min(DEATH_BEAT_BPM.length - 1, index | 0));
+    return {
+      f: HEART_HZ_MAX - HEART_HZ_SPAN - i * (HEART_HZ_SPAN / 2),
+      gain: HEART_GAIN_MIN + HEART_GAIN_SPAN - i * (HEART_GAIN_SPAN / 2),
+      stretch: DEATH_BEAT_MS[i] / DEATH_BEAT_MS[0],
+      pair: i < DEATH_BEAT_BPM.length - 1,
+    };
+  }
+
+  /** The three beats and the silence after them, scheduled in one go.
+   *
+   * Returns a handle whose `times` are milliseconds from the call — the SAME
+   * table web/js/deathfx.js draws its fade against, so picture and sound are
+   * one clock the way upkeep.py's pulse and thump are one clock. The handle is
+   * returned even when audio is off or unavailable (`silent: true`), because a
+   * player with the sound muted still has to get the timing of the screen.
+   */
+  heartbeatStop({ delay = 0 } = {}) {
+    const times = DEATH_BEAT_AT.slice();
+    const total = DEATH_BEAT_AT[DEATH_BEAT_AT.length - 1] + DEATH_SILENCE_MS;
+    if (!this.enabled || !this._build()) {
+      return { times, total, silent: true, cancel() {} };
+    }
+    // A gate of our own, so cancel() has something to close. Scheduled Web
+    // Audio nodes cannot be un-scheduled; they can be turned down.
+    const gate = this.ctx.createGain();
+    gate.gain.value = 1;
+    gate.connect(this.sfxBus);
+    const t0 = this.ctx.currentTime + 0.005 + Math.max(0, delay) / 1000;
+    for (let i = 0; i < DEATH_BEAT_BPM.length; i++) {
+      this._heart(t0 + DEATH_BEAT_AT[i] / 1000,
+                  { ...this.deathBeatShape(i), dest: gate });
+    }
+    const ctx = this.ctx;
+    let closed = false;
+    return {
+      times, total, silent: false,
+      cancel() {
+        if (closed) return;
+        closed = true;
+        const now = ctx.currentTime;
+        try {
+          gate.gain.cancelScheduledValues(now);
+          gate.gain.setValueAtTime(gate.gain.value, now);
+          gate.gain.linearRampToValueAtTime(0.0001, now + 0.06);
+        } catch (e) { /* a context torn down under us is not an error here */ }
+        setTimeout(() => { try { gate.disconnect(); } catch (e) {} }, 200);
+      },
+    };
   }
 
   /** Milliseconds between beats for a given severity.
@@ -989,7 +1167,7 @@ class MetalRig {
    */
   heartbeatInterval(severity = 1) {
     const sev = Math.max(0, Math.min(1, severity));
-    const bpm = 72 + sev * (132 - 72);
+    const bpm = BPM_ONSET + sev * (BPM_MAX - BPM_ONSET);
     return Math.round(60000 / bpm);
   }
 

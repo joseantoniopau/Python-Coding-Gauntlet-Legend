@@ -13,6 +13,8 @@ from dataclasses import dataclass, field, asdict
 
 from . import adaptive, config, coach as coachmod, db, grading, items, sandbox
 from . import curriculum, diagnostic, puzzles, story as storymod, tactics
+from . import death
+from . import unmaking
 from . import skills as skillmod
 from . import srs as srsmod
 from . import world
@@ -26,7 +28,7 @@ from . import transfer as transfermod
 # isolation, proved itself against real numbers and wrote down a contract; none
 # of them imports this file and none of them writes progression. Everything
 # below is that contract being honoured at the call sites the contracts name.
-from . import arts, banter, captives, economy, finale, hunters, movesets
+from . import antagonist, arts, banter, captives, economy, finale, hunters, movesets
 from . import regalia, sages, sanctuary, upkeep
 from .corpus import ensure as ensure_corpus
 from .corpus.schema import Problem
@@ -429,6 +431,14 @@ DEFAULT_STATE = {
     "achievements": [],
     "cleared_bosses": [],
     "boss_rematch": {},
+    # THE OPEN BOSS FIGHT, and it is a fight rather than a flag now.
+    #
+    # bestiary.open_fight() returns plain JSON and bestiary.land() mutates it;
+    # this is where it is kept between requests. A boss is four to six graded
+    # solves, which is long enough that the fight WILL be interrupted by a
+    # reload, and a fight that cannot be written to the save is a fight that
+    # gets lost. None when nobody is standing in front of anything.
+    "boss_fight": None,
     "solved_ids": [],
     "recent_ids": [],
     "attributes": {"LOGIC": 0, "FOCUS": 0, "VIGOR": 0, "INSIGHT": 0, "HASTE": 0},
@@ -516,6 +526,10 @@ DEFAULT_STATE = {
     sanctuary.STATE_KEY: sanctuary.new_state(),           # "sanctuary"
     captives.STATE_KEY: captives.new_captive_state(),     # "captives"
     finale.STATE_KEY: finale.new_state(),                 # "finale"
+    # THE NULL KING'S OWN LEDGER — "antagonist". What he has already said, so
+    # he does not say it twice. He writes here and nowhere else, ever: no
+    # mastery, no gold, no flag another system reads.
+    antagonist.STATE_KEY: antagonist.new_state(),         # "antagonist"
     # sages.py ships new_state() and never named the key it belongs under —
     # the one module of the ten that did not. It is named here, once, so there
     # is still exactly one spelling of it in the codebase.
@@ -556,6 +570,10 @@ class Game:
         self.teachable: list = corpusmod.teachable(self.corpus)
         self.holdout: list = corpusmod.sealed_pool(self.corpus)
         self.state = self._load_or_create()
+        # Idempotent, and returns None when an anchor already exists. Without it
+        # a death in the very first fight takes the fallback path and the player
+        # wakes where they fell.
+        death.ensure_wake_point(self.conn, self.state)
         self._rng = random.Random()
         # The world is rebuilt from its seed rather than serialised: the spec is
         # a frozen description and generate() is pure, so a save carries 4 bytes.
@@ -605,6 +623,21 @@ class Game:
     PLAYTIME_MAX_GAP = 15 * 60
 
     def _open_session(self) -> None:
+        # WHERE YOU ARE COUNTS AS SOMEWHERE YOU HAVE BEEN.
+        #
+        # `note_region` was wired into the two places the region CHANGES —
+        # `Game.move` and `Game.travel` — and nowhere into the place it starts.
+        # So a save's persisted arrival list never contained Python Village,
+        # the village you have by definition stood in, and it never contained
+        # wherever a loaded save was parked either. `story.build_context` hides
+        # that by folding in the current region, so the story gates read
+        # correctly; the two readers that take the stored list at its word do
+        # not. antagonist.py counts it to decide how much of the map has been
+        # walked and was permanently one short.
+        #
+        # Idempotent and free: note_region ignores a region it already has.
+        storymod.note_region(self.state["story"],
+                             self.state["player"]["region"])
         stats = self.state["stats"]
         now = time.time()
         if now - float(stats.get("session_started_at") or 0) > self.SESSION_GAP_SECONDS:
@@ -937,7 +970,25 @@ class Game:
         player["mana"] = min(player["mana"], player["mana_max"])
 
     def loadout(self) -> dict:
-        fx = self.effects(include_temp=False)
+        """The kit screen. DEGRADE — docs/10-sealed-views.md §4.E.
+
+        The swap test is no and the spend test is no: what you own does not
+        move when the question does. The IN-FORCE test is yes, and that half is
+        the whole finding. `_player_defender` hands `build_sealed=True` to
+        elements during a measured run, so `effects`, `effect_text`, `armour`,
+        `probe_charges` and `strike_element` are all numbers that are NOT in
+        force while a run is open. Half this screen already knew — forge's
+        contribution vanishes through `forge.effects_in` — and the other half
+        did not, which made it internally inconsistent as well as wrong.
+        A wrong number is worse than no number, because the player plans
+        against it.
+
+        So: keep everything that is WHAT YOU OWN, zero everything that is what
+        it currently does for you, and say which. The same shape
+        `regalia.view(sealed=True)` already returns.
+        """
+        suspended = bool(self._sealed_in_interview())
+        fx = {} if suspended else self.effects(include_temp=False)
         equipped = {}
         for slot, item_id in self.state["equipped"].items():
             item = _item(item_id)
@@ -968,12 +1019,22 @@ class Game:
             "active_sets": fx.get("_sets", []),
             "effects": {k: v for k, v in fx.items() if k != "_sets"},
             "effect_text": items.describe({k: v for k, v in fx.items() if k != "_sets"}),
-            "probe_charges": items.base_probe_charges(fx),
+            # Zero, not the base of one. Probes are a crutch with a rung on the
+            # ladder and a measured run has none; quoting a charge the run
+            # cannot spend is the in-force defect in miniature.
+            "probe_charges": (0 if suspended else items.base_probe_charges(fx)),
             "secrets": [
                 {**s, "found": s["id"] in self.state["secrets_found"]}
                 for s in items.SECRETS
             ],
             "rarities": items.RARITIES,
+            # THE RING, BESIDE THE SATCHEL. Not in `inventory` — see the note
+            # above `items.keyring_rows`: a key is proved, not owned, so it has
+            # no slot, no rarity and no drop rate, and it is drawn as its own
+            # list rather than smuggled into the loot one.
+            "keys": items.keyring_rows(self.state["cleared_bosses"]),
+            "keys_held": len(world.keys_held(self.state["cleared_bosses"])),
+            "keys_required": world.PORTAL_KEY_REQUIREMENT,
             # The belt, outside a fight. A player has to be able to see what is
             # in the pouch when deciding whether to walk into the marsh, not
             # only once the marsh has already poisoned them.
@@ -985,8 +1046,17 @@ class Game:
             "armour": items.armour_view(fx),
             # Through _player_element, not items.strike_element: the loadout
             # screen must name the same element the swing will actually use, and
-            # a forged blade is invisible to the catalogue lookup.
-            "strike_element": self._player_element(),
+            # a forged blade is invisible to the catalogue lookup. Under the
+            # seal the swing has no element at all, and this says so.
+            "strike_element": ("" if suspended else self._player_element()),
+            "sealed": suspended,
+            "suspended": (["effects", "effect_text", "armour", "probe_charges",
+                           "strike_element"] if suspended else []),
+            "seal_note": ("Your kit is yours and it is listed. None of it is in "
+                          "force: a measured run is fought on the typing and "
+                          "nothing else, so every number it would have added is "
+                          "shown as zero rather than as a figure you would plan "
+                          "against." if suspended else ""),
         }
 
     def choose_build(self, build_id: str) -> dict:
@@ -1014,6 +1084,18 @@ class Game:
 
     def respec(self) -> dict:
         """The Armorer will unpick your attribute points for gold."""
+        # THE WRITE CLAUSE, and it is asked at the door.
+        #
+        # A measured run moves nothing in the world in either direction. Every
+        # sibling of this call already knew that — `buy_potion`, `forge_upgrade`,
+        # `open_trial`, `spend_node`, `choose_class`, `class_respec` and
+        # `set_active_pets` all refuse — and these were the ones nobody reached.
+        # `_sealed_in_interview` is the question, because a run is open or it is
+        # not and that does not depend on whether a question is on screen this
+        # second. See `_sealed_for`.
+        sealed = self._sealed_in_interview()
+        if sealed:
+            return sealed
         cost = 40 + 12 * sum(self.state["attributes"].values())
         if self.state["player"]["gold"] < cost:
             return {"error": f"the Armorer wants {cost} gold for that"}
@@ -1026,6 +1108,11 @@ class Game:
         return {"ok": True, "points": self.state["unspent_points"], "cost": cost}
 
     def allocate(self, attribute: str, points: int = 1) -> dict:
+        # Spends a point that `respec` charges gold to get back, so it is a
+        # spend. Same door, same rule; see `respec`.
+        sealed = self._sealed_in_interview()
+        if sealed:
+            return sealed
         if attribute not in items.ATTRIBUTES:
             return {"error": "unknown attribute"}
         points = max(1, min(points, self.state["unspent_points"]))
@@ -1040,6 +1127,14 @@ class Game:
                 "effects": self.loadout()["effects"]}
 
     def equip(self, item_id: str) -> dict:
+        # The build is suspended for the length of a measured run — `elements`
+        # is handed `build_sealed=True` and `loadout()` marks the effects
+        # suspended — so equipping mid-run cannot help with the question. It
+        # can only leave the player convinced it did. `set_active_pets` is the
+        # same shape and already refuses.
+        sealed = self._sealed_in_interview()
+        if sealed:
+            return sealed
         item = _item(item_id)
         if not item or item_id not in self.state["inventory"]:
             return {"error": "you do not carry that"}
@@ -1063,6 +1158,9 @@ class Game:
         return {"ok": True, "slot": slot, "loadout": self.loadout()}
 
     def unequip(self, slot: str) -> dict:
+        sealed = self._sealed_in_interview()          # see `equip`
+        if sealed:
+            return sealed
         self.state["equipped"].pop(slot, None)
         self._sync_caps()
         self.save()
@@ -1351,6 +1449,12 @@ class Game:
         bestiary.regenerate(vitals)
         special = bestiary.take_turn(vitals, roll=self._rng.random())
         power = float(special["power"]) if special else 1.0
+        # THE PHASE LADDER'S BLOW, and this is where "it gets stronger" stops
+        # being a caption. `bestiary.buff_state` accumulates it a rung at a
+        # time and `_arm_boss` puts it on the vitals; a boss with no ladder
+        # under it has no `blow` key and multiplies by one, which is every
+        # ordinary monster in the game, unchanged.
+        power *= max(1.0, float(vitals.get("blow", 1.0) or 1.0))
         if special:
             out["special"] = special
             out["lines"].append(
@@ -1400,7 +1504,22 @@ class Game:
         # be exempt. A fire monster in a fire region therefore burned a player
         # holding fire, for a tenth of the bar a tick, which is precisely the
         # consolation the shrug was supposed to be.
-        for status_id in (hit.inflicted, (special or {}).get("inflicts", "")):
+        # A BOSS ONLY LEAVES MARKS ONCE IT HAS CLIMBED TO LEAVING THEM.
+        #
+        # `bestiary.special_mark` is the one place the two halves of that meet:
+        # SPECIALS says what each special inflicts, and the phase ladder says
+        # whether this boss has reached the AFFLICTION rung yet. Reading
+        # `special["inflicts"]` directly — which is what this loop did — handed
+        # a phase-one boss a status it has not earned, which is the same defect
+        # as the art never turning, one system over. An ordinary monster has no
+        # fight and no ladder and is unchanged: `special_mark` is only asked
+        # when there is a fight to ask it about.
+        marks = (special or {}).get("inflicts", "")
+        if special and enc.boss_id:
+            boss_fight = self._boss_fight()
+            if boss_fight and boss_fight.get("boss") == enc.boss_id:
+                marks = bestiary.special_mark(boss_fight, special)
+        for status_id in (hit.inflicted, marks):
             if not status_id or not elements.marks(hit.kind):
                 continue
             landed = elements.inflict(statuses, status_id)
@@ -1847,6 +1966,9 @@ class Game:
         self._grant_blade()
 
         ctx = quests.context(self.story_context(readiness=ready), self.state)
+        # Read once: `boss_fight` below is the ladder the player walked out of,
+        # and asking for it twice is asking the save twice.
+        open_fight = self._boss_fight()
         run = self.state.get(dungeons.STATE_KEY)
         dungeon_view = None
         if run:
@@ -1877,9 +1999,28 @@ class Game:
             ],
             "bosses": [
                 {**b, "cleared": b["id"] in self.state["cleared_bosses"],
-                 "records": db.boss_history(self.conn, b["id"])}
+                 "records": db.boss_history(self.conn, b["id"]),
+                 # What this one is holding. Named on the dashboard so a boss
+                 # has a reason to exist beyond XP before the player walks in.
+                 "key": world.key_for_boss(b["id"])}
                 for b in world.BOSSES
             ],
+            # THE KEYRING, DERIVED. There is no state["keys"] on purpose:
+            # `cleared_bosses` above IS the keyring, so every save that has ever
+            # existed already holds exactly the keys its owner earned, a slot
+            # round trip cannot lose one, and there is no second ledger to fall
+            # out of step with the kill list.
+            "keys": world.keyring(self.state["cleared_bosses"]),
+            "keys_held": len(world.keys_held(self.state["cleared_bosses"])),
+            "keys_required": world.PORTAL_KEY_REQUIREMENT,
+            "portal": world.portal_status(self.state["cleared_bosses"]),
+            # Said on the dashboard, next to the locked door, for the reason in
+            # `practical_access`: the measurement is never behind the keys.
+            "practical": self.practical_access(),
+            # The open boss ladder, if the player walked out mid-fight. Four to
+            # six graded solves is long enough that "where was I" is a question
+            # the dashboard has to be able to answer.
+            "boss_fight": bestiary.view(open_fight) if open_fight else None,
             "retests_due": [
                 {"family": e.family, "days_overdue": round(srsmod.overdue_days(e, now=now), 1),
                  "stage": e.stage, "lapses": e.lapses}
@@ -2004,10 +2145,44 @@ class Game:
     def _sealed_in_interview(self) -> dict | None:
         """One refusal for every overworld action. The modules refuse too, but
         the guarantee belongs at the door, not three rooms in."""
-        if self.state.get("interview") or (
-                self.encounter and self.encounter.mode == config.MODE_INTERVIEW):
+        if self._run_is_open():
             return finalexam.refuse("BUILD")
         return None
+
+    def _run_is_open(self) -> bool:
+        """Is a measured run open AT ALL, question on screen or not?"""
+        return bool(self.state.get("interview")
+                    or self.state.get("exam")
+                    or (self.encounter
+                        and self.encounter.mode == config.MODE_INTERVIEW))
+
+    def _sealed_for(self, capability: str) -> bool:
+        """`finalexam.sealed`, asked so that it cannot be answered by an
+        encounter that is not there.
+
+        THE HOLE THIS CLOSES, and it is the write clause rather than the view
+        rule. `finalexam.sealed(encounter, capability)` is the one capability
+        check and it is the right question — but it is asked OF AN ENCOUNTER,
+        and BETWEEN TWO QUESTIONS OF A MEASURED RUN THERE IS NOT ONE. Every
+        door that asked it with `self.encounter` therefore answered "not
+        sealed" in the gap, and the town's doors are doors that pay:
+
+            start_interview("FINAL_EXAM")      # no question open yet
+            heal()                             # stamina 1 -> 20, free, mid-exam
+
+        `Game._antagonist` already carries this exact paragraph and already
+        fixes it, by asking `_sealed_in_interview` instead — the run is open or
+        it is not, and that does not depend on whether a question happens to be
+        on the screen this second. This is that fix, given a name, so the next
+        door does not have to rediscover it.
+
+        A run being open is sufficient. The capability ladder still decides
+        everything else, so a hold-out problem served in Adventure Mode is
+        untouched: `_pays_into_the_world` explains why that distinction has to
+        survive, and it does.
+        """
+        return bool(self._run_is_open()
+                    or finalexam.sealed(self.encounter, capability))
 
     # -- classes -----------------------------------------------------------
     def class_selection(self) -> dict:
@@ -2304,11 +2479,16 @@ class Game:
     def town(self) -> dict:
         """Everything the town square draws, in one call."""
         enc = self.encounter
-        sealed = finalexam.sealed(enc, upkeep.UPKEEP_CAPABILITY)
+        # `_sealed_for`, not `finalexam.sealed(enc, ...)`: between two questions
+        # of a measured run there is no encounter to ask. See `_sealed_for`.
+        sealed = self._sealed_for(upkeep.UPKEEP_CAPABILITY)
         gold = int(self.state["player"]["gold"])
         return {
             "visit": upkeep.town_visit(self.state, gold=gold, sealed=sealed),
-            "loop": upkeep.loop_report(self.state),
+            # The SAME seal the quote beside it gets. It was not being passed,
+            # so this block quoted a mending bill two keys away from the door
+            # that refuses to quote one. See upkeep.loop_report's docstring.
+            "loop": upkeep.loop_report(self.state, sealed=sealed),
             "condition": upkeep.condition(self.state),
             "alarm": upkeep.alarm(self.state),
             "quote": upkeep.repair_quote(self.state, gold=gold, sealed=sealed),
@@ -2316,13 +2496,22 @@ class Game:
                        **{k: v for k, v in vars(upkeep.MENDER).items()
                           if k != "lines"}},
             "gold": gold,
+            # WHERE THIS SQUARE IS. The town screen had no idea, which was fine
+            # until something stood in exactly one of them.
+            "region": self.state["player"].get("region", ""),
+            # THE STANDING PORTAL, in the one square it stands in and null in
+            # the other sixteen. Not sealed: it is what you have done and where
+            # you may go, and the payload says in its own words that the
+            # practical is not behind it. See `Game.portal`.
+            "portal": (self.portal()
+                       if self.state["player"].get("region", "")
+                       == progression.PORTAL_REGION else None),
         }
 
     def heal(self) -> dict:
         """The Mender. Free, and she says so before you ask."""
         enc = self.encounter
-        sealed = finalexam.sealed(enc, upkeep.UPKEEP_CAPABILITY)
-        if sealed:
+        if self._sealed_for(upkeep.UPKEEP_CAPABILITY):
             return finalexam.refuse(upkeep.UPKEEP_CAPABILITY)
         statuses = list(enc.statuses) if enc else []
         out = upkeep.heal(self.state, statuses=statuses, sealed=False,
@@ -2337,12 +2526,12 @@ class Game:
         enc = self.encounter
         return upkeep.repair_quote(
             self.state, piece, gold=int(self.state["player"]["gold"]),
-            sealed=finalexam.sealed(enc, upkeep.UPKEEP_CAPABILITY))
+            sealed=self._sealed_for(upkeep.UPKEEP_CAPABILITY))
 
     def repair(self, piece: str = "") -> dict:
         """Ferro. The purse is this file's, as always: upkeep REPORTS a spend."""
         enc = self.encounter
-        if finalexam.sealed(enc, upkeep.UPKEEP_CAPABILITY):
+        if self._sealed_for(upkeep.UPKEEP_CAPABILITY):
             return finalexam.refuse(upkeep.UPKEEP_CAPABILITY)
         player = self.state["player"]
         out = upkeep.repair(self.state, piece, gold=int(player["gold"]),
@@ -2444,8 +2633,9 @@ class Game:
         healer hidden where a fainted companion happens.
         """
         enc = self.encounter
-        sealed = finalexam.sealed(enc, upkeep.UPKEEP_CAPABILITY)
-        if sealed:
+        # `_sealed_for`: a sanctuary rest heals, and between two questions of a
+        # measured run there is no encounter to ask the capability of.
+        if self._sealed_for(upkeep.UPKEEP_CAPABILITY):
             return finalexam.refuse(upkeep.UPKEEP_CAPABILITY)
         statuses = list(enc.statuses) if enc else []
         out = sanctuary.rest(self.state, sanctuary_id,
@@ -2780,6 +2970,113 @@ class Game:
             "changes": captives.village_changes(self.state),
             "total": len(captives.CAPTIVES),
         }
+
+    # ======================================================================
+    # THE STANDING PORTAL, AND THE ONE THING IT MUST NEVER STAND IN FRONT OF
+    # ======================================================================
+    #
+    # THE PORTAL GATES THE STORY CLIMAX. Fourteen bosses, fourteen keys, one
+    # door frame in the village square the player walked past on their first
+    # morning. Behind it is the room under the castle, the mythic python wizard
+    # standing in it, the captives, the cutscene and the ending.
+    #
+    # THE PORTAL NEVER GATES THE PRACTICAL. Interview Mode is a MEASUREMENT and
+    # not a reward. A player must be able to sit it AT ANY TIME, from the menu,
+    # at level one, holding nothing, to find out where they stand — that is the
+    # entire point of this game. Gating the measurement behind fourteen boss
+    # kills would make the one honest number in it something you have to earn
+    # twice.
+    #
+    # Those two paragraphs are not a convention here. They are
+    # `world.portal_gates()` and `progression.portal_blocks()`, which answer
+    # False for every measured thing forever and are checked by tests rather
+    # than trusted. `start_interview` below reads neither the keyring nor the
+    # portal, and `practical_access()` exists so a screen can SAY so instead of
+    # a player having to infer it from the absence of a lock.
+
+    def portal(self) -> dict:
+        """The portal panel: fourteen wards, which are lit, and who has the rest.
+
+        Checked against docs/10-sealed-views.md: WORLD, and open during a
+        measured run. The swap test is no — it does not move when the question
+        on the screen does. The in-force test is no — a key is derived from
+        `cleared_bosses`, which no seal suspends. The spend test is no — it
+        names bosses and roads, never a problem.
+        """
+        prog = progression.snapshot(self.state, self.skills,
+                                    readiness=self._readiness())
+        view = progression.portal_view(prog)
+        view["practical"] = self.practical_access()
+        return view
+
+    def practical_access(self) -> dict:
+        """Whether the practical is reachable, and the honest answer is: always.
+
+        This method returns a constant on purpose. It exists so the portal
+        screen, the keyring and the menu can all print the same sentence from
+        the same place, and so that anybody who later adds a condition has to
+        delete a docstring that tells them not to.
+        """
+        return {
+            # finalexam owns the sentence, because finalexam owns the exam. One
+            # source, so the menu, the portal panel and the keyring cannot
+            # drift into three different descriptions of the same open door.
+            **finalexam.practical_gate(),
+            "requires_keys": False,
+            "keys_held": len(world.keys_held(self.state["cleared_bosses"])),
+            "format": "FINAL_EXAM",
+            "where": "From the menu. Interview Mode, at any time.",
+            "gated_by_portal": world.portal_gates("practical"),   # False, forever
+        }
+
+    def enter_portal(self) -> dict:
+        """Step through, or be told exactly which wards are dark.
+
+        A refusal here is never a dead end. It names the bosses still holding
+        keys, and it says in the same breath that the practical is reachable
+        right now with none of them — because the one thing a locked door in
+        this game must never do is make a player think the measurement is
+        behind it.
+        """
+        sealed = self._sealed_in_interview()
+        if sealed:
+            return sealed
+        prog = progression.snapshot(self.state, self.skills,
+                                    readiness=self._readiness())
+        view = progression.portal_view(prog)
+        view["practical"] = self.practical_access()
+        if not progression.portal_open(prog):
+            return {
+                "ok": False, "open": False, "portal": view,
+                "error": "the wards are not answered",
+                "message": view.get("line", ""),
+                "missing": view.get("missing", []),
+                # Said on the refusal, not in a menu somewhere else.
+                "practical": view["practical"],
+            }
+        # Open. `ev_portal_opens` is a WORLD EVENT and progression.advance is
+        # the only thing that fires one — this method does not get a second
+        # opinion about the ledger, it just runs the settle and reports whether
+        # this was the pass that lit it.
+        before = set((self.state.get("world") or {}).get("events_fired") or ())
+        announcements = progression.advance(self.state, self.skills,
+                                            readiness=self._readiness())
+        after = set((self.state.get("world") or {}).get("events_fired") or ())
+        fired = "ev_portal_opens" in (after - before)
+        room = {
+            "ok": True, "open": True, "portal": view,
+            "trial": dict(world.FINAL_TRIAL),
+            "examiner": finalexam.examiner_view(),
+            "gates": list(world.PORTAL_GATES),
+            "never_gates": list(world.PORTAL_NEVER_GATES),
+            "practical": view["practical"],
+            "first_time": bool(fired),
+            "watching": self._antagonist(antagonist.PORTAL_OPENED) or None,
+            "world": announcements,
+            "message": world.THE_STANDING_PORTAL["open_line"],
+        }
+        self.save()
+        return room
 
     # ======================================================================
     # THE LAST SCENE
@@ -3246,14 +3543,22 @@ class Game:
         # player's feet. `roll` is pinned at 1.0 so this is the PREVIEW — it
         # reports the speed and the risk without ever inflicting anything, which
         # is the same discipline elements.resolve_damage uses for a swing.
+        # DEGRADE — docs/10-sealed-views.md §4.D. The row is geography and
+        # stays; `step` alone is computed from the boots actually equipped, and
+        # boots are BUILD. `_player_defender` hands `build_sealed=True` into
+        # elements during a measured run, so the quoted cost is not the cost.
+        # Narrow, real, and the same in-force defect as the loadout screen.
+        sealed = bool(self._sealed_in_interview())
         view["element"] = {
             "id": elements.affinity_for(region_id),
             "view": elements.element_view(elements.affinity_for(region_id)),
             "hazard": ({"id": hazard.id, "name": hazard.name,
                         "blurb": hazard.blurb, "element": hazard.element}
                        if hazard else {}),
-            "step": elements.hazard_step(region_id, boots, roll=1.0),
-            "boots": boots,
+            "step": (None if sealed
+                     else elements.hazard_step(region_id, boots, roll=1.0)),
+            "boots": ("" if sealed else boots),
+            "sealed": sealed,
         }
         return view
 
@@ -3274,6 +3579,9 @@ class Game:
         if not status.get("ok"):
             return {"error": "the road is closed", "route": status}
         self.state["player"]["region"] = status["to"]
+        # See `move`: geography is recorded wherever the player's region
+        # changes, and there are exactly two such places.
+        storymod.note_region(self.state["story"], status["to"])
         walked = self.state["world"].setdefault("routes_walked", [])
         if route_id not in walked:
             walked.append(route_id)
@@ -4542,6 +4850,43 @@ class Game:
         }
 
     def diagnostic_finish(self, answers: dict, *, skipped: bool = False) -> dict:
+        """The placement, taken once.
+
+        TWO THINGS WERE WRONG HERE AND THE SECOND IS THE SERIOUS ONE.
+
+        `diagnostic.seed_skills` is, by its own docstring, "the one place
+        mastery moves without a graded attempt", and it is bounded so that it
+        stays weak evidence: mastery caps at 35 and confidence at 18. What it
+        is NOT bounded against is being called twice. `state.mastery + gain` and
+        `state.unaided_clears += 1` are both cumulative, and nothing here ever
+        read the `done` flag it had just written — so fifty POSTs to
+        `/api/diagnostic/finish` manufactured fifty attempts, fifty clears and
+        fifty UNAIDED clears, with no code run anywhere, and unaided clears are
+        what `adaptive.readiness` and the castle gate are counted in. MASTERY
+        MOVES ONLY ON GRADED EVIDENCE is one of the rules that cannot be
+        weakened, and this was weakening it with a repeat request.
+
+        It is a placement. You are placed once. A second call returns the
+        placement already taken — not an error, because a client that retried a
+        dropped response must get an answer rather than a dead end.
+
+        And it is sealed in a measured run, like every other door that moves the
+        world: `_sealed_in_interview` rather than `finalexam.sealed(enc, ...)`,
+        because between two questions of a run there is no encounter to ask.
+        """
+        sealed = self._sealed_in_interview()
+        if sealed:
+            return sealed
+        taken = self.state.get("diagnostic") or {}
+        if taken.get("done"):
+            return {
+                **(taken.get("placement") or {}),
+                "already": True,
+                "message": "You have already been placed. The ladder moves on "
+                           "graded work from here.",
+                "chapter": curriculum.next_objective(self.skills),
+                "story": self.collect_story(),
+            }
         placement = (diagnostic.skip_placement() if skipped
                      else diagnostic.evaluate(answers or {}))
         skills = self.skills
@@ -4775,7 +5120,8 @@ class Game:
                 purse = economy.roll_purse(
                     region_id=enc.region, difficulty=problem.difficulty,
                     rank=rank, luck=fx.get("loot_luck", 0.0),
-                    is_boss=bool(enc.boss_id), solved=solved,
+                    # The LAST phase, not every phase. See `_boss_finisher`.
+                    is_boss=self._boss_finisher(enc, solved), solved=solved,
                     # READ BEFORE _resolve_boss increments it, which is why this
                     # sits above the boss block rather than below it.
                     times_defeated=self.state["boss_rematch"].get(enc.boss_id, 0),
@@ -4927,7 +5273,10 @@ class Game:
         # -- boss
         boss_event = None
         if enc.boss_id:
-            boss_event = self._resolve_boss(enc, solved, rank, seconds)
+            boss_event = self._resolve_boss(
+                enc, solved, rank, seconds,
+                passed=int(feedback.get("passed", 0) or 0),
+                total=int(feedback.get("total", 0) or 0))
 
         # -- training camp / remediation on failure
         camp = None
@@ -4936,12 +5285,31 @@ class Game:
             camp = adaptive.training_camp(analysis.root_cause, skills, skill_name)
             remediation = adaptive.remediation_plan(self.teachable, analysis.root_cause,
                                                     problem, skills)
+        # HITTING THE FLOOR IS ASKED BEFORE DEATH IS, because the two answer
+        # different questions and only one of them is new. `check` adjudicates
+        # and, if the verdict is death, rewinds the game to the last waking
+        # point and hands back the state to adopt — the same contract as
+        # saves.load_slot. A measured run is death-proof and comes back as a
+        # reprieve at one health, since killing a player mid-run would destroy
+        # graded work in progress.
         stamina_zero = player["stamina"] <= 0
+        death_out = death.check(self.conn, self.state, cause="enemy_turn",
+                                encounter=enc)
+        died = bool(death_out.get("died"))
+        if died:
+            self.state = death_out["state"]
+            player = self.state["player"]
         if stamina_zero:
-            # Stamina at zero is never a punishment. It routes to teaching.
-            player["stamina"] = max(4, player["stamina_max"] // 3)
+            # DEATH REPLACED THE HEAL, NOT THE TEACHING. The player who reached
+            # the floor is the one who most needs the remediation, and that is
+            # as true of a player who died as of one who was spared — they read
+            # it when they wake. Only the heal is conditional, because death.py
+            # has already decided what health they open their eyes on and a
+            # second opinion here would overwrite it.
             camp = camp or adaptive.training_camp(analysis.root_cause or "PYTHON_RECALL",
                                                   skills, skill_name)
+            if not died:
+                player["stamina"] = max(4, player["stamina_max"] // 3)
 
         # -- loot
         drop = None
@@ -4949,7 +5317,7 @@ class Game:
             drop = items.roll_drop(
                 difficulty=problem.difficulty, rank=rank,
                 luck=fx.get("loot_luck", 0.0),
-                is_boss=bool(enc.boss_id),
+                is_boss=self._boss_finisher(enc, solved),
                 skill=skill_name,
                 owned=set(self.state["inventory"]),
                 rng=self._rng,
@@ -5043,7 +5411,10 @@ class Game:
             events.append("first_s_rank")
         if solved and problem.difficulty == "MEDIUM" and enc.hints_used == 0:
             events.append("first_medium_unaided")
-        if enc.boss_id and solved:
+        # CLEARED MEANS THE LAST PHASE FELL. A boss is four to six graded solves
+        # now, and firing the story event on the first of them would hand the
+        # player the beat for something they are still standing in front of.
+        if enc.boss_id and solved and (boss_event or {}).get("defeated"):
             events.append("first_boss_cleared")
         if enc.is_retest and solved and enc.interval_days >= 7:
             events.append("retest_survived_7d")
@@ -5106,6 +5477,16 @@ class Game:
             "remediation": remediation,
             "stamina": player["stamina"], "mana": player["mana"],
             "stamina_triggered_camp": stamina_zero,
+            # The death sequence the client plays: the three slowing beats, the
+            # black, the report of what was lost and what was kept, and where
+            # the player wakes. None on every ordinary turn. A reprieve carries
+            # the same shape and says nobody died — a measured run floors at one
+            # health rather than ending, which is why it is reported separately
+            # instead of being silently indistinguishable from surviving.
+            "death": death_out if death_out.get("died") else None,
+            "reprieve": (death_out if (not death_out.get("died")
+                                       and death_out.get("reason") == "reprieve")
+                         else None),
             "damage_taken": damage_taken,
             "next_retest_days": (0.0 if enc.holdout
                                  else round(interval, 1) if solved else 0.5),
@@ -5787,7 +6168,22 @@ class Game:
         if apex is None:
             return {"apex": None, "region": region_id,
                     "line": "Nothing hunts here."}
-        ready = self._readiness_for(region_id)
+        # DEGRADE, NOT REFUSE — docs/10-sealed-views.md §4.F, and it is newly
+        # cheap. `_readiness_for` counted class bonuses a measured run does not
+        # have, which is why the whole screen was refused; `readiness_from_game`
+        # takes `build_sealed=` and has all along. Everything ELSE on this
+        # screen is now provably player-independent: `pace_for` returns the cast
+        # band, the strike multiplier and the teaching stance from the chapter
+        # and the region id alone. The chapter says how big the place is;
+        # readiness says where in it you land, and only the second half is
+        # sealed. A run sees where the creature is and how long its fight is,
+        # with every BUILD term in the readiness readout at zero and a line
+        # saying why. Not the whole score: the rung term is where the player
+        # stands on the ladder, which no seal suspends, so a sealed readiness
+        # is a smaller true number rather than a flat nought. The note below
+        # says that, because it used to say "zero" and the screen said nine.
+        sealed = bool(self._sealed_in_interview())
+        ready = self._readiness_for(region_id, sealed=sealed)
         row = self._hunt_for(region_id)
         block = self._hunt_state()
         return {
@@ -5795,6 +6191,22 @@ class Game:
             "apex": apex.to_dict(),
             "hunt": row.to_dict(),
             "readiness": ready.to_dict(),
+            "sealed": sealed,
+            "seal_note": ("The chapter decides how long this fight is and that "
+                          "is shown whole. Your preparation score is not: a "
+                          "measured run is fought without the build, so every "
+                          "term that counts gear, element or class reads zero "
+                          "here. What is left standing is the part that is "
+                          "still true — where you are on the ladder — which is "
+                          "why this number is lower than the one outside and "
+                          "not simply absent." if sealed else ""),
+            # THE PACE, said out loud beside the readiness readout so a player
+            # can see that the length they are being quoted is a property of
+            # WHERE THEY ARE STANDING rather than of how well they have done.
+            # Chapter I asks about a third of what chapter XI does; it was flat
+            # across the whole game until the ramp landed.
+            "pace": hunters.pace_for(region_id),
+            "ramp": hunters.ramp_table(),
             "lesson": hunters.lesson_for(region_id),
             "scaling": (hunters.scale_for(region_id, ready=ready) or
                         hunters.Scaling(apex.id, region_id, 0, "", 0, 0, 1.0,
@@ -6700,9 +7112,34 @@ class Game:
         return {"question": question, "seconds": 20, "skill": skill}
 
     def shrine_answer(self, text: str) -> dict:
+        """Trivia at a roadside stone. THE WRITE CLAUSE —
+        docs/10-sealed-views.md §4.G.
+
+        Reading the riddle is a view and stays open. Being PAID for it is not:
+        this grants stamina, focus and XP and moves mastery on two skills
+        through `skillmod.apply_outcome`, so without this check a measured run
+        could heal and move mastery off trivia between questions. A view that
+        changes the save is not a view, and mastery moves only on graded
+        evidence — a shrine riddle is not graded evidence.
+
+        The riddle is still ANSWERED, and still told whether it was right. What
+        a run does not get is the payment.
+        """
         pending = self.state.pop("_shrine", None)
         if not pending:
             return {"error": "no shrine active"}
+        if not self._pays_into_the_world(self.encounter) or self.state.get(
+                "interview"):
+            given = (text or "").strip().lower()
+            correct = any(a in given or given in a
+                          for a in pending["answers"] if given)
+            self.save()
+            return {"correct": correct, "expected": pending["answers"][0],
+                    "stamina": self.state["player"]["stamina"],
+                    "mana": self.state["player"]["mana"], "xp": 0,
+                    "paid": False,
+                    "seal_note": "A measured run may read the stone and may "
+                                 "not be paid for it."}
         given = (text or "").strip().lower()
         correct = any(a in given or given in a for a in pending["answers"] if given)
         player = self.state["player"]
@@ -6730,10 +7167,319 @@ class Game:
                 "xp": 12 if correct else 0}
 
     # -- bosses ------------------------------------------------------------
+    #
+    # A BOSS IS A LADDER NOW, AND THIS IS WHERE THE RUNGS LIVE.
+    #
+    # What was here before: `start_boss` shipped a `phases` list and an `hp_max`
+    # derived from it, `Encounter.boss_phase` was declared and never once
+    # incremented, and a region boss died to ONE solved problem. Six keys per
+    # boss promised a structure the fight did not have.
+    #
+    # What is here now, and the whole of it fits in four sentences:
+    #
+    #   1. `bestiary.open_fight` opens a fight with four to six phases, each
+    #      with its own health pool and its own demanded idioms. It lives in
+    #      state["boss_fight"] so a reload resumes the phase you were on.
+    #   2. A GRADED SOLVE EMPTIES THE PHASE. `land(kind="submit", solved=True)`
+    #      is the only thing that can, which is the Python typing being the
+    #      attack, said in the one place it decides a fight's length.
+    #   3. A FAILED SUBMISSION THAT PASSED TRIALS CHIPS IT.
+    #      `land(kind="cast", ...)` takes damage that has already been through
+    #      elements.resolve_damage against the boss's own buffed armour, and
+    #      bestiary.CAST_FLOOR_HP stops it at one point — so chipping can never
+    #      finish a phase and nothing but graded evidence ever advances the
+    #      fight. It is also why a failed attempt at a boss now visibly moves
+    #      the bar: LEARNING NEVER DEAD-ENDS is a thing the health bar can say.
+    #   4. The phase turn buffs the boss (bestiary's ladder: a heavier blow, a
+    #      second element, a status it did not leave before, plate, a narrower
+    #      demand, more turns) and hands back a `beat` the client plays.
+    #
+    # The key drops when the LAST phase falls and not before. See `_key_card`.
+
+    def _antagonist(self, occasion: str, *, detail: dict | None = None) -> dict:
+        """The Null King, reading one line out of your file.
+
+        He is weather. `blocking` is False in every payload this can return, so
+        a caller attaches the result to a payload it was going to send anyway
+        and a client that ignores it loses nothing. `finalexam.sealed` is the
+        only capability question asked on the path, and in a measured run
+        EXAM_SEAL seals every occasion he has — there is no branch by which he
+        speaks into a measurement.
+
+        Wrapped because a villain that raises inside a result payload is a
+        villain somebody wraps in a try block and then deletes.
+        """
+        # ASKED AT THE DOOR AS WELL AS INSIDE, and this is not belt and braces.
+        # `antagonist.speak` asks `finalexam.sealed(encounter, capability)`,
+        # which is the right question — but it is asked OF AN ENCOUNTER, and
+        # between two questions of a measured run there is not one. The module
+        # would therefore have spoken into the gaps in a run, which is the exact
+        # defect docs/10-sealed-views.md records against `/api/sage`. A run is
+        # open or it is not, and that is `_sealed_in_interview`.
+        if self._sealed_in_interview():
+            return {}
+        try:
+            said = antagonist.speak(occasion, self.state, skills=self.skills,
+                                    detail=detail or {},
+                                    encounter=self.encounter, rng=self._rng)
+        except Exception:                      # noqa: BLE001 - see docstring
+            return {}
+        return said if said.get("lines") else {}
+
+    def unmaking_view(self) -> dict:
+        """The spell, as data, for whoever is drawing it.
+
+        THE SPELL EXPLAINS THE SEAL; IT DOES NOT CHANGE IT. `gauntlet/unmaking`
+        holds no state, reads no save and cannot reach `finalexam.sealed`, which
+        remains the one capability check in the codebase. This is narration over
+        a rule that already existed, so it is safe to serve at any time and is
+        not gated on the run — refusing it would be the animation making the
+        exam harder than the audit.
+
+        `first_time` is the only thing the server knows that the module does
+        not: the full telling once, the wordless short form on every later cast.
+        """
+        seen = bool(self.state.get("story", {}).get("unmaking_seen"))
+        reduced = bool(self.state.get("settings", {}).get("reduced_motion"))
+        return unmaking.cinematic_view(first_time=not seen, reduced_motion=reduced)
+
+    def mark_unmaking_seen(self) -> dict:
+        """Latch the full telling so the second cast is the short form."""
+        story = self.state.setdefault("story", {})
+        first = not story.get("unmaking_seen")
+        story["unmaking_seen"] = True
+        self.save()
+        return {"ok": True, "was_first": first}
+
+    def antagonist_view(self) -> dict:
+        """His standing, his pressure and whatever he has to say right now.
+
+        A read plus a small write — the rotation advances so he does not open
+        with the same sentence twice — which is the same bargain `town_talk`
+        makes, and it is why this is saved afterwards.
+        """
+        # See `_antagonist`: the seal is asked of the RUN, not of an encounter
+        # that may not exist between two questions of one. The curve is still
+        # served — it is standing and pressure, both derived from graded
+        # evidence and both world by docs/10-sealed-views.md — and he simply
+        # has nothing to say while the measurement is running.
+        if self._sealed_in_interview():
+            # DEGRADE, and it has to SAY degrade. This used to splat
+            # `finalexam.refuse("MENTOR")`, whose `error: "sealed"` key makes
+            # `server._reply` answer 409 — so the standing and the pressure
+            # this line is at pains to keep serving arrived at the client under
+            # a status code meaning "no answer", and were thrown away.
+            # `finalexam.suspended` is the same sentence without the key that
+            # turns a served view into a refusal.
+            return {**antagonist.herald(self.state, self.skills),
+                    "lines": [], "moves": [], "blocking": False,
+                    **finalexam.suspended("MENTOR")}
+        out = antagonist.view(self.state, self.skills,
+                              encounter=self.encounter, rng=self._rng)
+        self.save()
+        return out
+
+    def _boss_finisher(self, enc: Encounter, solved: bool) -> bool:
+        """Is THIS submission the one that ends the boss?
+
+        A boss is four to six graded solves now, and two payers read
+        `is_boss=` long before `_resolve_boss` runs: `economy.roll_purse` and
+        `items.roll_drop`. Left as `bool(enc.boss_id)` they would pay the boss
+        rate once per PHASE — four to six boss purses and four to six
+        boss-rate drop rolls for one kill, which is not "more reward for more
+        work", it is the same kill paid for several times.
+
+        So the phases in the middle pay the ordinary encounter rate, which is
+        what they are, and the last one pays what a boss pays.
+        """
+        if not enc.boss_id or not solved:
+            return False
+        fight = self._boss_fight()
+        if not fight or fight.get("boss") != enc.boss_id:
+            return True         # no ladder: the old one-solve boss, unchanged
+        return int(fight.get("phase", 0) or 0) >= int(
+            fight.get("phases", 1) or 1) - 1
+
+    def _boss_fight(self) -> dict | None:
+        """The open fight, or None. Refuses a fight written by another build:
+        a stale shape is a fight that would resolve against the wrong ladder,
+        and dropping it costs one boss re-entry rather than a wrong key."""
+        fight = self.state.get("boss_fight")
+        if not isinstance(fight, dict) or not fight.get("boss"):
+            return None
+        if int(fight.get("v", 0) or 0) != bestiary.FIGHT_VERSION:
+            return None
+        if fight["boss"] not in bestiary.BOSS_BY_ID:
+            return None
+        return fight
+
+    def _write_boss_fight(self, fight: dict | None) -> None:
+        self.state["boss_fight"] = fight or None
+
+    def _boss_element(self, boss_id: str) -> str:
+        """The ground this fight stands on, which is the region's affinity —
+        the same value `vitals()` already gets. bestiary forms no second
+        opinion about the wheel and neither does this."""
+        boss = world.BOSS_BY_ID.get(boss_id, {})
+        region = boss.get("region", "") or (
+            bestiary.BOSS_BY_ID[boss_id].region
+            if boss_id in bestiary.BOSS_BY_ID else "")
+        element = elements.affinity_for(region)
+        return element if element in elements.ELEMENTS else ""
+
+    def _open_boss_fight(self, boss_id: str, rematch: int) -> dict:
+        """Resume the open fight against this boss, or open a new one."""
+        live = self._boss_fight()
+        if live and live.get("boss") == boss_id and not live.get("cleared"):
+            return live
+        fight = bestiary.open_fight(boss_id,
+                                    element=self._boss_element(boss_id),
+                                    rematch=int(rematch or 0))
+        if not fight:
+            # A world boss with no bestiary entry. The fight degrades to the
+            # single-solve shape it has always had rather than refusing to
+            # start, because a boss nobody can walk into is a dead end.
+            self._write_boss_fight(None)
+            return {}
+        fight["problems"] = []
+        self._write_boss_fight(fight)
+        return fight
+
+    def _phase_problem(self, boss: dict, fight: dict, rematch: int) -> str:
+        """The problem THIS phase asks for.
+
+        bestiary.phase_kind names an `encounter_kind` per phase — recognise the
+        family, state the approach, write it, survive the edges, name its cost,
+        fight the disguised rematch — and this draws one from the boss's own
+        spaced-repetition family that has not been served in this fight yet.
+
+        It is a PREFERENCE and never a requirement. A family with nothing of
+        that kind falls back to any unserved family problem, and then to the
+        authored one. A phase that refused to start because the corpus had no
+        COMPLEXITY_DUEL in it would be a dead end, and there are none of those.
+        """
+        authored = self._rematch_problem(boss, rematch)
+        phase = int((fight or {}).get("phase", 0) or 0)
+        if not fight or phase <= 0:
+            return authored
+        problem = self.by_id.get(boss.get("problem_id", ""))
+        if problem is None:
+            return authored
+        want = bestiary.phase_kind(phase, int(fight.get("phases", 1) or 1))
+        used = set(fight.get("problems") or ()) | {authored}
+        family = [p for p in self.teachable
+                  if p.spaced_repetition_family == problem.spaced_repetition_family
+                  and p.id not in used]
+        family.sort(key=lambda p: (adaptive.DIFF_ORDER.index(p.difficulty), p.id))
+        pick = next((p for p in family if p.encounter_kind == want), None)
+        return (pick or (family[0] if family else problem)).id
+
+    def _arm_boss(self, enc: Encounter, fight: dict) -> None:
+        """Put the ladder's buffs on the thing that actually swings.
+
+        `bestiary.boss_vitals` is `vitals()` with the rungs folded in: the blow
+        multiplier, the accreted second element, the focus regen, the specials
+        that focus buys and the status it has climbed to being allowed to
+        leave. `_enemy_turn` reads every one of them off `enc.enemy_vitals`, so
+        this one assignment is what makes a phase turn change a number rather
+        than print a caption.
+
+        The hit points are NOT taken from the fight. A problem encounter's
+        enemy HP is tactics.derive_enemy's count of hidden trials and has never
+        been a health bar; the phase's pool lives on the fight, where `land()`
+        keeps it.
+        """
+        if not fight:
+            return
+        buffed = bestiary.boss_vitals(fight)
+        if not buffed:
+            return
+        row = dict(enc.enemy_vitals or {})
+        keep_hp = int(row.get("hp", buffed.get("hp", 1)) or 1)
+        keep_max = int(row.get("hp_max", buffed.get("hp_max", 1)) or 1)
+        keep_focus = int(row.get("focus", buffed.get("focus", 0)) or 0)
+        # The vial it was rolled for stays rolled. `_arm_enemy` decides once,
+        # before the fight, whether this thing is carrying an antidote;
+        # `boss_vitals` rebuilds the row from the ladder and would hand back the
+        # bare default, which would quietly un-roll it on every phase turn.
+        keep_vials = int(row.get("antidotes", 0) or 0)
+        row.update(buffed)
+        row["antidotes"] = keep_vials
+        row["hp"], row["hp_max"] = keep_hp, keep_max
+        # Focus is not restored by a phase turn. A boss that banked focus in the
+        # phase it just lost would open the next one with a free special, and
+        # the player has earned the opposite of that. Carried only within a
+        # phase; `open_fight` and each turn rebuild the pool, not the balance.
+        row["focus"] = min(int(row.get("focus_max", keep_focus) or keep_focus),
+                           keep_focus)
+        enc.enemy_vitals = row
+
+    def _phase_preview(self, fight: dict) -> dict | None:
+        """The next rung, one phase early, for whoever is wearing the artifact.
+
+        `phase_preview` is in items.EFFECT_LABELS and has been dead payload
+        since the artifacts landed, for the plain reason that there were no
+        phases to preview. Gated on the effect, because an unconditional
+        preview would delete the surprise the rung exists to be.
+        """
+        if not fight or not self.effects().get("phase_preview"):
+            return None
+        boss = bestiary.BOSS_BY_ID.get(fight.get("boss", ""))
+        if boss is None:
+            return None
+        rungs = bestiary.ladder(boss)
+        idx = int(fight.get("phase", 0) or 0)
+        if idx >= len(rungs):
+            return None
+        return {**rungs[idx].to_dict(), "phase": idx + 1, "early": True}
+
+    def _key_card(self, boss_id: str) -> dict | None:
+        """What this boss is holding, whether or not it has been taken yet.
+
+        A key is DERIVED — it is held if and only if its boss is in
+        `cleared_bosses` — so there is no key ledger to fall out of step with
+        the kill list, nothing to drop, nothing to sell, and no inventory bug
+        that can take one back. See world.keys_held.
+        """
+        key = world.key_for_boss(boss_id)
+        if not key:
+            return None
+        return {**key, "held": boss_id in set(self.state["cleared_bosses"])}
+
+    def keyring(self) -> dict:
+        """The fourteen keys, the roads they open and the portal that counts
+        them. World, by the rule in docs/10-sealed-views.md: it is what you have
+        done and where you may go, it does not move when the question on the
+        screen does, and it reports nothing the seal has suspended."""
+        cleared = list(self.state["cleared_bosses"])
+        prog = progression.snapshot(self.state, self.skills,
+                                    readiness=self._readiness())
+        return {
+            "keys": world.keyring(cleared),
+            "held": world.keys_held(cleared),
+            "required": world.PORTAL_KEY_REQUIREMENT,
+            "portal": progression.portal_view(prog),
+            # Said on the screen that counts the keys, because this is exactly
+            # where a player would otherwise conclude the exam is behind them.
+            "practical": self.practical_access(),
+        }
+
     def start_boss(self, boss_id: str) -> dict:
+        # ASKED AT THE DOOR, like every other overworld action, and it was not
+        # being asked at all. `start_encounter` writes state["encounter"], so a
+        # boss opened during a measured run replaced the question being
+        # measured — a player could destroy their own exam by pressing the
+        # wrong thing, and the practical is the one screen in this game that
+        # must never be losable by accident. The write clause in
+        # docs/10-sealed-views.md is what this is: a call that changes the save
+        # is not a view, and a measured run does not make them.
+        sealed = self._sealed_in_interview()
+        if sealed:
+            return sealed
         boss = world.BOSS_BY_ID.get(boss_id)
         if not boss:
             return {"error": "unknown boss"}
+
         if boss.get("final"):
             # Spec: final-boss completion requires actual interview-readiness gates.
             skills = self.skills
@@ -6753,16 +7499,112 @@ class Game:
                     "requirements": requirements,
                     "readiness": ready,
                 }
+        # YOU HAVE TO GO THERE.
+        #
+        # This was the hole under the geography pass. story._places_proved says
+        # that clearing a boss PROVES the player stood in that boss's region,
+        # and story.build_context folds every cleared boss's region into
+        # `regions_entered` on the strength of it — which is what rescues a save
+        # written before the gate existed. Both were relying on a door that was
+        # never locked: `start_boss` asked the seal, asked the readiness bar for
+        # the final boss, and never once asked WHERE THE PLAYER WAS STANDING.
+        #
+        # So a level-six player in the village square could kill the Graph
+        # Necromancer four regions away, take the Ring of Light, and have the
+        # Cartographer — who lives in the Wastes and had never laid eyes on
+        # them — open her chain. That is the exact bug the brief describes, one
+        # hop further round than the place it was fixed.
+        #
+        # AFTER the readiness bar, not before it, and that order is the whole
+        # design of this refusal. The Castle is the one region behind an event
+        # wall rather than a road, so a player who is not ready yet must hear
+        # the readiness bar — the thing they can act on — and not be sent to
+        # walk to a place that is still sealed.
+        #
+        # NO DEAD END, and it is proved rather than asserted:
+        # progression.verify_no_orphans deletes every wall and shows all sixteen
+        # mortal regions still form one component, so the region a region boss
+        # lives in is walkable with no key, no level and no gold. The Castle
+        # opens on `ev_castle_unsealed`, whose terms are restoring captives and
+        # RECALL mastery — both ordinary play, both always available — and the
+        # refusal below names them when there is no road yet instead of leaving
+        # the player looking at a wall with no sentence on it.
+        here = self.state["player"]["region"]
+        if boss["region"] != here:
+            prog = progression.snapshot(self.state, self.skills,
+                                        readiness=self._readiness())
+            path = progression.path_between(prog, here, boss["region"])
+            region = world.REGION_BY_ID.get(boss["region"], {})
+            name = region.get("name", boss["region"])
+            first = progression.ROUTE_BY_ID.get(path[0]) if path else None
+            if path:
+                message = (f"{boss['name']} is in {name}. You are not. Walk "
+                           f"there and it will be waiting.")
+            else:
+                message = (f"{boss['name']} is in {name}, and no road there is "
+                           f"open yet. Nothing here is spent waiting: the way "
+                           f"in opens with the rest of the story.")
+            return {
+                "error": "not there",
+                "message": message,
+                "travel": {
+                    "region": boss["region"],
+                    "region_name": name,
+                    "from": here,
+                    "hops": len(path),
+                    "route": path[0] if path else "",
+                    "route_name": first.name if first else "",
+                    "path": path,
+                    "road_open": bool(path),
+                },
+                # A refusal in this game never leaves the player holding
+                # nothing. Whether or not the road is open, the list of things
+                # that are is attached to the same reply.
+                "things_to_do": self.things_to_do(),
+                # And the one door this refusal is never about.
+                "practical": self.practical_access(),
+            }
+
         rematch = self.state["boss_rematch"].get(boss_id, 0)
+
+        # THE FIGHT, WHICH IS NOW LONGER THAN ONE PROBLEM.
+        #
+        # `open_fight` is called once per boss and then left alone: walking out
+        # and coming back resumes the phase you were on rather than restarting
+        # the ladder, because a four-solve fight that forgets itself on a reload
+        # is a four-solve fight nobody finishes. `_open_boss_fight` returns the
+        # live one when there is one.
+        fight = self._open_boss_fight(boss_id, rematch)
+        fight_view = bestiary.view(fight) if fight else {}
+
         # A rematch that replays the identical problem id is not a rematch. The
         # victory copy promised "the same boss, a different surface form", so the
         # rematch draws a different problem from the boss's own family, one rung
         # harder per tier, and only falls back to the authored one when the
-        # family has nothing else.
-        problem_id = self._rematch_problem(boss, rematch)
+        # family has nothing else. Each PHASE then draws its own problem on top
+        # of that, by the kind bestiary.phase_kind names.
+        problem_id = self._phase_problem(boss, fight, rematch)
+        if fight is not None and problem_id not in (fight.get("problems") or ()):
+            # So the next phase does not draw the same question again. A boss
+            # that asked one problem six times would be a rematch of itself.
+            fight.setdefault("problems", []).append(problem_id)
+            self._write_boss_fight(fight)
         payload = self.start_encounter(problem_id,
                                        mode=config.MODE_ADVENTURE,
                                        boss_id=boss_id, reason="BOSS")
+        enc = self.encounter
+        if enc is not None and fight:
+            # The encounter's own record of where in the ladder it sits. It was
+            # declared with the dataclass and never once written to; this is the
+            # line that was missing, and `_resolve_boss` reads it back.
+            enc.boss_phase = int(fight.get("phase", 0) or 0)
+            # THE BUFFS, FOLDED INTO THE THING THAT ACTUALLY SWINGS. A phase
+            # turn that changes no number is a caption, so the boss standing in
+            # front of the player is `boss_vitals` — the ladder's blow, focus
+            # regen, second element and status — rather than a fresh roll.
+            self._arm_boss(enc, fight)
+            self._write_encounter(enc)
+            self.save()
         spec = next((b for b in self.world.bosses if b.id == boss_id), None)
         # The six-phase structure is world.BOSS_PHASES and stays authoritative —
         # the manifest said worldgen.BossSpec.phases replaces it, but the seeded
@@ -6774,7 +7616,14 @@ class Game:
         seal = finalexam.seal_for(mode=config.MODE_ADVENTURE, boss_id=boss_id)
         payload["boss"] = {
             **boss, "phases": phases, "rematch": rematch,
-            "hp_max": sum(1 for p in phases if p["demanded"]),
+            # WHAT `hp_max` USED TO BE: a count of the seeded phase keys, which
+            # no client ever read and which was not a health bar in any sense.
+            # It is the current phase's real pool now, and `fight` beside it is
+            # the whole ladder, so bosses.js can draw the art stage the server
+            # is actually on instead of guessing from a fraction.
+            "hp": int(fight_view.get("hp", 0)),
+            "hp_max": int(fight_view.get("hp_max", 1) or 1),
+            "fight": fight_view,
             "teaching_available": True,
             "affixes": list(spec.affixes) if spec is not None else [],
             "seal": seal.to_dict(),
@@ -6782,6 +7631,15 @@ class Game:
             # told what this one takes away while they can still walk out.
             "herald": seal.herald,
             "ladder": self.boss_ladder(boss_id)["ladder"],
+            # What this thing is holding, said at the door. The key is the
+            # reason to finish the ladder rather than walk away after phase two,
+            # so it is named before the first line of Python, not after the last.
+            "key": self._key_card(boss_id),
+            # `phase_preview` is a legendary effect that has been in
+            # items.EFFECT_LABELS since the artifacts landed and has never once
+            # been read: "a boss phase announces its modifier one phase early".
+            # There were no phases to announce. There are now.
+            "next_rung": self._phase_preview(fight),
         }
         # THE CAGE, BEFORE THE FIGHT, and this is the whole reason captives.py
         # has any weight. A cage the player WALKED PAST is a different fight
@@ -6809,12 +7667,90 @@ class Game:
         family.sort(key=lambda p: (adaptive.DIFF_ORDER.index(p.difficulty), p.id))
         return family[min(rematch - 1, len(family) - 1)].id
 
+    # What a submission that did NOT solve the problem takes off the phase, as
+    # a share of that phase's pool at full trial coverage.
+    #
+    # It is a third rather than a half because a phase has to stay worth a
+    # graded solve: at a third, three near-misses still leave the pool above
+    # bestiary.CAST_FLOOR_HP's floor of one, and the floor means that even
+    # twenty of them cannot finish it. Nothing here supplies an answer and
+    # nothing here clears a phase. What it buys is the health bar telling the
+    # truth: you were close, and being close moved something.
+    BOSS_CHIP_SHARE = 0.34
+
     def _resolve_boss(self, enc: Encounter, solved: bool, rank: str,
-                      seconds: float) -> dict:
+                      seconds: float, *, passed: int = 0,
+                      total: int = 0) -> dict:
         boss = world.BOSS_BY_ID.get(enc.boss_id, {})
+        fight = self._boss_fight()
+        if fight is not None and fight.get("boss") != enc.boss_id:
+            fight = None
+        # `Encounter.boss_phase` is what it was declared for. It is stamped when
+        # the phase's problem is served and read here, and the two disagreeing
+        # means this submission belongs to a phase the fight has already left —
+        # a second tab, a back button, a replayed request. Landing it would take
+        # two phases off the boss for one solve, so nothing is landed at all.
+        #
+        # It returns rather than falling through to the one-solve path on
+        # purpose: a stale submission must not be able to fell a boss, and the
+        # player is not stranded by it because the fight is exactly where they
+        # left it and `start_boss` walks straight back in.
+        if fight is not None and int(enc.boss_phase or 0) != int(
+                fight.get("phase", 0) or 0):
+            return {
+                "id": enc.boss_id, "name": boss.get("name", ""),
+                "defeated": False, "stale": True,
+                "phase": int(fight.get("phase", 0) or 0),
+                "phases": int(fight.get("phases", 1) or 1),
+                "fight": bestiary.view(fight),
+                "message": "That answer was for a phase this fight has already "
+                           "left. Nothing is lost — walk back in and the boss "
+                           "is standing where you left it.",
+                "history": db.boss_history(self.conn, enc.boss_id),
+            }
+        # THE LADDER, ADVANCED. One call, two kinds, and the kind is decided by
+        # whether the Python ran — which is the only thing in this game that is
+        # ever allowed to decide anything.
+        event = self._land_on_boss(enc, fight, solved=solved,
+                                   passed=passed, total=total)
+        cleared = bool(event.get("cleared")) if fight else bool(solved)
+
+        # `defeated=` IS THE CLEAR, NOT THE SOLVE. Recording a win per phase
+        # would put four rows in the boss history for one kill and would tell
+        # `db.boss_history` — which the exam ladder, the accolades and the
+        # rematch tier all read — that a boss was beaten four times.
         db.record_boss(self.conn, enc.boss_id, seconds=seconds,
-                       hints_used=enc.hints_used, rank=rank, defeated=solved)
-        if solved:
+                       hints_used=enc.hints_used, rank=rank, defeated=cleared)
+
+        # -- A PHASE FELL AND THE BOSS IS STILL STANDING --------------------
+        #
+        # No key, no purse, no cage opened, nothing appended to
+        # cleared_bosses. What the player gets is the beat — the flash, the
+        # herald, the tell — and the next phase's problem, which they fetch by
+        # walking back in. Deliberately NOT started here: `start_boss` already
+        # serves the current phase and starting a second encounter inside the
+        # resolution of the first is how two live encounters end up in one save.
+        if fight and solved and not cleared:
+            self._write_boss_fight(fight)
+            self.save()
+            view = bestiary.view(fight)
+            return {
+                "id": enc.boss_id, "name": boss.get("name", ""),
+                "defeated": False, "advanced": True, "rank": rank,
+                "seconds": round(seconds, 1),
+                "phase": int(fight.get("phase", 0) or 0),
+                "phases": int(fight.get("phases", 1) or 1),
+                "beat": event.get("beat"),
+                "fight": view,
+                "next_rung": self._phase_preview(fight),
+                "key": self._key_card(enc.boss_id),
+                "message": "The phase falls and the thing behind it does not. "
+                           "Walk back in for the next one — the fight is where "
+                           "you left it.",
+                "history": db.boss_history(self.conn, enc.boss_id),
+            }
+
+        if cleared:
             if enc.boss_id not in self.state["cleared_bosses"]:
                 self.state["cleared_bosses"].append(enc.boss_id)
             times_defeated = self.state["boss_rematch"].get(enc.boss_id, 0)
@@ -6860,15 +7796,68 @@ class Game:
                 self.state["player"]["gold"] += boss_gold
                 upkeep.record_income(self.state, boss_gold)
 
+            # -- THE KEY --------------------------------------------------
+            #
+            # Taken by the same fact that records the boss as beaten, in the
+            # same breath as the cages, and for the same reason: there is
+            # nothing to award. `cleared_bosses` IS the keyring —
+            # world.keys_held derives it — so this block grants nothing and
+            # stores nothing. What it does is SAY so, because a key the player
+            # is never told about is a key that does not exist to them.
+            #
+            # It therefore survives a save, a load and a slot round trip for
+            # free: there is no second ledger that could fail to be written.
+            key = self._key_card(enc.boss_id)
+            opened = None
+            if key:
+                prog = progression.snapshot(self.state, self.skills,
+                                            readiness=self._readiness())
+                route = progression.ROUTE_BY_ID.get(key.get("opens", ""))
+                if route is not None:
+                    opened = progression.route_status(
+                        route, prog, frm=route.frm)
+                key["portal"] = progression.portal_view(prog)
+
+            # HE WATCHES. One line, over the kill and over the key, and a
+            # different one when the fourteenth ward lights. None of it blocks,
+            # none of it is load-bearing, and deleting any of these three
+            # statements costs a remark and nothing else.
+            watched = [self._antagonist(antagonist.BOSS_FELLED,
+                                        detail={"boss": enc.boss_id})]
+            if key:
+                watched.append(self._antagonist(antagonist.KEY_TAKEN,
+                                                detail={"key": key["id"]}))
+                if len(world.keys_held(self.state["cleared_bosses"])) >= \
+                        world.PORTAL_KEY_REQUIREMENT:
+                    watched.append(self._antagonist(
+                        antagonist.PORTAL_OPENED))
+            watching = [row for row in watched if row]
+
+            # The fight is over and the ladder comes down with it. A cleared
+            # fight left in the save would be resumed by the next `start_boss`
+            # as a fight already at its last phase, which is how a rematch
+            # would arrive pre-won.
+            self._write_boss_fight(None)
             saves.autosave(self.conn, self.state, "boss_defeated")
             return {"id": enc.boss_id, "name": boss.get("name", ""),
                     "defeated": True, "rank": rank, "seconds": round(seconds, 1),
                     "rematch_tier": self.state["boss_rematch"][enc.boss_id],
                     "gold": boss_gold,
                     "rescue": rescue or None,
+                    "phase": int((fight or {}).get("phase", 0) or 0),
+                    "phases": int((fight or {}).get("phases", 1) or 1),
+                    "key": key,
+                    "opens": opened,
+                    "watching": watching,
                     "history": db.boss_history(self.conn, enc.boss_id)}
         # A boss is never a dead end: it enters its teaching phase, and the
         # ladder comes WITH the refusal rather than behind a route nothing calls.
+        # The fight is NOT thrown away — the phases already cleared stay
+        # cleared, and the chip this submission landed stays landed, so walking
+        # back in resumes rather than restarts.
+        if fight:
+            self._write_boss_fight(fight)
+            self.save()
         seal = finalexam.seal_for(mode=config.MODE_ADVENTURE, boss_id=enc.boss_id)
         return {
             "id": enc.boss_id, "name": boss.get("name", ""), "defeated": False,
@@ -6877,9 +7866,83 @@ class Game:
                 world.REGION_BY_ID.get(boss.get("region", ""), {}).get(
                     "mentor", "byte"))),
             "ladder": self.boss_ladder(enc.boss_id).get("ladder", []),
+            "phase": int((fight or {}).get("phase", 0) or 0),
+            "phases": int((fight or {}).get("phases", 1) or 1),
+            # What the near-miss took off it, and the bar it took it off. This
+            # is the difference between "you failed" and "you were two trials
+            # short and it felt them".
+            "chip": int(event.get("damage", 0) or 0),
+            "fight": bestiary.view(fight) if fight else None,
             "message": "The boss steps back. A mentor arrives. Nothing here is a wall.",
             "history": db.boss_history(self.conn, enc.boss_id),
         }
+
+    def _land_on_boss(self, enc: Encounter, fight: dict | None, *,
+                      solved: bool, passed: int, total: int) -> dict:
+        """One piece of graded evidence, landed on the fight. The ONE call.
+
+        Two kinds and nothing else, and which one it is was decided by whether
+        the player's own Python ran:
+
+          SOLVED   -> `land(kind="submit", solved=True)` empties the phase.
+                      This is the only thing in the game that advances a boss.
+          NOT      -> `land(kind="cast", damage=...)` chips it, with the damage
+                      already through `elements.resolve_damage` against the
+                      boss's own buffed armour, floored by
+                      bestiary.CAST_FLOOR_HP so it can never finish a phase.
+
+        `incantation=` is left empty on purpose. The DEMAND rung halves a cast
+        that is not the phase's demanded IDIOM — an incantation id, from the
+        typed-Python battle — and a graded submission is not one of those. A
+        rung that silently halved every near-miss would be punishing the
+        experiment the whole bestiary exists to encourage.
+        """
+        if not fight:
+            return {"landed": False, "damage": 0, "turned": False,
+                    "cleared": bool(solved), "beat": None, "line": ""}
+        if solved:
+            return bestiary.land(fight, kind="submit", solved=True)
+        # The near miss. Nothing at all if nothing passed: a submission that
+        # solved none of the trials landed no blow, and saying otherwise would
+        # be the game manufacturing a hit.
+        share = (max(0, int(passed)) / max(1, int(total))) if total else 0.0
+        if share <= 0:
+            bestiary.land(fight, kind="submit", solved=False)
+            return {"landed": False, "damage": 0, "turned": False,
+                    "cleared": False, "beat": None, "line": ""}
+        pool = int(fight.get("hp_max", 1) or 1)
+        base = max(1, int(round(pool * share * self.BOSS_CHIP_SHARE)))
+        state = dict(fight.get("buff") or {})
+        defender = elements.Defender(
+            element=state.get("element", "") or fight.get("ground", ""),
+            # THE ARMOUR RUNG, BITING. `buff_state` raises the boss's flat
+            # points and the share of a hit they may remove as the ladder
+            # climbs, and this is the one place a player can feel it: the same
+            # near miss chips less in phase four than it did in phase one.
+            armour=elements.ArmourProfile(
+                points=int(state.get("armour_points", 0) or 0),
+                points_cap=min(elements.ARMOUR_POINT_CAP,
+                               float(state.get("armour_cap", 0.0) or 0.0)),
+                kind="PLATE"),
+            statuses=self._load_statuses(enc.enemy_statuses),
+            max_health=pool,
+            # THE ELEMENT RUNG, BITING. A boss that has accreted the counter to
+            # its own ground is TWO elements, and `Defender.affinities()`
+            # resolves against the chain rather than the primary. Passing only
+            # the first would make the rung a caption: the loadout that was
+            # working would go on working.
+            elements=tuple(state.get("elements") or ()))
+        hit = elements.resolve_damage(
+            base, self._player_element(enc), defender,
+            attacker_statuses=self._load_statuses(enc.statuses),
+            roll=self._rng.random(),
+            build_sealed=finalexam.sealed(enc, "BUILD"))
+        event = bestiary.land(fight, kind="cast", damage=hit.damage)
+        # The spent turn is recorded too, so the fight's own log says what
+        # happened rather than showing a cast that arrived from nowhere.
+        bestiary.land(fight, kind="submit", solved=False)
+        event["line"] = f"{hit.line} {event.get('line', '')}".strip()
+        return event
 
     def boss_ladder(self, boss_id: str) -> dict:
         """Repeated failure reduces complexity rather than repeating the wall."""
@@ -7455,10 +8518,15 @@ class Game:
         enemy_turn = None
         turn_open = None
         routed = False
+        incant_death: dict = {}
         if not cleared:
             enemy_turn = self._incant_enemy_turn(run, ctx, lines,
                                                  correct=bool(result.correct))
             turn_open = self._incant_open_turn(run, lines)
+            incant_death = death.check(self.conn, self.state,
+                                       cause="incant_enemy_turn", encounter=None)
+            if incant_death.get("died"):
+                self.state = incant_death["state"]
             routed = int(self.state["player"]["stamina"]) <= 0
             # ASKED AGAIN, BECAUSE THE ENEMY'S TURN CAN END THE FIGHT. The
             # first thing `_incant_enemy_turn` does is tick the acting monster's
@@ -7489,6 +8557,11 @@ class Game:
                    "strike": strike, "enemy_turn": enemy_turn,
                    "turn_open": turn_open, "lines": lines,
                    **self.incantation_view(ctx)}
+        # Same shape as the graded-submission payload, so the client plays one
+        # death sequence rather than two. `incant_death` is only bound when the
+        # fight was still open; a win never asks.
+        if not cleared and incant_death.get("died"):
+            payload["death"] = incant_death
         if cleared:
             self.state["player"]["xp"] += 40 + 10 * len(ctx.enemies)
             potion = self._incant_reward(run)
@@ -7826,30 +8899,113 @@ class Game:
         self.state["player"]["region"] = region
         self.state["player"]["x"] = x
         self.state["player"]["y"] = y
+        # THE GEOGRAPHY CLAUSE'S EVIDENCE, and the one write story.py asks the
+        # engine to make outside `apply`.
+        #
+        # A story chain that fires on mastery alone gives a fast player a
+        # Coliseum NPC commenting on their times while they are standing in
+        # Python Village at level six. `story.needs_geography` refuses to let a
+        # beat about a place fire before the player has been in it, and this
+        # list is how it knows. It returns True the first time only, so arrival
+        # is an event rather than a per-step write.
+        arrived = storymod.note_region(self.state["story"], region)
+        # He notices the first time and never again. `note_region` returning
+        # True is the arrival; asking on every step would be a villain with a
+        # motion sensor rather than a villain reading a file.
+        watching = self._antagonist(antagonist.REGION_ENTERED,
+                                    detail={"region": region}) if arrived else {}
         self.save()
-        return {"ok": True}
+        return {"ok": True, "arrived": bool(arrived),
+                "watching": watching or None}
 
     def problem(self, problem_id: str, *, mode: str = config.MODE_ADVENTURE) -> dict:
         """Look one problem up by id. The browsable door, so it is also the
-        obvious way to read the hold-out one id at a time; it refuses."""
+        obvious way to read the hold-out one id at a time; it refuses.
+
+        THE MODE OF A LOOKUP IS NOT THE CLIENT'S TO DECLARE —
+        docs/10-sealed-views.md §4.A, and it was the critical one.
+
+        `player_view(mode=)` redacts the pattern, the hint tree, the
+        visualisation, the common failures and the optimal complexity only when
+        the string is exactly "interview". The problem id is in the encounter
+        payload the run itself hands the client — it has to be, or the client
+        could not submit — so `GET /api/problem?id=<the id on the screen>
+        &mode=adventure` handed over PATTERN, HINTS, VISUALS and most of
+        WEAKNESS_MAP for the question being measured, through one GET, with no
+        capability consulted anywhere on the path.
+
+        The parameter is still accepted, because a caller may legitimately ask
+        for the stricter view. It can only ever make the answer stricter now.
+        """
         p = self.by_id.get(problem_id)
         if p is None:
             return {"error": "unknown problem"}
         if corpusmod.is_sealed(p):
             return finalexam.refuse(finalexam.HOLDOUT)
+        if self.state.get("interview") or (
+                self.encounter and self.encounter.mode == config.MODE_INTERVIEW):
+            mode = config.MODE_INTERVIEW
         return p.player_view(mode=mode)
 
     def performance_history(self, problem_id: str | None = None) -> dict:
+        """What you have done. DEGRADE — docs/10-sealed-views.md §4.B.
+
+        The aggregates are world: recent attempts, boss history, interview
+        history, the stats block. `problem_id` is not. `db.attempts_for` is a
+        SELECT *, and the attempts table stores `pattern`, `family`,
+        `declared_pattern` and `root_cause` — so asking it for the id on the
+        screen answered with the family name. That is the same leak as the
+        problem lookup, one hop further round, and it survives fixing that one.
+
+        A measured run gets the aggregates and an empty per-problem list, with
+        the reason named, rather than a 409 on the whole screen.
+        """
+        sealed = bool(self._sealed_in_interview())
         return {
             "recent": db.recent_attempts(self.conn, limit=60),
-            "problem": db.attempts_for(self.conn, problem_id) if problem_id else [],
+            "problem": ([] if sealed or not problem_id
+                        else db.attempts_for(self.conn, problem_id)),
             "bosses": db.boss_history(self.conn),
             "interviews": db.interview_history(self.conn),
             "stats": db.attempt_stats(self.conn),
+            "sealed": sealed,
+            "seal_note": ("Prior attempts on one problem name its pattern and "
+                          "its family. The totals are yours to read; the row "
+                          "for the question in front of you is not."
+                          if sealed else ""),
         }
 
+    # Keys the save carries that name problems the player has NOT been served
+    # yet. See `export`.
+    EXPORT_REDACTED = ("interview", "exam")
+
     def export(self) -> dict:
-        return db.export_save(self.conn)
+        """The save, with the unserved hold-out roster taken out of it.
+
+        docs/10-sealed-views.md §4.H, the spend test, and the other critical.
+        `run_view` was fixed once for exactly this and the save was never
+        re-checked: a measured run reaches for the hold-out FIRST, so
+        `state["interview"]["problem_ids"]` is a list of sealed problems the
+        player has not been served yet, and a sealed problem is spent when it is
+        SERVED. Reading the list therefore costs nothing and buys the player the
+        ability to go and study the questions the selector likes best. The final
+        practical is worse: `_start_exam` writes `state["exam"]`, which the
+        engine's own comment says "carries every question's problem_id and
+        title" — which is why the RESPONSE uses `exam.player_view()`. The save
+        kept the other one and this door shipped the save.
+
+        Redacted ALWAYS, not only mid-run, because neither key is needed to
+        restore a save: a reload re-derives both, and an exported run is a run
+        the player has chosen to bank rather than one they are sitting.
+        """
+        payload = db.export_save(self.conn)
+        state = payload.get("state") if isinstance(payload, dict) else None
+        if isinstance(state, dict):
+            for key in self.EXPORT_REDACTED:
+                if state.get(key):
+                    state[key] = None
+            payload["redacted"] = list(self.EXPORT_REDACTED)
+        return payload
 
     def import_save(self, payload: dict) -> dict:
         """Load a save file, or report why it was refused and change nothing."""

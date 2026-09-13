@@ -156,18 +156,42 @@ for (const { key, colour } of rows) {
     coloursMap: colourCount(map),
   };
 
-  // phases: pixels and silhouette cells that move
+  /* Phases: pixels and silhouette cells that move.
+   *
+   * Two comparisons, and the second one is the claim that matters. Against
+   * stage 0 is "the fight ends looking different from how it started", which a
+   * single change anywhere satisfies for every later stage at once. Against
+   * the stage BEFORE is "every phase turn is visible", and it is the one the
+   * player actually experiences — a turn that moves nothing since the last
+   * turn is a flash, a herald, a tell, and an identical creature. Only the
+   * first of those two was being measured, which is how three archetypes came
+   * to move zero silhouette cells at the old stage 1. */
   const p0 = battle;
-  for (const ph of [1, 2]) {
+  let prev = battle, prevShape = bs, worstStep = Infinity, worstStepAt = 0;
+  for (let ph = 1; ph < B.BOSS_PHASE_COUNT; ph++) {
     const cv = B.bossSprite(key, colour, 0, { phase: ph, beat: 0 });
     const ss = shapeAt(cv);
-    let cells = 0;
-    for (let i = 0; i < ss.bits.length; i++) if (ss.bits[i] !== bs.bits[i]) cells++;
+    let cells = 0, step = 0;
+    for (let i = 0; i < ss.bits.length; i++) {
+      if (ss.bits[i] !== bs.bits[i]) cells++;
+      if (ss.bits[i] !== prevShape.bits[i]) step++;
+    }
     r[`phase${ph}Px`] = pxDiff(p0, cv);
     r[`phase${ph}Cells`] = cells;
+    r[`phase${ph}Step`] = step;
+    r[`phase${ph}StepPx`] = pxDiff(prev, cv);
     r[`phase${ph}Colours`] = colourCount(cv);
     if (r[`phase${ph}Px`] === 0) report.fail.push(`${key}: phase ${ph} changes zero pixels`);
+    if (step === 0) {
+      report.fail.push(`${key}: stage ${B.BOSS_PHASE_NAMES[ph]} moves zero `
+        + `silhouette cells since ${B.BOSS_PHASE_NAMES[ph - 1]}; that phase `
+        + `turn is invisible`);
+    }
+    if (step < worstStep) { worstStep = step; worstStepAt = ph; }
+    prev = cv; prevShape = ss;
   }
+  r.worstStep = worstStep === Infinity ? 0 : worstStep;
+  r.worstStepAt = B.BOSS_PHASE_NAMES[worstStepAt] || '-';
 
   // parts move independently: per-beat deltas inside the idle loop
   const beats = [];
@@ -179,13 +203,13 @@ for (const { key, colour } of rows) {
   // colour budget, off rendered pixels, every frame x phase x beat
   let worst = 0, worstAt = '';
   for (let f = 0; f < B.BOSS_FRAME_COUNT; f++) {
-    for (let ph = 0; ph < 3; ph++) {
+    for (let ph = 0; ph < B.BOSS_PHASE_COUNT; ph++) {
       const n = colourCount(B.bossSprite(key, colour, f, { phase: ph, beat: f < 2 ? 3 : 0 }));
       if (n > worst) { worst = n; worstAt = `f${f}p${ph}`; }
     }
   }
   if (hasMap) {
-    for (let ph = 0; ph < 3; ph++) {
+    for (let ph = 0; ph < B.BOSS_PHASE_COUNT; ph++) {
       const n = colourCount(B.bossMapSprite(key, colour, 0, { phase: ph }));
       if (n > worst) { worst = n; worstAt = `map p${ph}`; }
     }
@@ -282,7 +306,7 @@ if (hasMap) {
   RASTER.counting = true; RASTER.canvases = 0;
   let warmed = 0;
   for (const { key, colour } of rows) {
-    for (let ph = 0; ph < 3; ph++) { warmed += B.warmBoss(key, colour, ph); warmed += B.warmBossMap(key, colour, ph); }
+    for (let ph = 0; ph < B.BOSS_PHASE_COUNT; ph++) { warmed += B.warmBoss(key, colour, ph); warmed += B.warmBossMap(key, colour, ph); }
   }
   const cold = RASTER.canvases;
   RASTER.canvases = 0;
@@ -386,17 +410,21 @@ else {
     console.log(`${pad(r.key, 13)} ${pad(r.mapRings.ring1 + '%', 8)} ${pad(r.mapRings.ring2 + '%', 8)} ${pad(r.battleRings.ring1 + '%', 10)} ${pad(r.battleRings.ring2 + '%', 10)} ${pad(r.mapPx, 8)} ${r.battlePx}`);
   }
   console.log('');
-  console.log('PHASES CHANGE THE ART  — pixels moved, and silhouette cells moved, against phase 0');
-  console.log(`${pad('archetype', 13)} ${pad('p1 px', 7)} ${pad('p1 cells', 9)} ${pad('p2 px', 7)} ${pad('p2 cells', 9)} ${pad('sheds', 8)} ${pad('grows', 8)} beat spread`);
+  const STAGES = [];
+  for (let ph = 1; ph < B.BOSS_PHASE_COUNT; ph++) STAGES.push(ph);
+  console.log('PHASES CHANGE THE ART  — silhouette cells of a 24x24 normalised shape that flipped');
+  console.log('  vs stage 0 (the fight ends different) / vs the stage before (every turn is visible)');
+  console.log(`${pad('archetype', 13)} ${STAGES.map(p => pad(B.BOSS_PHASE_NAMES[p], 10)).join('')}${pad('sheds', 8)} ${pad('grows', 8)} worst step`);
   for (const r of report.bosses) {
-    console.log(`${pad(r.key, 13)} ${pad(r.phase1Px, 7)} ${pad(r.phase1Cells, 9)} ${pad(r.phase2Px, 7)} ${pad(r.phase2Cells, 9)} ${pad(r.sheds, 8)} ${pad(r.grows, 8)} ${r.beatSpread}`);
+    const cols = STAGES.map(p => pad(`${r[`phase${p}Cells`]}/${r[`phase${p}Step`]}`, 10)).join('');
+    console.log(`${pad(r.key, 13)} ${cols}${pad(r.sheds, 8)} ${pad(r.grows, 8)} ${r.worstStep} (${r.worstStepAt})`);
   }
   console.log('');
   const s = report.bosses;
   const avg = (f) => (s.reduce((a, r) => a + r[f], 0) / s.length).toFixed(1);
   console.log(`mean shape agreement ${avg('shapeAgree')}%   mean IoU ${avg('shapeIoU')}%   worst IoU ${Math.min(...s.map(r => r.shapeIoU))}%`);
   console.log(`colour budget: worst ${Math.max(...s.map(r => r.worstColours))} of 15`);
-  if (report.workingSet) console.log(`working set: ${report.workingSet.canvasesBuiltCold} canvases cold, ${report.workingSet.canvasesBuiltWarm} rebuilt warm (cap 832); 1800 draws allocated ${report.drawAllocsCold} cold, ${report.drawAllocs} steady`);
+  if (report.workingSet) console.log(`working set: ${report.workingSet.canvasesBuiltCold} canvases cold, ${report.workingSet.canvasesBuiltWarm} rebuilt warm (cap ${B.BOSS_CACHE_CAP || 832}); 1800 draws allocated ${report.drawAllocsCold} cold, ${report.drawAllocs} steady`);
   if (report.apex) {
     console.log('');
     console.log('THE APEX ROSTER  — gauntlet/hunters.py, seventeen roaming monsters borrowing a body until one is authored');

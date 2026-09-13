@@ -20,12 +20,39 @@
  * the player moved, and the rule that nothing it draws may ever cover the
  * player, a marker or the way out. When nothing is hunting, `this.hunt` is null
  * and every one of those paths is a single null check.
+ *
+ * The Null King is that bargain a third time, and the strictest of the three.
+ * kingui.js owns his art, his panel, his placement and his clock; this file
+ * owns where he sits in the same y-sort, the clamp that keeps him behind
+ * everything he touches, and the order his panel is painted in relative to the
+ * way out. He is NOT in the simulation: solid(), checkTile() and interact() do
+ * not know he exists, so he is incapable of blocking a step, eating a keypress
+ * or delaying a submission. When he has nothing to say, `this.king` is null and
+ * every one of those paths is a single null check too.
+ *
+ * THE UNMAKING is the same bargain a fourth time and the last of them.
+ * unmakingfx.js owns the spell — the beats, the substitutions, the arcs on the
+ * silhouette, the light from the wrong direction — and this file owns the four
+ * places it touches a frame: the hero's image is swapped for the plate, the
+ * arcs are painted at the same coordinates the sprite was drawn at, the
+ * companion's alpha is multiplied by what the spell says it is, and the screen
+ * layer goes on in screen space BEFORE the way out. It is mounted exactly the
+ * way that module's own integration note asks for it and in no other way.
+ *
+ * It does not block either, and it blocks less than he does: there is no key it
+ * waits for, it cannot be dismissed because there is nothing to dismiss, the
+ * player keeps walking the whole way through it, and `update()` reaches it
+ * after the movement branch has already run. When nothing is being taken,
+ * `this.unmaking` is null and every one of those paths is a single null check.
  */
 import * as tiles from './tiles.js';
 import * as sprites from './sprites.js';
 import * as bosses from './bosses.js';
 import * as pixel from './pixel.js';
 import * as apexmod from './apex.js';
+import * as kingui from './kingui.js';
+import * as unmakingfx from './unmakingfx.js';
+import * as monsterart from './monsterart.js';
 import { audio } from './audio.js';
 
 const T = tiles.TILE_SIZE;
@@ -410,6 +437,9 @@ export class Overworld {
     this.player = { x: 4, y: 17, px: 4 * T, py: 17 * T, facing: 'down',
                     frame: 0, moving: false };
     this.keys = new Set();
+    /* The wall-clock hour, sampled in update() and read by draw(). See both. */
+    this._hour = new Date().getHours();
+    this._clockAcc = 0;
     this.particles = [];
     this.particleStyle = pixel.PARTICLE_STYLE.motes;
     this.onEnter = null;
@@ -463,11 +493,76 @@ export class Overworld {
     this._wayOutMark = [{ x: 0, y: 0, edge: '' }, { x: 0, y: 0, edge: '' },
                         { x: 0, y: 0, edge: '' }, { x: 0, y: 0, edge: '' }];
 
+    /* The King. Same two ways in as the companion and the apex, same refusal to
+     * invent a request. Until antagonist.py has something to say, `king` is
+     * null and this feature costs the frame nothing at all.
+     *
+     * `_kingWorld` is allocated here, once, and refreshed in place — the
+     * Presence reads the live player, the live markers and the live camera out
+     * of it, and a fresh object per poll would be an allocation on a path that
+     * runs every frame. */
+    this.king = null;
+    this.onKingSpoke = null;      // (view) on the frame a new thing is said
+    this.onKingGone = null;       // (info) when he stops being there, however
+    this._kingPushed = undefined;
+    this._kingStamp = '';
+    this._kingSeq = 0;
+    this._kingSortY = 0;
+    this._kingUnder = 0;          // times the sort was clamped to keep him behind
+    this._kingPanelAlpha = 0;
+    this._kingWashPeak = 0;
+    this._kingPayloadSeen = false;
+    this._kingRefused = null;
+    /* The Unmaking. Same two ways in as everything else in this file: a push
+     * (`castUnmaking`) or a pull off `stateSource`. Until something casts it,
+     * `unmaking` is null and the four call sites below are four null checks.
+     *
+     * `_heroLook` is the opts dict setEquipment() was last handed. unmakingfx
+     * needs it to know which pixels of the rendered hero are trim and which are
+     * garb, and asking sprites.js twice for the same answer is how the plate
+     * ends up disagreeing with the sprite it is replacing. */
+    this.unmaking = null;
+    this.onUnmakingDone = null;   // (info) when the spell finishes, however
+    this._heroLook = {};
+    this._unmakingPushed = undefined;
+    this._unmakingStamp = '';
+    this._unmakingScreenPeak = 0;
+    this._unmakingArcPx = 0;
+    this._unmakingPrewarmed = 0;
+    this._lookKey = hash('{}').toString(36);
+    this._unmakingCompanionAlpha = 1;
+    this._unmakingFromState = false;
+    this._unmakingSpent = false;
+    this._kingWorld = { regionId: '', mapW: MAP_W, mapH: MAP_H, player: this.player,
+                        markers: this.markers, solid: (x, y) => this.solid(x, y),
+                        viewW: 640, viewH: 420, scale: 3, camX: 0, camY: 0, seq: 0 };
+
     this._bindInput();
   }
 
   setEquipment(opts) {
     this.hero = sprites.heroSprites(opts || {});
+    /* Kept because the spell needs it. It is the same object sprites.js was
+     * given, not a copy and not a re-derivation: unmakingfx asks the rig which
+     * hex it painted each glyph in, and a look that has drifted from the one
+     * the frames were built from would substitute the wrong pixels.
+     *
+     * Re-equipping mid-spell is legal and cheap — the plate cache is keyed on
+     * the sprite key and the take mask, so the new frames simply build new
+     * plates and the old ones age out of the cap. */
+    this._heroLook = opts || {};
+    /* The cache key for the hero's frames, and the reason re-equipping
+     * mid-spell is safe rather than merely legal. unmakingfx keys its plates
+     * and contours on the string this file hands it, so a key built only from
+     * facing, frame and pose would hand back the plate for the OLD armour after
+     * a change of gear — right shape, wrong colours, and nothing would throw.
+     * The look goes in the key, so a different look is a different sprite, and
+     * the stale plates age out of that module's own cap on their own. */
+    this._lookKey = hash(JSON.stringify(this._heroLook || {})).toString(36);
+    if (this.unmaking) {
+      this.unmaking.look = this._heroLook;
+      this._prewarmUnmaking();
+    }
   }
 
   /* Click the companion and it answers.
@@ -508,6 +603,12 @@ export class Overworld {
         e.preventDefault();
       }
       this.keys.add(e.key.toLowerCase());
+      /* E. He is dismissible and he is not waiting for it. Escape only: the
+       * interact key belongs to the world, and a villain who eats the key you
+       * press to open a chest is a villain who is in the way. Nothing else
+       * about this branch changes — the keypress is not consumed, and with
+       * nobody speaking it is one null check. */
+      if (e.key === 'Escape' && this.king) this.dismissKing();
       if (e.key === ' ' || e.key === 'Enter') this.interact();
     });
     window.addEventListener('keyup', (e) => this.keys.delete(e.key.toLowerCase()));
@@ -544,6 +645,25 @@ export class Overworld {
     this._apexHeard = false;
     this._setStage('DORMANT');
     this._syncApex();
+    /* He does not follow you through a door either. What he said belonged to
+     * the field you said it in. */
+    this._kingStamp = '';
+    this.king = null;
+    this._kingPanelAlpha = 0;
+    this._kingWashPeak = 0;
+    /* And the spell does not follow you through a door either. It was cast on
+     * one person standing in one field; carrying it into the next region would
+     * mean the door did not work, which is the promise every escape in this
+     * file is built on. */
+    this.unmaking = null;
+    this._unmakingStamp = '';
+    this._unmakingFromState = false;
+    this._unmakingSpent = false;
+    this._unmakingScreenPeak = 0;
+    this._unmakingArcPx = 0;
+    this._unmakingCompanionAlpha = 1;
+    this._kingWorld.regionId = region.id;
+    this._kingWorld.markers = this.markers;
     this.resize();
   }
 
@@ -630,6 +750,17 @@ export class Overworld {
     if (this.flash > 0) this.flash -= dt * 3;
     this._updateCompanion(dt);
     this._updateApex(dt);
+    this._updateKing(dt);
+    /* After the movement branch, not before it. The order is the guarantee: by
+     * the time a single line of the spell has run this frame, the player's step
+     * has already been taken. */
+    this._updateUnmaking(dt);
+    /* Once a second, not once a frame: the day/night tint changes on the hour
+     * and reading a Date twice a minute is already three thousand times more
+     * often than it can possibly matter. draw() reads `_hour` and never the
+     * clock — see the tint block there. */
+    this._clockAcc += dt;
+    if (this._clockAcc >= 1) { this._clockAcc = 0; this._hour = new Date().getHours(); }
     pixel.stepParticles(this.particles, this.particleStyle, MAP_W * T, MAP_H * T, dt);
   }
 
@@ -1117,6 +1248,436 @@ export class Overworld {
     }
   }
 
+  /* ----------------------------------------------------------------- the King
+   *
+   * gauntlet/antagonist.py decides when he speaks, which occasion it was, which
+   * of five registers he is in and what the words are. This file does four
+   * things with that and nothing else: reads the row, builds a Presence, gives
+   * it a place in the y-sort, and takes it away again. The contract it codes
+   * against is written out at the top of kingui.js, taken from antagonist.py's
+   * own tables rather than invented — and every degrade is silent, so a missing
+   * field, a row for another region, a row with no words or a stateSource that
+   * throws mid-rewrite all mean "he has nothing to say" and the world renders
+   * exactly as it did before this existed.
+   *
+   * THE RULE THIS WHOLE SECTION EXISTS FOR: he never blocks. There is no state
+   * in which the player owes him a keypress, nothing here touches update()'s
+   * movement branch, solid(), checkTile() or interact(), and a payload that
+   * ever asks to be modal has the flag dropped and recorded rather than
+   * honoured. He is weather.
+   */
+
+  /* Push. Pass null for silence; pass undefined to hand the decision back to
+   * stateSource. */
+  setKing(row) {
+    this._kingPushed = row === undefined ? undefined : (row || null);
+    this._syncKing();
+  }
+
+  /* E. Dismissible. Returns whether there was anything to dismiss, so a caller
+   * can decide whether the key it just spent belonged to somebody else. */
+  dismissKing() {
+    if (!this.king) return false;
+    return this.king.dismiss();
+  }
+
+  _kingState() {
+    if (this._kingPushed !== undefined) {
+      return this._kingPushed ? { king: this._kingPushed } : null;
+    }
+    if (typeof this.stateSource !== 'function') return null;
+    try { return this.stateSource(); } catch (e) { return null; }
+  }
+
+  _syncKing() {
+    if (!this.region || !this.scene) { this.king = null; return; }
+    const st = this._kingState();
+    let view = null;
+    try { view = kingui.resolveKing(st, this.region.id); } catch (e) { view = null; }
+
+    // the register table, adopted once if the client is carrying it
+    if (!this._kingPayloadSeen && st && (st.king_payload || st.kingPayload)) {
+      this._kingPayloadSeen = true;
+      try { this._kingRefused = kingui.adoptPayload(st.king_payload || st.kingPayload).refused; }
+      catch (e) { /* a half-built payload is not a reason to stop drawing */ }
+    }
+
+    /* Nothing to say. Note what this does NOT do: it does not silence a
+     * sentence already in the air. The engine clears its row the moment the
+     * client has seen it, and a man cut off mid-word by a poll is a bug in the
+     * poll rather than a characterisation. He finishes, then he goes. */
+    if (!view) { this._kingStamp = ''; return; }
+
+    const stamp = kingui.stampOf(view);
+    if (stamp === this._kingStamp) { if (this.king) this.king.sync(view); return; }
+
+    /* A different sentence. He does not queue — the newest thing he has to say
+     * replaces the one being said, because a backlog is a conversation and he
+     * is not having one. */
+    this._kingStamp = stamp;
+    this._kingSeq++;
+    const w = this._kingWorld;
+    w.regionId = this.region.id;
+    w.player = this.player;
+    w.markers = this.markers;
+    w.viewW = this.viewW; w.viewH = this.viewH; w.scale = this.scale;
+    // He may arrive before the first frame has been painted, so the frame is
+    // asked for rather than remembered.
+    this._camera();
+    w.camX = this._camX; w.camY = this._camY;
+    w.seq = this._kingSeq;
+    this.king = new kingui.Presence(view, w);
+    this._kingUnder = 0;
+    if (this.onKingSpoke) {
+      // One object per THING SAID — a handful in a whole game — not one per
+      // frame. The per-frame paths in this file allocate nothing; this is not
+      // one of them.
+      try {
+        this.onKingSpoke({
+          occasion: view.occasion, register: view.register, text: view.text,
+          ms: view.ms, index: this.king.index, seq: this._kingSeq,
+          regionId: view.regionId, placed: this.king.placed, blocking: false,
+        });
+      } catch (e) { /* a listener that throws is not this module's problem */ }
+    }
+  }
+
+  _updateKing(dt) {
+    this._syncKing();
+    const k = this.king;
+    if (!k) return;                       // F. one null check and out
+    if (k.update(dt, this.time) !== 'gone') return;
+    const why = k.dismissed ? 'dismissed' : (k.walked > 16 * 5 ? 'walked away' : 'said');
+    this.king = null;
+    this._kingPanelAlpha = 0;
+    this._kingWashPeak = 0;
+    if (this.onKingGone) {
+      try { this.onKingGone({ occasion: k.view.occasion, register: k.register, why }); }
+      catch (e) { /* same */ }
+    }
+  }
+
+  /* -------------------------------------------------------- the Unmaking
+   *
+   * THE LAST SPELL, ON THE MAP HE SAID IT ON.
+   *
+   * gauntlet/unmaking.py owns the spell: which crutch leaves in which order,
+   * what each act is called, how long each beat runs, and the words. This file
+   * asks that module rather than inventing any of it — `castUnmaking` takes the
+   * JSON `unmaking.cinematic()` returns and hands it straight to
+   * unmakingfx.beatsFromCinematic, and the standalone table in unmakingfx is
+   * only what happens when nobody passed one.
+   *
+   * FOUR THINGS HAPPEN TO A FRAME AND THEY ARE ALL IN THIS FILE:
+   *
+   *   1  the hero's image is swapped for the plate that has lost what has been
+   *      taken so far — an exact colour substitution over the same pixels, so
+   *      his SILHOUETTE never moves;
+   *   2  the green arcs are painted on his own outline, at the same coordinates
+   *      the sprite was drawn at, inside the same camera transform;
+   *   3  the companion's alpha is multiplied by what the spell says, and once
+   *      that is zero the animal stops being drawn;
+   *   4  the screen layer goes on in screen space.
+   *
+   * WHERE THE SCREEN LAYER IS PAINTED, AND WHY NOT LAST. unmakingfx's own
+   * integration note asks for "the same place as _drawApexOverlay". It goes
+   * just BEFORE it instead, and that is deliberate: the screen layer is a
+   * whole-frame wash of up to 0.30, the apex overlay ends on the gold chevron
+   * that points at the way out, and this file has exactly one rule it will not
+   * break for any feature — nothing it draws may end up on top of the door.
+   * The King's panel is ordered against the same promise, ten lines down.
+   *
+   * IT DOES NOT BLOCK. There is no key it waits for, nothing to dismiss,
+   * nothing to confirm, and no branch in update() that stops reading the
+   * movement keys while it runs. `cancel()` exists for a host that needs the
+   * sequence over now, and the player never has to use it.
+   *
+   * THE CONTRACT FOR main.js, which this pass does not touch. Four lines, and
+   * three of them are optional.
+   *
+   * PUSH — the host decides:
+   *
+   *   G.overworld.castUnmaking({
+   *     cinematic: await api.unmakingCinematic(),   // gauntlet/unmaking.py
+   *   });                                          // omit for the 15.60s table
+   *   G.overworld.onUnmakingDone = (info) => { ... };  // optional, fires once,
+   *                                                    // {seconds, beats,
+   *                                                    //  takenMask, stillPlain}
+   *   G.overworld.clearUnmaking();                 // give the gear back
+   *
+   * PULL — the engine decides. `stateSource()` returns a row under any of
+   * `unmaking` / `last_spell` / `nullKingSpell`, in the shape
+   *
+   *   { cinematic } | { beats } | { active: true }   // plus optional `key`
+   *
+   * and it is cast when the row first appears. Drop the row and the hero gets
+   * his gear back once the spell has finished; change `key` and it recasts.
+   *
+   * AFTERWARDS, AND THIS IS THE PART THAT IS EASY TO GET WRONG. When the
+   * sequence ends the hero STAYS PLAIN — see _updateUnmaking. That is the
+   * event, not a leak. The host takes him out of it in exactly one of three
+   * ways: clearUnmaking(), dropping the state row, or calling setEquipment()
+   * with whatever the engine now says he is wearing. Doing nothing leaves a man
+   * standing in a field with nothing on him, which is the correct picture.
+   *
+   * WHAT THE HOST NEVER HAS TO DO: wait for it, gate on it, pause anything,
+   * hide the HUD, or handle a key for it. `unmakingDebug().blocking` is false
+   * and there is no branch that can set it.
+   *
+   * Every degrade is silent: a malformed row, a cinematic from a newer schema,
+   * a stateSource that throws — all of them mean "nothing is being taken", and
+   * the overworld renders exactly as it did before this existed.
+   */
+  castUnmaking(spec = {}) {
+    const o = spec || {};
+    let beats = null;
+    try {
+      if (Array.isArray(o.beats) && o.beats.length) beats = unmakingfx.beatsFrom(o.beats);
+      else if (o.cinematic) beats = unmakingfx.beatsFromCinematic(o.cinematic);
+    } catch (e) { beats = null; }
+    let fx = null;
+    try {
+      fx = unmakingfx.createUnmaking({
+        sprites, look: this._heroLook,
+        beats: (beats && beats.length) ? beats : undefined,
+        reducedMotion: this.reducedMotion,
+      });
+    } catch (e) { return null; }     // a spell that will not build is silence
+    this.unmaking = fx;
+    this._unmakingSpent = false;
+    this._unmakingFromState = false;
+    this._unmakingScreenPeak = 0;
+    this._unmakingArcPx = 0;
+    this._unmakingCompanionAlpha = 1;
+    this._prewarmUnmaking();
+    return fx;
+  }
+
+  /* Every plate and every contour the sequence can ask for, built BEFORE the
+   * first frame of it. Without this the effect is still correct and allocates a
+   * canvas on each beat boundary from inside the draw loop, which is the one
+   * thing scripts/verify/cap.mjs exists to fail on. Twenty-four hero frames —
+   * four facings by four walk frames and two idle ones — and up to eight
+   * companion strips: 96 plates and 56 contours, measured, a few milliseconds,
+   * once, at the moment he starts. */
+  _prewarmUnmaking() {
+    const u = this.unmaking;
+    if (!u) return 0;
+    let built = 0;
+    try {
+      for (const facing of ['down', 'up', 'left', 'right']) {
+        const walk = this.hero[facing] || [];
+        for (let f = 0; f < walk.length; f++) {
+          built += u.prewarm(walk[f], this._heroKey(facing, f, 'walk'), facing, f, 'walk');
+        }
+        const idle = (this.hero.idle && this.hero.idle[facing]) || [];
+        for (let f = 0; f < idle.length; f++) {
+          built += u.prewarm(idle[f], this._heroKey(facing, f, 'idle'), facing, f, 'idle');
+        }
+      }
+      /* Every strip the draw pass can CHOOSE, chosen the same way it chooses
+       * it. Enumerating c.art by hand here instead would name keys the draw
+       * pass never asks for and miss the ones it does — a companion with no
+       * idle strip for a facing falls back to its walk strip while still
+       * reading as standing still, and that fallback has to be warmed under the
+       * name the draw pass will look it up by, or the contour is traced inside
+       * the render loop. */
+      if (this.companion && this.companion.art) {
+        for (const cf of ['down', 'up', 'left', 'right']) {
+          for (const moving of [true, false]) {
+            const strip = this._companionStrip(cf, moving);
+            if (!strip) continue;
+            for (let f = 0; f < strip.length; f++) {
+              u.prewarmSprite(strip[f], this._companionKey(cf, f, !moving));
+            }
+          }
+        }
+      }
+    } catch (e) { /* a rig that will not warm still draws; it just allocates */ }
+    this._unmakingPrewarmed = built;
+    return built;
+  }
+
+  /* The two key builders, in one place so the warm pass and the draw pass
+   * cannot disagree about what a sprite is called. A key that differs between
+   * them shows the wrong plate; it cannot crash, which is exactly why it would
+   * never be noticed. */
+  _heroKey(facing, frame, pose) {
+    return `hero|${this._lookKey}|${facing}|${frame}|${pose}`;
+  }
+  /* Which strip the companion is drawn from, as an array, for one facing and
+   * one movement state. The draw pass and the warm pass both go through here so
+   * they cannot disagree about which image a key names. */
+  _companionStrip(facing, moving) {
+    const c = this.companion;
+    if (!c || !c.art) return null;
+    const idle = c.art.idle;
+    const strip = (!moving && idle && idle[facing]) ? idle[facing]
+                : (c.art[facing] || c.art.down);
+    if (!strip) return null;
+    return strip.length !== undefined ? strip : [strip];
+  }
+  _companionKey(facing, frame, idle) {
+    const c = this.companion;
+    return `pet|${(c && c.id) || '-'}|${facing}|${frame}|${idle ? 'i' : 'w'}`;
+  }
+
+  _unmakingState() {
+    if (this._unmakingPushed !== undefined) return this._unmakingPushed;
+    if (typeof this.stateSource !== 'function') return null;
+    let st = null;
+    try { st = this.stateSource(); } catch (e) { return null; }
+    if (!st || typeof st !== 'object') return null;
+    const row = st.unmaking || st.last_spell || st.lastSpell
+             || st.nullKingSpell || st.null_king_spell;
+    return (row && typeof row === 'object') ? row : null;
+  }
+
+  /* Push. Pass null to end it; pass undefined to hand the decision back to
+   * stateSource. Symmetrical with setKing and setCompanion on purpose. */
+  setUnmaking(row) {
+    this._unmakingPushed = row === undefined ? undefined : (row || null);
+    // An explicit null is the host saying "nothing is being taken any more",
+    // and unlike a row that merely stopped arriving it releases a spent effect
+    // outright rather than waiting to be asked twice.
+    if (this._unmakingPushed === null && this.unmaking && this.unmaking.done) {
+      this.clearUnmaking();
+      this._unmakingPushed = null;
+      return;
+    }
+    this._syncUnmaking();
+  }
+
+  _syncUnmaking() {
+    const row = this._unmakingState();
+    if (!row) {
+      /* The row went away. What is already running is NOT cut off mid-beat —
+       * the same rule the King gets: a spell interrupted by a poll is a bug in
+       * the poll. It is asked to finish first.
+       *
+       * Once it HAS finished, a row that is no longer there is the engine
+       * saying the world is not being unmade any more, and the spent effect is
+       * released — which is the only thing that gives the hero his gear back. A
+       * spell this file was handed directly rather than read off the state is
+       * never released here: the host that cast it is the host that ends it. */
+      this._unmakingStamp = '';
+      if (this._unmakingFromState && this.unmaking && this.unmaking.done) {
+        this.clearUnmaking();
+      }
+      return;
+    }
+    const stamp = String(row.key || row.stamp || row.seq
+                         || (row.cinematic && row.cinematic.version) || 'cast');
+    if (stamp === this._unmakingStamp) return;
+    this._unmakingStamp = stamp;
+    this.castUnmaking(row);
+    this._unmakingFromState = true;
+  }
+
+  /* Give it back. The only way the hero returns to his gear, and it is the
+   * host's decision rather than this file's — see _updateUnmaking. */
+  clearUnmaking() {
+    if (!this.unmaking) return false;
+    this.unmaking = null;
+    this._unmakingStamp = '';
+    this._unmakingFromState = false;
+    this._unmakingSpent = false;
+    this._unmakingScreenPeak = 0;
+    this._unmakingArcPx = 0;
+    this._unmakingCompanionAlpha = 1;
+    return true;
+  }
+
+  /* WHAT HAPPENS AFTER THE LAST BEAT, which is the whole point of the spell.
+   *
+   * The effect is NOT thrown away when it finishes. Nulling it here is the
+   * obvious thing to write and it undoes the entire sequence on the very next
+   * frame: heroImage stops being consulted, the hero reverts to the dressed
+   * sprite, and fifteen seconds of being taken from ends with the player back
+   * in full armour as though none of it had happened. Measured, before this
+   * comment existed: zero pixels different from the dressed hero one frame
+   * after the spell that took everything.
+   *
+   * So the spent effect is kept, and keeping it costs almost nothing: step()
+   * returns immediately, `air` is zero past the last beat so there are no arcs
+   * and no wash, and heroImage is a pointer comparison handing back the
+   * fully-taken plate. The hero STAYS plain — which is what the spell did —
+   * until the host says otherwise, by calling clearUnmaking(), by handing
+   * setEquipment() the stripped look the engine now says he is wearing, or by
+   * dropping the state row that cast it.
+   *
+   * onUnmakingDone fires exactly once, on the frame the last beat ends. */
+  _updateUnmaking(dt) {
+    this._syncUnmaking();
+    let u = this.unmaking;
+    if (!u) return;                      // one null check and out
+    /* prefers-reduced-motion is a CONSTRUCTION-time flag in unmakingfx, and
+     * main.js re-reads the media query into `this.reducedMotion` whenever the
+     * setting changes. A player who turns it on halfway through fifteen seconds
+     * of this has asked for the motion to stop and would otherwise keep getting
+     * it until the spell ended. Rebuilding and seeking to the same `t` is that
+     * module's own documented answer: same beats, same position, nothing
+     * moving. It happens at most once or twice in a lifetime. */
+    if (!!this.reducedMotion !== !!u.reducedMotion) {
+      const at = u.t, spent = this._unmakingSpent, fromState = this._unmakingFromState;
+      const rebuilt = this.castUnmaking({ beats: u.beats });
+      if (rebuilt) {
+        rebuilt.seek(at);
+        this._unmakingSpent = spent;
+        this._unmakingFromState = fromState;
+        u = rebuilt;
+      }
+    }
+    let done = false;
+    try { done = u.step(dt); } catch (e) { done = true; }
+    if (!done || this._unmakingSpent) return;
+    this._unmakingSpent = true;
+    this._unmakingScreenPeak = 0;
+    this._unmakingArcPx = 0;
+    if (this.onUnmakingDone) {
+      try {
+        this.onUnmakingDone({ seconds: u.duration, beats: u.beats.length,
+                              takenMask: u.taken, stillPlain: true });
+      } catch (e) { /* a listener that throws is not this module's problem */ }
+    }
+  }
+
+  /* What scripts/verify reads back. Allocation-free for the caller to ignore. */
+  unmakingDebug() {
+    const u = this.unmaking;
+    if (!u) return null;
+    return {
+      beat: u.beat, beatId: u.beatId, k: +u.k.toFixed(3),
+      t: +u.t.toFixed(3), duration: +u.duration.toFixed(2), done: u.done,
+      takenMask: u.taken, platesPrewarmed: this._unmakingPrewarmed,
+      companionAlpha: +this._unmakingCompanionAlpha.toFixed(3),
+      arcPixelsLastFrame: this._unmakingArcPx,
+      screenPeakAlpha: +this._unmakingScreenPeak.toFixed(4),
+      reducedMotion: !!u.reducedMotion,
+      spent: !!this._unmakingSpent,
+      fromState: !!this._unmakingFromState,
+      // The promise, restated where a harness can read it.
+      blocking: false, blocksInput: false, dismissRequired: false,
+    };
+  }
+
+  /* What scripts/verify/kingui.mjs reads back. Cheap, and allocation-free for
+   * the caller to ignore. */
+  kingDebug() {
+    if (!this.king) return null;
+    const d = this.king.debug();
+    d.sortY = +this._kingSortY.toFixed(2);
+    d.framesSortClampedBehindSomething = this._kingUnder;
+    d.panelAlpha = +this._kingPanelAlpha.toFixed(4);
+    d.washPeakAlpha = +this._kingWashPeak.toFixed(4);
+    d.payloadRefused = this._kingRefused || [];
+    // The promise, restated where a harness can read it rather than where a
+    // reviewer has to believe it.
+    d.blocksInput = false;
+    d.inCollision = false;
+    return d;
+  }
+
   /* What scripts/verify/apexhunt.mjs reads back. */
   apexDebug() {
     if (!this.hunt) return null;
@@ -1230,16 +1791,36 @@ export class Overworld {
           } });
           continue;
         }
-        const key = m.kind === 'elite' ? 'construct' : 'slime';
-        const motion = sprites.enemyMotion(key);
-        const pose = sprites.idlePose(motion, t, m.x + m.y);
-        const img = sprites.enemySprite(
-          key, 'ARRAY', pose.frame, m.kind === 'elite' ? '#d84a7a' : null);
-        const ox = (T - sprites.ENEMY_SIZE) / 2;
+        /* WHAT THIS USED TO BE, and why it is worth a comment: every
+         * ordinary encounter in all seventeen regions was hardcoded to
+         * 'slime' and every elite to 'construct'. The Marsh, the Mines and
+         * the Castle all fielded the Fields' animals. monsterart.js resolves
+         * against the region's own roster, so the creature standing on the
+         * tile now belongs to the place the player is standing in.
+         *
+         * The pick is seeded off the marker id, so it is stable across
+         * frames and across a reload of the same world, and two nodes in one
+         * region are usually two different animals. Elites keep the pink
+         * tint they always had — it is the only thing distinguishing them at
+         * a glance, and the species colour is not load-bearing for that. */
+        const regionId = (this.region && this.region.id) || null;
+        const key = monsterart.pickFor(regionId, sprites.hash(m.id));
+        const pose = monsterart.monsterFrameAt(key, t * 1000, 'idle',
+                                               m.x + m.y, { region: regionId });
+        const img = monsterart.monsterFrame(key, pose.frame, {
+          region: regionId, pose: 'idle',
+          colour: m.kind === 'elite' ? '#d84a7a' : undefined,
+        });
+        const size = monsterart.monsterSize(key, { region: regionId });
+        const sh = monsterart.monsterShadow(key, { region: regionId });
+        const ox = (T - size) / 2;
         out.push({ x: m.x, y: m.y, sortY: m.y * T + T, draw: (ctx) => {
-          sprites.drawGroundShadow(ctx, m.x * T + T / 2, m.y * T + T - 1, 7, 3, 0.3);
-          ctx.drawImage(img, m.x * T + ox + pose.dx,
-                        m.y * T + T - sprites.ENEMY_SIZE + pose.dy);
+          sprites.drawGroundShadow(ctx, m.x * T + T / 2, m.y * T + T - 1,
+                                   sh.rx, sh.ry, sh.alpha);
+          if (img) {
+            ctx.drawImage(img, m.x * T + ox + pose.dx,
+                          m.y * T + T - size + pose.dy);
+          }
         } });
       } else if (m.kind === 'npc') {
         const villager = this.villagers[
@@ -1294,10 +1875,39 @@ export class Overworld {
     const p = this.player;
     const facing = (p.facing === 'side') ? 'right' : p.facing;
     const frames = p.moving ? this.hero[facing] : this.hero.idle[facing];
-    const img = frames[p.frame % frames.length];
+    const fi = p.frame % frames.length;
+    const img = frames[fi];
+    /* THE UNMAKING, on the sprite. Two lines, and both of them are null checks
+     * when nothing is being taken.
+     *
+     * `heroImage` returns the very same object it was handed until something
+     * has actually been taken, so the ordinary frame is a pointer comparison
+     * and `shown === img`. Once a taking has landed it returns a PLATE: the
+     * same pixels with the taken ones substituted, which is why his silhouette
+     * never moves and why "the trim went grey" is a number rather than a claim.
+     *
+     * The key must be the same string the prewarm pass used or the wrong plate
+     * comes back, silently — so neither side builds it, _heroKey does. */
+    const u = this.unmaking;
+    const pose = p.moving ? 'walk' : 'idle';
+    const ukey = u ? this._heroKey(facing, fi, pose) : '';
+    let shown = img;
+    if (u) { try { shown = u.heroImage(img, ukey, facing, fi, pose) || img; }
+             catch (e) { shown = img; } }
     out.push({ x: p.x, y: p.y, sortY: p.py + T + 1, draw: (ctx) => {
       sprites.drawGroundShadow(ctx, p.px + T / 2, p.py + T - 1, 6, 3, 0.32);
-      ctx.drawImage(img, Math.round(p.px), Math.round(p.py + T - sprites.HERO_H));
+      ctx.drawImage(shown, Math.round(p.px), Math.round(p.py + T - sprites.HERO_H));
+      /* The green ON the sprite — the brief's own words. Arcs crawling his own
+       * outline, painted immediately after the sprite, at the coordinates the
+       * sprite went down at, inside the same camera transform. It paints single
+       * pixels on the sprite's own lattice, so it stays pixel-aligned at any
+       * integer world scale. */
+      if (u) {
+        try {
+          this._unmakingArcPx = u.drawSprite(
+            ctx, shown, Math.round(p.px), Math.round(p.py + T - sprites.HERO_H), ukey);
+        } catch (e) { this._unmakingArcPx = 0; }
+      }
       if (!p.moving) {
         // a soft chevron above the head when standing still: enough to find
         // yourself in a village, not enough to be noise while walking
@@ -1305,6 +1915,15 @@ export class Overworld {
         ctx.fillStyle = 'rgba(232,195,125,0.85)';
         ctx.fillRect(p.px + 6, p.py - 10 + bob, 4, 2);
         ctx.fillRect(p.px + 7, p.py - 8 + bob, 2, 2);
+      }
+      /* The Green Index, landing on the player. Four corner brackets and one
+       * slow read across the sprite, in the colour that has been turning up in
+       * side quests since Chapter II — and this is the first time it is aimed
+       * at the person holding it. kingui owns the treatment and the rule that
+       * it only happens from PRECISE up; this is one null check and a call. */
+      if (this.king) {
+        kingui.drawIndexOnPlayer(ctx, this.king, p.px, p.py, this.time,
+                                 this.reducedMotion);
       }
     } });
 
@@ -1321,9 +1940,8 @@ export class Overworld {
     const c = this.companion;
     if (c && c.art) {
       const cf = (c.facing === 'side') ? 'right' : c.facing;
-      const idle = c.art.idle;
-      const strip = (!c.moving && idle && idle[cf]) ? idle[cf] : (c.art[cf] || c.art.down);
-      const cimg = strip && (strip.length !== undefined ? strip[c.frame % strip.length] : strip);
+      const strip = this._companionStrip(cf, c.moving);
+      const cimg = strip && strip[c.frame % strip.length];
       if (cimg && cimg.width) {
         const cw = cimg.width, ch = cimg.height;
         const cx = Math.round(c.px + (T - cw) / 2);
@@ -1336,10 +1954,42 @@ export class Overworld {
         const sx = c.px + T / 2, sy = c.py + T - 1;
         const sr = c.shadowR, sry = c.shadowRY;
         const alertColour = (c.alert && this.hunt) ? this.hunt.view.colour : null;
-        out.push({ x: Math.floor(c.px / T), y: Math.floor(c.py / T), sortY,
+        /* THE UNMAKING, on the companion — the one thing in the sequence that
+         * actually LEAVES. Everything taken off the hero is a colour
+         * substitution and his outline survives all of it; the animal's shape
+         * goes out, and its silhouette is the number that is not zero.
+         *
+         * `companionAlpha` is 1 before its beat and 0 after it, so a host that
+         * multiplies by it unconditionally is correct the whole way through.
+         * At zero the animal is not drawn at all, and it does not come back. */
+        const uc = this.unmaking;
+        let ca = 1;
+        if (uc) { try { ca = uc.companionAlpha(); } catch (e) { ca = 1; } }
+        this._unmakingCompanionAlpha = ca;
+        /* The index of the frame that was ACTUALLY chosen out of the strip,
+         * not c.frame. The walk strips are four long and the idle strips are
+         * two, so `c.frame % 4` invents two key names the prewarm pass never
+         * built — and an unwarmed key traces its contour on the spot, which
+         * means a canvas allocated inside the draw loop. Measured: exactly the
+         * thing scripts/verify/cap.mjs exists to fail on. */
+        const cfi = c.frame % strip.length;
+        const ckey = uc ? this._companionKey(cf, cfi, !c.moving) : '';
+        if (ca > 0.004) out.push({ x: Math.floor(c.px / T), y: Math.floor(c.py / T), sortY,
                    draw: (ctx) => {
+          const prev = ctx.globalAlpha;
+          /* `ca` goes on globalAlpha and NEVER into drawGroundShadow's alpha
+           * argument. sprites.groundShadow caches on its parameters, alpha
+           * included, so a shadow whose alpha is a continuously varying number
+           * is a fresh canvas built and cached on every single frame the
+           * companion is fading — measured at 48 canvases allocated inside the
+           * draw loop over one departure, which is precisely the failure
+           * scripts/verify/cap.mjs exists to catch. The constant is the cache
+           * key; the fade is free. */
+          if (ca < 1) ctx.globalAlpha = prev * ca;
           sprites.drawGroundShadow(ctx, sx, sy, sr, sry, 0.28);
           ctx.drawImage(cimg, cx, cy);
+          ctx.globalAlpha = prev;
+          if (uc) { try { uc.drawCompanion(ctx, cimg, cx, cy, ckey); } catch (e) { /* no contour, no arc */ } }
           if (alertColour) {
             apexmod.drawCompanionAlert(ctx, cx + cw / 2 - 1, cy - 7, alertColour,
                                        this.time, this.reducedMotion);
@@ -1401,22 +2051,78 @@ export class Overworld {
                  draw: (ctx) => apexmod.drawApexBody(ctx, h, time, rm) });
     }
 
+    /* A. The King joins the same y-sort as the hero, the trees, the companion
+     * and the apex, because a figure painted over the scene is a menu with a
+     * costume on. He is IN the field: the tree he is standing behind covers
+     * him, and that is what makes him a presence rather than an overlay.
+     *
+     * Then the same one rule the apex gets, for the same reason and by the same
+     * arithmetic:
+     *
+     *   HE MAY NEVER COVER THE PLAYER, A MARKER, OR AN EXIT.
+     *
+     * kingui.Presence.place() has already refused every position whose box
+     * touches one of those, so in the ordinary case this loop finds nothing and
+     * his sort is honest. It is here for the cases geometry cannot answer — a
+     * building whose sprite is two tiles tall reaching up into him, a marker
+     * that moved after he arrived — and it resolves every one of them the same
+     * way: drawn before the thing he touches, which means underneath it. */
+    const k = this.king;
+    if (k && k.placed && k.alpha > 0.004) {
+      const bw = kingui.KING_W, bh = k.reg.rows;
+      const bx = k.ax - bw / 2, by = k.ay - kingui.KING_H;
+      let sortY = k.ay;
+      let clamped = false;
+      const underKing = (oy, ox, ow, oh, osort) => {
+        if (bx >= ox + ow || bx + bw <= ox || by >= oy + oh || by + bh <= oy) return;
+        if (osort - 0.5 < sortY) { sortY = osort - 0.5; clamped = true; }
+      };
+      underKing(p.py + T - sprites.HERO_H, p.px, sprites.HERO_W, sprites.HERO_H,
+                p.py + T + 1);
+      for (let i = 0; i < this.markers.length; i++) {
+        const m = this.markers[i];
+        if (m.x < view.x0 - 4 || m.x > view.x1 + 4
+            || m.y < view.y0 - 4 || m.y > view.y1 + 4) continue;
+        if (m.kind === 'building') {
+          underKing(m.y * T, m.x * T, T * 2, T * 2, m.y * T + T * 2 - 4);
+        } else if (m.kind === 'exit') {
+          underKing(m.y * T - 4, m.x * T, T, T + 8, m.y * T);
+        } else if (m.kind === 'boss') {
+          underKing(m.y * T + T - 64, m.x * T + T / 2 - 32, 64, 64, m.y * T + T);
+        } else {
+          underKing(m.y * T + T - 24, m.x * T - 4, T + 8, 24, m.y * T + T);
+        }
+      }
+      this._kingSortY = sortY;
+      if (clamped) this._kingUnder++;
+      const ktime = this.time;
+      const krm = this.reducedMotion;
+      out.push({ kind: 'king', x: Math.floor(k.ax / T), y: Math.floor(k.ay / T), sortY,
+                 draw: (ctx) => kingui.drawKingBody(ctx, k, ktime, krm) });
+    }
+
     return out;
 
+  }
+
+  /* Where the frame is, clamped to the map. One copy of this arithmetic:
+   * draw() paints with it, _companionHit turns a pointer back into world space
+   * with it, and the King asks it whether a place he is thinking of standing is
+   * actually on screen. Two copies would drift the first time either moved. */
+  _camera() {
+    const s = this.scale;
+    this._camX = Math.max(0, Math.min(MAP_W * T - this.viewW / s,
+                                      this.player.px - this.viewW / (2 * s) + T / 2));
+    this._camY = Math.max(0, Math.min(MAP_H * T - this.viewH / s,
+                                      this.player.py - this.viewH / (2 * s) + T / 2));
   }
 
   draw() {
     if (!this.scene) return;
     const ctx = this.ctx;
     const s = this.scale;
-    const camX = Math.max(0, Math.min(MAP_W * T - this.viewW / s,
-                                      this.player.px - this.viewW / (2 * s) + T / 2));
-    const camY = Math.max(0, Math.min(MAP_H * T - this.viewH / s,
-                                      this.player.py - this.viewH / (2 * s) + T / 2));
-    // Kept so a pointer event can be turned back into world space. Recomputing
-    // the camera in the click handler would be a second copy of this clamp, and
-    // the two would drift the first time either is touched.
-    this._camX = camX; this._camY = camY;
+    this._camera();
+    const camX = this._camX, camY = this._camY;
 
     const pal = this.scene.set.palette;
     ctx.fillStyle = pal.sky;
@@ -1436,7 +2142,15 @@ export class Overworld {
     this.drawMotif(ctx);
     pixel.drawParticles(ctx, this.particles, this.particleStyle, 0.45);
 
-    const hour = new Date().getHours();
+    /* The wall clock is READ IN update(), not here. Two reasons, and the second
+     * is the one that matters: a draw path that asks what time it is is a draw
+     * path that cannot be compared against itself, and every determinism check
+     * in scripts/verify is a comparison of two frames drawn from the same state
+     * — they agree today because they run inside the same hour and would stop
+     * agreeing at nine in the evening. The same rule that keeps Math.random and
+     * Date.now out of this file applies to a Date constructor; it just took a
+     * clock crossing a boundary to make it visible. */
+    const hour = this._hour;
     const night = hour >= 21 || hour < 5;
     tiles.drawLights(ctx, this.scene, view, time, night ? 1 : 0.45);
 
@@ -1461,6 +2175,50 @@ export class Overworld {
     grad.addColorStop(1, 'rgba(0,0,0,0.26)');
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, this.viewW, this.viewH);
+
+    /* THE UNMAKING, on the screen. Screen space, camera already unwound,
+     * globalAlpha PINNED rather than inherited — everything above this line is
+     * a stack of translucent passes, and a wash whose cap depends on what the
+     * particle layer happened to leave on the context is not a cap, it is a
+     * hope.
+     *
+     * THE WHOLE SCREEN ORDER, BOTTOM TO TOP, AND WHY IT IS THAT ORDER. Each
+     * layer may cover the one under it and nothing else:
+     *
+     *   1  the room  — vignette, night tint, flash
+     *   2  the spell — this, a whole-frame wash of up to 0.30
+     *   3  his words — the King's panel, which has to stay READABLE while he
+     *      is taking things, and would not be if the wash went on top of it
+     *   4  the way out — apex.js's gold chevron, over everything, always
+     *
+     * That puts this ahead of his own panel and well ahead of the door. It is a
+     * departure from unmakingfx's own integration note, which asks for "the
+     * same place as _drawApexOverlay", and it is the right one: the two things
+     * on this screen a player might actually need — what he said, and where the
+     * exit is — are the two things his weather does not get to paint over. */
+    if (this.unmaking) {
+      const prevA = ctx.globalAlpha;
+      ctx.globalAlpha = 1;
+      try {
+        this._unmakingScreenPeak =
+          this.unmaking.drawScreen(ctx, this.viewW, this.viewH);
+      } catch (e) { this._unmakingScreenPeak = 0; }
+      ctx.globalAlpha = prevA;
+    }
+
+    /* His panel, in screen space, and BEFORE the hunt's telegraph on purpose.
+     * PANEL_TOP already clears both of apex.js's rim lanes, so the two never
+     * touch — but a margin is a hope and an ordering is a guarantee, and the
+     * guarantee the whole apex overlay is built around is that nothing this
+     * file draws can end up on top of the way out. He is the most dangerous
+     * thing in the game and he still does not get to paint over the door. */
+    if (this.king) {
+      this._kingWashPeak = kingui.drawIndexWash(
+        ctx, this.king, this.viewW, this.viewH, this.time, this.reducedMotion);
+      this._kingPanelAlpha = kingui.drawKingPanel(
+        ctx, this.king, this.viewW, this.viewH, this.scale, this.time,
+        this.reducedMotion);
+    }
 
     /* Last of everything, deliberately. The room's own vignette is 0.26 at the
      * rim and the night tint is another 0.16 on top of it, and a gold arrow

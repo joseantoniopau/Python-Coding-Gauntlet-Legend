@@ -17,6 +17,7 @@
 import * as pixel from './pixel.js';
 import * as sprites from './sprites.js';
 import * as bosses from './bosses.js';
+import * as monsterart from './monsterart.js';
 import * as lootart from './lootart.js';
 import * as spellfx from './spellfx.js';
 import * as stagelayer from './battlescene.js';
@@ -338,6 +339,17 @@ export class BattleFX {
     this.bossFrame = 0;
     this.bossState = 'idle';
     this.bossStateT = 0;
+    /* THE ART PHASE, and it is the fix for a bug rather than a feature.
+     *
+     * web/js/bosses.js has had a phase system since it was written: the plate
+     * opens, the creature sheds a limb, a core lights. _drawEnemy never passed
+     * one. Nothing in the tree ever passed one. So every boss in every fight
+     * was drawn at stage 0 — the art existed, was measured, was verified, and
+     * was never once on screen. Two numbers, carried from the server's phase
+     * turn to the sprite builder, is the whole of it. */
+    this.bossPhase = 0;          // art stage, 0..bosses.BOSS_PHASE_COUNT-1
+    this.bossPhases = 0;         // how many phases this fight has
+    this.phaseCard = null;       // the herald and the tell, mid-turn
     this.knock = 0;
     this.flash = 0;
     this.tintColour = null; this.tint = 0;
@@ -468,6 +480,11 @@ export class BattleFX {
 
     this.scene = {
       pal, biome, seed,
+      /* The region ID, kept because monsterart resolves a bestiary sprite key
+       * against the region's OWN roster. Without it every region draws the
+       * default roster's animals, which is the bug monsterart.js exists to
+       * fix. `biome` above is not a substitute: two regions share a biome. */
+      regionId: (region && region.id) || null,
       backdrop: buildBackdrop(pal, biome, seed),
       enemy: enemy || { name: '—', sprite: 'slime', boss: false },
       pattern: pattern || 'ARRAY',
@@ -498,6 +515,18 @@ export class BattleFX {
     this.bossFrame = 0;
     this.bossState = 'idle';
     this.bossStateT = 0;
+    /* A boss that walks in already cracked has thrown away the only moment
+     * where cracking it means anything, so a fight opens at stage 0 unless the
+     * payload says otherwise — which it does on a reload into a fight already
+     * three phases deep. */
+    this.bossPhases = Math.max(0, (enemy && enemy.phases) | 0);
+    this.bossPhase = this.scene.boss
+      ? bosses.bossPhase(enemy && (enemy.art_phase !== undefined
+        ? { art_phase: enemy.art_phase }
+        : { phase: enemy.phase, phases: enemy.phases }))
+      : 0;
+    this.phaseCard = null;
+    if (this.scene.boss) this._warmPhase(this.bossPhase);
 
     this.weatherStyle = pixel.PARTICLE_STYLE[BIOME_WEATHER[biome] || 'motes'];
     this.weather = pixel.makeParticles(biome, STAGE.w, STAGE.ground, 26);
@@ -552,6 +581,7 @@ export class BattleFX {
     this.banner = null;
     this.nameCard = null;
     this.crawl = null;
+    this.phaseCard = null;
     this.tint = 0;
     this.tintColour = null;
     this.heroLunge = 0;
@@ -1494,6 +1524,121 @@ export class BattleFX {
     return this;
   }
 
+  /* ---------------- the phase turn ----------------
+   *
+   * THE ONE BEAT THIS PASS ADDS, and the requirement it answers is not "make
+   * it pretty". It is: a player has to SEE the phase turn, SEE it get
+   * stronger, and be told WHY they are suddenly losing. Three jobs, three
+   * places, and if any one of them is cut the other two stop working.
+   *
+   * Everything here is driven by the payload gauntlet/bestiary.phase_beat()
+   * returns. Nothing about the timing is invented at this end: the server owns
+   * the beat because the server owns the fight, and a client that made up its
+   * own 1900ms would drift from the combat log the moment either was tuned.
+   * Every field has a fallback, so a caller holding an older payload — or none
+   * at all — still gets a legible turn.
+   *
+   *   0ms      FREEZE. The stage stops for freeze_ms. The cheapest way to make
+   *            a hit read as an event, and it costs no art.
+   *   0ms      FLASH and SHAKE, and the pip for the phase just cleared goes
+   *            out. This is "something happened".
+   *   140ms    THE ART TURNS, under the flash, so the creature is DIFFERENT
+   *            when the white clears instead of transforming in front of an
+   *            eye that is watching it. This is the line that was missing: the
+   *            sprite builder has drawn six stages since it was written and
+   *            nothing ever asked it for one.
+   *   420ms    THE HERALD — the boss's own line for the phase it is entering.
+   *   1100ms   THE TELL — one sentence naming what changed. The easiest thing
+   *            on this list to cut and the one that must not be, because it is
+   *            the entire difference between "this got hard" and "this got
+   *            hard because it is two elements now".
+   *
+   * Reduced motion collapses the flourishes and keeps both text holds at full
+   * length. Cutting reading time is not an accessibility win.
+   */
+  async bossPhaseTurn(beat = {}) {
+    const stage = bosses.bossPhase(beat.art_phase !== undefined
+      ? { art_phase: beat.art_phase }
+      : { phase: beat.phase, phases: beat.phases });
+    const phases = (beat.phases | 0) || this.bossPhases;
+    const ms = (v, d) => Math.max(0, (v === undefined ? d : v)) / 1000;
+
+    /* Warm the incoming stage BEFORE the flash. A phase change is the one
+     * moment in a fight that asks for fifteen canvases at once, and generating
+     * them inside the render loop is a visible hitch at exactly the moment the
+     * player is looking hardest. */
+    this._warmPhase(stage);
+
+    this._sfx('crit');
+    this.flash = Math.max(this.flash, beat.flash === undefined ? 0.92 : beat.flash);
+    this.shake(this._amp(beat.shake === undefined ? 8 : beat.shake));
+    this.holdUntil = this.clock + ms(beat.freeze_ms, 180);
+    this.tintColour = beat.colour || '#ff6a7a';
+    this.tint = this.reducedMotion ? 0 : 0.38;
+    if (phases) {
+      this.pips = phases;
+      this.pipsLit = Math.max(0, phases - (beat.phase | 0));
+    }
+    this.burst({
+      x: STAGE.enemyX, y: STAGE.ground - 54,
+      colour: beat.colour || '#ff6a7a', count: 22, power: 70, life: 0.55,
+    });
+
+    await this._wait(this._t(ms(beat.art_at_ms, 140), { keep: true }));
+    if (!this.el) return this;
+    // The turn itself. Everything above is announcement; this is the change.
+    this.bossPhase = stage;
+    if (phases) this.bossPhases = phases;
+    this.bossState = 'hurt';
+    this.bossStateT = 0;
+    this.sprites.clear();          // the cached frames are of the old creature
+
+    await this._wait(this._t(Math.max(0, ms(beat.herald_at_ms, 420)
+      - ms(beat.art_at_ms, 140)), { keep: true }));
+    if (!this.el) return this;
+    this.tint = 0;
+    this.phaseCard = {
+      label: String(beat.label || beat.phase_label || 'IT CHANGES').toUpperCase(),
+      herald: String(beat.herald || ''),
+      tell: '',
+      colour: beat.colour || '#ff6a7a',
+      t: 0, dur: this.reducedMotion ? 2.4 : 2.6,
+    };
+
+    await this._wait(this._t(Math.max(0, ms(beat.tell_at_ms, 1100)
+      - ms(beat.herald_at_ms, 420)), { keep: true }));
+    if (!this.el || !this.phaseCard) return this;
+    this.phaseCard.tell = String(beat.tell || '');
+    this._sfx('tick');
+    return this;
+  }
+
+  /* The art stage, set without the beat. For a reload into a fight already
+   * three phases deep, and for any caller that would rather drive the turn
+   * itself. */
+  setBossPhase(phase, phases) {
+    if (phases !== undefined) this.bossPhases = Math.max(0, phases | 0);
+    const stage = bosses.bossPhase(
+      phases === undefined ? phase : { phase, phases });
+    if (stage === this.bossPhase) return this;
+    this.bossPhase = stage;
+    this.sprites.clear();
+    this._warmPhase(stage);
+    return this;
+  }
+
+  /* Build one stage's canvases outside the render loop. Never load-bearing:
+   * bossSprite generates on demand anyway, so a throw here costs a hitch and
+   * nothing else. */
+  _warmPhase(stage) {
+    if (!this.scene || !this.scene.boss) return this;
+    try {
+      bosses.warmBoss(this.scene.enemy.sprite,
+        this.scene.enemy.colour || undefined, stage);
+    } catch (e) { /* the sprite builder will do it lazily instead */ }
+    return this;
+  }
+
   /* ---------------- internals: timing ---------------- */
 
   /* Durations. Reduced motion collapses flourishes but keeps anything the
@@ -1569,7 +1714,8 @@ export class BattleFX {
     try {
       img = e.boss
         ? bosses.bossSprite(e.sprite, e.colour || undefined, frame)
-        : sprites.enemySprite(e.sprite, this.scene.pattern, frame, e.colour || undefined);
+        : monsterart.monsterSprite(e.sprite, this.scene.pattern, frame,
+            e.colour || undefined, { region: this.scene.regionId });
     } catch (err) {
       img = null;
     }
@@ -1801,7 +1947,12 @@ export class BattleFX {
     this.last = now;
     this.clock += dt;
     this._runTimers();
-    this._update(dt);
+    /* The impact freeze. `holdUntil` was declared in the constructor, reset in
+     * destroy(), and never once read — so the one field in this class whose
+     * entire job is to stop time did not. A phase turn is the beat it was put
+     * there for. Timers and the render still run: freezing the promise queue
+     * would strand whatever is awaiting the rest of the beat. */
+    if (this.clock >= this.holdUntil || this.reducedMotion) this._update(dt);
     this._render();
   }
 
@@ -1872,6 +2023,10 @@ export class BattleFX {
       this.banner.t += dt;
       if (this.banner.t >= this.banner.dur) this.banner = null;
     }
+    if (this.phaseCard) {
+      this.phaseCard.t += dt;
+      if (this.phaseCard.t >= this.phaseCard.dur) this.phaseCard = null;
+    }
     if (this.nameCard) this.nameCard.t += dt;
     if (this.crawl) {
       this.crawl.t += dt;
@@ -1909,6 +2064,7 @@ export class BattleFX {
     this._drawTint(ctx);
     this._drawBanner(ctx);
     this._drawBossCard(ctx);
+    this._drawPhaseCard(ctx);
   }
 
   _drawBackdrop(ctx) {
@@ -1999,6 +2155,7 @@ export class BattleFX {
         flash: this.flash,
         alpha: this.enemyAlpha,
         colour: e.colour,
+        phase: this.bossPhase,
         reducedMotion: this.reducedMotion,
       });
       return;
@@ -2232,6 +2389,57 @@ export class BattleFX {
     }
   }
 
+  /* The herald and the tell. Two registers on purpose: the boss's own line is
+   * theatre and is allowed to be long, the tell is mechanics and is one short
+   * sentence in a plainer colour underneath it. A player who reads only the
+   * second one has still been told why they are losing, which is the point.
+   *
+   * Drawn low rather than across the middle: the middle is where the banner
+   * goes and where the creature IS, and covering the creature during the one
+   * beat whose whole purpose is showing the creature change would be a joke at
+   * the file's own expense. */
+  _drawPhaseCard(ctx) {
+    const c = this.phaseCard;
+    if (!c) return;
+    const k = clamp(c.t / c.dur, 0, 1);
+    const inK = clamp(c.t / 0.18, 0, 1);
+    const alpha = (k > 0.82 ? 1 - (k - 0.82) / 0.18 : 1) * inK;
+    const herald = this._wrap(c.herald, 34);
+    const tell = c.tell ? this._wrap(c.tell, 40) : [];
+    const lines = 1 + herald.length + tell.length;
+    const h = 10 + lines * 9;
+    const y0 = STAGE.h - h - 22;
+
+    ctx.globalAlpha = alpha * 0.86;
+    ctx.fillStyle = '#0b0a12';
+    ctx.fillRect(0, y0, STAGE.w, h);
+    ctx.fillStyle = withAlpha(c.colour, 0.7);
+    ctx.fillRect(0, y0, STAGE.w, 1);
+    ctx.fillRect(0, y0 + h - 1, STAGE.w, 1);
+    /* A bar that drains for as long as the card is up, so the player can see
+     * how much reading time is left rather than losing a sentence to a
+     * disappearance they did not expect. */
+    ctx.fillStyle = withAlpha(c.colour, 0.45);
+    ctx.fillRect(0, y0 + h - 1, Math.round(STAGE.w * (1 - k)), 1);
+    ctx.globalAlpha = alpha;
+
+    let y = y0 + 9;
+    this._text(ctx, c.label, STAGE.w / 2, y, {
+      size: c.label.length > 24 ? 5 : 6, colour: c.colour, outline: '#0b0a12' });
+    y += 10;
+    for (const line of herald) {
+      this._text(ctx, line, STAGE.w / 2, y, {
+        size: 6, colour: '#e8e6f5', outline: '#0b0a12' });
+      y += 9;
+    }
+    for (const line of tell) {
+      this._text(ctx, line, STAGE.w / 2, y, {
+        size: 5, colour: '#9b96b8', outline: '#0b0a12' });
+      y += 9;
+    }
+    ctx.globalAlpha = 1;
+  }
+
   /* ---------------- internals: text ---------------- */
 
   _text(ctx, str, x, y, { size = 8, colour = '#e8e6f5', outline, align = 'center' } = {}) {
@@ -2302,4 +2510,4 @@ export function trialsFromFeedback(feedback, combat) {
 
 /* 1.1.0 adds technique(): the forged blade's swing, scaled entirely by its
  * rung, and the camera hold frame in battlescene.js that it drives. */
-export const FX_VERSION = '1.1.0';
+export const FX_VERSION = '1.2.0';   // 1.2: bossPhaseTurn, and the art phase finally reaches drawBoss

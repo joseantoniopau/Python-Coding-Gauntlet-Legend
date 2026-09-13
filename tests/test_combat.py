@@ -460,6 +460,7 @@ class TestNoDeadEnd(CombatTest):
     def _descend(self, plan, room, world_seed):
         """One descent, at one point of health, in one pinned world."""
         from gauntlet import dungeons
+        self._probed_floor = False
         g = self.fresh()
         g.choose_class("analyst")
         g.choose_build("ANALYST")
@@ -511,15 +512,52 @@ class TestNoDeadEnd(CombatTest):
             problem = g.by_id[g.encounter.problem_id]
 
             # The miss, at one point of health. It must cost the turn and put
-            # the player on their feet somewhere, never end the descent.
-            g.state["player"]["stamina"] = 1
-            g.save()
-            g.submit("def nope():\n    return 1\n")
+            # the player ON THEIR FEET SOMEWHERE. There are now two ways that
+            # can happen, and the guarantee is about the floor rather than
+            # about the descent:
+            #
+            #   SPARED — the old path. Health comes back to a third, a training
+            #     camp is raised, and the run is still open.
+            #   DIED   — since gauntlet/death.py landed. Zero health is a death,
+            #     the game rewinds to the last waking point, and `dungeon_run`
+            #     rewinds with it: "the descent. you are not in the dungeon any
+            #     more." That is the real cost of dying the brief asked for.
+            #
+            # Neither may LOCK the player out, and that is what is measured. A
+            # death is a setback you walk back from; if it were not, the walk
+            # back below would fail and so would this test.
+            probed_the_floor = getattr(self, "_probed_floor", False)
+            if not probed_the_floor:
+                g.state["player"]["stamina"] = 1
+                g.save()
+            result = g.submit("def nope():\n    return 1\n")
             self.assertGreater(g.state["player"]["stamina"], 0,
-                               "a miss at one point of health was a loss, not "
-                               "a camp")
-            self.assertTrue(g.state.get(dungeons.STATE_KEY),
-                            "a missed answer closed the dungeon")
+                               "a miss at one point of health left the player "
+                               "on the floor")
+            if not g.state.get(dungeons.STATE_KEY):
+                # They died. Prove the way back in is open: they are fightable,
+                # and the same dungeon takes them again.
+                self.assertTrue(result.get("death"),
+                                "the descent ended without a death to explain it")
+                g.state["player"]["region"] = plan.region
+                g.save()
+                again = g.enter_dungeon(plan.id)
+                self.assertFalse(again.get("error"),
+                                 "death locked the player out of %s: %s"
+                                 % (plan.id, again))
+                built2 = g._dungeon_for(
+                    plan.id, g.state[dungeons.STATE_KEY].get("seed"))
+                g.state["dungeon_map"][built2.id] = {
+                    str(r.id): code[i % len(code)].id
+                    for i, r in enumerate(built2.rooms)}
+                g.save()
+                # The floor has been probed and the way back in was open. The
+                # rest of the descent is walked at ordinary health: pinning to
+                # one point before every room would die in every room and
+                # measure nothing but the dying.
+                self._probed_floor = True
+                continue
+            self._probed_floor = True
 
             # And then the line, written correctly, with nothing equipped that
             # helps. Being swept to a training camp does not take the room away:
@@ -991,3 +1029,11 @@ class TestItSurvivesTheSave(CombatTest):
         after = self.facts(g)
         self.assertTrue(after["tiers"], "undo emptied the rungs")
         self.assertTrue(any(after["metals"].values()), "undo emptied the bag")
+
+
+# Runnable on its own. tests/run_all.py discovers this file too, but the
+# suite is long enough that it gets killed mid-run on some machines, and a file
+# that exits 0 without running anything is worse than one that fails.
+if __name__ == "__main__":
+    import unittest
+    unittest.main(verbosity=2)

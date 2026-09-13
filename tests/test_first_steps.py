@@ -436,3 +436,11 @@ class TestTheTeachingOrderGateStrandsNobody(FirstStepsTest):
                 adaptive.gating_prerequisites(by_id[problem.id], by_id),
                 list(problem.prerequisites),
                 f"{problem.id} lost its teaching order to the gate rule")
+
+
+# Runnable on its own. tests/run_all.py discovers this file too, but the
+# suite is long enough that it gets killed mid-run on some machines, and a file
+# that exits 0 without running anything is worse than one that fails.
+if __name__ == "__main__":
+    import unittest
+    unittest.main(verbosity=2)

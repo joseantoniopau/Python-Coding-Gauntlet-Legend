@@ -20,6 +20,9 @@ import * as partyui from './partyui.js';
 import * as uikit from './uikit.js';
 import * as townui from './townui.js';
 import * as huntui from './huntui.js';
+import * as deathfx from './deathfx.js';
+import { Transformation } from './transform.js';
+import * as spellfx from './spellfx.js';
 import * as legendui from './legendui.js';
 import * as finaleui from './finaleui.js';
 
@@ -250,6 +253,10 @@ async function refresh() {
     }
   }
   paintVitals();
+  // ensureAlarm rather than paintVitalBands: the band on screen must be dropped
+  // when it no longer describes the health on screen, and that check lives in
+  // exactly one place.
+  ensureAlarm();
   applySettings();
   return G.state;
 }
@@ -399,6 +406,14 @@ function paintWorldSide() {
     const h = hunted.hunt || {};
     const sc = hunted.scaling || {};
     const rd = hunted.readiness || {};
+    /* THE CHAPTER RAMP, said beside the readiness score. The hunt used to cost
+     * 26-52 encounters flat across the whole game — the same price in chapter I
+     * as in chapter XI. It ramps now, and a player has to be able to see that
+     * the number they are being quoted moved because of the ground rather than
+     * because of them. `pace` is hunters.pace_for() and is computed from the
+     * region id and the chapter alone, which is why it is readable even inside
+     * a measured run while the readiness score beside it is not. */
+    const pace = hunted.pace || null;
     const row = el('div', 'list-item',
       `<span class="t" style="color:${hunted.apex.colour}">${
          hunted.apex.name.toUpperCase()}
@@ -408,7 +423,12 @@ function paintWorldSide() {
        <span class="d">${sc.blurb || ''}<br>
          <span class="muted small">${sc.target_casts || '—'} cast(s) at your
          current preparation${hunted.kills
-           ? ` · killed ${hunted.kills} time(s)` : ''}</span></span>`);
+           ? ` · killed ${hunted.kills} time(s)` : ''}</span>
+         ${pace ? `<br><span class="muted small">${pace.chapter_view.numeral} ·
+           ${pace.casts_ready}–${pace.casts_unready} casts here, and this
+           chapter ${pace.stance === 'TEACHES' ? 'teaches' : 'tests'}. The
+           length is a property of WHERE YOU ARE STANDING; readiness only says
+           where in that band you land.</span>` : ''}</span>`);
     row.onclick = () => go('hunt');
     side.appendChild(row);
   }
@@ -887,9 +907,25 @@ function ensureStage() {
 
 function setEnemyScene(payload) {
   const fx = ensureStage();
+  /* THE FIGHT'S OWN PHASE, CARRIED TO THE SPRITE BUILDER.
+   *
+   * web/js/bosses.js has drawn six art stages since it was written and nothing
+   * in the tree ever asked it for one: every boss in every fight was rendered
+   * at stage 0. The fight knew its phase, the art knew how to draw one, and no
+   * line carried the number from one to the other. This is that line.
+   *
+   * `payload.boss.fight` is gauntlet/bestiary.view() — phase, phases and the
+   * art stage the SERVER computed, so the client never has to infer a stage
+   * from a health fraction again. It also means walking back into a fight
+   * three phases deep opens on the right creature instead of a whole one. */
+  const fight = (payload.boss || {}).fight || null;
+  const enemy = fight
+    ? { ...payload.enemy, phase: fight.phase, phases: fight.phases,
+        art_phase: fight.art_phase }
+    : payload.enemy;
   fx.setScene({
     region: (payload.region || {}).palette || 'spring',
-    enemy: payload.enemy,
+    enemy,
     pattern: payload.problem.pattern,
     heroLook: G.state && G.state.hero,
     // The rung the player actually paid for, in the hand, on the stage. The
@@ -897,7 +933,13 @@ function setEnemyScene(payload) {
     // already knows what is equipped.
     gear: G.state && G.state.hero && G.state.hero._gear,
   });
-  fx.setEnemyHp(payload.enemy.hp, payload.enemy.hp_max);
+  /* A boss's pips are its PHASES, not its trials: one per phase, lit for the
+   * ones still standing, which is bestiary.view's `pips`/`pips_lit` exactly.
+   * The trial bar above it still counts hidden tests, and the two are
+   * deliberately different numbers — one says how close this answer is, the
+   * other says how much fight is left. */
+  if (fight) fx.setEnemyHp(fight.pips_lit, fight.pips);
+  else fx.setEnemyHp(payload.enemy.hp, payload.enemy.hp_max);
   // The ground this is being fought on. `element.region` is the region's biome
   // pushed through elements.BIOME_AFFINITY, so a cold place reads cold because
   // of what it physically is — and a neutral region gets nothing added, which
@@ -1113,7 +1155,12 @@ function hideCombatHud() {
   const node = $('#combat-hud');
   if (node) node.classList.remove('on');
   G.hud = null;
-  stopAlarm();
+  // The WASH goes with the fight it belonged to. The beat does not: walking out
+  // of a battle at two health does not make two health safe, and the field is
+  // where the potions and the Mender are. paintAlarmBeat re-decides from the
+  // screen the player is actually on.
+  stopWash();
+  paintAlarmBeat();
 }
 
 /* ======================================================================
@@ -1169,12 +1216,30 @@ function placeAlarm(node) {
   node.style.height = `${Math.round(size)}px`;
 }
 
+/* WHERE EACH HALF OF THE ALARM IS ALLOWED TO EXIST.
+ *
+ * The WASH is a node positioned over #battle-stage, so it is battle-only by
+ * construction — there is no stage to hang it on anywhere else.
+ *
+ * The BAR and the SOUND are not. "health and focus meter should always be
+ * visible even in the overworld and when at 10% the health bar should beat and
+ * glow red with the sound of the heartbeats" — an alarm that only fires on the
+ * screen where you cannot heal is a warning delivered too late to act on. The
+ * topbar is outside .screen and therefore always up, so the band paints on
+ * every screen and the heart is audible in the field as well as the fight.
+ *
+ * Neither half decides anything. Both read G.alarm, which is upkeep.alarm() as
+ * the server last sent it — see ensureAlarm: when it goes stale this draws
+ * NOTHING rather than guessing, because a copy of ALARM_BANDS living in the
+ * client is how the bar and the pulse end up with two opinions. */
 function paintAlarm() {
   const alarm = G.alarm;
   const on = !!(alarm && alarm.pulse && G.screen === 'battle');
   const label = $('#chud-you-hp-v');
   if (label) label.classList.toggle('alarming', !!(alarm && alarm.pulse));
-  if (!on) { stopAlarm(); return; }
+  paintVitalBands();
+  paintAlarmBeat();
+  if (!on) { stopWash(); return; }
   const stage = $('#battle-stage');
   if (!stage) return;
   if (getComputedStyle(stage).position === 'static') stage.style.position = 'relative';
@@ -1211,6 +1276,17 @@ function paintAlarm() {
   // and lands two milliseconds away, which is nothing to hear and is still two
   // places deciding one number. The severity is passed on for the SHAPE of the
   // thump, which is audio's business.
+}
+
+/* The screens the heart is allowed to be heard on. A menu, a shop, the ledger
+ * and the editor are all places where a thump under the text is noise rather
+ * than warning; the field and the fight are the two places the player can act
+ * on it. */
+const BEAT_SCREENS = new Set(['battle', 'world']);
+
+function paintAlarmBeat() {
+  const alarm = G.alarm;
+  if (!alarm || !BEAT_SCREENS.has(G.screen)) { stopBeat(); return; }
   const sev = Number(alarm.severity) || 0;
   const bpm = Number(alarm.bpm) || 0;
   const wanted = (alarm.heartbeat && bpm)
@@ -1222,11 +1298,32 @@ function paintAlarm() {
   const id = setInterval(() => {
     // Every tick re-checks its own reason for existing: a heartbeat that
     // outlives the fight is the sixth leak this file is not going to have.
-    if (G.screen !== 'battle' || !G.alarm || !G.alarm.heartbeat) { stopBeat(); return; }
+    if (!BEAT_SCREENS.has(G.screen) || !G.alarm || !G.alarm.heartbeat) {
+      stopBeat(); return;
+    }
     audio.heartbeat(Number(G.alarm.severity) || 0);
   }, wanted);
   G.alarmBeat = { id, ms: wanted };
   audio.heartbeat(sev);
+}
+
+/* The topbar bar itself: red at CRITICAL, red AND beating at DIRE, on the same
+ * clock as everything else because --beat-ms is the server's own bpm. The CSS
+ * is in game.css; this only ever moves two class names and one variable. */
+function paintVitalBands() {
+  const bar = $('#bar-stamina');
+  const vital = bar && bar.closest ? bar.closest('.vital') : null;
+  if (!vital) return;
+  const a = G.alarm;
+  const band = (a && a.band) || '';
+  vital.classList.toggle('critical', band === 'CRITICAL');
+  vital.classList.toggle('dire', band === 'DIRE');
+  const bpm = Number(a && a.bpm) || 0;
+  if (band === 'DIRE' && bpm) {
+    vital.style.setProperty('--beat-ms', `${Math.round(60000 / bpm)}ms`);
+  } else {
+    vital.style.removeProperty('--beat-ms');
+  }
 }
 
 function stopBeat() {
@@ -1234,10 +1331,312 @@ function stopBeat() {
   G.alarmBeat = null;
 }
 
-function stopAlarm() {
-  stopBeat();
+function stopWash() {
   if (G.alarmNode && G.alarmNode.isConnected) G.alarmNode.remove();
   G.alarmNode = null;
+}
+
+function stopAlarm() {
+  stopBeat();
+  stopWash();
+}
+
+/* ======================================================================
+ * THE UNMAKING — the spell that explains the seal
+ *
+ * "the python last boss casts a spell on you rendering all skills and abilities
+ *  obsolete thus giving a story line to the practical no help. forces you to
+ *  fight in pure python"
+ *
+ * It plays HERE, between the player confirming the practical and the first
+ * question appearing, because that is the seam the story has to cover: the
+ * fourteen things finalexam.EXAM_SEAL takes are the fourteen things he is shown
+ * taking, in the same order, and unmaking.py's last act is a blank editor and a
+ * cursor — which is the practical.
+ *
+ * THE SPELL EXPLAINS THE SEAL; IT DOES NOT CHANGE IT. Nothing here is allowed
+ * to alter what the exam does, and nothing does: the payload is read-only
+ * narration and `finalexam.sealed()` remains the one capability check. Skipping
+ * it, or failing to fetch it, changes nothing about the exam that follows.
+ *
+ * There are two Unmakings and this is the CHAMBER one — the full telling, once.
+ * The world-map cast is unmakingfx.js via overworld.castUnmaking, is fifteen
+ * seconds, and is wordless. See docs/11-the-two-unmakings.md before merging
+ * them; they are not duplicates.
+ */
+async function playUnmaking() {
+  let payload = null;
+  try { payload = await api.unmaking(); } catch (e) { payload = null; }
+  // A spell that will not load is silence, and the exam is unaffected.
+  if (!payload || payload.error) return;
+
+  const reduced = !!(G.state && G.state.settings && G.state.settings.reduced_motion);
+  let seq;
+  try {
+    spellfx.warmUnmaking({ cinematic: payload });
+    seq = spellfx.createUnmakingCinematic({ cinematic: payload, reducedMotion: reduced });
+  } catch (e) { return; }
+
+  const host = el('div', '');
+  host.id = 'unmaking-screen';
+  host.style.cssText = 'position:fixed;inset:0;z-index:8900;background:#000';
+  const cv = document.createElement('canvas');
+  cv.style.cssText = 'width:100%;height:100%;display:block';
+  // spellfx draws the title card and deliberately does NOT own the subtitle
+  // layer, so his lines are rendered here, in the game's own voice styling.
+  const line = el('div', '');
+  line.style.cssText = 'position:absolute;left:0;right:0;bottom:6%;text-align:center;'
+    + 'padding:0 8%;font-size:15px;line-height:1.7;color:#cfc9d8;'
+    + 'text-shadow:0 2px 0 #000;pointer-events:none';
+  const hint = el('div', '');
+  hint.style.cssText = 'position:absolute;right:14px;bottom:10px;font-size:10px;'
+    + 'color:#4a4458;pointer-events:none';
+  host.append(cv, line, hint);
+  document.body.appendChild(host);
+  const ctx = cv.getContext('2d');
+  const fit = () => {
+    cv.width = Math.max(1, host.clientWidth);
+    cv.height = Math.max(1, host.clientHeight);
+  };
+  fit();
+  window.addEventListener('resize', fit);
+
+  audio.silence();
+  try { seq.begin({ cinematic: payload }); } catch (e) { /* drawn anyway */ }
+
+  await new Promise((resolve) => {
+    let last = 0, finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      window.removeEventListener('resize', fit);
+      window.removeEventListener('keydown', onKey);
+      if (host.isConnected) host.remove();
+      resolve();
+    };
+    const onKey = (ev) => {
+      // The skip arms only once the first dispossession has finished, so a key
+      // that was already down cannot eat the spell. That policy is the
+      // module's, asked rather than reimplemented.
+      let armed = false;
+      try { armed = seq.canSkip(); } catch (e) { armed = false; }
+      if (!armed) return;
+      ev.preventDefault();
+      try { seq.skipToEnd(); } catch (e) { finish(); }
+    };
+    window.addEventListener('keydown', onKey);
+    const step = (ms) => {
+      if (finished) return;
+      if (!last) last = ms;
+      const dt = Math.min(0.1, (ms - last) / 1000);
+      last = ms;
+      try {
+        seq.update(dt);
+        seq.draw(ctx, cv.width, cv.height);
+        const say = seq.speaking();
+        line.textContent = say && say.text ? say.text : '';
+        hint.textContent = seq.canSkip() ? 'ANY KEY' : '';
+      } catch (e) { finish(); return; }
+      if (seq.active) requestAnimationFrame(step);
+      else finish();
+    };
+    requestAnimationFrame(step);
+  });
+
+  // Latch it, so a second sitting gets the wordless short form rather than two
+  // minutes the player has already watched.
+  try { await api.unmakingSeen(); } catch (e) { /* cosmetic */ }
+}
+
+/* ======================================================================
+ * THE TRANSFORMATION — "BY THE SOURCE, I NAME IT."
+ *
+ * docs/09-story-bible.md §7, and transform.js's own header states the gate:
+ * it fires on a CLUTCH CLEAR, and the timing is the whole point. "The sequence
+ * is a reward for a thing the player did well, so it has to be gated on
+ * evidence rather than on a cooldown, or it becomes an interruption instead of
+ * a payoff."
+ *
+ * So the gate is deliberately narrow, and both halves are read off the result
+ * the engine already built:
+ *   - a BOSS went down while the player was in the red, or
+ *   - an S rank taken with no probe spent and no hint taken.
+ * Anything looser and a four-second cinematic starts landing on ordinary
+ * clears, which is how a payoff becomes a thing people press escape through.
+ */
+function isClutchClear(result) {
+  if (!result || !result.solved) return false;
+  const p = (G.state && G.state.player) || {};
+  const max = Math.max(1, Number(p.stamina_max) || 1);
+  const ratio = (Number(result.stamina) || 0) / max;
+  if ((result.boss || {}).defeated && ratio <= 0.35) return true;
+  const probes = Number((result.combat || {}).probes_used) || 0;
+  const hints = Number((result.combat || {}).hints_used || result.hints_used) || 0;
+  return result.rank === 'S' && probes === 0 && hints === 0;
+}
+
+function playTransformation(title) {
+  const reduced = !!(G.state && G.state.settings && G.state.settings.reduced_motion);
+  // A player who turned movement off is not shown a four-second strobe. They
+  // are told instead — the same information, without the thing the setting
+  // exists to remove.
+  if (reduced) {
+    toast('BY THE SOURCE', `${(title || 'ARCHITECT').toUpperCase()} — I NAME IT.`, 'gold');
+    return Promise.resolve();
+  }
+  const host = el('div', '');
+  host.id = 'transform-screen';
+  host.style.cssText = 'position:fixed;inset:0;z-index:8800;background:#000';
+  const cv = document.createElement('canvas');
+  cv.style.cssText = 'width:100%;height:100%;display:block';
+  host.appendChild(cv);
+  document.body.appendChild(host);
+  const ctx = cv.getContext('2d');
+  const fit = () => {
+    cv.width = Math.max(1, host.clientWidth);
+    cv.height = Math.max(1, host.clientHeight);
+  };
+  fit();
+  window.addEventListener('resize', fit);
+
+  const seq = new Transformation();
+  return new Promise((resolve) => {
+    let last = 0;
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      window.removeEventListener('resize', fit);
+      window.removeEventListener('keydown', onKey);
+      if (host.isConnected) host.remove();
+      resolve();
+    };
+    const onKey = () => seq.cancel();
+    window.addEventListener('keydown', onKey);
+    seq.begin(title, finish);
+    const step = (ms) => {
+      if (done) return;
+      if (!last) last = ms;
+      const dt = Math.min(0.1, (ms - last) / 1000);
+      last = ms;
+      ctx.clearRect(0, 0, cv.width, cv.height);
+      seq.update(dt);
+      seq.draw(ctx, cv.width, cv.height);
+      if (seq.active) requestAnimationFrame(step);
+      else finish();
+    };
+    requestAnimationFrame(step);
+  });
+}
+
+/* ======================================================================
+ * DYING
+ *
+ * "when the player reaches 0 health points hp, the screen goes black a
+ *  heartbeat noise slowly does 1 then 2 then 3 progressively slower beats and
+ *  blacks out. the player then wakes up at the last save point."
+ *
+ * The engine has already done the irreversible half by the time this runs:
+ * gauntlet/death.py rewound the game, wrote the state through, and handed back
+ * the report. This function is the telling of it, and it owns no rules — every
+ * duration, every tempo and every word comes off `payload.heartbeat` and
+ * `payload.report`, which is why the beats here and the alarm the player was
+ * ignoring a second ago are one continuous heart: the first death beat is
+ * upkeep.BPM_MAX, exactly where the alarm left off.
+ *
+ * It deliberately does not gate on a screen. You can die in a fight or in an
+ * incantation out in the field, and both end the same way.
+ */
+function playDeath(payload) {
+  if (!payload) return Promise.resolve();
+  // The alarm is over; it was right, and leaving it ticking under the death
+  // beats would be two hearts.
+  stopAlarm();
+  audio.silence();
+
+  const reduced = !!(G.state && G.state.settings && G.state.settings.reduced_motion);
+  const seq = deathfx.createDeath({
+    look: (G.state && G.state.hero) || null,
+    alarmColour: (payload.colour) || deathfx.DIRE_FALLBACK,
+    reduced,
+    report: payload.report || null,
+    seen: Number(payload.seen) || 0,
+  });
+
+  const host = el('div', '');
+  host.id = 'death-screen';
+  host.style.cssText = 'position:fixed;inset:0;z-index:9000;background:#000';
+  const cv = document.createElement('canvas');
+  cv.style.cssText = 'width:100%;height:100%;display:block';
+  host.appendChild(cv);
+  document.body.appendChild(host);
+  const ctx = cv.getContext('2d');
+
+  const fit = () => {
+    cv.width = Math.max(1, host.clientWidth);
+    cv.height = Math.max(1, host.clientHeight);
+  };
+  fit();
+  window.addEventListener('resize', fit);
+
+  try { audio.heartbeatStop(); } catch (e) { /* audio is never load-bearing */ }
+  seq.begin();
+
+  return new Promise((resolve) => {
+    let last = 0;
+    const onKey = (ev) => {
+      // The skip arms on deathfx's own schedule, not ours: a key already down
+      // when the screen appeared must not eat the sequence.
+      if (!deathfx.skipArmedAt(seq.t)) return;
+      ev.preventDefault();
+      seq.skip();
+    };
+    window.addEventListener('keydown', onKey);
+
+    const done = () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', fit);
+      if (host.isConnected) host.remove();
+      resolve();
+    };
+
+    const step = (ms) => {
+      if (!last) last = ms;
+      const dt = (ms - last) / 1000;
+      last = ms;
+      seq.update(dt);
+      const st = deathfx.renderDeath(seq.t, {
+        reduced, alarmColour: seq.alarmColour, look: seq.look,
+        words: seq.words, report: seq.report,
+      });
+      deathfx.blitDeath(ctx, cv.width, cv.height, st);
+      if (seq.active) { requestAnimationFrame(step); return; }
+      // The words hold until the player asks to leave. `active` going false is
+      // the end of the ANIMATION, not the end of the screen.
+      const leave = (ev) => {
+        if (ev) ev.preventDefault();
+        window.removeEventListener('keydown', leave);
+        host.removeEventListener('click', leave);
+        done();
+      };
+      window.addEventListener('keydown', leave);
+      host.addEventListener('click', leave);
+    };
+    requestAnimationFrame(step);
+  }).then(async () => {
+    // The engine already wrote the rewound state. Read it back rather than
+    // patching what we had: this client's copy is of a game that no longer
+    // exists.
+    hideCombatHud();
+    G.encounter = null;
+    await refresh();
+    const where = (payload.report && payload.report.wake) || {};
+    toast('YOU WAKE', where.region
+      ? `${where.label || 'Last waking point'} — ${where.region}.`
+      : 'Where you fell.', 'violet');
+    show('world');
+    if (G.overworld) audio.play('world');
+  });
 }
 
 /* One alarm, from wherever the server just sent one. The band is latched and
@@ -2356,8 +2755,16 @@ async function showResult(result) {
       // on, and the tick that opened the next turn. Playback only — every one
       // of those numbers was decided server-side before this ran.
       await playElementalExchange(result, fb);
-      if (result.solved) await G.fx.victory({ rank: result.rank, xp: result.xp,
-                                              loot: result.loot });
+      /* THE PHASE TURN, BEFORE THE VICTORY FANFARE AND INSTEAD OF IT.
+       *
+       * A phase falling is not a win — the thing is still standing and about
+       * to be harder — so playing `victory()` here would be the game
+       * congratulating the player for a third of a fight. The beat plays in
+       * its place: freeze, flash, the silhouette changes under the white, the
+       * boss speaks, and then one sentence saying what just got worse. */
+      if ((result.boss || {}).advanced) await playPhaseTurn(result);
+      else if (result.solved) await G.fx.victory({ rank: result.rank, xp: result.xp,
+                                                   loot: result.loot });
       else await G.fx.defeat({ cause: (result.analysis || {}).root_cause });
     } catch (err) { /* the report must appear even if the animation cannot */ }
   }
@@ -2374,12 +2781,22 @@ async function showResult(result) {
   // alarm is upkeep's, the hunt row is the chase's own next state, and the
   // rest are discoveries the engine made while resolving this encounter.
   noteAlarm(result.alarm);
+  // DEATH SHORT-CIRCUITS THE REST OF THE RESULT. Everything below this line
+  // reports on a game that death.py has already rewound — spoils from a fight
+  // that no longer happened, a hunt row for a chase that was rolled back. The
+  // engine hands `death` back only when it actually killed somebody.
+  if (result.death) { await playDeath(result.death); return; }
   huntui.noteResult(result, G.huntRegion,
     (G.encounter || {}).mode === 'interview');
   noteWorldSpoils(result);
 
   if (result.solved) {
     audio.sfx(result.rank === 'S' ? 'victory' : 'crit');
+    // After the spoils have been counted, so the rank it names is the one the
+    // player just earned rather than the one they walked in with.
+    if (isClutchClear(result)) {
+      await playTransformation((G.state.player || {}).title);
+    }
     if (G.overworld && G.pendingNode) {
       G.overworld.solvedNodes.add(G.pendingNode.id);
       localStorage.setItem('gauntlet-nodes-' + currentRegion().id,
@@ -2506,16 +2923,7 @@ async function showResult(result) {
       `<p class="small"><span class="tag gold">ACHIEVEMENT</span> ${a.name} — ${a.desc}</p>`).join('');
   }
   if (result.boss) {
-    html += result.boss.defeated
-      ? `<h3>${result.boss.name} FALLS</h3>
-         <p>Rank ${result.boss.rank} in ${fmtTime(result.boss.seconds)}. Rematch tier
-         ${result.boss.rematch_tier} unlocked — the same boss, a different surface form.</p>`
-      : `<h3>${result.boss.name} STEPS BACK</h3><p>${result.boss.message}</p>
-         ${result.boss.mentor ? `<div class="list-item">
-           <span data-portrait="${result.boss.mentor.sprite}"></span>
-           <span class="t">${result.boss.mentor.name}</span>
-           <span class="d">${result.boss.mentor.greeting}</span></div>` : ''}
-         <div id="boss-ladder"><p class="small muted">Reading the ladder…</p></div>`;
+    html += bossReport(result.boss);
   }
   if (result.canonical_solution) {
     html += `<h3>THE WORKED SOLUTION</h3>
@@ -2598,7 +3006,16 @@ async function showResult(result) {
     say(mentor.name, [camp.why, 'We fix the foundation first. Then we go back.'],
         mentor.sprite);
   });
-  if (result.boss && !result.boss.defeated) paintBossTeaching(m, result.boss);
+  if (result.boss && !result.boss.defeated && !result.boss.advanced) {
+    paintBossTeaching(m, result.boss);
+  }
+  // The one button that did not exist before there were phases: the way back
+  // into a fight that is only partly won.
+  const next = m.querySelector('[data-boss-next]');
+  if (next) next.onclick = () => faceNextPhase(next.dataset.bossNext);
+  // Over the kill and over the key, after the report is on screen rather than
+  // instead of it.
+  if (result.boss) heWatches(result.boss.watching);
   bind('r-next-iv', async () => {
     closeModal();
     try {
@@ -3005,6 +3422,13 @@ async function sendCast(payload) {
   }
   if (r.error) {
     return { ok: false, layer: 'semantics', detail: r.error, teach: '' };
+  }
+  // A field battle can kill you too, and it ends the same way a fight does.
+  // Asked before anything paints: the bars below would be drawn from a run that
+  // death.py has already rolled back.
+  if (r.death) {
+    await playDeath(r.death);
+    return { ok: false, layer: 'semantics', detail: 'You fell.', teach: '' };
   }
   const inc = r.incantation || {};
   G.incantRun = inc;
@@ -3522,6 +3946,122 @@ async function doShrine() {
 
 /* ---------------- bosses ---------------- */
 
+/* THE THREE THINGS A BOSS RESULT CAN BE, and until this pass there were two.
+ *
+ * A region boss used to die to ONE solved problem. It is four to six graded
+ * solves now — bestiary.open_fight gives every boss its own phase ladder — so
+ * a submission against one lands in one of three places:
+ *
+ *   ADVANCED   a phase fell and the thing behind it did not. The player gets
+ *              the beat (see playPhaseTurn) and a way back in. This is the
+ *              case that did not exist before.
+ *   DEFEATED   the last phase fell. The key drops, and the key is named with
+ *              the road it opens, because a key whose lock is a mystery is a
+ *              trophy rather than a reason to have fought.
+ *   STEPS BACK it is still standing. The ladder of simpler same-family
+ *              problems arrives WITH the refusal, exactly as before — and the
+ *              health bar now shows what the near miss took off it, which is
+ *              the difference between "you failed" and "you were close and it
+ *              felt that".
+ */
+function bossReport(boss) {
+  if (boss.advanced) {
+    const beat = boss.beat || {};
+    return `<h3 style="color:var(--orange)">${boss.name} CHANGES</h3>
+      <p class="small"><span class="tag red">PHASE ${(boss.phase | 0) + 1}
+        / ${boss.phases}</span>
+        ${beat.label ? `<span class="tag violet">${beat.label}</span>` : ''}</p>
+      ${beat.herald ? `<p><i>“${beat.herald}”</i></p>` : ''}
+      ${beat.tell ? `<p><b>${beat.tell}</b></p>` : ''}
+      <p>${boss.message}</p>
+      ${boss.next_rung ? `<p class="small muted">Your artifact reads one phase
+        ahead: <b>${boss.next_rung.label}</b> — ${boss.next_rung.tell}</p>` : ''}
+      ${boss.key ? `<p class="small muted">${boss.key.name} is still on it.
+        It opens ${boss.key.opens_name}.</p>` : ''}
+      <button class="btn" data-boss-next="${boss.id}">FACE THE NEXT PHASE ✦</button>`;
+  }
+  if (boss.defeated) {
+    const key = boss.key;
+    return `<h3>${boss.name} FALLS</h3>
+      <p>Rank ${boss.rank} in ${fmtTime(boss.seconds)}. Rematch tier
+      ${boss.rematch_tier} unlocked — the same boss, a different surface form.</p>
+      ${key ? `<h3 style="color:${key.colour}">${key.name.toUpperCase()}</h3>
+        <p><i>${key.line}</i></p>
+        <p class="small"><span class="tag gold">OPENS</span> ${key.opens_name}</p>
+        ${boss.opens ? `<p class="small muted">${boss.opens.name} is
+          ${boss.opens.state === 'open' ? 'open' : boss.opens.requirement}.</p>` : ''}
+        ${key.portal ? `<p class="small muted">THE STANDING PORTAL ·
+          ${key.portal.held} of ${key.portal.required} wards lit.
+          ${key.portal.held >= key.portal.required
+            ? 'It is open.'
+            : 'The practical does not need any of them — it is on the menu now.'}
+          </p>` : ''}` : ''}`;
+  }
+  return `<h3>${boss.name} STEPS BACK</h3><p>${boss.message}</p>
+    ${boss.chip ? `<p class="small"><span class="tag orange">−${boss.chip}</span>
+      It felt that. The phase is at
+      ${(boss.fight || {}).hp} / ${(boss.fight || {}).hp_max}, and only a
+      solved problem can take the last point.</p>` : ''}
+    ${boss.mentor ? `<div class="list-item">
+      <span data-portrait="${boss.mentor.sprite}"></span>
+      <span class="t">${boss.mentor.name}</span>
+      <span class="d">${boss.mentor.greeting}</span></div>` : ''}
+    <div id="boss-ladder"><p class="small muted">Reading the ladder…</p></div>`;
+}
+
+/* THE NULL KING, READING ONE LINE OUT OF YOUR FILE.
+ *
+ * gauntlet/antagonist.py was written and then imported by nothing — an orphan
+ * in a codebase that claims none. He is wired now, to the occasions this pass
+ * created: a boss down, its key taken, the fourteenth ward lit, and a region
+ * stood in for the first time.
+ *
+ * HE IS WEATHER. `blocking` is False in every payload that module can produce
+ * and its own audit proves it, so this never queues behind a modal, never asks
+ * to be dismissed and never delays a transition. If he has nothing to say — a
+ * measured run, where he is sealed like everything else — there is nothing
+ * here to draw and nothing to skip.
+ */
+function heWatches(watching) {
+  const rows = Array.isArray(watching) ? watching : (watching ? [watching] : []);
+  const said = rows.filter(r => r && (r.lines || []).length);
+  if (!said.length) return;
+  // One of them. Two villains talking over each other is a cutscene, and
+  // dropping the second costs nothing: nothing downstream reads what he said.
+  const row = said[0];
+  const who = (row.speaker || {}).name || 'THE NULL KING';
+  say(String(who).toUpperCase(), row.lines, (row.speaker || {}).sprite
+      || 'interviewer');
+}
+
+/* The beat, played on the stage. Everything about the timing comes from
+ * gauntlet/bestiary.phase_beat() — the freeze, the flash, when the art turns,
+ * when the boss speaks, when the reason lands — because the server owns the
+ * fight and a client that invented its own 1900ms would drift from the combat
+ * log the moment either was tuned. fx.bossPhaseTurn holds the whole sequence;
+ * this only decides whether there is one to play. */
+async function playPhaseTurn(result) {
+  const boss = result && result.boss;
+  if (!boss || !boss.advanced || !G.fx) return;
+  audio.sfx('boss');
+  try {
+    await G.fx.bossPhaseTurn(boss.beat || {});
+  } catch (err) { /* the report must appear even if the stage cannot animate */ }
+}
+
+/* Walking back in. `start_boss` serves whatever phase the fight is on, so this
+ * is the same call that opened it — the fight is where it was left, including
+ * across a reload. */
+async function faceNextPhase(bossId) {
+  try {
+    const payload = await api.startBoss(bossId);
+    if (payload.error) return toast('THE FIGHT IS CLOSED', payload.error, 'red');
+    closeModal();
+    enterBattle(payload);
+  } catch (e) { toast('THE FIGHT IS CLOSED', e.message, 'red'); }
+}
+
+
 /* The mastery a region demands of its prerequisites (world.unlocked_regions).
  * Walking into a boss below it is legal and occasionally correct, but the
  * player should be told which one they are doing. */
@@ -3558,6 +4098,19 @@ function bossGate(b) {
     return { open: true, label: 'THE GATE IS OPEN', colour: 'gold',
       why: 'Every gate is met. This is the one you have been training for.' };
   }
+  /* YOU HAVE TO GO THERE. The server refuses a boss in a region the player is
+   * not standing in — `Game.start_boss`, and the reason is written there — so
+   * this says it on the row instead of letting the click earn a red toast.
+   * Not `open: false`: the row stays live and the click travels, because a
+   * button that names a place and then refuses to take you to it is worse than
+   * no button. */
+  const here = (G.state.player || {}).region;
+  if (here && b.region && b.region !== here) {
+    const there = (G.state.regions || []).find(r => r.id === b.region);
+    return { open: true, travel: b.region, label: 'ELSEWHERE', colour: 'blue',
+      why: `${b.name} is in ${there ? there.name : b.region.replace(/_/g, ' ')}. `
+        + 'You are not. Walking there is the first move.' };
+  }
   const skill = (G.state.skills || []).find(k => k.name === b.skill);
   const mastery = Math.round(skill ? skill.mastery : 0);
   if (mastery < BOSS_READY_MASTERY) {
@@ -3572,23 +4125,48 @@ function bossGate(b) {
 function showBossList(regionId) {
   const bosses = G.state.bosses.filter(b => !regionId || b.region === regionId);
   const gates = new Map();
+  // The ladder the player walked out of, if they walked out of one. Four to six
+  // solves is long enough that "where was I" is a question this list has to be
+  // able to answer.
+  const fight = G.state.boss_fight || null;
   const list = (bosses.length ? bosses : G.state.bosses).map(b => {
     const best = b.records.filter(r => r.defeated)
       .reduce((a, r) => (a === null || r.seconds < a.seconds ? r : a), null);
     const gate = bossGate(b);
     gates.set(b.id, gate);
+    /* WHAT IT IS HOLDING, named before the fight rather than after it. A boss
+     * that drops a key the player only hears about on the corpse is a boss with
+     * no reason to be fought twice; a key named at the door is a road on the
+     * map with a monster in front of it. */
+    const key = b.key;
+    const open = fight && fight.boss === b.id ? fight : null;
     return `<div class="list-item ${gate.open ? '' : 'locked'}" data-boss="${b.id}">
       <span class="t">${b.cleared ? '☑ ' : gate.open ? '' : '⚿ '}${b.name.toUpperCase()}
-        ${gate.label ? `<span class="tag ${gate.colour}">${gate.label}</span>` : ''}</span>
+        ${gate.label ? `<span class="tag ${gate.colour}">${gate.label}</span>` : ''}
+        ${open ? `<span class="tag red">PHASE ${(open.phase | 0) + 1} / ${open.phases}
+          — STILL OPEN</span>` : ''}</span>
       <span class="d">${b.taunt}<br>
+      ${key ? `<span class="small" style="color:${key.colour}">⚿ ${key.name}</span>
+        <span class="muted small"> — ${b.cleared ? 'taken' : 'still on it'};
+        opens ${key.opens_name}</span><br>` : ''}
       <span class="muted small">${b.region.replace(/_/g, ' ')} ·
       ${b.records.length} attempt(s)${best ? ` · best ${fmtTime(best.seconds)} rank ${best.rank}` : ''}
       <br>${gate.why}</span>
       </span></div>`;
   }).join('');
+  const held = G.state.keys_held | 0;
+  const need = G.state.keys_required | 0;
   const m = modal(`<h2>BOSSES</h2>
     <p class="small">A boss is never a wall. Fail one and it enters its teaching phase —
     a mentor arrives, the complexity is reduced, and you climb back up.</p>
+    <p class="small">Each one is <b>four to six graded solves</b>, one per phase,
+    and it gets stronger at every turn — a heavier blow, a second element, a
+    status it did not leave before, plate it was not wearing. Only a solved
+    problem takes a phase down. Getting close moves the bar and never finishes
+    it.</p>
+    <p class="small"><span class="tag gold">${held} / ${need} KEYS</span>
+    The Standing Portal in Python Village wants all fourteen. It opens the
+    story's last room — never the practical, which is on the menu now.</p>
     ${list}<div class="actions"><button class="btn" id="m-close">CLOSE</button></div>`);
   m.querySelectorAll('[data-boss]').forEach(n => {
     n.onclick = async () => {
@@ -3596,6 +4174,17 @@ function showBossList(regionId) {
       // A locked boss says why it is locked rather than handing out a fight the
       // player cannot win and a one-line error afterwards.
       if (!gate.open) { toast(gate.label, gate.why, 'red'); return; }
+      // And a boss that is simply somewhere else hands the player the map
+      // rather than an error. The road is the answer to this one.
+      if (gate.travel) {
+        closeModal();
+        toast('ELSEWHERE', gate.why, 'blue');
+        // The road if one leaves from here, the map if it is further than that.
+        // Same fallback `things_to_do` uses for a travel item; see line ~624.
+        const road = roadsFromHere().find(e => e.to === gate.travel);
+        if (road && road.passable) return takeRoad(road);
+        return go('map');
+      }
       closeModal();
       try {
         const payload = await api.startBoss(n.dataset.boss);
@@ -4190,6 +4779,18 @@ function paintInterview() {
         <button class="btn primary" data-format="GAUNTLET">THE GAUNTLET · 65 min · 4 problems</button>
       </div>
     </div>
+    <div class="frame" style="padding:14px;margin-top:12px;
+         border-left:4px solid var(--green)">
+      <div class="section-title" style="margin-top:0">NOTHING UNLOCKS THIS</div>
+      <p class="small">${(s.practical || {}).line || `A measured run is a
+        measurement, not a reward. It is reachable from this menu at any time,
+        at level one, holding nothing.`}</p>
+      <p class="small muted">You are holding ${s.keys_held | 0} of
+        ${s.keys_required | 0} boss keys. Those open the Standing Portal and the
+        story's last room. They have never had anything to do with this screen,
+        and gating the one honest number in the game behind fourteen boss kills
+        would make it something you have to earn twice.</p>
+    </div>
     <div class="frame" style="padding:14px;margin-top:12px">
       <div class="section-title">READINESS ${s.readiness.overall}% ·
         GATES ${s.readiness.gates_passed}/${s.readiness.gates_total}</div>
@@ -4237,6 +4838,9 @@ function paintInterview() {
           <button class="btn" id="iv-cancel">NOT YET</button></div>`);
       m.querySelector('#iv-go').onclick = async () => {
         closeModal();
+        // He takes the fourteen things first. The exam is identical either way
+        // — this is the reason for it, not a gate on it.
+        await playUnmaking();
         try {
           enterBattle(await api.interviewCurrent());
         } catch (e) { toast('CANNOT START', e.message, 'red'); }
@@ -5904,6 +6508,89 @@ async function mountParty() {
   }
 }
 
+/* ---------------- the keyring ---------------- */
+
+/* FOURTEEN BOSSES, FOURTEEN KEYS, FOURTEEN ROADS, ONE DOOR.
+ *
+ * The keys are not items. There is no state["keys"] in the save and nothing
+ * here can drop, sell or lose one: `world.keys_held(cleared_bosses)` derives
+ * the whole ring from the kill list, so beating the boss IS the possession.
+ * This screen is a reading of that, which is why it has no buttons except the
+ * one that opens the door.
+ *
+ * THE LINE AT THE BOTTOM IS THE POINT OF THE SCREEN. A player looking at
+ * "3 / 14" is one small assumption away from believing the exam is eleven boss
+ * fights away. It is not, it never will be, and the sentence saying so comes
+ * off the server (`finalexam.practical_gate`) rather than being retyped here,
+ * so there is exactly one place it can be got wrong. */
+async function paintKeyring() {
+  panel('THE KEYRING', '<p class="small muted">Counting the wards…</p>');
+  let view;
+  try {
+    view = await api.keys();
+  } catch (e) { toast('THAT PANEL WILL NOT OPEN', e.message, 'red'); return; }
+  const portal = view.portal || {};
+  const practical = view.practical || {};
+  const held = view.held ? view.held.length : 0;
+  const need = view.required | 0;
+
+  const rows = (view.keys || []).map(k => `
+    <div class="list-item ${k.held ? '' : 'locked'}"
+         style="${k.held ? `border-left:3px solid ${k.colour}` : ''}">
+      <span class="t" style="${k.held ? `color:${k.colour}` : ''}">
+        ${k.held ? '⚿ ' : '· '}${k.name.toUpperCase()}</span>
+      <span class="d">${k.held ? k.line
+        : `Held by ${k.boss_name}, in ${k.region_name}.`}<br>
+        <span class="muted small">opens ${k.opens_name}</span></span>
+    </div>`).join('');
+
+  panel('THE KEYRING', `
+    <p class="small">Every boss in the realm is holding one. Beating it is the
+    possession — there is nothing to carry, nothing to lose, and nothing to
+    sell. Each key opens exactly one road, and the road is named on it.</p>
+
+    <div class="frame" style="padding:16px;margin:12px 0;border-left:4px solid ${
+      portal.open ? 'var(--gold-hi)' : 'var(--violet)'}">
+      <div class="section-title" style="margin-top:0">${
+        portal.name || 'THE STANDING PORTAL'}</div>
+      <p class="small">${portal.where || ''}</p>
+      <p class="small"><span class="tag ${portal.open ? 'gold' : ''}">${held} / ${need}
+        WARDS LIT</span>${portal.open ? '<span class="tag green">OPEN</span>' : ''}</p>
+      <span class="bar"><i style="width:${need ? (held / need) * 100 : 0}%;
+        background:${portal.open ? 'var(--gold-hi)' : 'var(--violet)'}"></i></span>
+      <p class="small muted" style="margin-top:8px">${portal.line || ''}</p>
+      ${portal.open ? '<button class="btn primary" id="keys-enter">STEP THROUGH ✦</button>'
+        : ''}
+    </div>
+
+    <div class="frame" style="padding:14px;margin:12px 0;
+         border-left:4px solid var(--green)">
+      <div class="section-title" style="margin-top:0">
+        THE PRACTICAL IS NOT BEHIND THIS DOOR</div>
+      <p class="small">${practical.line || ''}</p>
+      <p class="small muted">${practical.where || ''}</p>
+      <button class="btn" id="keys-exam">SIT IT NOW ✦</button>
+    </div>
+
+    ${rows}`);
+
+  const enter = $('#keys-enter');
+  if (enter) {
+    enter.onclick = async () => {
+      const res = await api.enterPortal();
+      if (!res.ok) return toast('IT DOES NOT OPEN', res.message || res.error, 'red');
+      audio.sfx('unlock');
+      toast((res.trial || {}).name || 'THE LAST ROOM', res.message || '', 'gold');
+      paintKeyring();
+    };
+  }
+  const exam = $('#keys-exam');
+  // The measurement, from the screen that counts the keys, with the keys
+  // uncounted. This button is here specifically so the answer to "do I need
+  // these first" is a thing the player can press rather than read.
+  if (exam) exam.onclick = () => go('exam');
+}
+
 /* ---------------- the ledger ---------------- */
 
 /* The index. Fifteen screens do not fit across a topbar, and a topbar that
@@ -5939,6 +6626,8 @@ const LEDGER = [
     blurb: 'Objects that buy a companion more help, and never deeper help.' },
   { id: 'sanctuaries', label: 'THE HIDDEN HEALERS',
     blurb: 'Seventeen of them, found by being hurt in the right place.' },
+  { id: 'keys', label: 'THE KEYRING',
+    blurb: 'Fourteen keys, the roads they open, and the door that counts them.' },
   { id: 'rollcall', label: 'THE ROLL CALL',
     blurb: 'Who each boss took, who walked out, and who is still held.' },
   { id: 'finale', label: 'THE LAST SCENE',
@@ -6063,6 +6752,7 @@ function paintLedger() {
     arts: 'earned, never bought',
     regalia: 'twenty-four objects',
     sanctuaries: 'free, and they find you',
+    keys: 'fourteen bosses, fourteen roads, one door',
     rollcall: 'twenty-five names',
     finale: 'sixteen beats and a freeze frame',
   };
@@ -6129,6 +6819,7 @@ const SCREENS = {
   arts: () => mountWorldScreen(legendui, legendui.paintArts),
   regalia: () => mountWorldScreen(legendui, legendui.paintRegalia),
   sanctuaries: () => mountWorldScreen(legendui, legendui.paintSanctuaries),
+  keys: paintKeyring,
   rollcall: () => mountWorldScreen(legendui, legendui.paintRollCall),
   finale: () => mountWorldScreen(finaleui, finaleui.paintFinaleCard),
 };

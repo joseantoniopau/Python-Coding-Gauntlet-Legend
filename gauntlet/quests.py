@@ -129,6 +129,30 @@ class Gate(story.When):
     def shortcut(shortcut_id: str) -> story.Trigger:
         return story.Trigger("shortcut_open", shortcut_id)
 
+    # -- the keys. Inherited in spirit from story.When, re-declared here so a
+    # -- quest author does not have to know which module owns which predicate.
+    # -- story.trigger_progress answers all three, reading them off the kill
+    # -- list; there is no key ledger in the quest state and there must not be.
+
+    @staticmethod
+    def key(key_id: str) -> story.Trigger:
+        return story.Trigger("key_held", key_id)
+
+    @staticmethod
+    def keys(count: int) -> story.Trigger:
+        return story.Trigger("keys_held", value=count)
+
+    @staticmethod
+    def portal() -> story.Trigger:
+        """All fourteen. The Standing Portal's own gate, and the only thing in
+        the world that is allowed to ask for every key at once.
+
+        It gates the STORY, never the practical: Interview Mode is a
+        measurement and is reachable from the menu with no keys at all. See
+        world.portal_gates.
+        """
+        return story.Trigger("keys_held", value=len(world.KEYS))
+
 
 # The gate kinds this module answers itself. Anything else falls through to
 # story.trigger_progress, which already knows how to phrase it.
@@ -803,6 +827,179 @@ NPCS = {
                 "line": "There are no signs. There were never any signs. The "
                         "King removed the labels, not the rooms."},
 }
+
+
+# ---------------------------------------------------------------------------
+# What the keys change out here
+# ---------------------------------------------------------------------------
+# A key that only exists on a map screen is an achievement, not a key. The road
+# it opens is progression.py's half; this is the other half — the people who
+# live next to that road notice you are carrying it, and say so, forever after.
+#
+# One remark per key, from whoever would actually care. They are said IN
+# ADDITION to whatever the NPC already says, never instead of it, because a
+# line a quest earned is a line the player paid for and it is not being
+# overwritten by a drop.
+#
+# Nothing in here is a hint. Read all fourteen and you learn where a road goes
+# and nothing whatsoever about any problem.
+
+KEY_REMARKS = {
+    "key_one_rune": ("vela",
+                     "You are carrying the Titan's key. One vault, one rune, "
+                     "and a road south nobody has been paid a toll on since "
+                     "before I had this job."),
+    "key_skipped_head": ("dorn",
+                         "The Hydra is down to eight heads and the ninth is on "
+                         "your belt. I have alcoves in here numbered for a run "
+                         "that has been blocked my whole life."),
+    "key_unbroken_frame": ("fenn",
+                           "No seam in it anywhere. Lay that flat across the "
+                           "reeds and the crossing stops needing a levee "
+                           "keeper, which I am choosing to be pleased about."),
+    "key_shorter_wall": ("kell",
+                         "Two bits and one of them filed down. My grandmother "
+                         "set out from the far end of that road and got as far "
+                         "as the Behemoth. You may tell me about it later."),
+    "key_quarter_turn": ("lorne",
+                         "It turns the hall without a second hall to put it "
+                         "in. I have four hundred floor plans in this room and "
+                         "every one of them is now wrong in the same way."),
+    "key_bounded_branch": ("wren",
+                           "A floor and a ceiling carved on one branch. The "
+                           "birds have been walking that order since the "
+                           "Shattering and nobody believed them."),
+    "key_counted_leaf": ("pel",
+                         "That is the leaf one. My route goes root to leaf now, "
+                         "all the way up, and back, and it is a real route and "
+                         "not a made-up one."),
+    "key_ring_of_light": ("corvin",
+                          "Four hops. I have carried post across the Wastes for "
+                          "nine years and every run of it was eleven. I am "
+                          "going to need a moment."),
+    "key_discarded_maximum": ("sable",
+                              "Heavier at one end, and everything it threw away "
+                              "could never have won anyway. I ferry people over "
+                              "that. Now they can walk."),
+    "key_other_undo": ("ives",
+                       "The Automaton kept that on a hook by the door for "
+                       "whoever came back and finished the job. Nobody came "
+                       "back. That is the whole story of this Citadel."),
+    "key_amortised_step": ("ember",
+                           "One dear step off the top and then it costs "
+                           "nothing the whole way down. I light this tower "
+                           "floor by floor and I have opinions about averages."),
+    "key_written_tree": ("bram",
+                         "The whole grove, written down in one line, readable "
+                         "back into a grove. The Lich could write. It could "
+                         "never once read its own hand."),
+    "key_reproduced_fault": ("ilsa",
+                             "You made it fail on purpose. Twice. Do you know "
+                             "how many people have stood in these cells and "
+                             "told me it worked on their machine."),
+    "key_unlabelled": ("steward",
+                       "Nothing stamped on it. No region, no pattern, no "
+                       "difficulty. You knew what it opened because you "
+                       "recognised it, and that was the examination."),
+}
+
+# The Standing Portal, from the village's point of view. Four remarks on the way
+# up, because a counter you cannot see is a counter that does not motivate
+# anybody. The village watches this happen to its own square.
+PORTAL_REMARKS = (
+    (1, "odile", "There is a frame standing behind the bell with no wall around "
+                 "it and one ward lit on the lintel. I have laid stone in this "
+                 "square for thirty years and I have never once been able to "
+                 "put a chisel to that thing."),
+    (7, "tamsin", "Seven lit. Half. The seeds come up in March regardless, but "
+                  "I will admit I have started counting them in the evenings."),
+    (13, "odile", "Thirteen. One ward dark. Whatever is behind that frame has "
+                  "had thirteen fewer things standing between it and this "
+                  "square since you started walking out of here every morning."),
+    (14, "odile", "It is not a frame any more. Scaffolding holds things up "
+                  "until the thing can stand, and then you take it down. Go on "
+                  "then."),
+)
+
+
+def key_remark(npc_id: str, state: dict) -> str:
+    """What this person says about the keys you are carrying, if anything.
+
+    The latest key they have an opinion about wins, so the line keeps moving as
+    the realm empties out. Returns "" for the thirty-four people with nothing to
+    say about ironmongery, which is most of them.
+    """
+    cleared = set(state.get("cleared_bosses") or ())
+    latest = ""
+    for key in world.KEYS:
+        remark = KEY_REMARKS.get(key["id"])
+        if not remark or remark[0] != npc_id:
+            continue
+        if key["boss"] in cleared:
+            latest = remark[1]
+    return latest
+
+
+def portal_remark(npc_id: str, state: dict) -> str:
+    """The village, counting the wards. Highest threshold reached wins."""
+    held = len(world.keys_held(state.get("cleared_bosses") or ()))
+    line = ""
+    for threshold, speaker, text in PORTAL_REMARKS:
+        if speaker == npc_id and held >= threshold:
+            line = text
+    return line
+
+
+def npc_view(npc_id: str, state: dict) -> dict:
+    """One person, everything they currently have to say, in one payload.
+
+    `line` is the quest layer's answer and is unchanged — a line a quest earned
+    stays earned. The key and portal remarks are additions beside it, which is
+    why this exists rather than `npc_line` quietly starting to return something
+    else.
+    """
+    npc = NPCS.get(npc_id, {})
+    return {
+        "id": npc_id,
+        "name": npc.get("name", world.MENTORS.get(npc_id, {}).get("name", "")),
+        "role": npc.get("role", world.MENTORS.get(npc_id, {}).get("role", "")),
+        "region": npc.get("region", ""),
+        "sprite": npc.get("sprite", ""),
+        "line": npc_line(npc_id, state),
+        "key_remark": key_remark(npc_id, state),
+        "portal_remark": portal_remark(npc_id, state),
+        "keys_held": len(world.keys_held(state.get("cleared_bosses") or ())),
+        "keys_total": len(world.KEYS),
+    }
+
+
+def keyring(state: dict) -> dict:
+    """The fourteen keys as the quest log renders them, so a client on this
+    layer never has to reach into progression.py for them."""
+    cleared = state.get("cleared_bosses") or ()
+    rows = world.keyring(cleared)
+    return {"keys": rows, "held": sum(1 for r in rows if r["held"]),
+            "total": len(rows),
+            "remarks": [{"key": key_id, "npc": who,
+                         "name": NPCS.get(who, {}).get("name", who), "line": line}
+                        for key_id, (who, line) in KEY_REMARKS.items()
+                        if world.holds_key(cleared, key_id)]}
+
+
+def portal(state: dict) -> dict:
+    """The Standing Portal from the world layer's side.
+
+    world.py owns the door. This adds who in the village is talking about it.
+    The note about what it does and does not gate travels with the payload on
+    purpose: the practical is a measurement and needs no keys.
+    """
+    cleared = state.get("cleared_bosses") or ()
+    status = world.portal_status(cleared)
+    held = status["held"]
+    voices = [{"npc": speaker, "name": NPCS.get(speaker, {}).get("name", speaker),
+               "at": threshold, "line": text}
+              for threshold, speaker, text in PORTAL_REMARKS if held >= threshold]
+    return {**status, "voices": voices}
 
 
 def speaker_name(giver: str) -> str:
@@ -4222,6 +4419,9 @@ def counts() -> dict:
         "dungeons": len(DUNGEONS),
         "pets": len(PET_DISCOVERIES),
         "shortcuts": len(SHORTCUTS),
+        "keys": len(world.KEYS),
+        "key_remarks": len(KEY_REMARKS),
+        "portal_remarks": len(PORTAL_REMARKS),
         "town_upgrades": len(TOWN_UPGRADES),
         "incantations": len(INCANTATION_GRANTS),
         "regalia": len(REGALIA),
@@ -4799,6 +4999,37 @@ def validate(corpus: list | None = None) -> list:
                 if iid not in known:
                     problems.append(f"{iid}: no such incantation")
 
+    problems.extend(_validate_keys())
+
+    return problems
+
+
+def _validate_keys() -> list:
+    """The key remarks must name real keys and real people, and there must be
+    exactly one remark per key: fourteen keys, fourteen villages worth of
+    somebody noticing."""
+    problems = []
+    for key_id, (npc_id, line) in KEY_REMARKS.items():
+        if key_id not in world.KEY_BY_ID:
+            problems.append(f"key remark: unknown key {key_id!r}")
+        if npc_id not in NPCS:
+            problems.append(f"key remark {key_id}: unknown person {npc_id!r}")
+        if not line.strip():
+            problems.append(f"key remark {key_id}: says nothing")
+    for key in world.KEYS:
+        if key["id"] not in KEY_REMARKS:
+            problems.append(f"{key['id']}: nobody in the world mentions it")
+    for threshold, npc_id, line in PORTAL_REMARKS:
+        if npc_id not in NPCS:
+            problems.append(f"portal remark: unknown person {npc_id!r}")
+        if not 1 <= threshold <= len(world.KEYS):
+            problems.append(f"portal remark: {threshold} is not a ward count")
+        if not line.strip():
+            problems.append(f"portal remark at {threshold}: says nothing")
+    # The rule that matters more than any of the above.
+    for name in world.PORTAL_NEVER_GATES:
+        if world.portal_gates(name):
+            problems.append(f"the portal must never gate {name!r}")
     return problems
 
 
@@ -4862,6 +5093,10 @@ def _all_prose():
         yield chain.epilogue
     for npc in NPCS.values():
         yield npc["line"]
+    for _, line in KEY_REMARKS.values():
+        yield line
+    for _, _, line in PORTAL_REMARKS:
+        yield line
     for pet in PET_DISCOVERIES.values():
         yield pet["hint"]
         yield pet["condition"]
@@ -4873,7 +5108,26 @@ def _all_prose():
 
 
 WIRING = """
-How the engine picks this up. Nine touch points, none of them invasive.
+How the engine picks this up. Ten touch points, none of them invasive.
+
+0. THE KEYS AND THE PORTAL (new, and read-only from here)
+   No state, no migration, nothing to pay out. A key is held exactly when its
+   boss is in state["cleared_bosses"], so every save in the world already has
+   the right key ring.
+
+       quests.keyring(state)          -> the fourteen, held flags, and every
+                                         remark the world has unlocked
+       quests.portal(state)           -> the Standing Portal, wards lit, who in
+                                         the village is talking about it
+       quests.npc_view(npc_id, state) -> one person's line PLUS their key and
+                                         portal remarks. npc_line() is
+                                         unchanged and still authoritative for
+                                         the line a quest earned.
+       Gate.key / Gate.keys / Gate.portal — for authoring quests behind a key.
+
+   The Standing Portal gates the story climax. It does not gate Interview Mode,
+   which is a measurement and is reachable from the menu with no keys at all.
+   world.portal_gates("practical") is False and there is a test that says so.
 
 1. STATE
    engine.DEFAULT_STATE["quests"] = quests.new_quest_state()

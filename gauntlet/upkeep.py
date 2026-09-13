@@ -856,7 +856,10 @@ def repair_quote(state: dict, piece: str = "", *, gold: int = 0,
     and only affects `affordable` / `partial`; the price is the price.
     """
     if sealed:
-        return {"error": "sealed", "lines": [],
+        # Names the capability that took it. A refusal that will not say which
+        # seal it is speaking for is a refusal the next reader has to guess at,
+        # and the sealed-GET contract checks for exactly this key.
+        return {"error": "sealed", "capability": UPKEEP_CAPABILITY, "lines": [],
                 "message": "Nothing is being worn in here, so nothing is worn out."}
     ensure(state)
     targets = [piece] if piece else [p for p in PIECES
@@ -940,7 +943,7 @@ def repair(state: dict, piece: str = "", *, gold: int = 0,
     it could not be completed would be the same mistake as charging for healing.
     """
     if sealed:
-        return {"error": "sealed",
+        return {"error": "sealed", "capability": UPKEEP_CAPABILITY,
                 "message": "Not in here. Whatever you break in an exam, you "
                            "break in the exam only."}
     block = ensure(state)
@@ -1105,18 +1108,27 @@ class AlarmBand:
     blurb: str
 
 
+# The sound is an ALARM TO HEAL, so it starts late and it starts once.
+#
+# These were 0.35 and 0.15 with sound on both, which meant a heartbeat under
+# roughly a third of every fight. An alarm that is usually on is not an alarm —
+# it is ambience, and the player stops hearing it long before the fight it was
+# supposed to warn them about. So the sound now waits until a tenth of the bar,
+# and the band above it warns in silence: red on the sprite, nothing in the ears.
+# Look up and you get a warning; ignore it and the room starts making a noise.
 ALARM_BANDS: tuple = (
-    AlarmBand("DIRE", "Dire", 0.15, True, True, "#ff3b46",
-              "One bad submission from the floor."),
-    AlarmBand("CRITICAL", "Critical", 0.35, True, True, "#ff6a7a",
-              "Red pulse on the sprite, heartbeat under it."),
+    AlarmBand("DIRE", "Dire", 0.10, True, True, "#ff3b46",
+              "Red pulse and a heartbeat under it. Heal now."),
+    AlarmBand("CRITICAL", "Critical", 0.25, True, False, "#ff6a7a",
+              "Red pulse on the sprite, and deliberately no sound yet."),
     AlarmBand("WORN", "Worn", 0.50, False, False, "#e8c37d",
               "A colour shift and nothing else. Not an alarm yet."),
     AlarmBand("STEADY", "Steady", 1.01, False, False, "#8fd07a",
               "Nothing. The healthy half of the bar says nothing."),
 )
 
-ALARM_ONSET = 0.35          # where pulse and sound begin
+ALARM_ONSET = 0.25          # where the silent red pulse begins
+HEARTBEAT_ONSET = 0.10      # where the sound begins, and not one point sooner
 BPM_ONSET = 72              # a resting heart, at the moment it starts to matter
 BPM_MAX = 132               # at zero. fast, not cartoonish
 PULSE_MIN_ALPHA = 0.25      # how far the red fades out between blinks
@@ -1339,7 +1351,7 @@ def heal(state: dict, *, statuses=None, sealed: bool = False,
     has to wonder whether they forgot to charge for it. They did not. It is free.
     """
     if sealed:
-        return {"error": "sealed",
+        return {"error": "sealed", "capability": UPKEEP_CAPABILITY,
                 "message": "There is no town in here. Finish the paper."}
     block = ensure(state)
     player = (state or {}).get("player") or {}
@@ -1461,7 +1473,8 @@ def town_visit(state: dict, *, gold: int = 0, sealed: bool = False,
     you. Engine deducts nothing from this call.
     """
     if sealed:
-        return {"error": "sealed", "message": "The town is outside. Finish."}
+        return {"error": "sealed", "capability": UPKEEP_CAPABILITY,
+                "message": "The town is outside. Finish."}
     block = ensure(state)
     healed = heal(state, statuses=statuses, rng=rng)
     quote = repair_quote(state, gold=gold)
@@ -1480,13 +1493,29 @@ def town_visit(state: dict, *, gold: int = 0, sealed: bool = False,
 
 
 def loop_report(state: dict, *, difficulty: str = DEFAULT_DIFFICULTY,
-                hits_taken: int = 3, blows_landed: int = 4) -> dict:
+                hits_taken: int = 3, blows_landed: int = 4,
+                sealed: bool = False) -> dict:
     """The arithmetic, using the player's OWN last stretch where it has one.
 
     This is the anti-chore device: the player is told how many encounters until
     the smith matters, what it will cost, and what share of what they actually
     earned that is. A maintenance system the player can predict is a rhythm; one
     they cannot is an interruption.
+
+    `sealed` is the in-force test from docs/10-sealed-views.md, and it is here
+    because the town square was answering one question twice and disagreeing
+    with itself. `repair_quote(sealed=True)` says "nothing is being worn in
+    here, so nothing is worn out" — correct, because a measured run is build
+    sealed and the kit is not in play — and `Game.town` then rendered THIS
+    report beside it, unsealed, quoting a mending bill and a sentence naming
+    the piece and the price. Two doors onto one number, one of them refusing
+    and the other one answering. That is finding 4.E wearing a fourth hat: a
+    number is not a hint and is still FALSE, and a player will plan against it.
+
+    DEGRADE rather than refuse, because half of this report is world and stays
+    true: what an encounter pays, the third-of-income ceiling, the escape
+    hatch, and the fact that health is free. Only the mending half is
+    suspended, and it is named in `suspended` rather than silently zeroed.
     """
     block = ensure(state)
     since = block["since_town"]
@@ -1527,7 +1556,7 @@ def loop_report(state: dict, *, difficulty: str = DEFAULT_DIFFICULTY,
     share_of_income = (per_encounter_gold / income) if income else 0.0
     actual_share = ((quote["gold"] / earned) if earned else None)
 
-    return {
+    report = {
         "since_town": {"encounters": played, "gold": earned,
                        "wear_points": round(float(since["wear"]), 2)},
         "next_repair": soonest or {},
@@ -1544,7 +1573,28 @@ def loop_report(state: dict, *, difficulty: str = DEFAULT_DIFFICULTY,
         "escape_hatch": LOOP["escape_hatch"],
         "tension": LOOP["tension"],
         "line": _loop_line(soonest, quote["gold"], share_of_income),
+        "sealed": False,
+        "suspended": [],
     }
+    if not sealed:
+        return report
+    # The mending half, zeroed and named. `repair_quote(sealed=True)` already
+    # says this sentence at the other door; saying the same thing in the same
+    # words is the point.
+    report.update({
+        "next_repair": {},
+        "quote_now": 0,
+        "upkeep_per_encounter": 0.0,
+        "share_of_income": 0.0,
+        "share_of_income_actual": None,
+        "within_budget": True,
+        "line": "Nothing is being worn in here, so nothing is worn out. The "
+                "smith's arithmetic comes back when the run does.",
+        "sealed": True,
+        "suspended": ["next_repair", "quote_now", "upkeep_per_encounter",
+                      "share_of_income", "share_of_income_actual"],
+    })
+    return report
 
 
 def _loop_line(soonest, gold: int, share: float) -> str:

@@ -29,6 +29,36 @@ to hand back a question set it has handed back before.
 
 The report afterwards is the point of all of it. If the player is not ready, it
 says so in the first sentence and then says what evidence is missing.
+
+TWO THINGS IN THIS GAME WEAR THE WORD "EXAM" AND THEY ARE NOT THE SAME THING
+----------------------------------------------------------------------------
+The next person to read this file will assume there is one. There are two, and
+the difference is the single most load-bearing sentence in the project:
+
+    THE PRACTICAL — this module — is a MEASUREMENT. It is reachable from the
+    menu, at any time, at level one, holding nothing, with no boss beaten and
+    no key taken. That is the entire point of this game: a player must always
+    be able to ask where they stand and get an honest answer. Nothing gates it.
+    Nothing may ever gate it.
+
+    THE STORY CLIMAX is a REWARD. It is behind the Standing Portal in Python
+    Village, which wants all fourteen boss keys, and behind it are the mythic
+    python wizard, the captives, the cutscene and the ending. That is a thing
+    you earn, and earning it is the shape of the campaign.
+
+Those are separate doors and they must stay separate. `world.portal_gates()`
+answers False for "practical", "interview", "exam", "readiness", "diagnostic",
+"measurement" and everything else measured, forever and by default; tests check
+it rather than trusting it. `compose()`, `interview_format()` and every entry
+point below read the corpus, the player's skills and the clock — and NOTHING
+ELSE. There is no line in this file that reads `cleared_bosses`, a keyring, a
+route or a portal, and `PRACTICAL_IS_NEVER_GATED` below exists so that adding
+one means deleting a constant that says not to.
+
+Gating the measurement behind fourteen boss kills would make the one honest
+number in this game something you have to earn twice, and a player who cannot
+find out where they stand until they have finished the story has been sold the
+opposite of what was advertised.
 """
 from __future__ import annotations
 
@@ -43,6 +73,45 @@ from . import skills as skillmod
 # same rules copied out — the same constant, so every `enc.mode == MODE_INTERVIEW`
 # check already in engine.py fires for the exam without being told about it.
 EXAM_MODE = config.MODE_INTERVIEW
+
+# THE MEASUREMENT IS NOT A REWARD. Read as a sentence, and checked by
+# tests/test_interview_isolation.py rather than trusted.
+#
+# The value is True and must stay True. What it is really doing is giving the
+# rule a name that shows up in a grep for "gate", so that whoever one day
+# wonders whether the practical ought to want a key finds this line and the
+# paragraph above it before they write the `if`.
+PRACTICAL_IS_NEVER_GATED = True
+
+# What may decide whether a player can sit the practical, in full. This tuple is
+# the complete list and it has one entry.
+PRACTICAL_REQUIREMENTS: tuple = ("the player asked",)
+
+# What may NOT, ever. Every one of these is something the campaign hands out,
+# and none of them is evidence about whether this person can write Python under
+# time. `world.PORTAL_NEVER_GATES` says the same thing from the other side.
+PRACTICAL_NEVER_REQUIRES: tuple = (
+    "keys", "boss_kills", "the_standing_portal", "routes", "level", "gold",
+    "items", "class", "story_progress", "captives_freed", "region",
+)
+
+
+def practical_gate() -> dict:
+    """Why the practical is open. The answer never varies and that is the point.
+
+    Handed to the client so the menu, the portal panel and the keyring all print
+    the same sentence from the same place, rather than three screens each
+    deciding for themselves how to describe a door that does not exist.
+    """
+    return {
+        "open": True,
+        "requires": list(PRACTICAL_REQUIREMENTS),
+        "never_requires": list(PRACTICAL_NEVER_REQUIRES),
+        "line": "The practical is a measurement, not a reward. It is reachable "
+                "from the menu at any time, with nothing unlocked and nothing "
+                "earned, because being able to ask where you stand is the whole "
+                "point of the game.",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +245,30 @@ def refuse(capability: str) -> dict:
     name = CAPABILITY_NAMES.get(capability, capability)
     return {
         "error": "sealed",
+        "capability": capability,
+        "message": REFUSAL_MESSAGE.get(
+            capability, f"{name} does not work here. That is the point of here."),
+    }
+
+
+def suspended(capability: str) -> dict:
+    """The same sentence, for a view that DEGRADES instead of refusing.
+
+    `refuse()` carries `error: "sealed"`, and `server._reply` reads that key and
+    answers 409. That is correct for a whole view that is the problem. It is
+    wrong for a view with a world half, because a 409 tells the client to throw
+    away the half that was served — which is how `/api/antagonist` came to hand
+    over a standing, a pressure and an empty line list under a status code
+    meaning "there is no answer".
+
+    So this is the DEGRADE outcome's payload: the capability and the reason, at
+    200, beside whatever the view could honestly serve. docs/10-sealed-views.md
+    section 1 says degrading beats refusing wherever it is available; this is
+    the shape that makes it available.
+    """
+    name = CAPABILITY_NAMES.get(capability, capability)
+    return {
+        "sealed": True,
         "capability": capability,
         "message": REFUSAL_MESSAGE.get(
             capability, f"{name} does not work here. That is the point of here."),

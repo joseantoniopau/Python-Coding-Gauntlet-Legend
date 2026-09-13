@@ -1343,6 +1343,8 @@ export class WorldUI {
         ${node.bosses.map(b => `<div class="gate ${b.cleared ? 'pass' : 'fail'}">
           <span class="mark">${b.cleared ? '✔' : '·'}</span>
           <span>${esc(b.name)}${b.cleared ? '' : ' — still standing'}</span></div>`).join('')}` : ''}
+      ${this.keysBlock(node)}
+      ${this.portalBlock(node)}
       ${(node.dungeons || []).length ? `<div class="section-title">DUNGEONS</div>
         <div id="wui-dungeons"></div>` : ''}
       ${node.pet ? `<div class="section-title">SOMETHING IS HIDING HERE</div>
@@ -1364,6 +1366,55 @@ export class WorldUI {
         dungeonHost.appendChild(this.dungeonRow(dungeon, cards[dungeon.id] || {}, node));
       }
     }
+  }
+
+  /* WHAT THIS GROUND OWES, OR HAS ALREADY PAID.
+   *
+   * A key is drawn on the region it comes from rather than hidden in a menu,
+   * because the whole point of the key system is that geography is the reward:
+   * you go there, you beat the thing that lives there, and a road opens. Naming
+   * the road on the map is what turns "a trophy" into "a reason to go".
+   *
+   * `node.keys` is progression.region_view's own list and is derived from the
+   * kill list — there is no keyring in the save to disagree with it. */
+  keysBlock(node) {
+    const keys = node.keys || [];
+    if (!keys.length) return '';
+    return `<div class="section-title">KEYS HELD HERE</div>
+      ${keys.map(k => `<div class="gate ${k.held ? 'pass' : 'fail'}"
+           style="${k.held ? `border-left:3px solid ${esc(k.colour)}` : ''}">
+        <span class="mark">${k.held ? '✦' : '·'}</span>
+        <span>${esc(k.name)}${k.held
+          ? ` — opens ${esc(k.opens || '')}`
+          : ' — still on whatever is holding it'}</span></div>`).join('')}`;
+  }
+
+  /* THE STANDING PORTAL, drawn on the one region it stands in.
+   *
+   * Fourteen wards for fourteen bosses, and the sentence underneath is not
+   * decoration: this is the screen a player is most likely to misread as "the
+   * exam is behind all of this". It is not, it never will be, and the panel
+   * says so with the count sitting right next to it. */
+  portalBlock(node) {
+    const portal = node.portal;
+    if (!portal) return '';
+    const held = portal.held | 0;
+    const need = portal.required | 0;
+    const open = !!portal.open;
+    return `<div class="section-title" style="color:${
+      esc(open ? portal.accent || 'var(--gold-hi)' : 'var(--violet)')}">
+        ${esc(String(portal.name || 'THE STANDING PORTAL'))}</div>
+      <p class="small">${esc(portal.where || '')}</p>
+      <p class="small">
+        <span class="tag ${open ? 'gold' : ''}">${held} / ${need} WARDS LIT</span>
+        ${open ? '<span class="tag green">OPEN</span>' : ''}</p>
+      <span class="bar" style="margin-top:4px"><i style="width:${
+        clamp(need ? (held / need) * 100 : 0, 0, 100)}%;background:${
+        esc(open ? 'var(--gold-hi)' : 'var(--violet)')}"></i></span>
+      <p class="small muted" style="margin-top:6px">${esc(portal.line || '')}</p>
+      <p class="small muted">It stands in front of the story's last room and in
+        front of nothing else. The practical is a measurement and is on the menu
+        right now, with none of these keys.</p>`;
   }
 
   roadRow(edge, node, world) {

@@ -139,6 +139,20 @@ The final practical is that mode with the clock on and every crutch gone. The
 fourteen bosses before it each remove exactly one, so arriving with nothing is
 something you were trained for rather than ambushed by.
 
+And it is given a reason. Before the practical, the Null King casts **the Last
+Courtesy** — fourteen small dispossessions, one per crutch, in the order the
+bosses took them, ending with the Obliging Hand lifting off finger by finger
+into his open palm. The hints go out. The mentor is *"not in the room. I have
+not harmed them. I have stopped including them."* A clock is added, and it is
+the only thing he adds.
+
+The spell explains the seal; **it does not change it.** `gauntlet/unmaking.py`
+holds no state, reads no save, and cannot reach `finalexam.sealed()`, which
+remains the one capability check in the codebase. That is proven rather than
+asserted: a composed exam is byte-identical across three worlds — the module
+deleted, present-but-unimported, and imported first. Skipping the cinematic
+changes nothing about the exam that follows.
+
 ---
 
 ## What's in it
@@ -152,6 +166,8 @@ something you were trained for rather than ambushed by.
 | Companions | 12, tiered, one at a time · 31 pieces of regalia |
 | Combat | Turn-based · 6 elements in 3 opposed pairs · 12 potions · status effects · durability |
 | Content | 74 quests in 17 chains · 121 items · 22 artifacts |
+| Bestiary | 59 thematic creatures on 17 regional rosters · 6 boss phase stages |
+| Stakes | Death rewinds the game and never the player · autosaves on region entry and boss kills |
 
 ---
 
@@ -163,8 +179,24 @@ python3 run.py build-corpus    # rebuild and re-validate every problem
 python3 run.py doctor          # diagnose an installation
 ```
 
-**983 tests across 27 files.** `tests/run_all.py` runs them all, but takes ~45
-minutes and may be killed by a process limit; run files individually if so.
+**1,187 tests across 35 files.** `tests/run_all.py` runs them all, but takes
+~45 minutes and may be killed by a process limit. Every file is also runnable on
+its own — `python3 tests/test_keys_and_seal.py` — which matters more than it
+sounds: a dozen of them had no `__main__` block and exited 0 having run nothing,
+which is a worse failure than a red one because it looks like a pass.
+
+There is one more verifier that needs a running server, and it drives the real
+client with no browser — the actual `web/js` modules, under an instrumented
+canvas, against real HTTP:
+
+```bash
+python3 run.py serve --port 8801 &
+node scripts/verify/headless.mjs 8801
+```
+
+It walks boot, twenty-one screens, the road to a boss, one silhouette per phase
+and the practical at zero keys, and reports what rendered: draw calls, canvases
+allocated in the loop, and the four failure classes a parse check cannot see.
 
 Every problem carries **two independent implementations** — a reference used to
 compute expected outputs at build time, and a canonical solution shown to the

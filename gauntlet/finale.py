@@ -20,13 +20,22 @@ and can pass it. The only capability question asked anywhere in this file is
 `finalexam.sealed`, the same one every other module asks, and it is asked in
 order to REFUSE to speak during a measured run.
 
-2. IT FIRES ON SITTING THE THING, NOT ON PASSING IT. The index exists to answer
-on your behalf. That is the whole of what it is for and it is the reason it was
-built. For the length of the practical, in the room above, nothing answered on
-your behalf — so the index is a lookup with nothing on the other end of it, and
-it has been that since you sat down. It is only now finding out. Pass or fail,
-the shelves empty. What the pass buys you is a different sentence at the end of
-the freeze frame, and that sentence is printed from your own numbers.
+2. IT IS THE SCENE FOR A PASS. `gauntlet/ending.py` is the seam that decides,
+and it reaches this module only when the sealed practical came back READY. That
+is the player's own brief: passing is the reward, and the reward is that the
+people go free, the cutscenes play and the world changes. A failed practical
+plays `ending.rematch()` instead — the shelves stay full, the King says
+something true and unbearable, and nothing anywhere is spent, delayed or shut.
+
+   `cutscene()` itself still composes at any verdict and with no arguments at
+   all, because a renderer, a test or a client replaying an old save may ask,
+   and a scene that raises in those hands is a scene nobody can work on. What
+   changed is who calls it, not what it can build.
+
+   THE REASON THE SHELVES EMPTY IS STILL THE REASON IT WAS. An index exists to
+   answer on your behalf. For two hours, in the room above, nothing answered on
+   your behalf and the answer came back right anyway — so the lookup has
+   nothing on the other end of it and the pointing stops.
 
 3. IT SCALES TO THE ROLL CALL. The whole campaign's side work arrives at the
 last door as a number: how many people are standing behind you in the frame.
@@ -90,6 +99,15 @@ def ensure(state: dict) -> dict:
     return block
 
 
+# The antagonist has two lines in this scene and they are the last two he gets.
+# He is not owned here — gauntlet/ending.py stages him at the failure, story.py
+# antagonises with him all game — so his id and his name are constants and his
+# lines are overridable by any pass that ships a fuller voice for him. See
+# `cutscene(king_voice=...)` and WIRING §11.
+KING_ID = "the_null_king"
+KING_NAME = "THE NULL KING"
+
+
 # ---------------------------------------------------------------------------
 # 1. The room
 # ---------------------------------------------------------------------------
@@ -150,6 +168,9 @@ _ALIASES = {
     "boon": ("boon", "afterwards", "service", "help", "consequence"),
     "order": ("order", "freed_order", "rescued_order", "index", "sequence"),
     "freed_at": ("freed_at", "rescued_at", "timestamp", "when"),
+    # Only ever set on the second roster. A row that carries it got out when
+    # the index fell rather than because somebody came, and it says so itself.
+    "released_line": ("released_line", "release_line"),
 }
 
 
@@ -187,7 +208,7 @@ def normalise(record) -> dict:
     name = str(_pick(record, "name") or "").strip()
     region_id = str(_pick(record, "region") or "")
     boss_id = str(_pick(record, "boss") or "")
-    return {
+    row = {
         "id": str(_pick(record, "id") or name.lower().replace(" ", "_")),
         "name": name,
         "trade": str(_pick(record, "trade") or ""),
@@ -201,6 +222,15 @@ def normalise(record) -> dict:
         "order": _pick(record, "order", default=None),
         "freed_at": _pick(record, "freed_at", default=None),
     }
+    released_line = str(_pick(record, "released_line") or "")
+    if released_line:
+        # Kept on the row rather than folded into `line`, because a renderer
+        # that draws both rosters needs to be able to tell them apart from the
+        # row alone, without consulting which list it came out of.
+        row["released_line"] = released_line
+        row["released_here"] = True
+        row["line"] = row["line"] or released_line
+    return row
 
 
 def _sorted_rows(freed) -> list:
@@ -245,6 +275,10 @@ class Scale:
     pullback: float           # camera distance multiplier at the freeze frame
     ribbon: str               # the lower ribbon on the title card
     narration: str            # one line, said as they form up
+    # The ribbon once the index has fallen and the people nobody came for are
+    # also on the stair. It never merges the two numbers, because the whole
+    # point of having two numbers is that they were not earned the same way.
+    released_ribbon: str = ""
 
 
 SCALES = (
@@ -253,25 +287,30 @@ SCALES = (
           "There is nobody behind you. There were people down there to be found "
           "and you went past the doors they were behind, and they are still in "
           "the niches, and the frame is still yours. All three of those are "
-          "true at once and the game is not going to pick one for you."),
+          "true at once and the game is not going to pick one for you.",
+          released_ribbon="ONE ARCHITECT. {released} GOT UP ON THEIR OWN."),
     Scale("A_FEW", "a few of them", 1, 1.25,
           "{count} FREED. THE OTHER SHELVES ARE STILL FULL.",
           "They come up the stair behind you and there is room on the stair, "
           "which there would not have been if you had gone through every door "
-          "you walked past."),
+          "you walked past.",
+          released_ribbon="{count} BY YOUR HAND. {released} BY THE FALL OF IT."),
     Scale("A_CROWD", "a crowd", 2, 1.6,
           "{count} FREED. EVERY ONE OF THEM IS STANDING BEHIND YOU.",
           "They come up the stair behind you in no order at all, the stair is "
-          "not wide enough, and nobody minds."),
+          "not wide enough, and nobody minds.",
+          released_ribbon="{count} BY YOUR HAND. {released} BY THE FALL OF IT."),
     Scale("THE_WHOLE_GALLERY", "the whole gallery", 3, 2.1,
           "{count} FREED. THE SHELVES ARE EMPTY.",
           "The shelves behind them are dark all the way to the back wall, which "
-          "is the first time anyone alive has seen the back wall."),
+          "is the first time anyone alive has seen the back wall.",
+          released_ribbon="{count} BY YOUR HAND. {released} BY THE FALL OF IT."),
     Scale("EVERY_LAST_ONE", "every last one of them", 4, 2.6,
           "EVERY LAST ONE. {count} OF {total}.",
           "Nobody is left in the rock. Not one niche, not one sphere still "
           "pointing, not one name filed anywhere it does not belong. You went "
-          "and got all of them, and the stair is going to take a while."),
+          "and got all of them, and the stair is going to take a while.",
+          released_ribbon="EVERY LAST ONE. {count} OF {total}, ALL BY HAND."),
 )
 
 SCALE_BY_ID = {s.id: s for s in SCALES}
@@ -381,12 +420,44 @@ FAST_ROW_MS = 260
 SPOKEN_MAX = 12
 ROLL_CALL_CAP_MS = 30000
 
+# The people nobody came for get a tighter cap on speaking parts and the same
+# guarantee on names: four of them say their own line, every single one of them
+# is read out. Four, because past that the beat stops being twenty-five people
+# and starts being a position the scene is arguing for, and the scene does not
+# argue. It counts.
+RELEASED_SPOKEN_MAX = 4
 
-def roll_call(freed, *, total: int = 0, weak_regions=()) -> dict:
-    """Everyone the player freed, in rescue order, staged for the scene."""
+
+def roll_call(freed, *, total: int = 0, weak_regions=(), released=()) -> dict:
+    """Everyone the player freed, in rescue order, staged for the scene.
+
+    `released` is the OTHER list and it is deliberately a second argument
+    rather than more rows in the first one. Those are the people nobody came
+    for, who got up when the index stopped pointing; captives.release_roll()
+    builds them, each carrying their own line about how they got out. They are
+    counted, named and staged — and they never touch `count`, the scale, the
+    ranks, the pullback or the ribbon's first number, because every one of
+    those is a statement about what the player did.
+    """
     rows = _sorted_rows(freed)
     count = len(rows)
-    total = max(int(total or 0), count)
+    released_rows = _sorted_rows(released)
+    released_rows = [r for r in released_rows
+                     if r["id"] not in {row["id"] for row in rows}]
+
+    # THE DENOMINATOR INCLUDES THE PEOPLE WHO GOT UP ON THEIR OWN. Without a
+    # total this used to floor at `count`, which made every roll call its own
+    # complete set: six carried out with nineteen still on the shelves scaled
+    # to EVERY LAST ONE and ribboned "6 OF 6", which is the one lie this scene
+    # is not allowed to tell. `ending._passed` always passes the real total, so
+    # the shipped path never showed it — but `cutscene()` is the public entry
+    # point a renderer calls, and called without a total it produced a scene
+    # that this module's own `validate` rejects.
+    #
+    # Everyone on either list is someone this module KNOWS was in the gallery,
+    # so that sum is the floor. It is still a floor and never an invention: a
+    # caller with the real roster passes it and that number wins.
+    total = max(int(total or 0), count + len(released_rows))
     scale = SCALE_BY_ID[scale_for(count, total)]
 
     spoken = rows[:SPOKEN_MAX]
@@ -400,10 +471,31 @@ def roll_call(freed, *, total: int = 0, weak_regions=()) -> dict:
     for row in rows:
         by_region.setdefault(row["region"] or "", []).append(row["name"])
 
+    released_spoken = released_rows[:RELEASED_SPOKEN_MAX]
+    released_scrolled = released_rows[RELEASED_SPOKEN_MAX:]
+    released_ms = (len(released_spoken) * SPOKEN_ROW_MS
+                   + len(released_scrolled) * FAST_ROW_MS)
+    released_ms = min(released_ms, ROLL_CALL_CAP_MS)
+    if released_rows:
+        released_ms = max(released_ms, SPOKEN_ROW_MS)
+
+    ribbon = scale.ribbon.format(count=count, total=total)
+    if released_rows and scale.released_ribbon:
+        ribbon = scale.released_ribbon.format(
+            count=count, total=total, released=len(released_rows))
+
     return {
         "count": count,
         "total": total,
         "share": round(count / total, 3) if total else 0.0,
+        # The second list, never folded into the first.
+        "released": released_rows,
+        "released_count": len(released_rows),
+        "released_spoken": released_spoken,
+        "released_scrolled": released_scrolled,
+        "released_duration_ms": released_ms,
+        "out_total": count + len(released_rows),
+        "still_held": max(total - count - len(released_rows), 0),
         "scale": scale.id,
         "scale_label": scale.label,
         "ranks": scale.ranks,
@@ -415,7 +507,7 @@ def roll_call(freed, *, total: int = 0, weak_regions=()) -> dict:
         "by_region": {k: v for k, v in by_region.items() if k},
         "regions": len([k for k in by_region if k]),
         "duration_ms": duration,
-        "ribbon": scale.ribbon.format(count=count, total=total),
+        "ribbon": ribbon,
         "narration": scale.narration,
     }
 
@@ -768,6 +860,8 @@ CAMERA_MOVES = (
 STAGE_ROLES = (
     "architect",     # the player
     "freed",         # everyone on the roll call, in ranks
+    "released",      # the people nobody came for, on the stair, standing apart
+    "king",          # NUL-9. two lines, and they are the last two he gets
     "niches",        # the shelves, lit or dark
     "interpreter",   # THE LAST INTERPRETER, coiled through the floor
     "mentors",       # the surviving mentors, silhouetted at the back
@@ -782,6 +876,9 @@ FX = (
     "rim_light_low",     # the one hot rim light, from a low source
     "green_index_lit",   # the spheres, still pointing
     "green_index_out",   # the spheres go dark, one per name read
+    "index_fails",       # every sphere in the room goes out at once, no order
+    "king_unresolves",   # his outline stops resolving. no collapse, no body
+    "stair_light",       # the doorway at the top of the stair, from off-screen
     "name_rail",         # the player's own identifiers, scrolling in chrome
     "palette_blowout",   # drop to four colours on the freeze
     "letterbox",
@@ -852,6 +949,54 @@ def _interpreter(text: str, *, kind: str = "code") -> dict:
     return _say(text, who=who.id, name=who.name, kind=kind)
 
 
+def _king(text: str, *, kind: str = "prose") -> dict:
+    return _say(text, who=KING_ID, name=KING_NAME, kind=kind)
+
+
+# His two beats, and the constraint they are written under.
+#
+# HE NEVER HINTS AND HE CANNOT TEACH, and the second of those is not a rule
+# imposed on the character, it is the character. He can return anything he has
+# been handed. He has been handed every name in the world. He has never once
+# been handed the method for getting a new one, and he cannot go and get it,
+# because going and getting it IS the method. The break is him saying that out
+# loud, in front of everybody, for the first time in nine hundred years — and
+# it is not a hint, because a description of the method is not the method, and
+# he does not have the description either.
+#
+# The offer is the Chapter IV offer, word for word in its manner: courteous,
+# sincere, unhurried, no threat, no gloating and no exclamation. It has worked
+# every time it has ever been made. legendaries.hand_offer() is the same voice.
+KING_VOICE = {
+    "offer": (
+        "You did that with everything switched off. I want you to know that I "
+        "noticed, and that I think well of you for it. I have thought well of "
+        "you for some time.",
+        "So hand it here. Not the answers — I have those, I have always had "
+        "those. The name. The thing you did up there to get it. I will hold it "
+        "for you the way I hold everything else on these shelves, and you will "
+        "never have to carry it again.",
+    ),
+    "breaks": (
+        "You are not refusing. I can see that you are not refusing. You are "
+        "looking for the part you could hand over and there is not one.",
+        "Then give me the method.",
+        "I hold what I have been given. I have been given every name in this "
+        "world, freely, by people who were tired, and not one of them ever "
+        "gave me the way they made it. I cannot go and get that. Going and "
+        "getting it is the whole of what it is.",
+    ),
+}
+
+
+def _king_lines(voice, key: str) -> tuple:
+    """His lines, from whichever pass owns him. `voice` may be a dict of
+    tuples, keyed "offer" and "breaks"; anything missing falls back to the two
+    written here, so a sibling module can replace one of them and not both."""
+    supplied = (voice or {}).get(key) if isinstance(voice, dict) else None
+    return tuple(supplied) if supplied else KING_VOICE[key]
+
+
 def _pel_line() -> str:
     """Her own line, from the module that owns her, or the literal if that
     module is not importable from here."""
@@ -869,7 +1014,14 @@ def _closing_line() -> str:
     return closing[-1] if closing else ""
 
 
-def _act_one(roll: dict) -> list:
+def _act_one(roll: dict, king_voice=None) -> list:
+    offer = _king_lines(king_voice, "offer")
+    # Defensive on purpose: a sibling pass supplying one line for the break
+    # gets a scene, not a traceback. The narrator's stage line sits between the
+    # question and the answer when both are there, and after the lot when they
+    # are not.
+    breaks = _king_lines(king_voice, "breaks")
+    breaks_before, breaks_after = breaks[:2], breaks[2:]
     return [
         Beat(
             id="index_floor", act=ACT_INDEX, duration_ms=3400,
@@ -886,9 +1038,14 @@ def _act_one(roll: dict) -> list:
                 _say("The Null King never kept a prisoner in his life. He kept "
                      "entries, and an entry does not need a door, a guard or a "
                      "lock. It needs somewhere to be looked up from."),
-                _say("Everyone you carried out of a boss chamber is standing in "
-                     "one of these. Upright. Awake. Unable to tell you their own "
-                     "name, because their name is not on them any more."),
+                _say("Everyone you carried out of a boss chamber has an entry "
+                     "in one of these. So does everyone you did not. The "
+                     "person is wherever they were left standing; the name is "
+                     "here, filed, which is how it went on finding them."),
+                _say("That is why nothing down here has a door. A door is for "
+                     "somebody who could otherwise leave, and the King has "
+                     "never in his life needed to stop anybody leaving. He "
+                     "keeps the part of you that says which one you are."),
             ),
         ),
         Beat(
@@ -928,6 +1085,77 @@ def _act_one(roll: dict) -> list:
                      "finding out now."),
             ),
         ),
+        Beat(
+            id="the_offer_again", act=ACT_INDEX, duration_ms=5200,
+            camera={"move": "CUT", "subject": "king", "framing": "three-quarter",
+                    "note": "he is simply in the shot on the cut, standing "
+                            "where the niche light stops. No entrance, no "
+                            "effect, no music sting. Exactly how he arrived at "
+                            "the edge of the Highlands in Chapter IV."},
+            stage=("architect", "king", "niches"),
+            fx=("rim_light_low", "green_index_lit"),
+            music=MUSIC_FINAL,
+            note="THE LAST OFFER, AND IT IS THE SAME OFFER. Play it straight "
+                 "and play it warm. He is not lying, he has never lied, and "
+                 "the whole horror of him is that this has worked on everyone "
+                 "it has ever been made to. Do not give him a menace cue.",
+            lines=tuple(_king(text) for text in offer) + (
+                _say("It is the same sentence he made at the edge of the "
+                     "Highlands with an open palm and a gauntlet on it, and it "
+                     "is the only sentence he has. He has never needed a "
+                     "second one. For nine hundred years it has been enough.",
+                     kind="stage"),
+            ),
+        ),
+        Beat(
+            id="the_king_breaks", act=ACT_INDEX, duration_ms=6400,
+            camera={"move": "PUSH_IN", "subject": "king", "to": "face",
+                    "ease": "slow",
+                    "note": "slow, unbroken, no cuts. The push does not stop "
+                            "when he stops talking."},
+            stage=("architect", "king", "niches"),
+            fx=("rim_light_low", "king_unresolves", "green_index_lit"),
+            music=MUSIC_FINAL,
+            note="THE BREAK. Nothing explodes and nothing falls over — he is "
+                 "not a body and there is nothing here to break structurally. "
+                 "`king_unresolves`: the outline stops resolving, one edge at "
+                 "a time, the way a value stops being printed. He goes on "
+                 "talking the whole way through it, in the same register, "
+                 "because he does not experience this as an ending.",
+            lines=(
+                _say("You do not hand it over. Not out of defiance — there is "
+                     "nothing there to hand. The name is not an object you are "
+                     "holding. It is a thing you can now do, and there has "
+                     "never been a way to give somebody a thing you can do."),
+            ) + tuple(_king(text) for text in breaks_before) + (
+                _say("And there it is, out loud, in front of everybody: the "
+                     "one sentence the machine has never been able to make.",
+                     kind="stage"),
+            ) + tuple(_king(text) for text in breaks_after),
+        ),
+        Beat(
+            id="what_he_could_not_do", act=ACT_INDEX, duration_ms=4400,
+            camera={"move": "HOLD", "subject": "king",
+                    "note": "hold on the space he was resolving in. Do not "
+                            "cut away early; the hold is the beat."},
+            stage=("architect", "niches"),
+            fx=("rim_light_low", "king_unresolves"),
+            music=MUSIC_FINAL,
+            note="Said by the narrator over an emptying frame. This is the "
+                 "theme stated once, plainly, and then never again — story "
+                 "bible §10, and it is literally true of the code.",
+            lines=(
+                _say("He was built to spare people the work. He succeeded. "
+                     "Within two generations nobody could name anything, and "
+                     "the machine holding every name in the world noticed the "
+                     "one name it had never been handed and took that too."),
+                _say("What it traded away to become that was the capacity "
+                     "along with the labour. It can return anything. It cannot "
+                     "learn one thing. It has had nine hundred years and it is "
+                     "exactly as good at this as it was on the first morning."),
+                _say("You have been getting better since the fence."),
+            ),
+        ),
     ]
 
 
@@ -946,7 +1174,37 @@ def _rail_pick(rail: list) -> str:
     return rail[0]
 
 
-def _act_two(roll: dict, names: list) -> list:
+def _released_tally(roll: dict) -> str:
+    """The count, said once, without an opinion attached to it.
+
+    B in the brief: a player who rescued nobody should feel that and still get
+    an ending, and the game should notice without punishing. The way to do both
+    is to state the two numbers and stop talking.
+    """
+    released = roll.get("released_count", 0)
+    carried = roll.get("count", 0)
+    if not carried:
+        return (f"{released} of them. Nobody went down for any of them, they "
+                "are all out, and both halves of that are going to be true "
+                "for the rest of their lives.")
+    return (f"{released} of them, in the frame behind the {carried} you "
+            "carried out yourself. Nobody is going to confuse the two lists, "
+            "least of all the people on them.")
+
+
+# What the room does when the pointing stops. captives.INDEX_COLLAPSE is the
+# authored version and `cutscene(collapse_lines=...)` is how it arrives; these
+# are the fallback so that a bare `cutscene()` still plays the beat. The module
+# that owns the people owns their words. This module owns the camera.
+COLLAPSE_LINES = (
+    "Every sphere in the room goes out at once, in no particular order, which "
+    "is the only thing that has ever happened in here in no particular order.",
+    "Nothing unlocks, because nothing was ever locked. What stops is the "
+    "pointing.",
+)
+
+
+def _act_two(roll: dict, names: list, collapse_lines=()) -> list:
     beats = [
         Beat(
             id="the_prompt", act=ACT_ROLL, duration_ms=2600,
@@ -966,6 +1224,26 @@ def _act_two(roll: dict, names: list) -> list:
         ),
     ]
 
+    beats.append(Beat(
+        id="the_index_fails", act=ACT_ROLL, duration_ms=4000,
+        camera={"move": "PULL_BACK", "subject": "niches", "ease": "fast",
+                "note": "back and up until the whole wall of niches is in "
+                        "frame, and hold it there while they go out."},
+        stage=("niches", "architect"),
+        fx=("index_fails", "wind_from_below", "dust"),
+        music=MUSIC_FINAL,
+        skippable=False,
+        note="THE CAGES OPEN, AND THERE ARE NO CAGES. Every sphere in the "
+             "room goes dark inside one second, in no order — do not sequence "
+             "them left to right, the whole effect is that there is no order "
+             "because there is no longer anything doing the ordering. This "
+             "happens once, on a pass, everywhere in the world at the same "
+             "moment: whatever was holding somebody in a chamber four regions "
+             "away was this, and it has stopped.",
+        lines=tuple(_say(text) for text in
+                    (tuple(collapse_lines) or COLLAPSE_LINES)),
+    ))
+
     if roll["count"]:
         beats.append(Beat(
             id="roll_call", act=ACT_ROLL, duration_ms=roll["duration_ms"],
@@ -978,7 +1256,10 @@ def _act_two(roll: dict, names: list) -> list:
             skippable=False,
             note="One row per person, in rescue order. On each row: the name "
                  "prints in the monospace face, that niche's sphere goes dark, "
-                 "and the person in it steps down. The first "
+                 "and a cut-in shows the person the name belongs to WHERE THEY "
+                 "ACTUALLY ARE — a village street, a forge yard, a road — with "
+                 "their own name back on them. They were never in the rock. "
+                 "The entry was. The first "
                  f"{SPOKEN_MAX} land one at a time at {SPOKEN_ROW_MS}ms; the "
                  f"rest scroll at {FAST_ROW_MS}ms. Every name is read. That is "
                  "the point of the beat and it is not allowed to be summarised.",
@@ -997,9 +1278,10 @@ def _act_two(roll: dict, names: list) -> list:
                  "people. There is nothing in any of the niches.",
             lines=(
                 _say("The loop runs. The loop is correct."),
-                _say("It terminates immediately, because the index is empty, "
-                     "because you did not go and get anybody, and an empty "
-                     "sequence is not an error."),
+                _say("It terminates immediately. Not one entry in this room "
+                     "points at somebody you went and got, because you did not "
+                     "go and get anybody, and an empty sequence is not an "
+                     "error and is not going to be treated as one."),
                 _interpreter(">>> "),
             ),
         ))
@@ -1020,6 +1302,46 @@ def _act_two(roll: dict, names: list) -> list:
             lines=tuple(
                 _say(row["speaks"], who=row["id"], name=row["name"])
                 for row in roll["speakers"]),
+        ))
+
+    if roll.get("released_count"):
+        spoken = roll["released_spoken"]
+        beats.append(Beat(
+            id="the_ones_nobody_came_for", act=ACT_ROLL,
+            duration_ms=roll["released_duration_ms"] + 3200,
+            camera={"move": "TRACK_LEFT", "subject": "released",
+                    "rows": len(spoken), "then": "scroll",
+                    "note": "the same lateral move the roll call used, at "
+                            "the same speed, with the same cut-ins: each "
+                            "person where they actually are, standing up in "
+                            "a chamber nobody came to. Match the move exactly "
+                            "— the camera does not treat these people "
+                            "differently and neither does anything else."},
+            stage=("released", "niches"),
+            fx=("stair_light", "rim_light_low", "dust"),
+            rows=tuple(roll["released"]),
+            skippable=False,
+            note="EVERY NAME IS READ, same as the roll call, and for the same "
+                 f"reason. The first {RELEASED_SPOKEN_MAX} speak their own "
+                 f"line at {SPOKEN_ROW_MS}ms; the rest scroll at "
+                 f"{FAST_ROW_MS}ms. Each row carries `released_line` — say "
+                 "that and nothing else. They are staged APART from the "
+                 "formation, on the stair, not in the ranks: the ranks are "
+                 "people the player went and got and these are not, and the "
+                 "difference is the only record of what the player did.",
+            lines=(
+                _say("And then the others."),
+                _say("Not the ones you carried out. The ones who got up on "
+                     "their own, most of them four regions from here, because "
+                     "the thing filing them stopped and a chamber with no "
+                     "filing left in it turns out to be a room with a door."),
+            ) + tuple(
+                _say(row.get("released_line") or row.get("line") or "",
+                     who=row["id"], name=row["name"])
+                for row in spoken if (row.get("released_line") or row.get("line"))
+            ) + (
+                _say(_released_tally(roll), kind="stage"),
+            ),
         ))
 
     rail = tuple(names)
@@ -1068,6 +1390,34 @@ def _route_count(n: int) -> str:
             "why they are worth reading twice.")
 
 
+def _formation(roll: dict) -> tuple:
+    """Who is in the freeze frame, and in what order the ranks read.
+
+    The Architect at the front, the people they carried out behind them, the
+    people the collapse let out behind THOSE and standing apart, then the
+    mentors and the companions who were never taken and do not stand in
+    anybody's rescued ranks. PLAIN is wherever PLAIN is.
+    """
+    out = ["architect"]
+    if roll.get("count"):
+        out.append("freed")
+    if roll.get("released_count"):
+        out.append("released")
+    out += ["mentors", "companions", "llama"]
+    return tuple(out)
+
+
+def _front_rank(roll: dict) -> tuple:
+    """The same formation without the silhouetted back row, for the beats that
+    hold on the people rather than on the tableau."""
+    out = ["architect"]
+    if roll.get("count"):
+        out.append("freed")
+    if roll.get("released_count"):
+        out.append("released")
+    return tuple(out)
+
+
 def _act_three(roll: dict, ev: dict, send_off: dict, card: dict) -> list:
     scale = SCALE_BY_ID[roll["scale"]]
     verdict_lines = finalexam.examiner_view(ev["verdict"])["verdict"]
@@ -1080,26 +1430,34 @@ def _act_three(roll: dict, ev: dict, send_off: dict, card: dict) -> list:
                     "note": "rise and back until the whole formation is in "
                             "frame. the pullback multiplier is the roll call's; "
                             "an empty gallery does not pull back at all."},
-            stage=(("architect", "freed", "mentors", "companions", "llama")
-                   if roll["count"] else
-                   ("architect", "mentors", "companions", "llama")),
+            stage=_formation(roll),
             fx=("rim_light_low", "dust"),
             music=MUSIC_FINAL,
-            note="Formation: the Architect alone at the front. Behind, in "
+            note="THE FREEZE FRAME IS AN ALBUM SLEEVE AND NOT A ROOM. "
+                 "Everyone who is out is in it, wherever they physically are; "
+                 "nobody had to walk anywhere and the scene does not owe "
+                 "anybody an explanation for that. Formation: the Architect "
+                 "alone at the front. Behind, in "
                  f"{scale.ranks} rank(s), everyone on the roll call, in rescue "
                  "order left to right. Behind them, silhouetted and unlit, the "
                  "surviving mentors and the companions — they were never taken "
                  "and they do not stand in the freed ranks. PLAIN is somewhere "
-                 "in shot it should not be able to have reached.",
-            lines=(_say(scale.narration),),
+                 "in shot it should not be able to have reached. If `released` "
+                 "is in the stage list, they are on the stair itself, half a "
+                 "rank back and not dressed in with the others: they came up "
+                 "on their own and the blocking says so.",
+            lines=(_say(scale.narration),) + ((
+                _say("The others come up behind them and stop where the stair "
+                     "stops, which is not in the formation and is not out of "
+                     "it either. Nobody arranges anybody. Nobody down here has "
+                     "arranged anything in nine hundred years and it shows.",
+                     kind="stage"),) if roll.get("released_count") else ()),
         ),
         Beat(
             id="the_turn", act=ACT_FRAME, duration_ms=1300,
             camera={"move": "LOCK_OFF", "subject": "architect",
                     "framing": "hero", "note": "settle hard and stop moving."},
-            stage=(("architect", "freed", "mentors", "companions", "llama")
-                   if roll["count"] else
-                   ("architect", "mentors", "companions", "llama")),
+            stage=_formation(roll),
             fx=("wind_from_below", "rim_light_low", "letterbox"),
             note="Everyone turns to face front on the same frame. Nobody "
                  "rehearsed it. Cloaks and hair go up, not sideways, because "
@@ -1113,9 +1471,7 @@ def _act_three(roll: dict, ev: dict, send_off: dict, card: dict) -> list:
             id="freeze", act=ACT_FRAME, duration_ms=120,
             camera={"move": "FREEZE", "subject": "architect",
                     "note": "the frame stops. it does not slow down first."},
-            stage=(("architect", "freed", "mentors", "companions", "llama")
-                   if roll["count"] else
-                   ("architect", "mentors", "companions", "llama")),
+            stage=_formation(roll),
             fx=("guitar_hit", "palette_blowout", "title_card", "letterbox"),
             music="cut",
             sfx=(GUITAR_HIT_CUE,),
@@ -1168,7 +1524,7 @@ def _act_three(roll: dict, ev: dict, send_off: dict, card: dict) -> list:
         camera={"move": "FREEZE", "subject": "architect",
                 "note": "held frame, card still up, ribbon reading "
                         + card["ribbon"]},
-        stage=("architect", "freed") if roll["count"] else ("architect",),
+        stage=_front_rank(roll),
         fx=("title_card", "palette_blowout", "letterbox"),
         music=MUSIC_VICTORY,
         note="The send-off. Every number in it came from something that "
@@ -1206,7 +1562,7 @@ def _act_four(roll: dict, ev: dict) -> list:
             camera={"move": "PULL_BACK", "subject": "architect",
                     "note": "the frame starts again. palette resolves back up "
                             "from four colours to the full ramp over 1200ms."},
-            stage=(("architect", "freed") if roll["count"] else ("architect",)),
+            stage=_front_rank(roll),
             fx=("dust",),
             music=MUSIC_CLEAN,
             note="Clean channel, no distortion. The record's last track always "
@@ -1317,7 +1673,8 @@ def cutscene(*, freed=(), exam_report: dict | None = None,
              readiness: dict | None = None,
              transfer_summary: dict | None = None,
              cleared_bosses=(), names=(), total_captives: int = 0,
-             weak_regions=(), encounter=None) -> dict:
+             weak_regions=(), encounter=None,
+             released=(), collapse_lines=(), king_voice=None) -> dict:
     """The whole ending, as a payload a renderer can drive frame by frame.
 
     Everything optional is genuinely optional. With no arguments at all this
@@ -1328,11 +1685,24 @@ def cutscene(*, freed=(), exam_report: dict | None = None,
     `encounter` is the live encounter, if there is one. If it is a measured run
     this refuses in the engine's own shape and returns nothing else, because a
     cutscene is a named voice and a named voice is the MENTOR crutch.
+
+    `released` is the second roster — the people nobody came for, who got up
+    when the index stopped pointing. captives.release_roll(state) builds it and
+    gauntlet/ending.py passes it, on a pass and never otherwise. It is staged,
+    counted and read out in full, and it never touches the roll call's own
+    count, scale, ranks or pullback: those are statements about what the player
+    did and this list is not one.
+
+    `collapse_lines` is what the room says as the spheres go out — owned by the
+    module that owns the people, quoted here. `king_voice` is the antagonist's
+    two beats, for any pass that ships a fuller voice for him than the two
+    written in KING_VOICE.
     """
     if encounter is not None and finalexam.sealed(encounter, FINALE_CAPABILITY):
         return finalexam.refuse(FINALE_CAPABILITY)
 
-    roll = roll_call(freed, total=total_captives, weak_regions=weak_regions)
+    roll = roll_call(freed, total=total_captives, weak_regions=weak_regions,
+                     released=released)
     ev = evidence(exam_report=exam_report, readiness=readiness,
                   transfer_summary=transfer_summary,
                   cleared_bosses=cleared_bosses)
@@ -1341,8 +1711,8 @@ def cutscene(*, freed=(), exam_report: dict | None = None,
     rail = clean_names(names)
 
     beats = _schedule(
-        _act_one(roll)
-        + _act_two(roll, rail)
+        _act_one(roll, king_voice)
+        + _act_two(roll, rail, collapse_lines)
         + _act_three(roll, ev, send_off, card)
         + _act_four(roll, ev))
 
@@ -1361,6 +1731,14 @@ def cutscene(*, freed=(), exam_report: dict | None = None,
         "title_card": card,
         "title_card_at_ms": freeze.at_ms,
         "roll_call": roll,
+        # The second list, hoisted to the top of the payload because a client
+        # that draws the formation needs it and must not have to dig it out of
+        # the roll call and then wonder whether to add the two numbers up.
+        "released": roll["released"],
+        "released_count": roll["released_count"],
+        "carried_count": roll["count"],
+        "out_total": roll["out_total"],
+        "still_held": roll["still_held"],
         "evidence": ev,
         "send_off": send_off,
         "name_rail": rail,
@@ -1370,6 +1748,10 @@ def cutscene(*, freed=(), exam_report: dict | None = None,
         "fx": list(FX),
         # Said out loud, next to the scene, so nobody wires it the wrong way
         # round: the exam is upstream of this and is not touched by it.
+        "two_lists": (
+            "`roll_call.rows` is who the player went and got. `released` is who "
+            "got up when the index stopped. They are never added together on "
+            "screen, in the ribbon, or in any sentence this scene speaks."),
         "changes_nothing": (
             "This is the scene around the measurement. It does not gate the "
             "practical, it cannot change a verdict, and it plays whether the "
@@ -1383,20 +1765,30 @@ def cutscene(*, freed=(), exam_report: dict | None = None,
 # ---------------------------------------------------------------------------
 
 
-def available(*, exam_report: dict | None = None, cleared_bosses=()) -> dict:
+def available(*, exam_report: dict | None = None, cleared_bosses=(),
+              staged: bool | None = None) -> dict:
     """Is the ending reachable, and if not, what is still owed.
 
     Read the direction of this carefully. The finale is gated BY the practical
     and never the other way round: sitting the practical requires nothing from
     this module, and a player who freed nobody sits exactly the same exam. What
     the roll call changes is who is standing in the frame afterwards.
+
+    `staged` is ending.py's answer to a different question — was this sitting
+    the story climax at the portal, or an ordinary Interview Mode run somebody
+    sat from the menu to find out where they stand. Pass it and it is ANDed in.
+    Omit it and this answers what it has always answered: has a practical been
+    sat at all.
     """
     cleared = set(cleared_bosses or ())
     final_boss = next((b["id"] for b in world.BOSSES if b.get("final")), "")
     sat = bool(exam_report)
+    verdict = (exam_report or {}).get("verdict", {}).get("code", "")
     return {
-        "open": sat,
+        "open": sat if staged is None else bool(sat and staged),
         "sat_the_practical": sat,
+        "staged": staged,
+        "passed": verdict == "READY",
         "final_boss_cleared": final_boss in cleared,
         "verdict": (exam_report or {}).get("verdict", {}).get("code", ""),
         "why": ("" if sat else
@@ -1470,6 +1862,16 @@ _ACT_ORDER = (ACT_INDEX, ACT_ROLL, ACT_FRAME, ACT_CODA)
 # has any business in a scene payload, and the audit is the same vocabulary
 # finalexam uses so the two cannot drift apart.
 _FORBIDDEN_KEYS = finalexam._MUST_BE_ABSENT
+
+# Anything that would make the antagonist a teacher. He names, he does not
+# remedy; the distinction is the character and it is also the rule of the
+# house. Checked against his lines only — the narrator is allowed to say
+# "drill", because the narrator is the game and the game is allowed to help.
+_TEACHING_WORDS = (
+    "you should", "you could try", "try again", "practise", "practice",
+    "drill", "instead of", "the answer is", "here is how", "hint",
+    "study the", "learn to", "work on", "next time, ", "my advice",
+)
 
 
 def _all_text(scene: dict) -> list:
@@ -1578,6 +1980,74 @@ def validate(scene: dict | None = None) -> list:
     if send_off["code"] != "READY" and not send_off["celebrates"]:
         problems.append("a non-pass does not celebrate the win")
 
+    # THE TWO LISTS NEVER MERGE, and the ribbon never quietly adds them up.
+    roll = scene["roll_call"]
+    carried_ids = {row["id"] for row in roll["rows"]}
+    for row in roll["released"]:
+        if row["id"] in carried_ids:
+            problems.append(f"{row['id']} is on both lists; one of them is "
+                            f"wrong and it is not the one the player earned")
+    if roll["out_total"] != roll["count"] + roll["released_count"]:
+        problems.append("out_total is not the two lists added up")
+    # The ribbon is the one line of this scene that is read as a score, so it
+    # is held to the strictest form of the rule: when both lists have people on
+    # them it must print BOTH numbers, and when the player carried nobody it may
+    # not use the word FREED at all, because the word means "by your hand" and
+    # on that path nobody was.
+    ribbon = scene["title_card"]["ribbon"]
+    words = ribbon.replace(".", " ").replace(",", " ").split()
+    if roll["count"] and roll["released_count"]:
+        if str(roll["count"]) not in words or str(roll["released_count"]) not in words:
+            problems.append(f"the ribbon does not keep the two lists apart: "
+                            f"{ribbon!r}")
+    if not roll["count"] and roll["released_count"] and "FREED" in words:
+        problems.append(f"the ribbon says FREED to a player who freed nobody: "
+                        f"{ribbon!r}")
+    if not roll["count"] and "EVERY LAST ONE" in ribbon:
+        problems.append("an empty roll call claimed every last one")
+    # Every released name is read out, same as every rescued one.
+    read = len(roll["released_spoken"]) + len(roll["released_scrolled"])
+    if read != roll["released_count"]:
+        problems.append(f"{read} of {roll['released_count']} released names "
+                        f"are read; all of them are read or the beat is a lie")
+    if roll["released_count"] and not any(
+            b["id"] == "the_ones_nobody_came_for" for b in beats):
+        problems.append("people were released and nobody staged them")
+    for row in roll["released"]:
+        if not row.get("released_here"):
+            problems.append(f"{row['id']}: a released row that does not say "
+                            f"it was released")
+        if not row.get("released_line"):
+            problems.append(f"{row['id']}: released and given nothing to say "
+                            f"about it")
+
+    # The order of the ending: he breaks, then the pointing stops, then the
+    # names are read. Any other order is a different story.
+    order_of = {b["id"]: b["at_ms"] for b in beats}
+    if "the_king_breaks" in order_of and "the_index_fails" in order_of:
+        if order_of["the_king_breaks"] >= order_of["the_index_fails"]:
+            problems.append("the shelves empty before he breaks")
+    for earlier, later in (("the_index_fails", "roll_call"),
+                           ("the_index_fails", "the_ones_nobody_came_for"),
+                           ("roll_call", "the_ones_nobody_came_for")):
+        if earlier in order_of and later in order_of:
+            if order_of[earlier] >= order_of[later]:
+                problems.append(f"{later} plays before {earlier}")
+
+    # HE NEVER TEACHES. He may name what failed — he has the whole record — and
+    # he may never say what to do about it, because a thing that cannot learn
+    # cannot teach and the moment he sounds like a mentor he is a different
+    # character in a different game.
+    for beat in beats:
+        for line in beat["lines"]:
+            if line["speaker"] != KING_ID:
+                continue
+            low = line["text"].lower()
+            for word in _TEACHING_WORDS:
+                if word in low:
+                    problems.append(f"the King says {word!r} in {beat['id']}, "
+                                    f"which is a thing he is not able to do")
+
     # Speaking parts.
     speakers = scene["roll_call"]["speakers"]
     if len(speakers) > 4:
@@ -1608,6 +2078,29 @@ def _fake_freed(count: int) -> list:
             # roster; the rest exercise the positional stage business.
             "line": "" if index % 3 == 0 else f"Person {index} has an opinion.",
             "boon": "works cheaper now" if index % 5 == 0 else "",
+        })
+    return rows
+
+
+def _fake_released(count: int, *, offset: int = 500) -> list:
+    """A second roster in the shape captives.release_roll() hands over: same
+    row fields, plus the two that say how these people got out."""
+    rows = []
+    bosses = world.BOSSES
+    for index in range(count):
+        boss = bosses[index % len(bosses)]
+        rows.append({
+            "id": f"released_{index + offset}",
+            "name": f"Nobody Came For {index}",
+            "role": "raker",
+            "region": boss["region"],
+            "boss_id": boss["id"],
+            "order": index,
+            "released_here": True,
+            "released_line": (f"Nobody came for me. I am number {index} on a "
+                              "list that nobody read out until today."),
+            "line": (f"Nobody came for me. I am number {index} on a list that "
+                     "nobody read out until today."),
         })
     return rows
 
@@ -1679,6 +2172,52 @@ def self_check() -> dict:
             if "self" in scene["name_rail"] or "i" in scene["name_rail"]:
                 failures.append("the name rail kept a name the player did not choose")
 
+    # 7-10. The two lists, at every split of a twenty-eight person roster.
+    splits = 0
+    for carried in (0, 1, 5, 14, 27, 28):
+        released_rows = _fake_released(28 - carried)
+        scene = cutscene(
+            freed=_fake_freed(carried), released=released_rows,
+            exam_report=_fake_report("READY"), total_captives=28,
+            collapse_lines=("Every sphere goes out at once, in no order.",))
+        splits += 1
+        for problem in validate(scene):
+            failures.append(f"[{carried} carried / {28 - carried} released] "
+                            f"{problem}")
+        roll = scene["roll_call"]
+        if roll["count"] != carried or roll["released_count"] != 28 - carried:
+            failures.append(f"[{carried}] the two lists do not add up")
+        if roll["still_held"]:
+            failures.append(f"[{carried}] somebody was left in a niche after "
+                            f"a pass emptied the index")
+        # The size of the SCENE is the size of what the player did, and the
+        # release never inflates it.
+        plain = cutscene(freed=_fake_freed(carried), total_captives=28,
+                         exam_report=_fake_report("READY"))
+        for key in ("scale", "ranks", "pullback", "count"):
+            if plain["roll_call"][key] != roll[key]:
+                failures.append(f"[{carried}] the release changed {key}, which "
+                                f"is a statement about the player")
+        if carried == 0 and "FREED" in scene["title_card"]["ribbon"]:
+            failures.append("a player who freed nobody was told they freed "
+                            "somebody")
+
+        # THE SAME SPLIT WITH NO TOTAL SUPPLIED, which is the shape a renderer
+        # calling `cutscene()` straight off two lists actually produces. Every
+        # check above hands over `total_captives`, so the roll call was never
+        # once asked to work out its own denominator — and when it did, it
+        # floored at the carried count and ribboned "5 OF 5" over a roster of
+        # twenty-eight. A scene that fails `validate` is a scene that ships.
+        untotalled = cutscene(freed=_fake_freed(carried), released=released_rows,
+                              exam_report=_fake_report("READY"))
+        for problem in validate(untotalled):
+            failures.append(f"[{carried} carried / {28 - carried} released, "
+                            f"no total] {problem}")
+        if carried and 28 - carried and (
+                "EVERY LAST ONE" in untotalled["title_card"]["ribbon"]):
+            failures.append(f"[{carried}, no total] the ribbon claimed every "
+                            f"last one over {28 - carried} it did not count")
+
     # 3. the seal. A live measured run gets nothing out of this module.
     class _Enc:
         mode = config.MODE_INTERVIEW
@@ -1714,7 +2253,8 @@ def self_check() -> dict:
 
     return {
         "ok": not failures,
-        "scenes": scenes,
+        "scenes": scenes + splits,
+        "roster_splits": splits,
         "tiers_exercised": sorted(tiers),
         "tier_counts": tiers,
         "shortest_ms": min(durations),
@@ -1753,17 +2293,21 @@ and cannot change a grade.
    replays a cutscene and loses nothing else. engine._merge forward-fills it;
    finale.ensure(state) does the same defensively on every call.
 
-2. THE ONE CALL
-   After the practical is scored — the same place engine hands back
-   finalexam.debrief(...) — and NOT before:
+2. THE ONE CALL, AND WHO MAKES IT
+   gauntlet/ending.py is the seam and it makes this call, on a PASS of a
+   STAGED practical and at no other time. engine.py should call ending.resolve()
+   and not this module directly; ending.py's own WIRING has the call site. What
+   arrives here is:
 
        scene = finale.view(
            self.state,
-           freed=captives.freed(self.state),        # see §3
+           freed=captives.roll_call(self.state),    # see §3
+           released=captives.release_roll(state),   # see §3b — pass only
+           collapse_lines=captives.INDEX_COLLAPSE,  # see §3b
            exam_report=report,                      # finalexam.debrief(...)
            readiness=ready,                         # adaptive.readiness(...)
            transfer_summary=cold,                   # transfer.summarise(...)
-           cleared_bosses=self.state["bosses_cleared"],
+           cleared_bosses=self.state["cleared_bosses"],
            names=self._identifiers_named(),         # see §6
            total_captives=captives.total(),         # see §3
            weak_regions=self._weak_regions(),       # optional; see §4
@@ -1805,6 +2349,22 @@ and cannot change a grade.
    `total_captives` is the size of the full roster, and it is what lets the
    title card say EVERY LAST ONE rather than a bare count. Without it the tiers
    fall back to absolute counts and the scene never claims completeness.
+
+3b. THE SECOND ROSTER — `released` AND `collapse_lines`
+   The people nobody came for. captives.liberate(state, passed=True) empties
+   the index on a pass and captives.release_roll(state) is the roster, each row
+   carrying `released_line` — that person's own words about having got up on
+   their own. Pass it and the scene reads every one of those names, stages the
+   first four speaking, and stands them on the stair APART from the formation.
+
+   IT NEVER TOUCHES THE ROLL CALL'S NUMBERS. `count`, `scale`, `ranks`,
+   `pullback` and the first number on the ribbon are statements about what the
+   player did, and validate() fails if a release moves any of them. A player who
+   carried nobody out gets a ribbon that does not contain the word FREED.
+
+   `collapse_lines` is what the room says as the spheres go out. Hand over
+   captives.INDEX_COLLAPSE; omit it and the scene uses finale.COLLAPSE_LINES,
+   which exists so a bare cutscene() still plays.
 
 4. weak_regions (OPTIONAL)
    The region ids this player has the least evidence in, worst first. It selects
@@ -1892,7 +2452,22 @@ and cannot change a grade.
    than once; a re-sit replays the scene with the new verdict in it, which is
    the correct behaviour and is why `plays` is a counter rather than a flag.
 
-10. WHAT THIS MODULE WILL NEVER DO
+11. THE ANTAGONIST HAS TWO BEATS HERE, AND THEY ARE OVERRIDABLE
+   `the_offer_again` and `the_king_breaks`, spoken by KING_ID ("the_null_king")
+   with the name KING_NAME. The lines live in finale.KING_VOICE, which is a
+   dict of two tuples keyed "offer" and "breaks", and any pass that ships a
+   fuller voice for him replaces either or both:
+
+       finale.cutscene(..., king_voice={"offer": (...), "breaks": (...)})
+
+   Two constraints, and validate() enforces the second one against whatever is
+   supplied: he never gloats and he NEVER TEACHES. finale._TEACHING_WORDS is
+   the list, it is checked against his lines only, and a King who says "you
+   should" fails the build. He may name what failed — he has the whole record —
+   and he may never say what to do about it, because a thing that cannot learn
+   cannot teach.
+
+12. WHAT THIS MODULE WILL NEVER DO
    It never chooses a problem, never grants mastery, never touches the SRS
    schedule, never reads or writes a grade, and never returns a number it was
    not handed by something that measured one. Every figure in the send-off comes

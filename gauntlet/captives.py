@@ -1389,11 +1389,16 @@ def new_captive_state() -> dict:
     """Add to engine.DEFAULT_STATE under STATE_KEY. _merge forward-fills, so an
     existing save gains the key on load with nobody freed, which is correct."""
     return {
-        "freed": [],          # captive ids, in the order the cages opened
+        "freed": [],          # captive ids CARRIED OUT, in the order the cages opened
         "bosses": [],         # boss ids whose people are out
         "boons": [],          # BOONS ids in effect
         "routes": [],         # ROUTES ids now walkable
         "final_release": False,   # the last fight has happened
+        # The two lists below belong to the ending and never merge with `freed`.
+        # `released` is everyone the collapse of the index let out — the people
+        # nobody came for. See `liberate()`, and the long note above it.
+        "released": [],           # captive ids the index released, roster order
+        "index_collapsed": False, # the practical was passed and the shelves emptied
     }
 
 
@@ -1558,9 +1563,14 @@ def freed(state: dict) -> list:
 
 
 def still_held(state: dict) -> list:
-    """The honest other half of the list."""
+    """The honest other half of the list: everybody still in a niche.
+
+    Out is out, by either road — carried out by the player or let out when the
+    index stopped answering — so this subtracts both lists. Before the ending
+    the second one is empty and this is exactly what it always was.
+    """
     raw = state.get(STATE_KEY) or {}
-    out = set(raw.get("freed", []))
+    out = set(raw.get("freed", [])) | set(raw.get("released", []))
     return [c for c in CAPTIVES if c.id not in out]
 
 
@@ -1596,7 +1606,15 @@ def village_changes(state: dict, region_id: str = "") -> list:
         if region_id and person.home != region_id:
             continue
         out.append({"captive": person.id, "region": person.home,
-                    "text": person.change})
+                    "text": person.change, "released_here": False})
+    # After the index falls, the people nobody came for go home as well, and
+    # the street they go home to changes the same way. The flag is kept so a
+    # client can tell the two apart; the change itself is the same change.
+    for person in released(state):
+        if region_id and person.home != region_id:
+            continue
+        out.append({"captive": person.id, "region": person.home,
+                    "text": person.change, "released_here": True})
     return out
 
 
@@ -1649,6 +1667,283 @@ def open_routes(state: dict) -> list:
     raw = state.get(STATE_KEY) or {}
     return [{"id": rid, **ROUTES[rid]} for rid in raw.get("routes", [])
             if rid in ROUTES]
+
+
+# ---------------------------------------------------------------------------
+# The index stops answering
+# ---------------------------------------------------------------------------
+#
+# THERE ARE TWO WAYS OUT OF A NICHE AND THEY ARE NOT THE SAME WAY.
+#
+# The first is `free()` above: a boss goes down, a player walks into the
+# chamber, and somebody is carried out by hand. That is the rescue, it is the
+# boss reward, and it is the only one the player did.
+#
+# The second is this section, and it happens exactly once, at the end, and only
+# on a PASS of the final practical. An index exists to answer on your behalf.
+# For the length of that exam, in the room above, nothing answered on the
+# player's behalf and the answer still came back right — so the lookup has
+# nothing on the other end of it and the pointing stops. Everyone still filed
+# gets up.
+#
+# THE TWO LISTS NEVER MERGE, and that is the whole of the honesty in this
+# module. `freed` is who you went and got. `released` is who walked out because
+# the thing holding them failed. The finale stands the first group behind the
+# player and stages the second group saying, in their own words, that nobody
+# came. A player who rescued nobody still gets an ending; they get it in a room
+# full of people who are very clear about how they got out.
+#
+# NOTHING HERE IS A CONSOLATION PRIZE AND NOTHING HERE IS A PUNISHMENT. The
+# release is not smaller for a player who freed twenty-four and it is not
+# larger for one who freed none. It is the same event. What differs is who is
+# standing where, and that is decided by what the player actually did.
+
+INDEX_COLLAPSE = (
+    "Every sphere on every shelf goes out at once, in no particular order, "
+    "which is the only thing that has ever happened in this room in no "
+    "particular order.",
+    "Nothing unlocks, because nothing was ever locked. What stops is the "
+    "pointing.",
+    "The ones nobody came for get up on their own. They are not grateful, they "
+    "are not obliged to be, and most of them say so somewhere on the stair.",
+)
+
+# What each of them says on the way up, having been let out rather than fetched.
+#
+# THE RULE FOR THIS TABLE, and validate() enforces the parts of it a machine can
+# reach: the line is about them. It is not thanks, it is not blame, and it is
+# never addressed to the player as an accusation. Every one of them says the
+# true thing — nobody came — in the voice they already have in this file, and
+# then says what they are going to do about the rest of their life, because
+# that is what these people are like and it is why they are written this way.
+RELEASE_LINES = {
+    "sennet_crale":
+        "The scratches on the post stop at sixty-three. Nobody came down that "
+        "stair, and I am not going to make it sound better than it was to be "
+        "polite. The lock let go on its own and I walked out past a door I "
+        "could have cut in an afternoon if anyone had thought to ask.",
+    "ibb_tallow":
+        "I came up on my own feet with nobody holding the other end of the "
+        "rope. Twenty-one head have had a year without me. If any of them are "
+        "still up there it is because goats are better at this than people, "
+        "which I have been saying for six generations of them.",
+    "nessa_vey":
+        "Nobody came. Number it correctly, because a count that starts where "
+        "it is convenient is how this place has always lost people. Start at "
+        "nobody. Then write down that I walked out regardless.",
+    "josa_fell":
+        "Sera got out on day four. Nobody came for the second of us, which is "
+        "the thing I have been saying about places that cannot tell two people "
+        "apart, and I would much rather have been wrong.",
+    "perrin_oake":
+        "The shelf let go and I stood up, and that is the whole of it. Nobody "
+        "came down that stair, and I spent nine weeks deciding what I would "
+        "say to whoever did, and the deciding is the part I have wasted, which "
+        "at my age is what stings.",
+    "ysold_quen":
+        "Nobody came and the season spoiled. Both of those are facts about "
+        "waste and neither of them is about anyone in this room. I am going "
+        "back to the shelf. It takes eleven months to fill and I started on it "
+        "in my head on the way up.",
+    "alek_rill":
+        "I still have the pole. Nobody came, and the water still went out and "
+        "came back twice a day the entire time, which I found steadying. I do "
+        "not expect that to be steadying to anyone else.",
+    "hessa_dunmar":
+        "Nobody rigged a line down here, so I will not be standing about "
+        "saying I was fetched. I got out the way the middle of a span gets "
+        "found: the thing holding it up stopped, and there the error was.",
+    "torv_bael":
+        "Nobody came. One span, one person, end to end, and the person was "
+        "nobody. I have had six weeks to think of a better way to put that and "
+        "I have not found one, and Hessa is going to say that is because I "
+        "worked from the wrong end.",
+    "ona_kesk":
+        "Let the record say it plainly, and in triplicate if it must: nobody "
+        "came down for me, the shelf stopped, and I walked. I will write the "
+        "other two copies myself, which is the correct way to make this "
+        "particular complaint.",
+    "wenna_ives":
+        "Report it the way it happened. Nobody came, no relief was sent, the "
+        "hold failed on its own and I came out under my own feet. That is a "
+        "useful report. The other kind is what my father's drill is made of.",
+    "calla_prowd":
+        "Nobody came for me. Put that down in ink that cannot be gone over in "
+        "the morning, because the version where somebody did is exactly the "
+        "version this castle would have preferred to wake up to.",
+    "oskar_lind":
+        "Nobody came up the line. I am not owed it and I am not asking for it. "
+        "Tam is still not coming down, and being let out does not touch that "
+        "and was never going to.",
+    "ferris_ames":
+        "Count me where I belong, with the ones nobody came for. It is an end "
+        "with one twig on it, the ledger has been miscounting that kind for "
+        "nine years, and I notice it is still an end.",
+    "jessamy_roke":
+        "No one marked a road to this place. I walked out on an unmarked one, "
+        "which is the only sort I have ever had, and I started notching the "
+        "stair on the way up so the next person down does not have to guess.",
+    "abel_sarrow":
+        "Nobody came. At seventy that is not a complaint, it is a schedule. "
+        "The list is still shut and still on me and I am going to go and add "
+        "to it honestly, which means adding the ones nobody reached in time.",
+    "iolanthe_brask":
+        "Nobody came for me. I am not going to round that up to somebody "
+        "nearly did. That is the species of lying that cost a tenant a roof in "
+        "my first year and I have refused to do it since.",
+    "corin_ashe":
+        "Forty-one years on one staircase and nobody has ever once come to "
+        "fetch me off it, so this was at least familiar. I walked up out of "
+        "here. It is a poor stair. I could cut a better one in a season.",
+    "wilmot_tace":
+        "Nobody came. Write it exactly like that, because a description that "
+        "cannot be read back into the thing it describes is the trade I lost "
+        "two years of my hands to.",
+    "corr_vane":
+        "Nobody came in after me, and I would not have let them. I have spent "
+        "twenty years telling apprentices not to go in alone and I am not "
+        "going to be the reason one of them decided it was fine.",
+    "hedda_ferrin":
+        "No one came. The crack was in the thing holding me rather than in the "
+        "door, and I would far rather know that than be thanked for it. Every "
+        "crack has an address and I have just been given this one.",
+    "varna_strand":
+        "Nobody came, and I stood here asking out loud, every day, what "
+        "happens to this place in the rain. Today I got the answer. I would "
+        "still rather somebody had come, and I am going to keep asking.",
+    "thessaly_brun":
+        "Nobody came down for me. I have been on the other side of that — "
+        "waiting in a schoolroom for a child who is not brought — and I know "
+        "what it is worth to say it plainly instead of kindly.",
+    "yoren_halt":
+        "Nobody came. That is a name for what happened and I am going to use "
+        "it rather than paint something more comfortable over the top of it, "
+        "which is how this village went wrong in the first place.",
+    "ivo_brannt":
+        "Nobody came. I thought about whether to say it and I am going to, "
+        "because everyone down here is going to be asked about this afterwards "
+        "and the ones who were carried out should not be the only ones "
+        "talking.",
+}
+
+# Said next to the release, so a client cannot draw it as a second rescue.
+RELEASE_NOTE = ("These people were not rescued. The thing filing them stopped "
+                "working and they got up. The roll call keeps the two apart on "
+                "purpose and so should anything that draws it.")
+
+
+def total() -> int:
+    """Everybody in the world who is in a niche at the start of the game."""
+    return len(CAPTIVES)
+
+
+def release_line(captive_id: str) -> str:
+    """What this person says on the way up, if nobody came for them."""
+    return RELEASE_LINES.get(captive_id, "")
+
+
+def is_released(state: dict, captive_id: str) -> bool:
+    raw = state.get(STATE_KEY) or {}
+    return captive_id in raw.get("released", [])
+
+
+def released(state: dict) -> list:
+    """Captive records for the people the collapse let out, in roster order."""
+    raw = state.get(STATE_KEY) or {}
+    out = raw.get("released", [])
+    return [CAPTIVE_BY_ID[cid] for cid in out if cid in CAPTIVE_BY_ID]
+
+
+def everyone_out(state: dict) -> list:
+    """Both lists, carried first, for anything that only needs a headcount.
+    Nothing that draws the finale should use this: the scene needs the two
+    groups apart, because the difference between them is what the player did."""
+    return freed(state) + released(state)
+
+
+def release_roll(state: dict) -> list:
+    """Rows for the people the collapse let out, each carrying their own line
+    about how they got out. Same row shape as roll_call(), plus two fields the
+    renderer needs in order not to stage them as a rescue."""
+    rows = []
+    for person in released(state):
+        rows.append({**_view(person),
+                     "released_here": True,
+                     "released_line": release_line(person.id),
+                     "line": release_line(person.id)})
+    return rows
+
+
+def index_collapsed(state: dict) -> bool:
+    raw = state.get(STATE_KEY) or {}
+    return bool(raw.get("index_collapsed"))
+
+
+def liberate(state: dict, *, passed: bool = True, bank_boons: bool = True) -> dict:
+    """The shelves empty. The one call the PASS branch of the ending makes.
+
+    `passed` is not decoration and it is not a mood. A failed practical leaves
+    every person still in a niche exactly where they were, because the index
+    goes on answering as long as there is anything to answer; that is E in the
+    brief and it is the reason a rematch has anything at stake. Call this with
+    `passed=False` and it does nothing at all and says why.
+
+    Idempotent. A second call returns the same lists with `first_time` False,
+    so a client that replays the ending cannot double-bank a boon or read a
+    name out twice.
+    """
+    raw = _bucket(state)
+    if not passed:
+        return {
+            "collapsed": False, "first_time": False, "reason": "not_passed",
+            "lines": [], "released": [], "carried": roll_call(state),
+            "still_held": [_view(p) for p in still_held(state)],
+            "counts": {"carried": len(raw["freed"]), "released": 0,
+                       "still_held": len(still_held(state)), "total": total()},
+            "world": {"boons": [], "routes": [], "changes": []},
+            "note": "The practical was not passed. Nothing in the index moved, "
+                    "which is the only reason coming back is worth anything.",
+        }
+
+    first_time = not raw.get("index_collapsed")
+    banked_boons: list = []
+    banked_routes: list = []
+    if first_time:
+        for person in still_held(state):
+            raw["released"].append(person.id)
+            if bank_boons and person.boon and person.boon not in raw["boons"]:
+                raw["boons"].append(person.boon)
+                banked_boons.append(person.boon)
+                route = BOONS[person.boon].get("route")
+                if route and route not in raw["routes"]:
+                    raw["routes"].append(route)
+                    banked_routes.append(route)
+        raw["index_collapsed"] = True
+
+    rows = release_roll(state)
+    return {
+        "collapsed": True,
+        "first_time": first_time,
+        "reason": "the_index_stopped_answering",
+        "lines": list(INDEX_COLLAPSE),
+        "released": rows,
+        "carried": roll_call(state),
+        "still_held": [_view(p) for p in still_held(state)],
+        "counts": {
+            "carried": len(raw["freed"]),
+            "released": len(raw["released"]),
+            "still_held": len(still_held(state)),
+            "total": total(),
+            "villages": len({p.home for p in everyone_out(state)}),
+        },
+        "world": {
+            "boons": banked_boons,
+            "routes": banked_routes,
+            "changes": [{"captive": p.id, "region": p.home, "text": p.change,
+                         "released_here": True} for p in released(state)],
+        },
+        "note": RELEASE_NOTE,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1923,6 +2218,35 @@ def validate() -> list:
     if len(with_boons) == len(CAPTIVES):
         problems.append("everybody pays out, which makes them rewards again; "
                         "some people just go home")
+
+    # -- the release lines
+    #
+    # Everybody has one, because the ending has to be playable for a player who
+    # rescued nobody, and in that playthrough all twenty-five of these are the
+    # only thing anyone says. The three rules they are held to are the three
+    # that stop this becoming either a guilt trip or a consolation prize.
+    for person in CAPTIVES:
+        line = RELEASE_LINES.get(person.id, "")
+        if not line:
+            problems.append(f"{person.id}: no release line — a player who "
+                            f"freed nobody would stand in silence")
+            continue
+        if len(line) < 80:
+            problems.append(f"{person.id}: the release line is too thin to be "
+                            f"somebody's own words")
+        low = line.lower()
+        if not ("nobody came" in low or "no one came" in low
+                or "nobody" in low or "no one" in low):
+            problems.append(f"{person.id}: the release line does not say the "
+                            f"true thing, which is that nobody came")
+        for barb in ("you did not", "you never", "where were you",
+                     "your fault", "thank you"):
+            if barb in low:
+                problems.append(f"{person.id}: the release line {barb!r}s at "
+                                f"the player; it is about them, not about you")
+    for captive_id in RELEASE_LINES:
+        if captive_id not in CAPTIVE_BY_ID:
+            problems.append(f"release line for unknown captive {captive_id!r}")
     return problems
 
 
@@ -1942,6 +2266,8 @@ def counts() -> dict:
         "routes": len(ROUTES),
         "gifts": sum(1 for p in CAPTIVES if p.gift),
         "lines": sum(len(p.lines) for p in CAPTIVES),
+        "release_lines": len(RELEASE_LINES),
+        "release_words": sum(len(t.split()) for t in RELEASE_LINES.values()),
         "words": sum(len(" ".join([p.bearing, p.opinion, p.afterwards,
                                    p.change, *p.lines]).split())
                      for p in CAPTIVES),
@@ -2020,17 +2346,37 @@ five of them are one line.
    grows, with faces and trades on it, and watching it grow is most of the
    point.
 
-6. THE FINALE
-   The last fight makes exactly one call:
+6. THE FINALE, AND THE TWO WAYS OUT OF A NICHE
+   The last boss fight makes exactly one call, and it is the ordinary one:
 
        release = captives.final_release(self.state)
 
    It frees the three the Interviewer took out of the home village, marks the
-   release, and hands back release["roll_call"] — everyone, in order — plus
-   release["still_held"], which is the people whose boss is still standing.
-   The cutscene stands the roll call behind the player and must not quietly
-   round it up to everybody: see §5 of the story bible, which is explicit that
-   the ending is a eucatastrophe and not a restoration.
+   release, and hands back release["roll_call"] — everyone carried out, in
+   order — plus release["still_held"], the people whose boss is still standing.
+
+   THE ENDING MAKES A SECOND CALL, AND ONLY ON A PASS. gauntlet/ending.py owns
+   the seam and calls it; nothing else should:
+
+       out = captives.liberate(self.state, passed=(verdict == "READY"))
+
+   On a pass the shelves empty: everyone still in a niche is appended to
+   state["captives"]["released"], their boons and roads are banked, and every
+   one of them carries their own RELEASE_LINES entry saying that nobody came
+   for them. On a fail it does nothing and says why, because a failed practical
+   leaves the index answering and that is what makes a rematch worth sitting.
+
+   THE TWO LISTS NEVER MERGE. freed() is who the player went and got;
+   released() is who the collapse let out. everyone_out() exists for headcounts
+   and must not be used to draw the scene, because the difference between the
+   two lists is the only record of what the player actually did. §5 of the
+   story bible is explicit that the ending is a eucatastrophe and not a
+   restoration, and a roll call that quietly rounded up would be this module
+   telling a lie on the game's behalf.
+
+   New helpers, all pure: total(), released(state), release_roll(state),
+   release_line(id), is_released(state, id), everyone_out(state),
+   index_collapsed(state).
 
 7. INTERVIEW MODE
    captives.available_in(mode) is the same gate the quest board uses. Nothing
@@ -2114,6 +2460,25 @@ WHAT COULD NOT BE RESOLVED, said plainly rather than guessed at:
                 finding deep in a dungeon. They do not overlap: a healer is a
                 place, a captive is a person, and nothing in this module reads
                 or writes upkeep.py's state.
+
+  missable      Everyone in this file is freed on the boss kill, and the
+  rescues       Standing Portal wants all fourteen keys, so a player who
+                reaches the ending has normally carried all twenty-five out
+                and `released` is empty. That is the correct outcome for a
+                player who did everything, and the release path still fires for
+                the saves where the two lists genuinely disagree: a save made
+                before this module existed, whose `cleared_bosses` is full and
+                whose `captives` block is not; a save that lost the block; and
+                anything future that is missable on purpose.
+
+                IF MISSABLE RESCUES ARE WANTED — and the empty gallery in
+                finale.py is written for exactly that player — the change is
+                one call site and not this file: move `captives.free()` off the
+                boss kill in engine._resolve_boss and onto the act of opening
+                the cages in the chamber, so that walking out without doing it
+                is a thing a player can do. Nothing in this module, in
+                finale.py or in ending.py needs editing for that; all three
+                already count the two lists separately and stage them apart.
 
   the finale    owns the cutscene. This module owns the list it stands behind
                 the player, and final_release() is the only call it needs. The

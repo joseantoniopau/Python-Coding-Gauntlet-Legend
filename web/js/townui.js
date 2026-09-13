@@ -57,6 +57,25 @@ const TABS = [
   { id: 'voices', label: 'THE VOICES', blurb: 'Who is standing here, and what they have noticed.' },
 ];
 
+/* THE STANDING PORTAL, and it is a sixth counter in exactly one square.
+ *
+ * The last fight is in the first village. The door frame has been standing in
+ * Python Village since the first morning — behind the bell, in the gap between
+ * the founders' cellar and the wall everybody assumed it was part of — and it
+ * wants all fourteen boss keys. So the tab appears here and nowhere else,
+ * which is the geography doing the explaining instead of a menu.
+ *
+ * WHAT IT GATES AND WHAT IT NEVER GATES is printed on the panel itself, not
+ * assumed: the portal is the STORY climax, and the practical is a MEASUREMENT
+ * that is on the menu right now with none of these keys. This screen is the one
+ * a player would most easily misread as "the exam is behind fourteen bosses",
+ * so it is the screen that has to say otherwise in its own words. */
+const PORTAL_TAB = {
+  id: 'portal', label: 'THE PORTAL',
+  blurb: 'Fourteen wards, and what is on the other side of them.',
+};
+const PORTAL_REGION = 'python_village';
+
 /* ------------------------------------------------------------------ paint */
 
 export async function paintTown(tab) {
@@ -165,11 +184,20 @@ function latchAlarm(alarm) {
   if (worse && alarm.advice) HOST.toast(band, alarm.advice, band === 'DIRE' ? 'red' : 'violet');
 }
 
+function tabsHere() {
+  const here = (TOWN || {}).region || (TOWN || {}).region_id || '';
+  const portal = (TOWN || {}).portal;
+  // Shown when the server says there is one here — never inferred from a
+  // region id this file made up. The engine's region view carries `portal`
+  // for exactly one region and null for the other sixteen.
+  return (portal || here === PORTAL_REGION) ? TABS.concat([PORTAL_TAB]) : TABS;
+}
+
 function paintTabs() {
   const host = $('#town-tabs');
   if (!host) return;
   host.innerHTML = '';
-  for (const t of TABS) {
+  for (const t of tabsHere()) {
     const b = el('button', `btn small${TAB === t.id ? ' primary' : ''}`, t.label);
     b.title = t.blurb;
     b.onclick = () => { TAB = t.id; HOST.sfx('select'); paintTabs(); paintBody(); };
@@ -184,7 +212,108 @@ async function paintBody() {
   if (TAB === 'smith') return paintSmith(body);
   if (TAB === 'shelf') return paintShelf(body);
   if (TAB === 'broker') return paintBroker(body);
+  // A player who opened the portal tab and then walked out of the village
+  // keeps the tab selected; the door does not come with them.
+  if (TAB === 'portal') {
+    if (tabsHere().some(t => t.id === 'portal')) return paintPortal(body);
+    TAB = 'mender';
+    paintTabs();
+    return paintMender(body);
+  }
   return paintVoices(body);
+}
+
+/* ------------------------------------------------------- the Standing Portal */
+
+export async function paintPortal(body) {
+  body.innerHTML = '<p class="small muted">Counting the wards…</p>';
+  let view;
+  try {
+    view = await api.portal();
+  } catch (e) {
+    body.innerHTML = refusalCard({ error: e.message },
+      { title: 'THE SQUARE IS QUIET' });
+    return;
+  }
+  if (!body.isConnected) return;
+  if (view && view.error) { body.innerHTML = refusalCard(view); return; }
+
+  const keys = view.keys || [];
+  const held = num(view.held);
+  const need = num(view.required, 14);
+  const open = !!view.open;
+  const practical = view.practical || {};
+
+  const wards = keys.map((k) => `
+    <div class="list-item${k.held ? '' : ' locked'}"
+         style="border-left:3px solid ${esc(k.held ? k.colour : 'var(--line)')}">
+      <span class="t" style="${k.held ? `color:${esc(k.colour)}` : ''}">
+        ${esc(k.name)}</span>
+      <span class="d">${k.held
+        ? esc(k.line)
+        : `still on ${esc(k.boss_name || k.boss)}, in ${esc(k.region_name || k.region)}`}</span>
+      <span class="small muted">opens ${esc(k.opens_name || '')}</span>
+    </div>`).join('');
+
+  body.innerHTML = `
+    <div class="frame" style="padding:16px;border-left:4px solid ${
+      esc(open ? view.accent || 'var(--gold-hi)' : 'var(--line-hi)')}">
+      <div class="pixel" style="font-size:14px;color:${
+        esc(open ? view.accent || 'var(--gold-hi)' : 'var(--ink-dim)')}">
+        ${esc(String(view.name || 'THE STANDING PORTAL'))}</div>
+      <p class="small muted" style="margin:6px 0">${esc(view.where || '')}</p>
+      <p>${esc(view.blurb || '')}</p>
+      ${meter('WARDS', held, need, open ? 'var(--gold-hi)' : 'var(--violet)')}
+      <p class="small"><span class="tag ${open ? 'gold' : ''}">${held} / ${need}
+        WARDS LIT</span></p>
+      <p><i>${esc(view.line || '')}</i></p>
+      <p class="small muted">${esc(view.law || '')}</p>
+      <div class="row" style="margin-top:12px">
+        <button class="btn${open ? ' primary' : ''}" id="portal-enter"
+                ${open ? '' : 'disabled'}>
+          ${open ? 'STEP THROUGH ✦' : 'THE WARDS ARE NOT ANSWERED'}</button>
+      </div>
+    </div>
+
+    <div class="frame" style="padding:14px;margin-top:12px;
+         border-left:4px solid var(--green)">
+      <div class="section-title" style="margin:0 0 6px">
+        THE PRACTICAL IS NOT BEHIND THIS DOOR</div>
+      <p class="small">${esc(practical.line || '')}</p>
+      <p class="small muted">${esc(practical.where || '')}
+        ${practical.keys_held !== undefined
+          ? `You are holding ${num(practical.keys_held)} key(s). It would take
+             the same exam if you were holding none.` : ''}</p>
+    </div>
+
+    <div class="section-title" style="margin:18px 0 6px">THE FOURTEEN</div>
+    ${wards}`;
+
+  const enter = $('#portal-enter');
+  if (enter && open) {
+    enter.onclick = async () => {
+      enter.disabled = true;
+      const res = await api.enterPortal();
+      if (!res.ok) {
+        HOST.toast('IT DOES NOT OPEN',
+          (res.message || res.error || '') + ' — the practical still does not '
+          + 'need it.', 'red');
+        enter.disabled = false;
+        return;
+      }
+      HOST.sfx('unlock');
+      HOST.toast(String(res.trial ? res.trial.name : 'THE LAST ROOM'),
+        res.message || '', 'gold');
+      // He has one line about the fourteenth ward, and this is the moment for
+      // it. Never blocking — see gauntlet/antagonist.py WIRING §6.
+      const watching = res.watching;
+      if (watching && (watching.lines || []).length) {
+        HOST.say(String((watching.speaker || {}).name || 'THE NULL KING')
+          .toUpperCase(), watching.lines, (watching.speaker || {}).sprite);
+      }
+      paintPortal(body);
+    };
+  }
 }
 
 /* ----------------------------------------------------------- the Mender */

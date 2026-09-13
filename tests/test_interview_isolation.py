@@ -10,6 +10,8 @@ import unittest
 import urllib.error
 import urllib.request
 
+from gauntlet import progression, upkeep
+
 
 class TestInterviewIsolation(GameTest):
     def _interview_encounter(self, g):
@@ -214,14 +216,50 @@ SEALED_POSTS = (
 SEALED_GETS = (
     ("/api/regalia", "PET"),
     ("/api/sage", "MENTOR"),
-    ("/api/hunt", "BUILD"),
+    # Moved out of OPEN_GETS below. A repair quote is a price, and a price is
+    # not a hint — but armour integrity is BUILD and a measured run is build
+    # sealed, so a quote for kit that is not being worn is a price for nothing.
+    # `upkeep.repair_quote(sealed=True)` has always refused; what changed is
+    # that it is now asked in the GAP as well as during a question, so the
+    # answer stopped depending on whether a problem happened to be on screen.
+    # See docs/10-sealed-views.md 4b.I and 4b.II.
+    ("/api/town/quote", upkeep.UPKEEP_CAPABILITY),
+)
+
+# The reads that DEGRADE rather than refuse: a world half is served, the half
+# the seal has suspended comes back zeroed, and the payload says which is which.
+# docs/10-sealed-views.md §1 prefers this outcome to a refusal wherever it is
+# available, because a screen that refuses to show a player their own game is a
+# refusal with no rule behind it — and because a 409 teaches the player nothing
+# while a zeroed number teaches them exactly what the seal took.
+#
+# Each entry is (path, key that must be true, keys that must be empty).
+#
+# /api/hunt used to be in SEALED_GETS above and was moved here, which is
+# finding 4.F. The refusal was right when it was written — `hunt_view` computed
+# readiness with the build folded in — but since the chapter ramp landed,
+# `hunters.pace_for` returns the cast band, the strike multiplier and the
+# teaching stance from the chapter and the region id alone, and
+# `readiness_from_game` takes `build_sealed=`. A run may now see where the
+# creature is and how long its fight is, both provably independent of the
+# player, with the preparation score computed without the kit it cannot use.
+DEGRADED_GETS = (
+    # path, the flag that says it degraded, the keys that must come back empty,
+    # and the keys that must still be served whole.
+    # The region is named because Python Village has no apex and the point of
+    # the row is the half that IS served.
+    ("/api/hunt?region=hashmap_highlands", "sealed", (),
+     ("pace", "apex", "hunt")),
+    ("/api/loadout", "sealed",
+     ("effects", "effect_text", "probe_charges", "strike_element"),
+     ("slots", "attributes", "rarities")),
 )
 
 # The reads that stay OPEN during a measured run, and that is deliberate. A
 # price is not a hint, a log of who you have already freed is not a hint, and a
 # screen that refuses to show a player their own armour is a refusal with no
 # rule behind it.
-OPEN_GETS = ("/api/town", "/api/town/quote", "/api/shop", "/api/broker",
+OPEN_GETS = ("/api/town", "/api/shop", "/api/broker",
              "/api/sanctuaries", "/api/rollcall", "/api/arts")
 
 # Every world-layer POST, with a body that is the wrong shape in some way. None
@@ -349,6 +387,38 @@ class TestInterviewIsolationOverHTTP(ServerTest):
                 self.assertEqual(payload["capability"], capability)
                 self.assertTrue(payload["message"].strip())
 
+    def test_a_degraded_read_serves_the_world_half_and_zeroes_the_rest(self):
+        """DEGRADE, the outcome docs/10-sealed-views.md prefers to a refusal.
+
+        200 rather than 409, the world half intact, the suspended half empty,
+        and a sentence naming which is which — because a wrong number is worse
+        than no number, and no number with no explanation is worse than a
+        zeroed one that says why.
+        """
+        self.enter_the_room()
+        for path, flag, empties, kept in DEGRADED_GETS:
+            with self.subTest(path=path):
+                status, payload = self.hit("GET", path)
+                self.assertEqual(status, 200, f"{path} answered {status}")
+                self.assertTrue(payload.get(flag), f"{path} did not mark {flag}")
+                self.assertTrue(payload.get("seal_note", "").strip(),
+                                f"{path} degraded silently")
+                for key in empties:
+                    self.assertFalse(payload.get(key),
+                                     f"{path} still reports {key}")
+                for key in kept:
+                    self.assertTrue(payload.get(key),
+                                    f"{path} withheld the world half: {key}")
+
+    def test_a_degraded_read_is_undegraded_outside_a_measured_run(self):
+        for path, flag, _, kept in DEGRADED_GETS:
+            with self.subTest(path=path):
+                status, payload = self.hit("GET", path)
+                self.assertEqual(status, 200, f"{path} answered {status}")
+                self.assertFalse(payload.get(flag))
+                for key in kept:
+                    self.assertTrue(payload.get(key), f"{path} lost {key}")
+
     def test_those_same_reads_are_open_outside_a_measured_run(self):
         for path, _ in SEALED_GETS:
             with self.subTest(path=path):
@@ -367,28 +437,43 @@ class TestInterviewIsolationOverHTTP(ServerTest):
                 self.assertNotEqual(payload.get("error"), "sealed")
 
     def test_the_seal_holds_between_problems_and_not_only_during_one(self):
-        """The reason the door has its own check, measured.
+        """The gap, closed at BOTH ends.
 
         `finalexam.sealed(encounter, capability)` asks about an ENCOUNTER, and
         `sealed(None, anything)` is False. In a measured run `self.encounter` is
         None whenever the player is between problems — including the whole
         stretch between `start_interview()` and the first `interview_current()`.
-        The engine's healer, smith, sanctuary, sage board and finale all ask the
-        question that way, so in that window they answer normally.
+        The engine's healer, smith and sanctuary all asked the question that
+        way, so in that window they answered normally and the door alone was
+        holding the line.
 
-        This asserts the hole exists in the engine and that the door closes it.
-        If a later pass teaches those methods to ask about the RUN as well, the
-        first half of this test starts failing, and that is the right failure:
-        delete it and keep the second half.
+        THE EARLIER VERSION OF THIS TEST ASSERTED THAT HOLE, and said in this
+        docstring that a later pass teaching those methods to ask about the RUN
+        would fail its first half, and that failing was the right outcome. That
+        pass happened: `Game._sealed_for` and `Game._run_is_open`. So the first
+        half is inverted rather than deleted — the engine now refuses in the
+        window too — and the door is still checked, because two locks on the
+        thing that must never open is the correct number of locks.
         """
         from gauntlet import finalexam
         self.enter_the_room()
         self.assertTrue(self.g.state.get("interview"))
         self.assertIsNone(self.g.encounter, "no encounter between problems")
+        # The capability check, asked the old way, still cannot see the run.
+        # That is not a bug in `finalexam.sealed`; it is why `_sealed_for` has
+        # to ask a second question before trusting the answer.
         self.assertFalse(finalexam.sealed(self.g.encounter, "BUILD"))
-        # The engine, asked directly, does not refuse in this window.
-        self.assertNotEqual(self.g.heal().get("error"), "sealed")
-        # The door does.
+        self.assertTrue(self.g._run_is_open())
+        self.assertTrue(self.g._sealed_for("BUILD"))
+        # The engine, asked directly, now refuses in this window.
+        for label, out in (("heal", self.g.heal()),
+                           ("repair", self.g.repair()),
+                           ("repair_quote", self.g.repair_quote()),
+                           ("respec", self.g.respec()),
+                           ("diagnostic_finish", self.g.diagnostic_finish({}))):
+            with self.subTest(call=label):
+                self.assertEqual(out.get("error"), "sealed")
+        # And the door does too.
         for path, body in (("/api/town/heal", {}),
                            ("/api/town/repair", {}),
                            ("/api/sanctuary/rest",
@@ -532,7 +617,13 @@ class TestTheWorldLayerIsReachable(ServerTest):
         self.assertTrue(self.get("/api/todo")["todo"])
         self.assertTrue(self.get("/api/world-map")["nodes"])
         self.assertTrue(self.get("/api/routes")["routes"])
-        self.assertEqual(self.get("/api/events")["total"], 26)
+        # Derived, not a literal: the world event table grows when content is
+        # added (the fourteen key drops and the two portal beats took it from
+        # twenty-six to forty-two), and a hard-coded count turns "somebody
+        # wrote a world event" into a test failure that says nothing.
+        self.assertEqual(self.get("/api/events")["total"],
+                         len(progression.WORLD_EVENTS))
+        self.assertGreaterEqual(len(progression.WORLD_EVENTS), 26)
 
     def test_saves_legendaries_worldgen_and_incantation(self):
         self.assertEqual(len(self.get("/api/saves")["slots"]), 16)
