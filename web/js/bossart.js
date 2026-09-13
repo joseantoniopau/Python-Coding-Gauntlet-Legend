@@ -168,6 +168,14 @@ export const BOSSART_VERSION = 1;
 export const ART_W = 64;
 export const ART_H = 64;
 export const ART_WIDE_W = 96;
+/* And the final rung of docs/08 §B, 12x16 tiles, which bosses.js authors one
+ * creature at (the Interviewer). Nothing in THIS file draws at it: an apex is a
+ * width profile 64 rows long and the seventeen of them are a cast, not a
+ * finale. The constants are here so the two files' idea of the ladder cannot
+ * drift silently — bossArtSelfCheck() compares them when a caller hands
+ * bosses.js's over. */
+export const ART_FINAL_W = 96;
+export const ART_FINAL_H = 128;
 
 /* The row an apex plants its feet on. Void apexes deliberately stop short. */
 export const ART_GROUND = 62;
@@ -1421,7 +1429,7 @@ const NAMED_ROWS = [
     'One horn, one wing, one leg a pixel short. The only thing here that refuses the mirror.',
     [['crown', M_ASYM, 30, 8]], { asym: true, lean: 3, leanK: 2 }],
   ['the_interviewer', 'The Interviewer', 'null_kings_castle', 'interviewer', '#d8d8e0',
-    'A visor with no slit and a clipboard that is a rectangle of nothing.',
+    'A crown whose band is the top of the skull, a visor with no slit, and a clipboard that is a rectangle of nothing.',
     [['brow', M_BLANK, 28, 12]], { scale: 1.00, taper: 10, swell: [6, 16, 4] }],
 ];
 
@@ -2200,11 +2208,21 @@ export function describe(lookOrId) {
  * It answers the questions this file can answer about itself; the ones about
  * pixels belong to scripts/verify/bossart.mjs, which rasterises.
  */
-export function bossArtSelfCheck(bossGlyphs) {
+export function bossArtSelfCheck(bossGlyphs, boxes) {
   const problems = [];
 
   if (bossGlyphs && String(bossGlyphs) !== ART_GLYPHS) {
     problems.push(`glyph table drift: bosses.js has ${bossGlyphs}`);
+  }
+  /* The ladder, if the caller hands it over. Optional because the check is
+   * older than the third rung and every existing caller passes one argument. */
+  if (boxes) {
+    const want = { w: ART_W, h: ART_H, wide: ART_WIDE_W, finalW: ART_FINAL_W, finalH: ART_FINAL_H };
+    for (const k of Object.keys(want)) {
+      if (boxes[k] !== undefined && boxes[k] !== want[k]) {
+        problems.push(`box drift: ${k} is ${boxes[k]} in bosses.js, ${want[k]} here`);
+      }
+    }
   }
   if (REGION_IDS.length !== 17) problems.push(`regions: ${REGION_IDS.length}, expected 17`);
   if (NAMED_IDS.length !== 14) problems.push(`named bosses: ${NAMED_IDS.length}, expected 14`);

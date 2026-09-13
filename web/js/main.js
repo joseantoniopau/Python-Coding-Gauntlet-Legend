@@ -727,7 +727,15 @@ function loadRegion(regionId, spawn) {
     seen.add(region.id);
     try { localStorage.setItem(seenKey, JSON.stringify([...seen])); } catch (e) { /* full */ }
   }
-  audio.play(firstVisit ? 'newarea' : (region.music || 'overworld'));
+  /* NOT WHILE THE TITLE SCREEN OWNS THE SPEAKERS. Boot calls loadRegion()
+   * before showTitle() so the world is built and warm behind the title, and
+   * this line started the region's track every time — which the title's own
+   * track then cancelled two calls later. `titling` is on <body> from
+   * index.html and every deep link clears it before it gets here, so this reads
+   * "is the title up right now"; leaveTitle() plays the region track itself. */
+  if (!document.body.classList.contains('titling')) {
+    audio.play(firstVisit ? 'newarea' : (region.music || 'overworld'));
+  }
   // What roams here. One call per region: the Hunt row is per-region and the
   // forty-kilobyte client payload inside it is adopted once and ignored
   // thereafter, exactly as api.js asks.
@@ -8028,6 +8036,7 @@ async function boot() {
   }).catch(() => { /* synthesis covers it */ });
 
   G.overworld = new Overworld($('#world-canvas'));
+  try { window.__DBG_G = G; } catch (e) {}
   // The overworld reads the companion out of the state we already hold, the
   // same way partyui.js reads it — no second fetch, and no knowledge of pets
   // in this file, so the pets rewrite lands without touching the shell.
@@ -8168,7 +8177,16 @@ function showTitle() {
   });
   G.title.resize();
   G.title.start();
-  audio.play('town');
+  /* `audio.play('town')` used to be here, and it was cancelling the title's own
+   * track five lines after the comment above promised it. audio.play() is one
+   * music channel with a crossfade — a second call REPLACES the first, it does
+   * not layer — so the dedicated title recording
+   * (nickpanek-80s-style-surf-thrash-instrumental) was fetched and aborted on
+   * every single boot, and what a player actually heard on the title screen was
+   * the overworld track, which is what `town` aliases to. Measured in a browser
+   * before and after: boot requested three music files and aborted two of them
+   * with net::ERR_ABORTED; it now requests one and aborts none. The region's
+   * track is started by leaveTitle(), which is where it belongs. */
 }
 
 function leaveTitle() {

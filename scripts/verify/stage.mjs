@@ -114,10 +114,16 @@ console.log('\n2. EVERY BOX IS A WHOLE 8x8 TILE');
 const LADDER = [
   ['HERO_W', sprites.HERO_W], ['HERO_H', sprites.HERO_H],
   ['ENEMY_SIZE', sprites.ENEMY_SIZE], ['BOSS_SIZE', sprites.BOSS_SIZE],
-  ['MON_SIZE', monsterart.MON_SIZE], ['monsterart.APEX_SIZE', monsterart.APEX_SIZE],
+  ['MON_SIZE', monsterart.MON_SIZE], ['monsterart.ELITE_SIZE', monsterart.ELITE_SIZE],
+  ['monsterart.APEX_SIZE', monsterart.APEX_SIZE],
   ['apex.APEX_SIZE', apex.APEX_SIZE],
   ['bossart.ART_W', bossart.ART_W], ['bossart.ART_H', bossart.ART_H],
   ['bossart.ART_WIDE_W', bossart.ART_WIDE_W],
+  /* The two rungs added with the 96x128 final boss. They were outside this
+   * check entirely, which meant the newest boxes in the ladder were the only
+   * ones nothing proved were whole tiles. */
+  ['bossart.ART_FINAL_W', bossart.ART_FINAL_W], ['bossart.ART_FINAL_H', bossart.ART_FINAL_H],
+  ['bosses.FINAL_BOSS_W', bosses.FINAL_BOSS_W], ['bosses.FINAL_BOSS_H', bosses.FINAL_BOSS_H],
   ['STAGE.w', S.w], ['STAGE.h', S.h], ['STAGE.safeH', S.safeH], ['STAGE.safeTop', S.safeTop],
   ['STAGE.heroX', S.heroX], ['STAGE.enemyX', S.enemyX],
 ];
@@ -284,35 +290,97 @@ for (const [ww, wh, sh, hudH, wantPx, wantW, wantH] of WINDOWS) {
 console.log('\n5. EVERY FIGURE BLIT IS A WHOLE NUMBER, AND STAYS IN FRAME');
 const PXS = [1, 2, 3, 4, 5, 6];
 const HERO_L = S.heroX - (16 * 4) / 2, HERO_R = S.heroX + (16 * 4) / 2 - 1;
+const fills = [];
+/* THE WHOLE ENVELOPE, NOT A CORNER OF IT.
+ *
+ * This swept `ph < 3` against BOSS_PHASE_COUNT = 6 and never passed a beat, so
+ * it sampled three stages of six at beat 0 — and the last two stages are
+ * exactly the ones that ADD contour (spall bites the outline, crown() puts
+ * spines out of it), while the wyrm's widest frame is at beat 4. It therefore
+ * printed dragon 94..255 and hydra 144..225 for real envelopes of 84..255 and
+ * 130..247, and called wyrm 86..253 and interpreter 68..249 when both were
+ * touching 255. A harness that samples an eighth of the animation and reports
+ * the answer as the animation is not a measurement, it is a sample dressed up
+ * as one. All six stages, all five frames, all six beats. */
 function paintedCols(key) {
   let lo = 1e9, hi = -1;
-  for (let ph = 0; ph < 3; ph++) for (let f = 0; f < 5; f++) {
-    const img = bosses.bossSprite(key, null, f, { phase: ph });
-    for (let y = 0; y < img.height; y++) for (let x = 0; x < img.width; x++) {
-      if (img.data[(y * img.width + x) * 4 + 3]) { if (x < lo) lo = x; if (x > hi) hi = x; }
-    }
-  }
+  for (let ph = 0; ph < bosses.BOSS_PHASE_COUNT; ph++)
+    for (let f = 0; f < bosses.BOSS_FRAME_COUNT; f++)
+      for (let b = 0; b < bosses.BOSS_BEATS; b++) {
+        const img = bosses.bossSprite(key, null, f, { phase: ph, beat: b });
+        for (let y = 0; y < img.height; y++) for (let x = 0; x < img.width; x++) {
+          if (img.data[(y * img.width + x) * 4 + 3]) { if (x < lo) lo = x; if (x > hi) hi = x; }
+        }
+      }
   return [lo, hi];
+}
+
+/* AND THE SWAY, WHICH IS THE HALF THE STILL LEAVES OUT.
+ *
+ * drawBoss does not blit at `left`; it blits at `left + dx`, where
+ * dx = clamp(round(pose.dx * scale), -4, 4) and pose.dx sweeps +-sway every
+ * idle period. Asserting the still certifies a pose the renderer never draws,
+ * and that is precisely how dragon, wyrm and interpreter shipped with two to
+ * four columns off the right edge while this file printed green. Returns every
+ * horizontal offset the renderer can actually produce for this archetype. */
+function swayOffsets(key, scale) {
+  const sway = (bosses.BOSS_MOTION[key] || {}).sway || 0;
+  const out = new Set();
+  for (let s = -sway; s <= sway; s++) out.add(Math.max(-4, Math.min(4, Math.round(s * scale))));
+  return [...out].sort((a, b) => a - b);
 }
 ok(Number.isInteger(24 * 4), 'the figure blit is not a whole number');
 console.log(`   hero / mob figure blit 4      whole at px ${PXS.join(',')}   hero stands ${HERO_L}..${HERO_R}`);
-for (const key of ['titan', 'lich', 'dragon', 'hydra', 'wyrm', 'interpreter']) {
+/* Every archetype, not a hand-picked six. The literal list covered 6 of 16 and
+ * omitted `interviewer`, the 96x128 rung this pass added — so the newest rig in
+ * the game was the one rig whose painted box nothing asserted. */
+for (const key of bosses.BOSS_ARCHETYPES) {
   const scale = bosses.bossStageScale(key);
   const bias = (bosses.BOSS_MOTION[key] || {}).bias || 0;
+  const sway = (bosses.BOSS_MOTION[key] || {}).sway || 0;
   const img = bosses.bossSprite(key, null, 0, {});
   const [lo, hi] = paintedCols(key);
   const w = img.width * scale;
   const left = Math.round(S.enemyX + bias - w / 2);
-  const pl = left + lo * scale, pr = left + (hi + 1) * scale - 1;
+  const dxs = swayOffsets(key, scale);
+  const pl = left + lo * scale + dxs[0];
+  const pr = left + (hi + 1) * scale - 1 + dxs[dxs.length - 1];
   const bad = PXS.filter(px => !Number.isInteger(scale * px));
   ok(bad.length === 0, `${key}: blit ${scale} is not whole at px ${bad.join(',')}`);
   ok(pl >= 0 && pr <= S.w - 1,
-     `${key}: painted box ${pl}..${pr} leaves the ${S.w}-wide frame`);
+     `${key}: painted box ${pl}..${pr} leaves the ${S.w}-wide frame at full sway `
+     + `(sway ${sway} -> dx ${dxs[0]}..${dxs[dxs.length - 1]})`);
+  /* HOW MUCH OF THE DECLARED BOX IS ACTUALLY PAINTED. A rig that asks for the
+   * 96-wide rung and draws 59 columns has not been drawn at that rung; it has
+   * been drawn at the 64 rung and given a bigger canvas, and every consumer
+   * that sizes a card, a cell or a stage slot off bossSize() is being told a
+   * width the art does not use. Reported for every archetype so the outlier is
+   * named on every run rather than found again in a year. */
+  const fill = (hi - lo + 1) / img.width;
+  fills.push({ key, fill, painted: hi - lo + 1, declared: img.width });
   console.log(`   ${key.padEnd(12)} rig ${String(img.width).padStart(2)}x${img.height}`
-    + ` blit ${scale} bias ${String(bias).padStart(3)}`
+    + ` blit ${scale} bias ${String(bias).padStart(3)} sway ${sway}`
     + `  painted ${String(pl).padStart(3)}..${String(pr).padStart(3)}`
+    + ` (${String(S.w - 1 - pr).padStart(2)} clear of the right edge)`
+    + `  fills ${String(Math.round(fill * 100)).padStart(3)}% of its box`
     + `  ${bad.length ? 'HALF PIXEL at px ' + bad.join(',') : 'whole at every px'}`
-    + `${pl <= HERO_R ? '   (passes behind the hero — fx.js draws him last)' : ''}`);
+    + `${pl <= HERO_R ? '   (passes behind the hero)' : ''}`);
+}
+
+/* A rig using less than four fifths of the width it declares is an authored-
+ * but-not-redrawn box. This is a NOTE and not a failure: the fix is to re-author
+ * the creature or to move it down a rung, both of which are art decisions with
+ * an owner, and neither of which belongs in a harness run. What the harness owes
+ * them is the number. */
+const THIN = fills.filter(f => f.fill < 0.8);
+if (THIN.length) {
+  console.log('\n   NOTE — rigs that do not use the box they declare:');
+  for (const f of THIN.sort((a, b) => a.fill - b.fill)) {
+    console.log(`     ${f.key.padEnd(12)} paints ${f.painted} of ${f.declared} declared columns`
+      + ` (${Math.round(f.fill * 100)}%) over all six stages`);
+  }
+  console.log('     Either re-author to the declared width or drop the rung —'
+    + ' bossSize() is promising a box the art does not fill.');
 }
 
 /* ================== verdict ================== */

@@ -392,7 +392,7 @@ for (const junk of ['__no_such_boss__', '', null, undefined, 0, 'apex_unnamed', 
 }
 
 /* bossart's own opinion of the join. */
-const sc = A.bossArtSelfCheck(B.BOSS_GLYPHS);
+const sc = A.bossArtSelfCheck(B.BOSS_GLYPHS, { w: B.BOSS_W, h: B.BOSS_H, wide: B.BOSS_WIDE_W, finalW: B.FINAL_BOSS_W, finalH: B.FINAL_BOSS_H });
 console.log(`\n   bossart self-check against BOSS_GLYPHS: ${sc.ok ? 'ok' : JSON.stringify(sc.problems)}`);
 if (!sc.ok) fail.push(`bossart self-check: ${sc.problems.join('; ')}`);
 

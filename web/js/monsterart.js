@@ -9,20 +9,21 @@
  *
  * So: thirty-two authored creatures grouped into families by ELEMENT and BIOME,
  * the seventeen apexes gauntlet/hunters.py names — drawn to the silhouettes it
- * writes for them — seven more apex-class bodies it does not currently use, and
- * three unmarked fallback bodies for keys nobody has drawn yet.
+ * writes for them — eight ELITES one rung below them, and three unmarked
+ * fallback bodies for keys nobody has drawn yet.
  *
  * Nothing here is traced, sampled or derived from any existing game. Every grid
  * below was authored for this file, in this file.
  *
  * WHAT THIS MODULE OWES THE REST OF THE GAME
  *
- *   monsterFrame(key, frame, opts)   -> a cached canvas, 24x24, or 32x32 apex
+ *   monsterFrame(key, frame, opts)   -> a cached canvas: 24 mob, 32 elite, 48 apex
  *   monsterSprite(key, pattern, f, c)-> the sprites.js enemySprite signature
  *   monsterSilhouette(key, frame)    -> the readability check, colour gone
  *   monsterMotion(key)               -> frames, period, bob, sway, phase
  *   rosterFor(region)                -> what lives there
  *   apexKeyFor(region)               -> the one that hunts you there
+ *   eliteKeyFor(region)              -> the rung between, '' if unknown
  *   monsterIsAuthored(key)           -> whether a key fell through
  *
  * It owns no state a caller has to manage and it never throws on a name it does
@@ -36,10 +37,15 @@
  *  1. Fifteen colours plus transparent, counted off the RENDERED RASTER by
  *     scripts/verify/monsters.mjs and never off the palette dict. A dict with
  *     fifteen entries that a shading pass turns into sixteen is over budget.
- *  2. One pixel grid. Mobs are 24x24, the same box sprites.js ENEMY_SIZE
- *     already uses, so a call site swaps without moving anything. Apexes are
- *     32x32 — bigger than a mob, smaller than the 48x48 boss, which is exactly
- *     the rank they hold.
+ *  2. One pixel grid, and it is docs/08-art-direction.md §B's ladder rather
+ *     than this file's own opinion: mob 24x24 (= sprites.js ENEMY_SIZE, so a
+ *     call site swaps without moving anything), elite 32x32, apex 48x48. The
+ *     apex rung used to be 32 here on the argument that a boss is a set piece
+ *     and this is a thing that walks up behind you in a field — true about
+ *     ROLE, and it was answering a question about SIZE. Measured against its
+ *     own region's mobs a 32px apex came out 1.34x their drawn pixels; at 48
+ *     the thinnest margin is 3.37x. 48 also blits to exactly the mob's stage
+ *     footprint at half its factor: 24 x 4 and 48 x 2 are both 96 logical.
  *  3. No Math.random and no Date.now on a draw path. Every variation is a hash
  *     of its own inputs, so two runs of one frame are the same bytes.
  *  4. Cached under a cap, evicted oldest-first, like every other rig here.
@@ -82,11 +88,18 @@
  * are authored deformations of the grid, not brightness nudges. A frame that
  * differs by a few units of brightness is not a frame.
  *
- * THE APEXES ARE DIFFERENT, NOT BIGGER
+ * THE APEXES ARE DIFFERENT, AND THEY ARE ALSO BIGGER
  *
- * Scaling a mob 1.33x is the failure mode, so none of the seventeen is a scaled
- * anything: each is a silhouette that does not appear anywhere else in its
- * region. gauntlet/hunters.py names the seventeen and writes a silhouette for
+ * Scaling a mob is the failure mode, so none of the seventeen is a scaled
+ * anything — and when the box went 32 -> 48 not one of them was resampled
+ * either: all seventeen were re-authored into the larger grid, which is why
+ * two of them changed shape rather than only scale. `fourth_orientation` was
+ * redrawn asymmetric (the Citadel's own mob is a square statue, and two
+ * bilateral squares are 24 outline cells apart at 16px, which is one creature
+ * with two names); `zeroth_weight` was redrawn as an anvil with a horn after
+ * the first 48px version came out a knuckle-walking ape, 39 cells from the
+ * knuckle-walking ape that is the Caverns' biggest mob. Each is a silhouette
+ * that does not appear anywhere else in its region. gauntlet/hunters.py names the seventeen and writes a silhouette for
  * each of them FOR AN ARTIST rather than for a tooltip, so these are drawn to
  * that text: the Mines get a phoenix whose wings are visibly a stack rather
  * than a fan; the Pass gets two mirrored ice-bearers converging, where the
@@ -109,21 +122,59 @@
  * the rendered raster rather than off this file's intentions. Re-take them with
  * monsterArtStats() and `node scripts/verify/monsters.mjs`.
  *
- *   colour budget   2,360 frames swept — fifty-nine bodies, two poses, four
- *                   frames, five palettes (own plus four server colours).
- *                   Worst frame: 13 colours. Budget 15. Nothing over, ever,
- *                   counted off pixels rather than off the palette dict.
- *   silhouette      closest pair in the whole roster: 21 of 256 outline cells
- *                   differ (fourth_orientation / sand_champion — two armoured
- *                   bipeds, in the Citadel and the Coliseum, which a player
- *                   never sees in the same place). Closest pair a player CAN
- *                   see side by side: 43 (tuftling / fieldadder, Fields of
- *                   Syntax). No region contains two creatures nearer than that.
- *   apex scale      every apex is between 1.34x and 3.16x the drawn pixels of
+ *   colour budget   2,400 frames swept — sixty bodies, two poses, four frames,
+ *                   five palettes (own plus four server colours). Worst frame:
+ *                   14 colours, on margin_walker; it was 13 at the old 32px
+ *                   box. Budget 15. Nothing over, ever, counted off pixels
+ *                   rather than off the palette dict.
+ *
+ *                   The extra colour is NOT a new palette entry. An apex has
+ *                   carried fifteen slots since this file was written and a
+ *                   32x32 grid never had the corners to spend them: on
+ *                   margin_walker at 48 the whole dict is on screen, and the
+ *                   two rarest entries are D at eight pixels and H at four —
+ *                   cells that did not exist in the smaller box. One glyph was
+ *                   genuinely added anywhere in this pass, the accent specular
+ *                   `A` on that creature's crossbar, and it shares no colour.
+ *   silhouette      closest pair in the whole roster: 22 of 256 outline cells
+ *                   differ (rimewolf / sandjackal — a wolf in the Pass and a
+ *                   jackal in the Coliseum, which a player never sees in the
+ *                   same place). Closest pair a player CAN see side by side:
+ *                   43, tuftling / fieldadder in the Fields and the Village —
+ *                   two MOBS, the same pair and the same number as before this
+ *                   pass. The nearest an apex now comes to anything in its own
+ *                   region is 50 (cinder_phoenix / emberwing, the Mines), which
+ *                   is deliberate: the mob is the fledgling of the apex. Two
+ *                   apexes were re-authored purely to hold this line — see
+ *                   fourth_orientation and zeroth_weight above.
+ *   apex scale      every apex is between 3.37x and 8.23x the drawn pixels of
  *                   the biggest mob in its own region, thickened outline
- *                   included.
+ *                   included. It was 1.34x to 3.16x at the old 32px box.
+ *   three tones     counted off the raster, per creature, as the share of the
+ *                   body ramp each of D/d/B/L/H actually paints. Seven of the
+ *                   thirty-two mobs were under three: bonepike, gravehound and
+ *                   skullswarm at ZERO (all three skeletons were drawn entirely
+ *                   in `g`, the hard-material glyph, which is one flat colour),
+ *                   shade, gildscarab, sanddervish and chiselmite at two. All
+ *                   sixty creatures are at three or more now, and the cheapest
+ *                   four of the seven cost no new authoring at all — the mass
+ *                   moved off `g` and onto the body ramp, where applyRim lights
+ *                   it. A tone has to paint four cells or 2% of the body to be
+ *                   counted; three cells is the shading pass finding a corner.
+ *
+ *                   The 48px boxes FAILED this the first time and the same
+ *                   count caught them: applyRim only lights a cell that touches
+ *                   an edge, so doubling the box halves the share of the mass
+ *                   it can reach, and margin_walker went 5 tones -> 3 and
+ *                   fenlight 5 -> 3 purely by getting bigger. Fourteen of the
+ *                   apexes therefore carry authored form shading — per COLUMN,
+ *                   a lit shoulder at the top of any body run eight cells deep
+ *                   and its own occlusion at the bottom, which follows the form
+ *                   instead of striping across it. Every apex is at 4 or 5 now
+ *                   except storm_ordinal, which is at 3 because it is a metal
+ *                   rod and most of it is `g`.
  *   motion          outline cells changing across one walk cycle: 76 at the low
- *                   end, 560 at the high. Across one idle cycle: 66 to 1,250.
+ *                   end, 840 at the high. Across one idle cycle: 64 to 3,279.
  *                   Fourteen gaits. Nothing in here animates by brightness,
  *                   nothing stands still, and no legless creature touches the
  *                   floor in any frame of either pose.
@@ -135,21 +186,32 @@
  *                   keys resolve through the table; none falls through; every
  *                   one of them draws between 13 and 15 DIFFERENT creatures
  *                   across the seventeen regions, which is the whole point.
- *   determinism     472 frames hash identically warm, cold and rebuilt.
+ *   determinism     480 frames hash identically warm, cold and rebuilt.
  *   steady state    240 redraws of one settled frame: 0 canvases. Every region's
  *                   whole cast, both poses, all frames, twice over: 376
  *                   canvases for 376 distinct frames, working set 377 under a
- *                   cap of 720.
+ *                   cap of 720. The cap is unchanged and the working set did
+ *                   not move, but the canvases behind it did: a full 720 of
+ *                   them is now 6.6MB rather than 2.9MB if every entry were an
+ *                   apex. In practice 17 of 60 bodies are, and the largest
+ *                   region's cast is three mobs and one apex.
  *
  * FALLING BACK WITHOUT LYING
  *
  * An unknown key does not throw and does not silently become a creature it is
- * not. It becomes `strayling`, `straywisp` or, at apex rank, `strayapex` —
+ * not. It becomes `strayling`, `straywisp` or, at apex rank, `strayapex` (also
+ * re-authored at 48; a 32px grid sitting at the bottom of a 48px box would be
+ * an apex-shaped hole) —
  * deliberately featureless bodies, no markings and no species, painted in the
  * palette of the region it was asked for and drawn in the box its rank expects,
  * so the caller's layout does not move either. A harness can tell the difference: monsterIsAuthored() reports
  * whether a key was resolved by the table or by falling off the end of it, and
  * scripts/verify/monsters.mjs fails on the second.
+ *
+ * THE ELITE RUNG HAS NO SUCH BODY, AND IS NOT GETTING ONE. `eliteKeyFor()`
+ * returns '' rather than a species for a place this module does not know. A
+ * caller asking for an elite already knows what to draw if the answer is
+ * nothing — it was drawing a mob before it asked.
  */
 
 import {
@@ -167,10 +229,22 @@ import {
  * call site that was drawing an enemy, at the same offsets. */
 export const MON_SIZE = 24;
 
-/* An apex is a third again as tall and reads at a glance as something that does
- * not belong to the trash roster. It is not 48: a boss is a set piece with a
- * cutscene and this is a thing that walks up behind you in a field. */
-export const APEX_SIZE = 32;
+/* The middle rung. docs/08-art-direction.md §B calls it `elite` and gives it
+ * 4x4 tiles, and it is exactly the box the seven bodies below were authored in
+ * before there was a name for them. An elite is the thing the overworld already
+ * spawns on an `elite` marker and has been drawing as a pink-tinted MOB. */
+export const ELITE_SIZE = 32;
+
+/* §B's apex rung: 6x6 tiles. It used to be 32 on the argument that a boss is a
+ * set piece and this is a thing that walks up behind you in a field — which is
+ * a true sentence about ROLE and was being used to settle a question about
+ * SIZE. On the old 192x128 raster a 32px apex was a quarter of the frame width.
+ * On 256x224 it is an eighth, standing 32 rows up a 175-row ground line, and
+ * measured against its own region's mobs it came out at 1.34x their drawn
+ * pixels — a third bigger than a hopper, which the player reads as a hopper.
+ * 48 is a rung the ladder already had (`apex.js` APEX_SIZE, `sprites.js`
+ * BOSS_SIZE) and 24/32/48/64 is the ladder §B writes. */
+export const APEX_SIZE = 48;
 
 /* The row every ground-standing creature plants on, in its own box. */
 export const MON_GROUND = MON_SIZE - 1;
@@ -750,13 +824,13 @@ M.chiselmite = {
     '.........ogggggo........',
     '........oggBBBggo.......',
     '.......ogBBwBwBBgo......',
-    '......oaBBBeBeBBBao.....',
-    '.....oaBBBBBBBBBBBao....',
-    '....oaBBBBBcccBBBBBao...',
-    '...oaBBBBBBBBBBBBBBBao..',
-    '..oaBBBBaBBBBBBBaBBBBao.',
-    '.ooBBBBBBBBBBBBBBBBBBoo.',
-    'ooBBBBBBBBBBBBBBBBBBBBoo',
+    '......oBBBBeBeBBBao.....',
+    '.....oBBBBBBBBBBBBao....',
+    '....oBBBBBBcccBBBBBao...',
+    '...oBBBBBBBBBBBBBBBBao..',
+    '..oBBBBBaBBBddddaddddao.',
+    '.ooDDDDDDDDDDDDDDDDDDoo.',
+    'ooDDDDDDDDDDDDDDDDDDDDoo',
     'o.ooooooooooooooooooo..o',
     'oo.o.oo.oo...oo.oo.o..oo',
     '.o..o..o.o...o.o..o...o.',
@@ -971,29 +1045,29 @@ M.bonepike = {
   body: 'bone', accent: 'void', hard: 'bone', core: 'violet',
   frames: 4, period: 700, bob: 1, sway: 0, phase: 0.00,
   rows: [
-    '......ogggggo.....og....',
-    '.....oggggggo.....og....',
-    '.....ogkkgkko.....og....',
-    '.....ogkkgkko.....og....',
-    '.....oggggggo.....og....',
-    '.....ogogogo......og....',
-    '......ogggo.......og....',
-    '....ooogggooo.....og....',
-    '...ogggooogggo....og....',
-    '...ogoogggooogo...og....',
-    '...oo.ogogo.ooo..oogo...',
-    '......ogogo......ogggo..',
-    '.....oogogoo....ogggggo.',
-    '.....ogggggo...oggcgggo.',
-    '.....oggggo.....ogggggo.',
-    '.....oggggggo....ogggo..',
-    '.....ogo..ogo.....ogo...',
-    '.....ogo..ogo.....og....',
-    '.....ogo..ogo.....og....',
-    '.....ogo..ogo.....og....',
-    '.....ogo..ogo.....og....',
-    '....oggo..oggo....og....',
-    '...ogggo..ogggo...og....',
+    '......oBBBBBo.....og....',
+    '.....oBBBBBBo.....og....',
+    '.....oBkkBkko.....og....',
+    '.....oBkkBkko.....og....',
+    '.....oBBBBBBo.....og....',
+    '.....oBoBoBo......og....',
+    '......oBBBo.......og....',
+    '....oooBBBooo.....og....',
+    '...oBBBoooBBBo....og....',
+    '...oBooBBBoooBo...og....',
+    '...oo.oBoBo.ooo..oogo...',
+    '......oBoBo......ogggo..',
+    '.....ooBoBoo....ogggggo.',
+    '.....oBBBBBo...oBgcgggo.',
+    '.....oBBBBo.....ogggggo.',
+    '.....oBBBBBBo....ogggo..',
+    '.....oBo..oBo.....ogo...',
+    '.....oBo..oBo.....og....',
+    '.....oBo..oBo.....og....',
+    '.....oBo..oBo.....og....',
+    '.....oBo..oBo.....og....',
+    '....oBBo..oBBo....og....',
+    '...oBBBo..oBBBo...og....',
     '...oooo....oooo...oo....',
   ],
   wing: null,
@@ -1012,20 +1086,20 @@ M.gravehound = {
   frames: 4, period: 620, bob: 1, sway: 0, phase: 0.30,
   rows: [
     '..o.....................',
-    '.ogo....ogggggo.........',
-    '.ogoooooogogogoo........',
-    '..ogggggggogogoggo......',
-    '...ooooooooooooogggo....',
-    '...ogogogogogogooggggo..',
-    '...ogogogogogogo.ogkkgo.',
-    '...ogogogogogogo.ogkkgo.',
+    '.oBo....oBBBBBo.........',
+    '.oBooooooBoBoBoo........',
+    '..oBBBBBBBoBoBoBBo......',
+    '...oooooooooooooBBBo....',
+    '...oBoBoBoBoBoBooBBBBo..',
+    '...ododododododo.ogkkgo.',
+    '...ododododododo.ogkkgo.',
     '...ooooooooooooo.oggggo.',
-    '...ogo.ogo.ogoogooggogo.',
-    '...ogo.ogo.ogo.ogoggggo.',
-    '...ogo.ogo.ogo.ogooggo..',
-    '...ogo.ogo.ogo.ogo......',
-    '...ogo.ogo.ogo.ogo......',
-    '..oggo.oggo.oggooggo....',
+    '...oBo.oBo.oBooBooBBoBo.',
+    '...oBo.oBo.oBo.oBoBBBBo.',
+    '...oBo.oBo.oBo.oBooBBo..',
+    '...odo.odo.odo.odo......',
+    '...odo.odo.odo.odo......',
+    '..oDDo.oDDo.oDDooDDo....',
     '..oooo.oooo.ooooooo.....',
   ],
   wing: null,
@@ -1045,22 +1119,22 @@ M.shade = {
   rows: [
     '........oooooo..........',
     '.......oaaaaaao.........',
-    '......oaBBBBBBao........',
+    '......oaHBBBBBao........',
     '.....oaBBkkkkBBao.......',
     '.....oaBkkccckkBao......',
     '....oaBBkcwwwckBBao.....',
     '....oaBBkkcccckBBao.....',
     '...oaBBBkkkkkkkBBBao....',
     '...oaBBBBkkkkkBBBBao....',
-    '..oaBBBBBBkkkBBBBBBao...',
-    '..oaBBBBBBBBBBBBBBBao...',
-    '.oaBBBBBBBBBBBBBBBBBao..',
-    '.oaBBBBBBBBBBBBBBBBBao..',
-    'oaBBBBBBBBBBBBBBBBBBBao.',
-    'oaBBBBBBBBBBBBBBBBBBBao.',
-    '.oBBBBBBBBBBBBBBBBBBBo..',
-    '..oBBBBBBBBBBBBBBBBBo...',
-    '...oBoBBBoBBoBBBoBBo....',
+    '..oaLLBBBBkkkBBBBBBao...',
+    '..oaLLBBBBBBBBBBBBBao...',
+    '.oaLLBBBBBBBBBBBBBBBao..',
+    '.oaLLBBBBBBBBBBBBBBBao..',
+    'oaLLBBBBBBBBBBBBBBBBBao.',
+    'oaLLBBBBBBBBBBBBBBBBBao.',
+    '.odddddddddddddddddddo..',
+    '..odddddddddddddddddo...',
+    '...oDoDDDoDDoDDDoDDo....',
     '....o.oBo.oo.oBo.oo.....',
     '.......o...o..o.........',
   ],
@@ -1078,26 +1152,26 @@ M.skullswarm = {
   frames: 3, period: 1100, bob: 2, sway: 2, phase: 0.85,
   oy: 2,
   rows: [
-    '.......oggggo...........',
-    '......oggggggo..........',
-    '......ogkkgkko..........',
-    '......oggggggo..........',
-    '.......ogogo............',
+    '.......oBBBBo...........',
+    '......oBBBBBBo..........',
+    '......oBkkBkko..........',
+    '......oBBBBBBo..........',
+    '.......oBoBo............',
     '........ooo.............',
     '.o..................o...',
-    'ogggo..........ogggggo..',
-    'oggggo........oggggggo..',
-    'ogkkgo........ogkkgkko..',
-    'oggggo........oggggggo..',
-    '.ogogo.........ogogo....',
+    'oBBBo..........oBBBBBo..',
+    'oBBBBo........oBBBBBBo..',
+    'oBkkBo........oBkkBkko..',
+    'oBBBBo........oBBBBBBo..',
+    '.oBoBo.........oBoBo....',
     '..ooo...........ooo.....',
     '........ccc.............',
     '.......c...c............',
     '......c.....c...........',
     '.....ooo...ooo..........',
-    '....oggggoggggo.........',
-    '....ogkkgogkkgo.........',
-    '....oggggoggggo.........',
+    '....oBBBBoBBBBo.........',
+    '....oBkkBoBkkBo.........',
+    '....oBBBBoBBBBo.........',
     '.....ooooooooo..........',
   ],
   wing: null,
@@ -1244,7 +1318,7 @@ M.dartwren = {
  * region's own physical description repeated on an animal. */
 M.gildscarab = {
   family: 'NEUTRAL', biome: 'ruins', gait: 'scuttle', idle: 'twitch',
-  body: 'stone', accent: 'gold', hard: 'goldleaf', core: null,
+  body: 'bronze', accent: 'gold', hard: 'goldleaf', core: null,
   frames: 4, period: 420, bob: 1, sway: 1, phase: 0.35,
   oy: 4,
   rows: [
@@ -1252,18 +1326,18 @@ M.gildscarab = {
     '......oao.....oao.......',
     '.......ogo...ogo........',
     '........ogoooogo........',
-    '.......ogBBBBBgo........',
-    '......ogBwBBwBBgo.......',
-    '.....oggBeBBeBBggo......',
+    '.......ogLBBBBgo........',
+    '......ogBwLBwBBgo.......',
+    '.....oggBeLBeBBggo......',
     '....ooggggggggggggoo....',
-    '...oaggAAAAAAAAggao.....',
-    '..oaggAAAAAAAAAAggao....',
-    '.oaggAAAAggggAAAAggao...',
-    'oaggAAAAggggggAAAAggao..',
-    'oaggAAAAggggggAAAAggao..',
-    '.oaggAAAAggggAAAAggao...',
-    '..oaggAAAAAAAAAAggao....',
-    '...oaggggAAAAggggao.....',
+    '...oaggLLLLLLLLggao.....',
+    '..oaggLLLLLLLLLLggao....',
+    '.oaggBBBBggggBBBBggao...',
+    'oaggBBBBggggggBBBBggao..',
+    'oaggBBBBggggggBBBBggao..',
+    '.oaggddddggggddddggao...',
+    '..oaggddddddddddggao....',
+    '...oaggggDDDDggggao.....',
     '....ooggggggggggoo......',
     '..oo..oo.oo.oo..oo......',
     '.oo...o...o..o...oo.....',
@@ -1340,25 +1414,25 @@ M.sanddervish = {
   oy: 1,
   rows: [
     '.........oaaao..........',
-    '........oaBBBao.........',
-    '.......oaBBBBBao........',
-    '......oaBBwBBwBao.......',
-    '......oaBBeBBeBao.......',
-    '.......oaBBBBBao........',
-    '........oaBBBao.........',
+    '........oaLBdao.........',
+    '.......oaLBBBdao........',
+    '......oaLBwBBwdao.......',
+    '......oaLBeBBedao.......',
+    '.......oaLBBBdao........',
+    '........oaLBdao.........',
     '.........oaBao..........',
-    '........oaBBBao.........',
-    '.......oaBBBBBao........',
-    '......oaBBBBBBBao.......',
-    '.....oaBBBBBBBBBao......',
-    '......oaBBBBBBBao.......',
-    '.......oaBBBBBao........',
-    '........oaBBBao.........',
+    '........oaLBdao.........',
+    '.......oaLBBBdao........',
+    '......oaLDDBBBdao.......',
+    '.....oaLDDBBBBBdao......',
+    '......oaLBBBBBdao.......',
+    '.......oaLBBBdao........',
+    '........oaLBdao.........',
     '.........oaBao..........',
-    '........oaBBBao.........',
-    '.......oaBBBBBao........',
-    '......oaBBBBBBBao.......',
-    '.....oBBoBBBoBBBo.......',
+    '........oaLBdao.........',
+    '.......oaLBBBdao........',
+    '......oaLDDBBBdao.......',
+    '.....oLBoBBBoBBdo.......',
     '......o.oo.o..oo........',
   ],
   wing: null,
@@ -1458,41 +1532,57 @@ A.margin_walker = {
   body: 'cloth', accent: 'leather', hard: 'wood', core: 'gold',
   frames: 3, period: 1500, bob: 1, sway: 1, phase: 0.00,
   rows: [
-    '..............oooo..............',
-    '.............oggggo.............',
-    '............ogBBBBgo............',
-    '............ogBkkBgo............',
-    '............ogBkkBgo............',
-    '............ogBBBBgo............',
-    '............ogBaaBgo............',
-    '.............oggggo.............',
-    '..............oBBo..............',
-    'ooooooooooooooBBoooooooooooooooo',
-    'oaaaaaaaaaaaaaBBaaaaaaaaaaaaaaao',
-    'oooooooooooooBBBBooooooooooooooo',
-    '.....ooo.....oBBBBo......ooo....',
-    '....oaBo....oBBBBBBo....oaBo....',
-    '....oaBo...oBBBBBBBBo...oaBo....',
-    '....oaBo..oaBBBBBBBBao..oaBo....',
-    '....oaBo..oBBBBccBBBBo..oaBo....',
-    '.....oBo..oBBBBccBBBBo..oBo.....',
-    '.....oBo..oaBBBBBBBBao..oBo.....',
-    '.....oBo...oBBBBBBBBo...oBo.....',
-    '......oo...oaBBBBBBao...oo......',
-    '............oBBBBBBo............',
-    '...........oBBoBBoBBo...........',
-    '..........oBo.oBo.oBo...........',
-    '..........oo..oBo..oo...........',
-    '..............oBo...............',
-    '..............oBo...............',
-    '..............oBo...............',
-    '..............oBo...............',
-    '.............ogggo..............',
-    '............oggggggo............',
-    '............ooooooooo...........',
+    '................oooooooooooooooo................',
+    '...............oggggggggggggggggo...............',
+    '...............ogLBBBLLLLLLBBBLgo...............',
+    '...............ogLBBBBBBBBBBBBLgo...............',
+    '...............ogBBBBBBBBBBBBBBgo...............',
+    '...............ogBBBBBBBBBBBBBBgo...............',
+    '...............ogBkkkBBBBBBkkkBgo...............',
+    '...............ogBkkkBBBBBBkkkBgo...............',
+    '...............ogBkkkBBBBBBkkkBgo...............',
+    '...............ogBkkkBBBBBBkkkBgo...............',
+    '...............ogBBBBddddddBBBBgo...............',
+    '...............ogdBBBDDDDDDBBBdgo...............',
+    '...............ogdaaaaaaaaaaaadgo...............',
+    '...............ogDBBBBBBBBBBBBDgo...............',
+    '...............oggggggggggggggggo...............',
+    '................oooooooooooooooo................',
+    '......................oBBo......................',
+    '......................oBBo......................',
+    'oooooooooooooooooooooooooooooooooooooooooooooooo',
+    'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+    'oooooooooooooooooooooooooooooooooooooooooooooooo',
+    '......oaLo..........oBBBBBBo..........oLao......',
+    '......oaLo.........oLBBBBBBLo.........oLao......',
+    '......oaBo........oaLBBBBBBLao........oBao......',
+    '......oaBo.......oaLBBBBBBBBLao.......oBao......',
+    '......oaBo......oaLLBBBBBBBBLLao......oBao......',
+    '......oaBo.....oaLLBBBBBBBBBBLLao.....oBao......',
+    '......oaBo....oaLLBBBBccccBBBBLLao....oBao......',
+    '......oaBo....oaLBBBBcCCCCcBBBBLao....oBao......',
+    '......oaBo....oaBBBBBcCCCCcBBBBBao....oBao......',
+    '......oaBo....oaBBBBBLccccLBBBBBao....oBao......',
+    '......oaBo....oaBBBBBLLLLLLBBBBBao....oBao......',
+    '......oaBo...oaLBBBBBBLLLLBBBBBBLao...oBao......',
+    '......oaBo...oaBBBBBBBBBBBBBBBBBBao...oBao......',
+    '......oado..oaLBBBBBBBBBBBBBBBBBBLao..odao......',
+    '.....oaBdo..oaBBBBBBBBBBBBBBBBBBBBao..odBao.....',
+    '.....oaBDo..oaBBBBBBBBBBBBBBBBBBBBao..oDBao.....',
+    '......oggo..oaBBBBBBBBBBBBBBBBBBBBao..oggo......',
+    '......oooo..oaBBBBBBBBBBBBBBBBBBBBao..oooo......',
+    '............oaBBBBdBBBBBBBBBBdBBBBao............',
+    '............oadBddddBBBBBBBBddddBdao............',
+    '.............oDdddDddddddddddDdddDo.............',
+    '..............oDDDoDddddddddDoDDDo..............',
+    '...............oo..oDDDDDDDDo..oo...............',
+    '...................oggggggggo...................',
+    '..................oggggggggggo..................',
+    '..................oooooooooooo..................',
   ],
-  head: [0, 8], headX: [11, 20], spine: [12, 21],
-  legs: [], legTop: 32, fray: null, arms: [[0, 9, 9, 21], [22, 31, 9, 21]],
+head: [0, 15], headX: [15, 32], spine: [22, 43],
+  legs: [], legTop: 48, fray: null, arms: [[0, 11, 18, 39], [36, 47, 18, 39]],
 };
 
 /* Graph Wastes. A stag of road-iron whose antlers have grown into the lattice of
@@ -1506,49 +1596,68 @@ A.lattice_stag = {
   body: 'leather', accent: 'bone', hard: 'bone', core: 'gold',
   frames: 4, period: 620, bob: 1, sway: 0, phase: 0.20,
   rows: [
-    '......og..............go........',
-    '.....ogo.o..........o.ogo.......',
-    '.....ogoogo........ogoogo.......',
-    '..o..ogggo.o......o.ogggo..o....',
-    '.ogo..oggoogo....ogooggo..ogo...',
-    '.ogoo..ogggggo..ogggggo..oogo...',
-    '..ogggooggggggooggggggooggggo...',
-    '...ogggggggggggggggggggggggo....',
-    '.....ooggggggooooggggggggoo.....',
-    '.......oggggo....oggggggo.......',
-    '.........ogo......ogggo.........',
-    '..........o........ogo..........',
-    '.....ooo...........oBBo.........',
-    '...ooaBooooooooooooBBBBo........',
-    '..oaBBBBBBBBBBBBBBBBwBBo........',
-    '.oaBBBBBBBBBBBBBBBBBeBBo........',
-    'oaBBBBBBBBBBBBBBBBBBBBggo.......',
-    'oBBBBBBBBBBBBBBBBBBBBBggo.......',
-    '.oBBBBBBBBBBBBBBBBBBBoo.........',
-    '..oBBBBBBBBBBBBBBBBBo...........',
-    '..oBBBoBBBBoBBBBoBBBo...........',
-    '..oBBo.oBBo.oBBo.oBBo...........',
-    '..oBBo.oBBo.oBBo.oBBo...........',
-    '..oBBo.oBBo.oBBo.oBBo...........',
-    '..oBBo.oBBo.oBBo.oBBo...........',
-    '..oBBo.oBBo.oBBo.oBBo...........',
-    '..oBBo.oBBo.oBBo.oBBo...........',
-    '..oggo.oggo.oggo.oggo...........',
-    '..oooo.oooo.oooo.oooo...........',
+    '................................................',
+    '.........oo.....................................',
+    '........oggo...oo...............................',
+    '........oggo..oggo...oo.........................',
+    '........oggooooggooooggoooooooooooo.............',
+    '........oggggggggggggggggggggggggggo............',
+    '.......ooggggggggggggggggggggggggggo............',
+    '......ogoggooooggooooggooooggooooggo............',
+    '......oggggo..oggooooggooooggooooggo............',
+    '.......oogggoooggggggggggggggggggggo............',
+    '.........ogggggggggggggggggggggggggo............',
+    '..........ooogogggoooggooooggooooggo............',
+    '.............ogggggoogggo.oggo..oggo............',
+    '..............ooggogogggooogggo.oggo............',
+    '...............oggggggggggggggo.oggo............',
+    '...............oggggggggggggggo.oggo............',
+    '.............oooggooooggggggggo.oggo............',
+    '............oggoggo..oggogogggo.oggo............',
+    '............ogggggooooggoogggggooggo............',
+    '.............ooggggggoggo.ooggogoggo............',
+    '...............ooogggggggooogggggggo............',
+    '..................ooogggogggggooogggoooooo......',
+    '.....................ooogggggggLLLLBBBBBBBo.....',
+    '........................oooogggBLLBBBBBBBBo.....',
+    '............................oooBBBBBBBBBBBo.....',
+    '..........................oooooBBBBwwBBBBBoooo..',
+    '........................ooBBBBBBBBBeeBggggggggo.',
+    'oo....................ooBBBBBBBBBBBBBBggggggggo.',
+    'BBo.................ooBBBBBBBBBBBBBaaaagggggggo.',
+    'BaBo..............ooBBBBBBBBBBBBBBBBBBggggggggo.',
+    'BBaBo...........ooBBBBBBBBBBBBBdBBBBBBggggggggo.',
+    'BBBBBoooooooooooBBBBBBBBBBBBBBBDBBdooooooooooo..',
+    'BBBBBBaaaaaaaaaaaaaaaaaaaaaaaaaaBBDo............',
+    'oooooBBLLBBBBBBBBBBBBBBBBBBBBBLLBBo.............',
+    '....oBBBBBBBBBBBBBBBBBBBBBBBBBBBBBo.............',
+    '....oBBBBcccccccccccccccccccccBBBBo.............',
+    '....oBBBBLLBBLLLLBBBBBBBLLLLBBBBBBo.............',
+    '....oBBBBBBBBBBBBBBBBBBBBBBBBBBBBBo.............',
+    '....oBBBBBBBBBBBBBBBBBBBBBBBBBBBBBo.............',
+    '.....ooBBBBooBBBBoooooooBBBBooBBBBo.............',
+    '......oBBBBooBBBBo.....oBBBBooBBBBo.............',
+    '......oBBBBooBBBBo.....oBBBBooBBddo.............',
+    '......oddddooddddo.....oddddooddddo.............',
+    '......oDDDDooDDDDo.....oDDDDooDDDDo.............',
+    '......oggggooggggo.....oggggooggggo.............',
+    '......oggggooggggo.....oggggooggggo.............',
+    '......oggggooggggo.....oggggooggggo.............',
+    '.......oooo..oooo.......oooo..oooo..............',
   ],
-  head: [0, 18], headX: [17, 25], spine: [13, 20],
-  legs: [[2, 5], [7, 10], [12, 15], [17, 20]], legTop: 21,
-  tail: [12, 16], tailX: [0, 5], fray: null, arms: null,
+head: [0, 30], headX: [31, 46], spine: [32, 38],
+  legs: [[6, 11], [12, 17], [23, 28], [29, 34]], legTop: 38,
+  tail: [27, 33], tailX: [0, 6], fray: null, arms: null,
 };
 
 /* Hashmap Highlands. A bull carrying a mast between its horns, because the
  * plateau is the tallest metal for a day's walk and something out there was
  * always going to grow into the job. The arc between the horn tips is authored,
  * and it is in a different place on every frame. *
- * NOT CURRENTLY A HUNTER. gauntlet/hunters.py gives this region a different
- * animal; this one is kept, drawn and measured so a later pass has it. */
+ * AN ELITE (§B's 32x32 rung). It was drawn in this box before the box had a
+ * name and it fills it; what changed is that something now asks for it. */
 A.thunderhorn = {
-  region: '', name: 'Thunderhorn', unassigned: true, family: 'LIGHTNING',
+  region: '', name: 'Thunderhorn', rank: 'elite', biome: 'highland', family: 'LIGHTNING',
   gait: 'lumber', idle: 'pulse',
   body: 'gunmetal', accent: 'gold', hard: 'bronze', core: 'gold',
   frames: 4, period: 900, bob: 1, sway: 1, phase: 0.35,
@@ -1597,43 +1706,68 @@ A.bough_stalker = {
   body: 'venom', accent: 'grass', hard: 'bone', core: 'venom',
   frames: 4, period: 760, bob: 1, sway: 0, phase: 0.50,
   rows: [
-    '..........oao.....oao...........',
-    '.........oaAao...oaAao..........',
-    '.........oaAao...oaAao..........',
-    '..........ooo.....ooo...........',
-    '..oo......oao.....oao...........',
-    '.oaBo......o.......o......oooo..',
-    '.oaBBo.....ooooooooo....oBBBBBo.',
-    '..oaBBoooooBBBBBBBBBoooBBBwBwBo.',
-    '...oaBBBBBBBBBBBBBBBBBBBBBeBeBo.',
-    '...oaBBBBBBBBBBBBBBBBBBBBBBggBo.',
-    '...oaBBBBBBBBBBBBBBBBBBBBBggggo.',
-    '....oBBBBBBBBBBBBBBBBBBBBoggggo.',
-    '....oBBBBBBBcccBBBBBBBBoooggoo..',
-    '....oBBBBBBBBBBBBBBBBBo.ooo.....',
-    '....oBBoBBBBBBBBBBoBBBo.........',
-    '....oBo.oBBBBBBBBo.oBBoo........',
-    '....oBo.oBBBBBBBBo.oBBBBoo......',
-    '....oBo.oBBoooBBo..oBBBBBBo.....',
-    '....oBo.oBo.oBBo...ooBBBBBo.....',
-    '....oBo.oBo.oBBo.....oBBBBo.....',
-    '....oBo.oBo.oBBo.....oaBBao.....',
-    '....oBo.oBo.oBBo......oBBo......',
-    '...oggo.oggooggo......oBBo......',
-    '...oooo.oooooooo.......oo.......',
+    '................................................',
+    '................................................',
+    '................................................',
+    '......................oo..................oo....',
+    '.....................oAAo................oAAo...',
+    '.....................oaao................oaao...',
+    '.....................oooo................oooo...',
+    '....................oBBLLo..............oLBBBo..',
+    '....................oBBBBo.............oLBBBBo..',
+    '.....................oBBBLo............oBBBBo...',
+    '.....................oBBBLo...........oLBBBBo...',
+    '.....................oBBBBLo.........oLBBBBo....',
+    '......................oBBBLLo.......oLBBBBBo....',
+    '......................odBBBLo.......oBBBBdo.....',
+    '......................oDBBBBLo.....oLBBBBDo.....',
+    '.......................oBBBBBBo...oBBBBBdo......',
+    '.......................odBBBBBBo.oBBBBBBDo......',
+    '.......................oDBBBBBBo.oBBBBBdo.......',
+    '........................oBBBBBBBoBBBBBBDo.......',
+    '........................oBBBBgggogggBBdo........',
+    '......................oooBBBBgggogggBBDo........',
+    '.....................oBBBBBBBBBBBBLBBdo.........',
+    '......................oBBdddBBBBBBLBBDo.........',
+    '......ooooooooooooooooooBddddBBBBBBBdo..........',
+    '.....oLLBBBBBBBBBBBBBBBBBDDDDBBBBBBBDo..........',
+    'ooooooBBaaaaaaaaaaaaaaaaaaaaaaaaaaBoooooooooo...',
+    'LBBBBBBBLLLBBBBBBBBBBBBBBBBBBBLLLBBLLLBBLBBBBo..',
+    'BaBBBBBBLLLBBBBBBBBBBBBBBBBBBBLLLBBBBBBBBBBBBo..',
+    'BBaBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBwwBwBBBo..',
+    'BBBaBBBBBBBBcccccccccccccccccBBBBBBBBBeeBeBBBoo.',
+    'BBBBBoBBBBBBBBBLLLBBBBBBLLLBBBBBBBdBBBBBBggggggo',
+    'BBBBBoddBBBBBBBLLLBBBBBBLLLBBBBBBBdBBBBBBggggggo',
+    'dBBBooDDBBBBBBBBBBBBBBBBBBBBBBBBBBDBBBBBBggggggo',
+    'DBBBo.ooBBBooooBBBooooooBBBoooBBBoodddBBdggggggo',
+    'oooo...oBBBo..oBBBo....oBBBo.oBBBooDDDBBDggggggo',
+    '.......oBBBo..oBBBo....oBBBo.oBBBo.oooooooooooo.',
+    '.......oBBBo..oBBBo....oBBBo.oBBBo..............',
+    '.......oBBBo..oBBBo....oBBBo.oBBBo..............',
+    '.......oBBBo..oBBBo....oBBBo.oBBBo..............',
+    '.......oBBBo..oBBBo....oBBBo.oBBBo..............',
+    '.......oBBBo..oBBBo....oBBBo.oBBBo..............',
+    '.......odddo..odddo....odddo.odddo..............',
+    '.......odddo..odddo....odddo.odddo..............',
+    '.......oDDDo..oDDDo....oDDDo.oDDDo..............',
+    '.......ogggo..ogggo....ogggo.ogggo..............',
+    '.......ogggo..ogggo....ogggo.ogggo..............',
+    '.......ogggo..ogggo....ogggo.ogggo..............',
+    '........ooo....ooo......ooo...ooo...............',
   ],
-  head: [5, 13], headX: [22, 31], spine: [7, 14],
-  legs: [[3, 7], [8, 12], [13, 17], [18, 22]], legTop: 14,
-  arms: [[8, 21, 0, 6]], tail: [15, 23], tailX: [18, 27], fray: null,
+head: [0, 34], headX: [35, 47], spine: [21, 32],
+  legs: [[7, 12], [14, 19], [23, 28], [29, 34]], legTop: 32,
+  tail: [26, 34], tailX: [0, 7],
+  arms: [[19, 32, 3, 21], [32, 45, 3, 21]], fray: null,
 };
 
 /* Array Caverns. Membrane, not muscle: the wings are most of the box and the
  * body hangs under them. The Caverns' mobs are an ape, a grub and a mite, all
  * of them on the floor; this is the only thing down there that is above you. *
- * NOT CURRENTLY A HUNTER. gauntlet/hunters.py gives this region a different
- * animal; this one is kept, drawn and measured so a later pass has it. */
+ * AN ELITE (§B's 32x32 rung). It was drawn in this box before the box had a
+ * name and it fills it; what changed is that something now asks for it. */
 A.vaultbat = {
-  region: '', name: 'The Vaultwing', unassigned: true, family: 'BRUTE',
+  region: '', name: 'The Vaultwing', rank: 'elite', biome: 'cave', family: 'BRUTE',
   gait: 'wingbeat', idle: 'drift',
   body: 'stone', accent: 'earth', hard: 'bone', core: 'bronze',
   frames: 3, period: 640, bob: 2, sway: 1, phase: 0.65,
@@ -1671,10 +1805,10 @@ A.vaultbat = {
 /* Sliding Window Marsh. Long, low and almost entirely horizontal — the frame
  * that slides across the reeds, with teeth. Its own region's mobs are a toad, a
  * heron and a wasp, none of which is longer than it is tall. *
- * NOT CURRENTLY A HUNTER. gauntlet/hunters.py gives this region a different
- * animal; this one is kept, drawn and measured so a later pass has it. */
+ * AN ELITE (§B's 32x32 rung). It was drawn in this box before the box had a
+ * name and it fills it; what changed is that something now asks for it. */
 A.mirelord = {
-  region: '', name: 'The Mirelord', unassigned: true, family: 'POISON',
+  region: '', name: 'The Mirelord', rank: 'elite', biome: 'swamp', family: 'POISON',
   gait: 'fourbeat', idle: 'breathe',
   body: 'venom', accent: 'grass', hard: 'bone', core: 'venom',
   frames: 4, period: 980, bob: 1, sway: 0, phase: 0.75,
@@ -1707,10 +1841,10 @@ A.mirelord = {
  * shoulder, tapering to a fray that is never the same two frames running, and
  * with no feet anywhere in the grid. It does not walk the Pass; it is carried
  * down it. *
- * NOT CURRENTLY A HUNTER. gauntlet/hunters.py gives this region a different
- * animal; this one is kept, drawn and measured so a later pass has it. */
+ * AN ELITE (§B's 32x32 rung). It was drawn in this box before the box had a
+ * name and it fills it; what changed is that something now asks for it. */
 A.hoarcolossus = {
-  region: '', name: 'The Hoar Colossus', unassigned: true, family: 'COLD',
+  region: '', name: 'The Hoar Colossus', rank: 'elite', biome: 'mountain', family: 'COLD',
   gait: 'hover', idle: 'pulse',
   body: 'frost', accent: 'cyan', hard: 'chrome', core: 'cyan',
   frames: 3, period: 1800, bob: 2, sway: 1, phase: 0.10,
@@ -1750,6 +1884,58 @@ A.hoarcolossus = {
   arms: [[0, 5, 11, 21], [25, 31, 11, 21]],
 };
 
+/* Stack & Queue Mines, and the Debugging Dungeon. An ELITE, and the one body
+ * this rung did not already have: the other six were drawn for the six elements
+ * that had spare apex-class bodies and FIRE had none. A kiln that got up: brick
+ * over a firebox, two vents that do not draw evenly, four legs too short for
+ * what is standing on them, and a door that does not shut. The read is a WIDE
+ * BOX WITH CHIMNEYS, which nothing else in either fire region is — the mobs are
+ * a bird, a hound, a rearing grub and a moth, and both apexes have wings or an
+ * arm above the shoulder line. */
+A.kilnwalker = {
+  region: '', name: 'The Kilnwalker', rank: 'elite', biome: 'mine', family: 'FIRE',
+  gait: 'lumber', idle: 'pulse',
+  body: 'rust', accent: 'bronze', hard: 'iron', core: 'ember',
+  frames: 4, period: 1100, bob: 1, sway: 0, phase: 0.30,
+  rows: [
+    '...oggggggo.....................',
+    '...ogkkkkgo.....................',
+    '...ogkcckgo........ooooooo......',
+    '...ogkkkkgo.......ogggggggo.....',
+    '...ogkkkkgo.......ogkkkkkgo.....',
+    '..oaaaaaaaao......ogkkckkgo.....',
+    '..oaaaaaaaao......ogkkkkkgo.....',
+    '..oaaaaaaaao.....oaaaaaaaaao....',
+    '...oggggggo......oaaaaaaaaao....',
+    '.oooggggggooooooooaaaaaaaaaoooo.',
+    'oggggggggggggggggggggggggggggggo',
+    'ogaaaaaaaaaaaaaaaaaaaaaaaaaaaago',
+    'ogaaaaaaaaaaaaaaaaaaaaaaaaaaaago',
+    'ogBBBBBBBBBBBBBBBBBBBBBBBBBBBBgo',
+    '.oBBBBBBBBBBBBBBBBBBBBBBBBBBBBo.',
+    '.oBBBBBBgggggggggggggggBBBBBBBo.',
+    '.oBBBBBBgcccccccccccccgBBBBBBBo.',
+    '.oBBBBBBgccCCkkkkCCcccgBBBBBBBo.',
+    '.oBBBBBBgccCCkkkkCCcccgBBBBBBBo.',
+    '.oBBBBBBgccCCCCCCCCcccgBBBBBBBo.',
+    '.oBBBBBBgcccccccccccccgBBBBBBBo.',
+    '.oBBBBBBgggggggggggggggBBBBBBBo.',
+    '.oBBBBBBBBBBBBBBBBBBBBBBBBBBBBo.',
+    '.oBaaaaaaaaaaaaaaaaaaaaaaaaaaBo.',
+    '.oBBBBBBBBBBBBBBBBBBBBBBBBBBBBo.',
+    '..oBBBBooBBBBooooBBBBooBBBBooo..',
+    '..oBBBBooBBBBo..oBBBBooBBBBo....',
+    '..oBBBBooBBBBo..oBBBBooBBBBo....',
+    '..oBBBBooBBBBo..oBBBBooBBBBo....',
+    '..oggggooggggo..oggggooggggo....',
+    '..oggggooggggo..oggggooggggo....',
+    '...oooo..oooo....oooo..oooo.....',
+  ],
+head: [0, 13], headX: [1, 30], spine: [13, 24],
+  legs: [[2, 7], [8, 13], [16, 21], [22, 27]], legTop: 24,
+  tail: null, tailX: null, fray: null, arms: null,
+};
+
 /* Stack & Queue Mines. The brief asked for a phoenix and hunters.py named one:
  * a bird of ore-cart iron and flame whose wings are stacked plates that unload
  * from the top, one at a time, and burn on the way down. Its legs are lift
@@ -1762,41 +1948,58 @@ A.cinder_phoenix = {
   frames: 3, period: 700, bob: 2, sway: 0, phase: 0.40,
   oy: 0,
   rows: [
-    '..............oo................',
-    '.............oaoo...............',
-    '............oao.o...............',
-    '............oBBBo...............',
-    '...........oBBwBBo..............',
-    '...........oBBeBBoggo...........',
-    '...........oBBBBBoggo...........',
-    '.o..........oBBBo...........o...',
-    'oao.........oBBBo..........oao..',
-    'oaBo.......oBBBBBo........oaBo..',
-    'oaBBo.....oBBBBBBBo......oaBBo..',
-    'oaBBBoooooBBBBBBBBBooooooaBBBo..',
-    'oaBBBBBBBBBBBcBcBBBBBBBBBBBBBo..',
-    'oaBBBBBBBBBBBBBBBBBBBBBBBBBBBo..',
-    'oaBBBBBBBBBBBBBBBBBBBBBBBBBBBo..',
-    '.oaBBBBoBBBBBBBBBBBBBoBBBBBao...',
-    '..oaaooooBBBBBBBBBBBooooaao.....',
-    '.........oBaBBBBBaBo............',
-    '.........oBBBBBBBBBo............',
-    '..........oBBBBBBBo.............',
-    '..........oBBoBBBo..............',
-    '.........ogoo.oogo..............',
-    '.........ogo...ogo..............',
-    '........oggo...oggo.............',
-    '........ooo.....ooo.............',
-    '.......oao.......oao............',
-    '......oaco.......ocao...........',
-    '.....oaco.........ocao..........',
-    '.....oco...........oco..........',
-    '.....oc..............co.........',
-    '.....o................o.........',
+    '.......................oo.......................',
+    '......................oaao......................',
+    '.....................oaooao.....................',
+    '.....................oaBBao.....................',
+    '......................oBBo......................',
+    '.....................oBBBBo.....................',
+    '....................oBBBBBBo....................',
+    '...................oBBwBBwBBo...................',
+    '...................oBBeBBeBBo...................',
+    '...................oBBBBBBBBo...................',
+    '....................oBBBBBBo....................',
+    '.....................oBBBBo.....................',
+    'o....................oBBBBo....................o',
+    'ao...................oBBBBo...................oa',
+    'aBo..................oBBBBo..................oBa',
+    'aBBo................oBBBBBBo................oBBa',
+    'aBBBo...............oBBBBBBo...............oBBBa',
+    'aBBBBo.............oBBBBBBBBo.............oBBBBa',
+    'aBBBBBo...........oBBBBBBBBBBo...........oBBBBBa',
+    'aBBBBBBoooooooooooBBBBBBBBBBBBoooooooooooBBBBBBa',
+    'aBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBa',
+    'aBBBBBBBBBBBBBBBBBBBBcCCCCcBBBBBBBBBBBBBBBBBBBBa',
+    'aBBBBBBBBBBBBBBBBBBBBcCCCCcBBBBBBBBBBBBBBBBBBBBa',
+    'aBBBBBBBBBBBBBBBBBBBBBccccBBBBBBBBBBBBBBBBBBBBBa',
+    'aBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBa',
+    'oaBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBao',
+    '.oaBBBBBBoBBBBBBBBBBBBBBBBBBBBBBBBBBBBoBBBBBBao.',
+    '..oaaBBBBoBBBBBBBBBBBBBBBBBBBBBBBBBBBBoBBBBaao..',
+    '....oaaBBooBBBBBBBBBBBBBBBBBBBBBBBBBBooBBaao....',
+    '.......ooo.oaBBBBBBBBBBBBBBBBBBBBBBao.ooo.......',
+    '...........oaBBBBBBBBBBBBBBBBBBBBBBao...........',
+    '............oaBBBBBBBBBBBBBBBBBBBBao............',
+    '.............oaBBBBBBBBBBBBBBBBBBao.............',
+    '..............oaBBBBBBBBBBBBBBBBao..............',
+    '...............oBBBBBBBBBBBBBBBBo...............',
+    '................oBBBBBBBBBBBBBBo................',
+    '.................oBBBBBBBBBBBBo.................',
+    '.................oBBBoBBBBoBBBo.................',
+    '.................oBBo.oBBo.oBBo.................',
+    '................oBBo...oo...oBBo................',
+    '...............oBBo....oo....oBBo...............',
+    '..............oaco.....oo.....ocao..............',
+    '.............oaco......oo......ocao.............',
+    '............oaco.......oo.......ocao............',
+    '...........oBBo..................oBBo...........',
+    '..........oBBo....................oBBo..........',
+    '..........oggo....................oggo..........',
+    '..........oooo....................oooo..........',
   ],
-  head: [0, 7], headX: [10, 20], spine: [11, 20],
-  legs: [[8, 12], [14, 18]], legTop: 21,
-  wing: [[0, 9, 7, 17], [20, 30, 7, 17]], tail: [25, 30], tailX: [4, 22],
+head: [0, 12], headX: [17, 30], spine: [19, 33],
+  legs: [[10, 16], [31, 37]], legTop: 37,
+  wing: [[0, 17, 12, 29], [30, 47, 12, 29]], tail: [38, 47], tailX: [6, 41],
   fray: null, arms: null,
 };
 
@@ -1811,37 +2014,58 @@ A.fourth_orientation = {
   body: 'stone', accent: 'gold', hard: 'chrome', core: 'gold',
   frames: 4, period: 1400, bob: 1, sway: 0, phase: 0.85,
   rows: [
-    '..........oooooooooo............',
-    '.........oggggggggggo...........',
-    '.........ogaaaaaaaago...........',
-    '.........oggggggggggo...........',
-    '..........oBBBBBBBBo............',
-    '..........oBwwBBwwBo............',
-    '..........oBeeBBeeBo............',
-    '..........oBBBBBBBBo............',
-    '.......ooooBBBggBBBoooo.........',
-    '.....ooaaaoBBBggBBBoaaaoo.......',
-    '...ooaaaoooBBBBBBBBooooaaaoo....',
-    '..oggggo..oBBBBBBBBo..ogggggo...',
-    '.oggggo.oooBBccccBBooo.ogggggo..',
-    '.ogggo.oaaoBBccccBBoaao.oggggo..',
-    '.oggo.oaaaoBBBBBBBBoaaao.oggo...',
-    '.ooo.oggggoBBBBBBBBoggggo.ooo...',
-    '.....ogggooBBBBBBBBooggggo......',
-    '.....oggo.oBBBBBBBBo.oggo.......',
-    '.....ooo..oBBBBBBBBo..ooo.......',
-    '..........oBBBBBBBBo............',
-    '.........ooBBBoBBBBoo...........',
-    '........oggBBo.oBBggo...........',
-    '........oggBBo.oBBggo...........',
-    '........oggBBo.oBBggo...........',
-    '.......oggggo...oggggo..........',
-    '.......oggggo...oggggo..........',
-    '.......oooooo...oooooo..........',
+    '................................................',
+    '.........ooooooooooooooooo......................',
+    '........ogggggggggggggggggo.....................',
+    '........ogggggggggggggggggo.....................',
+    '........ogggggggggggggggggo.....................',
+    '........ogaaaaaaaaaaaaaaago.....................',
+    '........ogaaaaaaaaLLLLLLLgo.....................',
+    '........ogggggggggLLLLLLLgo.....................',
+    '.......okkkkkkkkkkBBBBBBBgo.....................',
+    '.......okcccckkkkkBBBBBBBgo.....................',
+    '.......okcccckkkkkBBBBBBBgo.....................',
+    '.......okcccckkkkkBBBBBBBgo.....................',
+    'ooooooookcccckkkkkBBBBBBBgo.....................',
+    'gggggggggggggkkkkkBBBBBBBgooooooo...............',
+    'ggggggggggggggggLBBBBBBBBBBBBBBBLo..............',
+    'ggggggggggggggggLBdddddddBBBBBBBLo..............',
+    'gaaaaaaaaaaaggggBBdddddddBBBBBBBBo..............',
+    'gaaaaaaaaaaaggggBBDDDDDDDBBBBBBBBo..............',
+    'gggggggggggggoooBaaaaaaaaaaaaaaaBo..oooooooooooo',
+    'gggggggggggggo.oBLLLBBBBBBBBBBLLBo.ogggggggggggg',
+    'gggggggggggggo.oBLLLccccccccccLLBo.ogggggggggggg',
+    'gggggggggggggo.oBBBBccccccccccBBBo.ogggggggggggg',
+    'gggggggggggggo.oBBBBccCCCCCCccBBBo.ogaaaaaaaaaag',
+    'gggggggggggggo.oBBBBccCCCCCCccBBBo.ogaaaaaaaaaag',
+    'gggggggggggggo.oBBBBccCCkkCCccBBBo.ogggggggggggg',
+    'ggLLLLLLLLLggo.oBBBBccCCkkCCccBBBo.ogggggggggggg',
+    'ooBBBBBBBBBoo..oBBBBccCCCCCCccBBBo.ogggggggggggg',
+    '.oBBBBBBBBBo...oBBBBccCCCCCCccBBBo.ogggggggggggg',
+    '.oBBBBBBBBBo...oBBBBccccccccccBBBo.ogggggggggggg',
+    '.oBBBBBBBBBo...oBBBBccccccccccBBBo.ogggggggggggg',
+    '.oBBBBBBBBBo...oBdddBBBBBBBBBBddBo.ogggggggggggg',
+    '.odddddddddo...oBdddBBBBBBBBBBddBo.oggLLLLLLLLgg',
+    '.oDDDDDDDDDo...oBDDDBBBBBBBBBBDDBo..ooBBBBBBBBoo',
+    'ogggggggggggo..oBaaaaaaaaaaaaaaaBo...oBBBBBBBBo.',
+    'ogggggggggggo..odBBBBLLLLLLLLBLLBo...oBBBBBBBBo.',
+    'ogggggggggggo..odBBBBBBBBBBBBBBBBoooooBBBBBBBBo.',
+    'ogggggggggggo..oDBBBBBBBBBBBBBBBBLLLLLBBBBBBBBo.',
+    'ogggggggggggo...oooooBBBBBBBBoBBBBBBBBddddddddo.',
+    '.ooooooooooo........oBBBBBBBBoBBBBBBBBDDDDDDDDo.',
+    '....................oBBBBBBBBoBBBBBBBBgggggggggo',
+    '....................oBBBBBBBBoBBBBBBBBgggggggggo',
+    '....................oBBBBBBBBoBBBBBBBBgggggggggo',
+    '....................oBBBBBBBBoBBdBBBBBgggggggggo',
+    '....................oddddddddoddddddddgggggggggo',
+    '.................ooooDDDDDDDDoDDDDDDDDooooooooo.',
+    '................oggggggggggggggggggggggo........',
+    '................oggggggggggggggggggggggo........',
+    '.................oooooooooooooooooooooo.........',
   ],
-  head: [0, 7], headX: [9, 21], spine: [8, 20],
-  legs: [[7, 13], [15, 21]], legTop: 20,
-  arms: [[0, 9, 8, 18], [21, 31, 8, 18]], tail: null, tailX: null, fray: null,
+head: [0, 17], headX: [8, 26], spine: [14, 36],
+  legs: [[16, 29], [29, 38]], legTop: 36,
+  arms: [[0, 13, 13, 37], [35, 47, 19, 43]], tail: null, tailX: null, fray: null,
 };
 
 /* Recursive Forest. One figure at three sizes in a single outline: a walker
@@ -1855,41 +2079,59 @@ A.unreturning = {
   gait: 'hover', idle: 'drift',
   body: 'void', accent: 'violet', hard: 'bone', core: 'violet',
   frames: 3, period: 2000, bob: 2, sway: 2, phase: 0.55,
-  oy: 1,
+  oy: 0,
   rows: [
-    '...........oooooooo.............',
-    '.........ooaaaaaaaaoo...........',
-    '........oaBBBBBBBBBBao..........',
-    '.......oaBBkkkkkkkkBBao.........',
-    '.......oaBkkcccccckkBao.........',
-    '......oaBBkcwwwwwwckBBao........',
-    '......oaBBkkcccccckkBBao........',
-    '.....oaBBBBkkkkkkkkBBBBao.......',
-    '.....oaBBBBBkkkkkkBBBBBao.......',
-    '....oaBBBBBBBBBBBBBBBBBBao......',
-    '....oaBBBoooooooooooBBBBao......',
-    '...oaBBBBoaaaaaaaaaoBBBBBao.....',
-    '...oaBBBBoaBBkkkkBaoBBBBBao.....',
-    '..oaBBBBBoaBkcccckBoBBBBBBao....',
-    '..oaBBBBBoaBkcwwckBoBBBBBBao....',
-    '..oaBBBBBoaBBkkkkBaoBBBBBBao....',
-    '.oaBBBBBBoaBooooooBaoBBBBBBao...',
-    '.oaBBBBBBoaBoaaaaoBaoBBBBBBao...',
-    'oaBBBBBBBoaBoaBkBaoBaoBBBBBBBao.',
-    'oaBBBBBBBoaBoaBkBaoBaoBBBBBBBao.',
-    'oaBBBBBBBoaBoaaaaoBaoBBBBBBBBao.',
-    'oaBBBBBBBoaBooooooBaoBBBBBBBBao.',
-    '.oBBBBBBBoaBBBBBBBBaoBBBBBBBBo..',
-    '.oBBBBBBBBoaaaaaaaaoBBBBBBBBo...',
-    '..oBBBBBBBBoooooooooBBBBBBBBo...',
-    '..oBBBBBBBBBBBBBBBBBBBBBBBBo....',
-    '...oBBBBBBBBBBBBBBBBBBBBBBo.....',
-    '...oBoBBBoBBBoBBBoBBBoBBBoo.....',
-    '....o.oBo.oBo.oBo.oBo.oBo.......',
-    '......o...o....o...o...o........',
+    '.................ooBBBBBBBBBBBoo................',
+    '................oBBBBBBBBBBBBBBBo...............',
+    '...............oBBBBBBBBBBBBBBBBBo..............',
+    '..............oBBBBBBBBBBBBBBBBBBBo.............',
+    '.............oBBBkkkkkkkkkkkkkkkBBBo............',
+    '.............oBBBkkkkkkkkkkkkkkkBBBo............',
+    '............oBBBBBkkkkkkkkkkkkkBBBBBo...........',
+    '............oBBBBBkkccccccccckkBBBBBo...........',
+    '............oBBBBBBkccwwwwwcckBBBBBBo...........',
+    '...........oBBBBBBBBccwwwwwccBBBBBBBBo..........',
+    '...........oBBBBBBBBcccccccccBBBBBBBBo..........',
+    '..........oBBBBBBBBBBBBBBBBBBBBBBBBBBBo.........',
+    '..........oBBBBBBBBBBBBBBBBBBBBBBBBBBBo.........',
+    '.........oBBBBBBBBBBBBBBBBBBBBBBBBBBBBBo........',
+    '.........oBBBBBBBBBBBBBBBBBBBBBBBBBBBBBo........',
+    '.........oBBBBBBBBBBBBBBBBBBBBBBBBBBBBBo........',
+    '........oBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBo.......',
+    '........oBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBo.......',
+    '........oBBBooooooooBBBBBBBBBooooooooBBBo.......',
+    '.......oBBBBo....oBBBBBBBBBBBBBo....oBBBBo......',
+    '.......oBBBBo...oBBBBBBBBBBBBBBBo...oBBBBo......',
+    '.......oBBBBo...oBBkkkkkkkkkkkBBo...oBBBBo......',
+    '......oBBBBBo..oBBBkkkkkkkkkkkBBBo..oBBBBBo.....',
+    '......oBBBBBo..oBBBBkccccccckBBBBo..oBBBBBo.....',
+    '......oBBBBBo..oBBBBkcccwccckBBBBo..oBBBBBo.....',
+    '.....oaaaaaao.oBBBBBBcccccccBBBBBBo.oaaaaaao....',
+    '.....oBBBBBBo.oBBBBBBBBBBBBBBBBBBBo.oBBBBBBo....',
+    '.....oBBBBBBo.oBBBBBBBBBBBBBBBBBBBo.oBBBBBBo....',
+    '.....oBBBBBBooBBBBBBBBBBBBBBBBBBBBBooBBBBBBo....',
+    '.....oBBBBBBooBBBBoooBBBBBBBoooBBBBooBBBBBBo....',
+    '....oBBBBBBBooBBBBooBBBBBBBBBooBBBBooBBBBBBBo...',
+    '....oBBBBBBBooBBBBoBBBkkkkkBBBoBBBBooBBBBBBBo...',
+    '....oBBBBBBBoBBBBBoBBBkkckkBBBoBBBBBoBBBBBBBo...',
+    '...oBBBBBBBBoaaaaaoBBBkkkkkBBBoaaaaaoBBBBBBBBo..',
+    '...oaaaaaaaaoBBBBBoBBBBBBBBBBBoBBBBBoaaaaaaaao..',
+    '...oBBBBBBBBoBBBBBBBBBBBBBBBBBBBBBBBoBBBBBBBBo..',
+    '...oBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBo..',
+    '..oBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBo.',
+    '..oBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBo.',
+    '..oBBBBBBBBBBBBBBBoBBoBBoBBoBBoBBBBBBBBBBBBBBBo.',
+    '..oBBBBBBBBBBBBBBBoBBoBBoBBoBBoBBBBBBBBBBBBBBBo.',
+    '.oBBBBBBBBBBBBBBBBoBBoBBoBBoBBoBBBBBBBBBBBBBBBBo',
+    '.oBBBBBBBBBBBBBBBBoBBoBBoBBoBBoBBBBBBBBBBBBBBBBo',
+    '.oBBBBBBBBBBBBBBBBooo.oo.oo.oooBBBBBBBBBBBBBBBBo',
+    '..oooooooooooooooo.............oooooooooooooooo.',
+    '................................................',
+    '................................................',
+    '................................................',
   ],
-  head: [0, 9], headX: [4, 27], spine: [9, 26],
-  legs: [], legTop: 32, fray: [26, 29], tail: null, tailX: null, arms: null,
+head: [0, 15], headX: [10, 38], spine: [15, 43],
+  legs: [], legTop: 48, fray: [38, 45], tail: null, tailX: null, arms: null,
 };
 
 /* Stringwood Labyrinth. A great owl whose feathers are letters laid like
@@ -1903,36 +2145,58 @@ A.sporecrown = {
   body: 'wood', accent: 'bone', hard: 'bone', core: 'gold',
   frames: 3, period: 1200, bob: 1, sway: 0, phase: 0.25,
   rows: [
-    '.....oo..................oo.....',
-    '....oaao................oaao....',
-    '....oaBao..............oaBao....',
-    '.....oaBBoooooooooooooooaBBo....',
-    '......oaBBBBBBBBBBBBBBBBBBBo....',
-    '.....oaBBBBBBBBBBBBBBBBBBBBBo...',
-    '....oaBBBBwwwwBBBBwwwwBBBBBBBo..',
-    '...oaBBBBwwwwwwBBwwwwwwBBBBBBo..',
-    '...oaBBBBwweewwooweewwBBBBBBBo..',
-    '..oaBBBBBwwwwwwggwwwwwwBBBBBBo..',
-    '..oaBBBBBBwwwwggggwwwwBBBBBBBo..',
-    '..oaBBBBBBBBBBggggBBBBBBBBBBBo..',
-    '.oaBBBBBBBBBBBBggBBBBBBBBBBBBo..',
-    '.oaBBaBBaBBaBBBBBBaBBaBBaBBBBo..',
-    'oaBBBBBBBBBBBBBBBBBBBBBBBBBBBo..',
-    'oaBBaBBaBBaBBcccBBaBBaBBaBBBBo..',
-    'oaBBBBBBBBBBBBBBBBBBBBBBBBBBo...',
-    '.oaBBaBBaBBaBBBBaBBaBBaBBBBo....',
-    '.oaBBBBBBBBBBBBBBBBBBBBBBBo.....',
-    '..oaBBBBBBBBBBBBBBBBBBBBBo......',
-    '...oaaBBBBBBBBBBBBBBBBBao.......',
-    '.....ooaaBBBBBBBBBBBaao.........',
-    '........ooBBBooBBBoo............',
-    '.........oggo..oggo.............',
-    '........oggggooggggo............',
-    '........oooooooooooo............',
+    '...................ooooogooooo..................',
+    '..................ogggggggggggo.................',
+    '.................ogggggggggggggo................',
+    '..............o.ogggggggggggggggo.o.............',
+    '...........ooogogggggggggggggggggogooo..........',
+    '..........ogggggggaaaaaaaaaaaaagggggggo.........',
+    '.........ogggggggggggggggggggggggggggggo........',
+    '........ogggggggggggggggggggggggggggggggo.......',
+    '.........oaaaaaaaaaooooggoooooaaaaaaaaao........',
+    '..........ogggggggBBBBBggLBBBBBgggggggo.........',
+    '...........ooogoBBBBBBBggBBBBBBBBogooo..........',
+    '.............ogBBBBBBBBggBBBBBBBBBgo............',
+    '............oBgBBBBBBBBBLBBBBBBBBBgBo...........',
+    '...........oBBgBBwBBBBBBBBBBBBBwBBgBBo..........',
+    '..........oBBBwwwwwwwBBBBBBBwwwwwwwBBBo.........',
+    '.........oLBBwwwwwwwwwBBBBBwwwwwwwwwBBLo........',
+    '........oLLBwwwwwewwwwwBBdwwwwwewwwwwBLLo.......',
+    '........oBBBwwweeeeewwwBBDwwweeeeewwwBBBo.......',
+    '........oBBwwwweeeeewwwwBwwwweeeeewwwwBBo.......',
+    '........oBBLwweeeeeeewwBBBwweeeeeeewwLBBo.......',
+    '.......oBBBBwwweeeeewwwBdBwwweeeeewwwBBBBo......',
+    '.......ooBBBLwweeeeewwBBDBBwweeeeewwBBBBo.......',
+    '.....ooBaBBBLBwwwewwwgggggggwwwewwwBBBBBBoo.....',
+    '....oBBaBdBBBBBBBwBBBBgggggBBBBwBBBBBBBdaBBo....',
+    '..ooBaaBBDdBBBBBBBBBBBgggggBBBBBBBBBBBBDBaaBoo..',
+    'ooBBaBBBBadBBBBBBBBBBBggBggBBBBBBBBBBddaBBBaBBoo',
+    'BBaaBBBaaBDdBBBBBBBBBBBBBBBBBBBBBBBBBDdBaBBBaaBB',
+    'oaBBBBaBBBaDBBBBBBBBBBBBBBBBBBBBBBBBBaDBBaBBBBao',
+    '.ooBBaBBBaBaBBBBBBBBBBBBBBBBBBBBBBBBaBaBBBaBBoo.',
+    '...oaBBBBaBaBaaaaaaaaaaaaaaaaaaaaaaaaBBaBBBao...',
+    '....ooBBaBBaBBBBBBBBBBBBBBBBBBBBBBBBBaBaBBBo....',
+    '......oaBBaBBBBBBBBBBBBBBBBBBBBBBBBBBaBBaoo.....',
+    '.......oBBaBBBBBBBBBBBBBBBBBBBBBBBBBBaBBo.......',
+    '........ooaBdaaaaaaaaaaaaaaaaaaaaaaaBaBo........',
+    '..........oBdBBBBBBBBBBBBBBBBBBBBBBBBBo.........',
+    '...........oDBBBBBBBcccccccccBBBBBBBoo..........',
+    '............oBBBBBBBcccccccccBBBBBBBo...........',
+    '............oaaaaaaaaaaaaaaaaaaaaaaao...........',
+    '.............oBBBBBBBBBBBBBBBBBBBBBo............',
+    '..............oBBBBBBBBBBBBBBBBBBBo.............',
+    '...............oBBBBBBBBBBBBBBBBBo..............',
+    '...............oggggggBBBBggggggo...............',
+    '...............oggggggBBBBggggggo...............',
+    '...............oggggggooBoggggggo...............',
+    '...............oggggggo.ooggggggo...............',
+    '..............oggggggggooggggggggo..............',
+    '..............oggggggggooggggggggo..............',
+    '...............oooooooo..oooooooo...............',
   ],
-  head: [3, 13], headX: [2, 29], spine: [13, 21],
-  legs: [[8, 12], [14, 18]], legTop: 22,
-  wing: [[0, 6, 0, 21], [24, 31, 0, 21]], tail: null, tailX: null, fray: null,
+head: [0, 27], headX: [6, 41], spine: [26, 42],
+  legs: [[15, 22], [25, 32]], legTop: 41,
+  wing: [[0, 15, 13, 38], [32, 47, 13, 38]], tail: null, tailX: null, fray: null,
 };
 
 /* Fields of Syntax. A harvester on stilt legs, tall and mostly empty, with a
@@ -1946,50 +2210,67 @@ A.thresher = {
   body: 'rust', accent: 'gold', hard: 'gunmetal', core: 'gold',
   frames: 4, period: 1100, bob: 1, sway: 0, phase: 0.95,
   rows: [
-    '...............oo...............',
-    '..............ocoo..............',
-    '.............oco.o..............',
-    '............oco.................',
-    '...........ogggggggo............',
-    '..........oggcccccggo...........',
-    '.........oggcgggggcggo..........',
-    '.........ogcgwgggwgcgo..........',
-    '.........oggcgggggcggo..........',
-    '.........oggcccccccggo..........',
-    '..........ogggggggggo...........',
-    '...oo......oggkkkggo......oo....',
-    '..oaBoooooooBBBBBBBoooooooaBo...',
-    '..oaBBBBBBBBBcccccBBBBBBBBBBo...',
-    '..oaBBBoBBBBBBBBBBBBBBBoBBBBo...',
-    '..oaBBo.oBBBBBBBBBBBBBo.oBBBo...',
-    '...ooo..oBBo.......oBBo..ooo....',
-    '........oBo.........oBo.........',
-    '.......oBo...........oBo........',
-    '.......oBo...........oBo........',
-    '......oBo.............oBo.......',
-    '......oBo.............oBo.......',
-    '.....oBo...............oBo......',
-    '.....oBo...............oBo......',
-    '....oBo.................oBo.....',
-    '....oBo.................oBo.....',
-    '...oBo...................oBo....',
-    '...oBo...................oBo....',
-    '..ogo.....................ogo...',
-    '.oggo.....................oggo..',
-    '.oooo.....................oooo..',
+    '.....................ooooooo....................',
+    '....................ogggggggo...................',
+    '....................ogggggggo...................',
+    '....................ogkkkkkgo...................',
+    '....................ogkckckgo...................',
+    '....................ogkkkkkgo...................',
+    '....................ogggggggo...................',
+    '...................ooggBBgggooo.................',
+    '..................oggooBBooggggo................',
+    '.............o...ogoo.oBBggoooooo...............',
+    '............ogo.ogoooooBBooooooggooo............',
+    '............ogo..ooggggBBgggggooogggoo..........',
+    '............ogooogggggggggggggggooooggo.........',
+    '...........ogoogggggggggBgggggggggo.oo..........',
+    '...........ogoggggggBBBBBBBBBggggggogo..........',
+    '........o..oggggggBBBBBBBBBBBBBgggggogoo........',
+    '.......ogo..oggggBBBBBBBBBBBBBBBggggooggo.......',
+    '.......ogo.oggggBBBBBBBBcBBBBBBBBggggooogo......',
+    '........ogooggggBBBBBBcccccBBBBBBggggo..ogo.....',
+    '.........ogoggggBBBBBcccCcccBBBBBggggoo..o......',
+    '.........ogggggBBBBBccCCCCCccBBBBBgggggo........',
+    '.......o..ooggggBBBBBcccCcccBBBBBggggogo........',
+    '......ogoo.oggggBBBBBBcccccBBBBBBggggoogo.......',
+    '.......oggooggggBBBBBBBBcBBBBBBBBggggo.ogo......',
+    '........ooggoggggBBBBBBBBBBBBBBBggggo..ogo......',
+    '..........ooggggggBBBBBBBBBBBBBggggggo..o.......',
+    '............ooggBBggBBBBBBBBBBggBBgogo..........',
+    '...........oo.oBBgggBBggBgggBBgggBBogo..........',
+    '..........oggoBBoggBBggggggggBBgoBBgo...........',
+    '...........oogBBoooBBggggggggBBo.oBBo...........',
+    '............oBBoggBBoooogooooBBgo.oBBo..........',
+    '...........oBBo.ooBBoogggo..ooBBo..oBBo.........',
+    '..........oBBo...oBBggooo..oggBBo..oBBo.........',
+    '..........oBBo..oBBooo....ogooBBo...oBBo........',
+    '.........oBBo...oBBo.......o..oBBo...oBBo.......',
+    '........oBBo...oBoBo..........oBBo...oBoBo......',
+    '.......oBBo....oBBo...........oBBo....oBBo......',
+    '......oBBo.....oBBo............oBBo....oBBo.....',
+    '......oBBo....oBBo.............oBBo.....oBBo....',
+    '.....oBBo.....oBBo.............oBBo.....oBBo....',
+    '....oBBo......oBBo..............oBBo.....oBBo...',
+    '...oBBo......oBBo...............oBBo......oBBo..',
+    '...oBBo......oBBo...............oBBo.......oBBo.',
+    '..oBBo......oBBo.................oBBo......oBBoo',
+    '.oggo.......oggo................oggggo.....ogggg',
+    '.oggo.......oggo................oggggo.....ogggg',
+    '.oggo.......oggo................oggggo.....ogggg',
+    '..oo.........oo..................oooo.......oooo',
   ],
-  head: [0, 11], headX: [8, 22], spine: [12, 16],
-  legs: [[1, 9], [5, 12], [19, 26], [22, 30]], legTop: 16,
-  arms: [[2, 6, 11, 16], [25, 29, 11, 16]], tail: null, tailX: null, fray: null,
+head: [0, 12], headX: [19, 29], spine: [8, 31],
+  legs: [[0, 8], [11, 18], [27, 35], [38, 47]], legTop: 31,
+  arms: [[0, 10, 24, 33], [37, 47, 24, 33]], tail: null, tailX: null, fray: null,
 };
 
 /* Dynamic Programming Ruins. A lion with a mask where its face should be, lying
  * where the solved tiles are already lit. Long and horizontal, gilded along the
  * back, and the only creature in the game whose head is a flat plate. *
- * NOT CURRENTLY A HUNTER. gauntlet/hunters.py gives this region a different
- * animal; this one is kept, drawn and measured so a later pass has it. */
+ * AN ELITE (§B's 32x32 rung). It was drawn in this box before the box had a
+ * name and it fills it; what changed is that something now asks for it. */
 A.memoriam = {
-  region: '', name: 'The Memoriam', unassigned: true, family: 'NEUTRAL',
+  region: '', name: 'The Memoriam', rank: 'elite', biome: 'ruins', family: 'NEUTRAL',
   gait: 'fourbeat', idle: 'breathe',
   body: 'bone', accent: 'gold', hard: 'goldleaf', core: 'gold',
   frames: 4, period: 1000, bob: 1, sway: 0, phase: 0.45,
@@ -2037,47 +2318,67 @@ A.slagmother = {
   body: 'iron', accent: 'ember', hard: 'bronze', core: 'ember',
   frames: 4, period: 1300, bob: 1, sway: 1, phase: 0.05,
   rows: [
-    '.........................oooooo.',
-    '..........oooooooo.......oggggo.',
-    '.........oggggggggo......oggggo.',
-    '.........ogBBBBBBgo......oggggo.',
-    '.........ogBwwBwwgo......ooggoo.',
-    '.........ogBeeBeego........oBo..',
-    '.........oggBBBBggo.......oBBo..',
-    '.........ogccccccgo......oaBBo..',
-    '.......ooooBBBBBoooo....oaBBo...',
-    '.....ooaaaoBBBBBoaaaooooaBBo....',
-    '..oooaaaoooBBBBBooaaaaaaBBo.....',
-    '..ogggo...oBBBBBBBoooooooo......',
-    '..ogggo..ooBBBBBBBoo............',
-    '..oggo..oaBBccccccBBao..........',
-    '..ooo..oaBBccCCCCccBBao.........',
-    '.......oaBccCkkkkCccBao.........',
-    '.......oaBccCkkkkCccBao.........',
-    '.......oaBBccCCCCccBBao.........',
-    '........oaBBccccccBBao..........',
-    '........oaBBBBBBBBBBao..........',
-    '.........oBBBBBBBBBBo...........',
-    '.........oBBBoBBBBBBo...........',
-    '........ogBBo.oBBBBgo...........',
-    '........ogBBo.oBBBBgo...........',
-    '........ogBBo.oBBBBgo...........',
-    '.......oggggo.ogggggo...........',
-    '.......oggggo.ogggggo...........',
-    '.......oooooo.oooooo............',
+    '................................ooooooooooooooo.',
+    '...............................ogggggggggggggggo',
+    '...............................ogggggggggggggggo',
+    '...............................ogaaaaaaaaaaaaago',
+    '...............................ogaaaaaaaaaaaaago',
+    '.........ooooooooooooooooo.....ogggggggggggggggo',
+    '........oLBBBBBBBLBBBBBBBLo....ogggggggggggggggo',
+    '........oLBBBBBBBBBBBBBBBLo....ogggggggggggggggo',
+    '........oBBBBBBBBBBBBBBBBBo....ogggggggggggggggo',
+    '........oBkkkkkkkBkkkkkkkBo....ogaaaaaaaaaaaaago',
+    '........oBkcccckkBkcccckkBo....ogaaaaaaaaaaaaago',
+    '........oBkcccckkBkcccckkBo...oogggggggggggggggo',
+    '........oBkcccckkBkcccckkBo..oBBLBBBgggggggggggo',
+    '........oBkkkkkkkBkkkkkkkBo..oBBLBBBooooooooooo.',
+    '........oBBBBBBBBdBBBBBBBBo.oBBBBBBo............',
+    '........odBBBBBBBDBBBBBBBdo.oBBBBBBo............',
+    '........odgggggggggggggggdooBoBoBoBo............',
+    '.....ooooDgggggggggggggggDooBBBBBLo.............',
+    '....ogggggggggggggggggggggggggggBLBo............',
+    '....ogggggggggggggggggggggggggggBBBo............',
+    '....ogaaaaaaaaaaaaaaaaaaaaaaaaagBBBo............',
+    '..ooogaaaaaaaaaaaaaaaaaaaaaaaaagBBBo............',
+    '.oLLLLLLLLLgggggggggggggggggggggBBBo............',
+    '.oLLLLLLLLLgggggggggggggggggggggBBBo............',
+    '.oBBBBBBBBBLLBBBBBBBBBBBBBBBBBBBBBBo............',
+    '.oBBBBBBBBBLLBBBBBBBBBcBBBBBBBBBBBo.............',
+    '.oBBBBBBBBBBBaaaaaaaaaaaaaaaaaaaBBo.............',
+    '.oBBBBBBBBBBBBBBccccccCccccccBBBBBo.............',
+    '.oBBBBBBBBBBBBBccccCCCCCCCccccBBBBo.............',
+    '.oBBBBBBBBBBBBccccCCCCkCCCCccccBBBo.............',
+    '.oBBBBBBBBBBBBcccCCCkkkkkCCCcccBBBo.............',
+    '.odddddddddBBBcccCCCkkkkkCCCcccBBBo.............',
+    '.odddddddddBBcccCCCkkkkkkkCCCcccBBo.............',
+    '.oDDDDDDDDDBBBcccCCCkkkkkCCCcccBBBo.............',
+    'oggggggggggBBBcccCCCkkkkkCCCcccBBBo.............',
+    'oggggggggggBBBccccCCCCkCCCCccccBBBo.............',
+    'oggggggggggBBBBccccCCCCCCCccccBBBBo.............',
+    'oggggggggggBBBBBccccccCccccccBBBBBo.............',
+    'oggggggggggdBaaaaaaaaaaaaaaaaaaaBdo.............',
+    '.oooooooooodBBBBBBBBBBcBBBBBBBBBBdo.............',
+    '..........oDBBBBBBBBBBBBBBBBBBBBBDo.............',
+    '...........oBBBBBBBBooooBBBBBBBBBo..............',
+    '...........odBBBBBBBo..oBBBBBBBBdo..............',
+    '...........odBBBBBBBo..oBBBBBBBBdo..............',
+    '...........oDBBBBBBBo..oBBBBBBBBDo..............',
+    '..........oggggggggggoogggggggggggo.............',
+    '..........oggggggggggoogggggggggggo.............',
+    '...........oooooooooo..ooooooooooo..............',
   ],
-  head: [0, 7], headX: [9, 19], spine: [8, 21],
-  legs: [[7, 13], [14, 20]], legTop: 21,
-  arms: [[2, 8, 9, 14], [20, 31, 0, 11]], tail: null, tailX: null, fray: null,
+head: [0, 18], headX: [8, 26], spine: [18, 40],
+  legs: [[11, 20], [23, 33]], legTop: 40,
+  arms: [[0, 11, 21, 38], [25, 47, 0, 24]], tail: null, tailX: null, fray: null,
 };
 
 /* Complexity Tower. A serpent stood on end: every coil above the last one costs
  * more to climb, which is the region's own rule drawn as an animal. Vertical,
  * legless, and the tallest silhouette in the game. *
- * NOT CURRENTLY A HUNTER. gauntlet/hunters.py gives this region a different
- * animal; this one is kept, drawn and measured so a later pass has it. */
+ * AN ELITE (§B's 32x32 rung). It was drawn in this box before the box had a
+ * name and it fills it; what changed is that something now asks for it. */
 A.spirewyrm = {
-  region: '', name: 'The Spirewyrm', unassigned: true, family: 'COLD',
+  region: '', name: 'The Spirewyrm', rank: 'elite', biome: 'tower', family: 'COLD',
   gait: 'slither', idle: 'coil',
   body: 'cyan', accent: 'frost', hard: 'chrome', core: 'cyan',
   frames: 4, period: 1500, bob: 0, sway: 2, phase: 0.30,
@@ -2126,38 +2427,58 @@ A.sand_champion = {
   body: 'bronze', accent: 'blood', hard: 'chrome', core: 'gold',
   frames: 4, period: 800, bob: 1, sway: 1, phase: 0.60,
   rows: [
-    '..............oaao..............',
-    '.............oaaaao.............',
-    '............oaaoaaoo............',
-    '...........oaao.oaao............',
-    '..........ooooooooooo...........',
-    '.........oggggggggggo...........',
-    '.........ogwwgggwwggo...........',
-    '.........ogeegggeeggo.....o.....',
-    '.........oggggggggggo....ogo....',
-    '..........ogggggggo.....oggo....',
-    '....oooo...oggggggo....oggggo...',
-    '...ogggo...ooBBBBoo...oggggo....',
-    '..oggggoooogBBBBBBgoooggggo.....',
-    '..ogggggggggBBccBBggggggggo.....',
-    '..oggaaaggggBBccBBgggggggo......',
-    '..ogggaaggggBBBBBBgggggggo......',
-    '..oggggggogoBBBBBBogogggo.......',
-    '..ogggggo.ogBBBBBBgo.ogo........',
-    '...ooooo..ogBBBBBBgo............',
-    '..........ogBBBBBBgo............',
-    '..........oggBBBBggo............',
-    '..........oBBBoBBBBo............',
-    '.........ogBBo.oBBBgo...........',
-    '.........ogBBo.oBBBgo...........',
-    '.........ogBBo.oBBBgo...........',
-    '........oggggo.ogggggo..........',
-    '........oggggo.ogggggo..........',
-    '........oooooo.oooooo...........',
+    '......................ooooooo...................',
+    '.....................oaaaaaaao..................',
+    '.....................oaaaaaaao..................',
+    '.....................oaaaaaaao..................',
+    '....................oaaaaaaaaao.................',
+    '....................oaaaaaaaaao.................',
+    '....................oaaaaaaaaao.................',
+    '...................oaaaaaaaaaaao................',
+    '..................ogggggggggggggo...............',
+    '..................ogggggggggggggo...............',
+    '..................ogggggggggggggo...............',
+    '..................ogggggggggggggo..ooooo........',
+    '..................ogkkkkkgkkkkkgo.ogggggo.......',
+    '..................ogkwwkkgkwwkkgo.ogggggo.......',
+    '..................ogkeekkgkeekkgo.ogaaago.......',
+    '..........o.......ogkkkkkgkkkkkgo.ogaaago.......',
+    '......oooogoooo...ogkkkkkgkkkkkgo.ogaaago.......',
+    '....oogggggggggoo.ogggggggggggggo.ogaaago.......',
+    '...ogggggggggggggoogggggggggggggo.ogaaago.......',
+    '..ogggggggBgggggggogggggggggggggooogaaago.......',
+    '.ogggggLLLaBBLggggggggggggggggggggggaaago.......',
+    '.oggggLLLLcBBBLgggggggggggggggggggggaaago.......',
+    'oggggLBBBBcBBBBLggggggggggggggggggggaaago.......',
+    'ogggBBBBBBcBBBBBgggaaaaaaaaaaaaaagggaaago.......',
+    'ogggBBBBBBcBBBBBggggggggggggggggggLgaaago.......',
+    'ogggBBBBBBcBBBBBggggggggggggggggggLgaaago.......',
+    'gggBaBBBBBCcBdBBBBLLLLBBBBBBBBLLLLBgaaago.......',
+    'ogggBBBBBBBBcDBBBBBBBBccccccccBBBBBgaaago.......',
+    'ogggBBBBBBBBBcBBBBBBBBccCCCCccBBBBBgaaago.......',
+    'ogggBdBBBBBBBBBdBBBBBBccCCCCccBBBBBgaaago.......',
+    'oggggDddddBBBBdDggBBBBccCCCCccBBBBBgaaago.......',
+    '.oggggDdddBBBBDgggBBBBccCCCCccBBBBBgaaago.......',
+    '.ogggggDDDaBBBggggddddccccccccddddBgaaago.......',
+    '..ogggggggBgggggggDDDDBBBBBBBBDDDDdgaaago.......',
+    '...ogggggggggggggoggggggggggggggggdgaaago.......',
+    '....oogggggggggoooggggggggggggggggDgggggoo......',
+    '......oooogoooo..oBLLLLLLLBLLLLLLLggggggggo.....',
+    '..........o.......oBBBBBBBoBBBBBBBggggggggo.....',
+    '..................oBBBBBBBoBBBBBBBggggggggo.....',
+    '..................oBBBBBBBoBBBBBBBggggggggo.....',
+    '..................oBBBBBBBoBBBBBBBoooooooo......',
+    '..................oBBBBBBBoBBBBBBBo.............',
+    '..................oBBBBBBBoBBBBBBBo.............',
+    '..................odddddddodddddddo.............',
+    '..................oDDDDDDDoDDDDDDDo.............',
+    '.................ogggggggggggggggggo............',
+    '.................ogggggggggggggggggo............',
+    '..................ooooooooooooooooo.............',
   ],
-  head: [0, 9], headX: [9, 20], spine: [10, 21],
-  legs: [[8, 13], [14, 20]], legTop: 21,
-  arms: [[2, 9, 10, 18], [19, 27, 7, 17]], tail: null, tailX: null, fray: null,
+head: [0, 20], headX: [18, 32], spine: [20, 36],
+  legs: [[18, 26], [26, 34]], legTop: 36,
+  arms: [[0, 21, 15, 37], [32, 43, 11, 40]], tail: null, tailX: null, fray: null,
 };
 
 /* The Null King's Castle. The brief asked for skeletons in the void, so the
@@ -2165,10 +2486,10 @@ A.sand_champion = {
  * nothing under it. Robed, so there are no legs in the outline at all — it is
  * the shade's silhouette with a skull and a crown added, which is the one place
  * in this roster where two apexes are allowed to rhyme. *
- * NOT CURRENTLY A HUNTER. gauntlet/hunters.py gives this region a different
- * animal; this one is kept, drawn and measured so a later pass has it. */
+ * AN ELITE (§B's 32x32 rung). It was drawn in this box before the box had a
+ * name and it fills it; what changed is that something now asks for it. */
 A.bonecrown = {
-  region: '', name: 'The Bonecrown', unassigned: true, family: 'VOID',
+  region: '', name: 'The Bonecrown', rank: 'elite', biome: 'castle', family: 'VOID',
   gait: 'hover', idle: 'rattle',
   body: 'bone', accent: 'void', hard: 'goldleaf', core: 'violet',
   frames: 3, period: 1700, bob: 1, sway: 1, phase: 0.70,
@@ -2222,42 +2543,58 @@ A.storm_ordinal = {
   body: 'gunmetal', accent: 'gold', hard: 'bronze', core: 'gold',
   frames: 4, period: 1200, bob: 0, sway: 1, phase: 0.35,
   rows: [
-    '.............ogo................',
-    '............ogcgo...............',
-    '...ogo......ogcgo......ogo......',
-    '..ogcgo.....ogcgo.....ogcgo.....',
-    '..ogggo.ooo.ogggo.ooo.ogggo.....',
-    '..oggo.oaggo.ogo.oggao.oggo.....',
-    '.oggo.ogggggoooogggggo.oggo.....',
-    '.oggo.oggkkggggggkkggo.oggo.....',
-    '.oggo.oggkkggkkggkkggo.oggo.....',
-    '.oggo.ogggggokkoggggo..oggo.....',
-    '..oggo..ogggokkogggo..oggo......',
-    '..oggo...ooggkkggoo...oggo......',
-    '...ogo....ooggggoo.....ogo......',
-    '...ogo.....oaBBao......ogo......',
-    '....o.....oaBBBBao......o.......',
-    '..........oBBccBBo..............',
-    '.........oaBBccBBBao............',
-    '.........oBBBccBBBBo............',
-    '.........oaBBccBBBao............',
-    '..........oBBccBBo..............',
-    '..........oBBccBBo..............',
-    '...........oBccBo...............',
-    '...........oBccBo...............',
-    '...........oBccBo...............',
-    '...........oBccBo...............',
-    '...........oBccBo...............',
-    '...........oggggo...............',
-    '............oggo................',
-    '............ogo.................',
-    '............ogo.................',
-    '.............oo.................',
-    '.............o..................',
+    '......................ogggo.....................',
+    '......................ogggo.....................',
+    '...........o..........ogggo..........o..........',
+    '..........oao........ogggggo........oao.........',
+    '.........ogggo........ogggo........ogggo........',
+    '.........ogggo.........oao.........ogggo........',
+    '.........ogggo..........o..........ogggo........',
+    '........ogggggo...................ogggggo.......',
+    '.........ogggo..........o..........ogggo........',
+    '..........oao.......oooogoooo.......oao.........',
+    '.....o.....o.......ogggggggggo.......o.....o....',
+    '....oao...........ogggggggggggo...........oao...',
+    '...ogggo.........oggggggkggggggo.........ogggo..',
+    '...ogggo........ogggggkkkkkgggggo........ogggo..',
+    '...ogggo........oggggkkkkkkkggggo........ogggo..',
+    '..ogggggo.......ogggkkkkkkkkkgggo.......ogggggo.',
+    '...ogggo.......ogggggkkkkkkkgggggo.......ogggo..',
+    '....oao.........ogggggkkkkkgggggo.........oao...',
+    '.....o.....o....oggggggkkkggggggo....o.....o....',
+    '..........oao...oggggggkkkggggggo...oao.........',
+    '.........ogggo...ogggggkkkgggggo...ogggo........',
+    '.........ogggo....oggggkkkggggo....ogggo........',
+    '.........ogggo.....ogggggggggo.....ogggo........',
+    '........ogggggo.....oBccaccBo.....ogggggo.......',
+    '.........ogggo......oBcgggcBo......ogggo........',
+    '..........oao.......oBcgggcBo.......oao.........',
+    '...........o........oBcgggcBo........o..........',
+    '....................oBgggggBo...................',
+    '....................oBcgggcBo...................',
+    '....................oBcCaCcBo...................',
+    '....................oBcCCCcBo...................',
+    '....................oBcCCCcBo...................',
+    '....................oBcCCCcBo...................',
+    '....................oBcCCCcBo...................',
+    '....................oBcCCCcBo...................',
+    '....................oBcCCCcBo...................',
+    '....................oBcCCCcBo...................',
+    '....................oBcccccBo...................',
+    '....................oBcccccBo...................',
+    '....................oBBBBBBBo...................',
+    '....................ogggggggo...................',
+    '....................ogggggggo...................',
+    '.....................ogggggo....................',
+    '.....................ogggggo....................',
+    '......................ogggo.....................',
+    '......................ogggo.....................',
+    '.......................ogo......................',
+    '........................o.......................',
   ],
-  head: [0, 14], headX: [0, 31], spine: [13, 26],
-  legs: [], legTop: 32, fray: null, tail: null, tailX: null, arms: null,
-  orbit: [[0, 31, 0, 14]],
+head: [0, 23], headX: [0, 47], spine: [20, 40],
+  legs: [], legTop: 48, fray: null, tail: null, tailX: null, arms: null,
+  orbit: [[0, 47, 0, 23]],
 };
 
 /* Array Caverns. An anvil that has been given a stoop: shoulder-heavy, short in
@@ -2270,40 +2607,58 @@ A.zeroth_weight = {
   body: 'stone', accent: 'gold', hard: 'chrome', core: 'gold',
   frames: 4, period: 1400, bob: 1, sway: 0, phase: 0.85,
   rows: [
-    '.........oooooooooooo...........',
-    '........ogggggggggggggo.........',
-    '.......oggBBBBBBBBBBggo.........',
-    '.......ogBBwwBBBBwwBBgo.........',
-    '.......ogBBeeBBBBeeBBgo.........',
-    '.......oggBBBBggBBBBggo.........',
-    '......oooggggggggggggooo........',
-    '...oooaaaooggggggggooaaaooo.....',
-    '..oaaaaaaaoBBBBBBBBoaaaaaaao....',
-    '.oaggggggaoBBBBBBBBoaggggggao...',
-    'oaggggggggoBBBBBBBBoggggggggao..',
-    'oaggggggggoBBBBBBBBoggggggggao..',
-    'oaggggggggoBBBBBBBBoggggggggao..',
-    'oaggggggg.oBBoooBBo.gggggggggo..',
-    'ooggggggo.oBoaaaoBo.oggggggoo...',
-    '.ooooooo..oBoaoaoBo..ooooooo....',
-    '..........oBoaoaoBo.............',
-    '..........oBoaaaoBo.............',
-    '.........ooBBoooBBoo............',
-    '........oaBBBBBBBBBBao..........',
-    '.......oaBBBBBBBBBBBBao.........',
-    '......oaBBBBBBBBBBBBBBao........',
-    '......oBBBBBBBBBBBBBBBBo........',
-    '......oBBBBoooooooBBBBBo........',
-    '......oBBBo.......oBBBBo........',
-    '.....ogBBBo.......oBBBBgo.......',
-    '.....ogBBBo.......oBBBBgo.......',
-    '....oggggggo.....oggggggo.......',
-    '....oggggggo.....oggggggo.......',
-    '....oooooooo.....oooooooo.......',
+    '................................................',
+    '................................................',
+    '................................................',
+    'o...............................................',
+    'goo.............................................',
+    'gggooo..........................................',
+    'ggggggoooooooooooooooooooooooooooooooooooooooooo',
+    'gggggggggggggggggggggggggggggggggggggggggggggggg',
+    'gggggggggggggggggggggggggggggggggggggggggggggggg',
+    'gggggggggggggggggggggggggggggggggggggggggggggggg',
+    'ggggggggggggaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaago',
+    'gggggggggaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaago',
+    'gggggggggggggggggggggggggggggggggggggggggggggggo',
+    'ggggggggggggggggggggggggggggggggggggggggggggggo.',
+    'goggggggggggggggggggggggggggggggggggggggggggggo.',
+    'ooggggggggggggggggggggggggggggggggggggggggggggo.',
+    '..oggggggggggggggggggggggggggggggggggggggggggo..',
+    '..oggggggggggLBBBBBLLLBBBBBLgggggggggggggggggo..',
+    '...ooooooooooLBBBBBBBBBBBBBBoogggggggggggggoo...',
+    '............oBBBBBBBBBBBBBBBoogggggggggggggo....',
+    '............oBkkkkkBBBkkkkkBoogggggggggggggo....',
+    '............oBkwwwkBBBkwwwkBoogggggggggggggo....',
+    '............oBkeeekBBBkeeekBoogggggggggggggo....',
+    '............oBkeeekBBBkeeekBoogggggggggggggo....',
+    '............oBkeeekBBBkeeekBoogggggggggggggo....',
+    '............oBLLBBBBddBBBBBdoogggggggggggggo....',
+    '............oBLLBBBdDDBBcBBDoogggggggggggggo....',
+    '...........oBBBBBBBDcccccccccBkBBLLBBoooooo.....',
+    '...........oBdBBBBBccccckcccckBBBLLBBo..........',
+    '............odBBaaaaaaaaaaaaaaaaaBBBo...........',
+    '............oDBBBccckkkkkkkkkcccBBBBo...........',
+    '.............oBBBccckkkkkkkkkcccBBBo............',
+    '.............oBBBccckkkkkkkkkcccBBBo............',
+    '.............oBBccckkkkkkkkkkkcccBBo............',
+    '.............oBBLccckkkkkkkkkcccLBBo............',
+    '.............oBBBccckkkkkkkkkcccBBBo............',
+    '.............oBBBccckkkkkkkkkcccBBBo............',
+    '.............oBBBLcckkkkkkkkcccLBBBo............',
+    '.............odBBBBkcccckcccccBBBBdo............',
+    '.............odBBBkBcccccccccBBBBBdo............',
+    '.............oDBBBBBBBBBcBBBBBBBBBDo............',
+    '..............oBBBBBBBBoooBBBBBBBBo.............',
+    '..............odBBBBBBBo.oBBBBBBBdo.............',
+    '..............odddBBBBBo.oBBBBBdddo.............',
+    '.............ooDDDBBBBBo.oBBBBBDDDoo............',
+    '............ogggggggggggogggggggggggo...........',
+    '............ogggggggggggogggggggggggo...........',
+    '.............ooooooooooo.ooooooooooo............',
   ],
-  head: [0, 8], headX: [6, 23], spine: [7, 22],
-  legs: [[4, 11], [17, 24]], legTop: 23,
-  arms: [[0, 9, 7, 15], [22, 31, 7, 15]], tail: null, tailX: null, fray: null,
+head: [0, 27], headX: [12, 28], spine: [27, 40],
+  legs: [[13, 23], [25, 35]], legTop: 40,
+  arms: [[0, 14, 4, 26], [29, 47, 7, 26]], tail: null, tailX: null, fray: null,
 };
 
 /* Sliding Window Marsh. A drowned lamp-carrier holding one corner of a frame
@@ -2317,40 +2672,58 @@ A.fenlight = {
   body: 'cloth', accent: 'venom', hard: 'bone', core: 'venom',
   frames: 4, period: 1100, bob: 1, sway: 0, phase: 0.70,
   rows: [
-    '........ooooooooooooooooo.......',
-    '.......oaaaaaaaaaaaaaaaao.......',
-    '.......ogooooooooooooooogo......',
-    '.......ogo.............ogo......',
-    '.......ogo.............ogo......',
-    '.......ogo....ooo......ogo......',
-    '.......ogo...oBBBo.....ogo......',
-    '.......ogo...oBwBo.....ogo......',
-    '.oo....ogo...oBeBogggggogo......',
-    'oaBo...ogo...oBBBoggggggogo.....',
-    '.oBo...ogo....oBBo.....ogo......',
-    '.oBo...ogo....oBBo.....ogo......',
-    '.oBo...ogo...ooBBoo....ogo......',
-    '.oBo...ogo..oaBBBBao...ogo......',
-    '.oBo...ogo.oaBBccBBao..ogo......',
-    '.oBo...ogo.oBBcCCcBBo..ogo......',
-    '.oBo...o.o.oaBBccBBao..ogo......',
-    '.oBo.......oaBBBBBBao..ogo......',
-    '.oBo........ooBBBBoo...ogo......',
-    '.oBoo........oBooBo....ogo......',
-    '.oBBo........oBo.oBo...ogo......',
-    '..oBo........oBo.oBo...ogo......',
-    '..oBo.......oBo..oBo...ogo......',
-    '..oBo.......oBo..oBo...ogo......',
-    '..oBo......oBo....oBo..ogo......',
-    '..oBo......oBo....oBo..ogo......',
-    '..oBo.....oBo.....oBo..ogo......',
-    '..oBo.....oBo.....oBo..ogo......',
-    '..oBo....oggo.....oggo.ogo......',
-    '..ooo....oooo.....oooo.ooo......',
+    '...ooooooooooooooo.............ooooooooooooooo..',
+    '..ogggggggggggggggo...........ogggggggggggggggo.',
+    '..ogggggggggggggggo...........ogggggggggggggggo.',
+    '..oggaaaaaaaaaaaggoooooooooooooggaaaaaaaaaaaggo.',
+    '..ogggggggggggggggoLBBBLLLBBBBogggggggggggggggo.',
+    '..ogggggggggggggggoBBBBLLLBBBBogggggggggggggggo.',
+    '..ogggggoooooooooooBkkkBBBkkkBooooooooooogggggo.',
+    '..oBBBBBo.........oBkwkBBBkwkBo.........oBBBBBo.',
+    '..oBBBBBo.........oBkekBBBkekBoooo......oBBBBBo.',
+    '..oBBBBBo.........oBkkkBBBkkkgggggo.....oBBBBBo.',
+    '..oBBBBBo.........oBkkkBBBkkkgggggo.....oBBBBBo.',
+    '..ogggggo.........oBBBBBBBBBBgggggo.....ogggggo.',
+    '..ogggggo.........odBBBBBBBBBgggggo.....ogggggo.',
+    '..ogggggo.........oDBBBBBBBBBBoooo......ogggggo.',
+    '..ogggggo..........oooBBBBBooo..........ogggggo.',
+    '...ooooo.............oBdddBo.............ooooo..',
+    '...ooooo.............oBdddBo.............ooooo..',
+    '..oBBBBBo........oooooBDDDBooooo........oBBBBBo.',
+    '..oBBBBBo.......oaaaaaaaaaaaaaaao.......oBBBBBo.',
+    '..oBBBBBo........ooBBBBBBBBBBBoo........oBBBBBo.',
+    '..oBBBBBo........oLBBBBBcBBBBBLo........oBBBBBo.',
+    '..ogggggo.......oBBBBcccccccBBBBo.......ogggggo.',
+    '..ogggggo.......oBBBccccCccccBBBo.......ogggggo.',
+    '..ogggggo.......oBBBccCCCCCccBBBo.......ogggggo.',
+    '..ogggggo......oBBBccCCCCCCCccBBBo......ogggggo.',
+    '..ogggggo.......oBBBccCCCCCccBBBo.......ogggggo.',
+    '..ogggggo.......oBBBccccCccccBBBo.......ogggggo.',
+    '..ogggggo.......oBdBBcccccccBBdBo.......ogggggo.',
+    '..ogggggoooooooo.oDBBBBBcBBBBBDo.oooooooogggggo.',
+    '..ogggggggggggggoooBBBBBBBBBBBooogggggggggggggo.',
+    '..ogggggggggggggoaaaaaaaaaaaaaaaogggggggggggggo.',
+    '..oggaaaaaaaaaggooLLLLBBBBBLLLLooggaaaaaaaaaggo.',
+    '..ogggggggggggggooLLLLBBBBBLLLLoogggggggggggggo.',
+    '..ogggggggggggggooBBBBBBBBBBBBBoogggggggggggggo.',
+    '...ooooooooooooo.oBBBBBBBBBBBBBo.ooooooooooooo..',
+    '.................oBBBBoooooBBBBo................',
+    '.................oBBBBo...oBBBBo................',
+    '.................oBBBBo...oBBBBo................',
+    '.................oBBBBo...oBBBBo................',
+    '.................oBBBBo...oBBBBo................',
+    '.................oBBBBo...oBBBBo................',
+    '.................oBBBBo...oBBBBo................',
+    '.................oddddo...oddddo................',
+    '.................oddddo...oddddo................',
+    '................ooDDDDoo.ooDDDDoo...............',
+    '...............oggggggggoggggggggo..............',
+    '...............oggggggggoggggggggo..............',
+    '................oooooooo.oooooooo...............',
   ],
-  head: [5, 10], headX: [11, 20], spine: [11, 19],
-  legs: [[12, 16], [17, 21]], legTop: 19,
-  arms: [[0, 5, 8, 29], [22, 27, 0, 29]], tail: null, tailX: null, fray: null,
+head: [0, 13], headX: [18, 34], spine: [13, 31],
+  legs: [[17, 24], [26, 33]], legTop: 31,
+  arms: [[2, 8, 0, 34], [40, 46, 0, 34]], tail: null, tailX: null, fray: null,
 };
 
 /* Twin Pointer Pass. Two lantern-bearers of blue ice, mirrored, walking the
@@ -2364,37 +2737,57 @@ A.rimewarden = {
   body: 'frost', accent: 'cyan', hard: 'chrome', core: 'cyan',
   frames: 4, period: 1000, bob: 1, sway: 0, phase: 0.10,
   rows: [
-    '....oooo.................oooo...',
-    '...oggggo...............oggggo..',
-    '...ogaago...............ogaago..',
-    '...oggggo...............oggggo..',
-    '....oBBo.................oBBo...',
-    '...oBwBBo...............oBBwBo..',
-    '...oBeBBo...............oBBeBo..',
-    '...oBBBBo...............oBBBBo..',
-    '..ooBBBBoo.............ooBBBBoo.',
-    '.oaBBBBBBao...........oaBBBBBBao',
-    'oaBBBBBBBBao.........oaBBBBBBBBa',
-    'oBBBBccBBBBo.........oBBBBccBBBB',
-    'oBBBcCCcBBBo.........oBBBcCCcBBB',
-    'oBBBBccBBBBo.........oBBBBccBBBB',
-    'oaBBBBBBBBao.........oaBBBBBBBBa',
-    '.oBBBBBBBBo...........oBBBBBBBBo',
-    '.oBBBBBBBBo...........oBBBBBBBBo',
-    '.oaBBBBBBao...........oaBBBBBBao',
-    '..oBBBBBBo.............oBBBBBBo.',
-    '..oBBBBBBo.............oBBBBBBo.',
-    '..oBBBBBBo.............oBBBBBBo.',
-    '..oBBBBBBo.............oBBBBBBo.',
-    '..oBBoBBBo.............oBBBoBBo.',
-    '..oBo.oBBo.............oBBo.oBo.',
-    '..oBo.oBBo.............oBBo.oBo.',
-    '..oBo.oBBo.............oBBo.oBo.',
-    '.oggo.oggo.............oggo.oggo',
-    '.oooo.oooo.............oooo.oooo',
+    '................................................',
+    '...ooooooooooooo................ooooooooooooo...',
+    '..ogggggggggggggo..............ogggggggggggggo..',
+    '..ogggggggggggggo..............ogggggggggggggo..',
+    '..ogggggggggggggo..............ogggggggggggggo..',
+    '..ogggggggggggggo..............ogggggggggggggo..',
+    '..oggkkkkgkkkkggo..............oggkkkkgkkkkggo..',
+    '..oggkwwkgkwwkggo..............oggkwwkgkwwkggo..',
+    '..oggkeekgkeekggo..............oggkeekgkeekggo..',
+    '..oggkkkkgkkkkggo..............oggkkkkgkkkkggo..',
+    '..oggkkkkgkkkkggo..............oggkkkkgkkkkggo..',
+    '..ogggggggggggggo..............ogggggggggggggo..',
+    '..ogaaaaaaaaaaago..............ogaaaaaaaaaaago..',
+    'ooogaaaaaaaaaaagooo..........ooogaaaaaaaaaaagooo',
+    'gggggggggggggggggggo........oggggggggggggggggggg',
+    'gggggggggggggggggggo........oggggggggggggggggggg',
+    'gggggggggggggggggggo........oggggggggggggggggggg',
+    'gaaaaaaaaaaaaaaaaago........ogaaaaaaaaaaaaaaaaag',
+    'gggggggggggggggggggo........oggggggggggggggggggg',
+    'gggggggggggggggggggooo....oooggggggggggggggggggg',
+    'gggggggggggggggBLLBBBBo..oBBBBLLBggggggggggggggg',
+    'oLLBBBBBBcBBBBBBLLBBBBooooBBBBLLBBBBBBcBBBBBBLLo',
+    'oLLBBBcccccccBBBBBggggggggggggBBBBBcccccccBBBLLo',
+    'oBBBBcccccccccBBBBggggggggggggBBBBcccccccccBBBBo',
+    'oBBBcccccCcccccBBBgccccggccccgBBBcccccCcccccBBBo',
+    'oBBBcccCCCCCcccBBBgccccggccccgBBBcccCCCCCcccBBBo',
+    'oBBBcccCCCCCcccBBBgcCCcggcCCcgBBBcccCCCCCcccBBBo',
+    'oBBcccCCCCCCCcccBBgcCCcggcCCcgBBcccCCCCCCCcccBBo',
+    'oBBLcccCCCCCcccLBBgcCCcggcCCcgBBLcccCCCCCcccLBBo',
+    'oBBLcccCCCCCcccLBBgccccggccccgBBLcccCCCCCcccLBBo',
+    'oBBBcccccCcccccBBBgccccggccccgBBBcccccCcccccBBBo',
+    'oBBBLcccccccccLBBBggggggggggggBBBLcccccccccLBBBo',
+    'oBBBLLcccccccLLBBBggggggggggggBBBLLcccccccLLBBBo',
+    'oBBBBLLLLcLLLLBBBBooooooooooooBBBBLLLLcLLLLBBBBo',
+    'odBBBBLLLBLLLBBBBdo..........odBBBBLLLBLLLBBBBdo',
+    'odBBBBBBBBBBBBBBBdo..........odBBBBBBBBBBBBBBBdo',
+    'oDBBBBBBBBBBBBBBBDo..........oDBBBBBBBBBBBBBBBDo',
+    '.oBBBBBBBoBBBBBBBo............oBBBBBBBoBBBBBBBo.',
+    '.oBBBBBBBoBBBBBBBo............oBBBBBBBoBBBBBBBo.',
+    '.oBBBBBBBoBBBBBBBo............oBBBBBBBoBBBBBBBo.',
+    '.oBBBBBBBoBBBBBBBo............oBBBBBBBoBBBBBBBo.',
+    '.oBBBBBBBoBBBBBBBo............oBBBBBBBoBBBBBBBo.',
+    '.odddddddodddddddo............odddddddodddddddo.',
+    '.odddddddodddddddo............odddddddodddddddo.',
+    '.oDDDDDDDoDDDDDDDo............oDDDDDDDoDDDDDDDo.',
+    'ogggggggggggggggggo..........ogggggggggggggggggo',
+    'ogggggggggggggggggo..........ogggggggggggggggggo',
+    '.ooooooooooooooooo............ooooooooooooooooo.',
   ],
-  head: [0, 8], headX: [0, 31], spine: [9, 22],
-  legs: [[2, 9], [22, 29]], legTop: 22,
+head: [0, 14], headX: [0, 47], spine: [14, 36],
+  legs: [[0, 17], [30, 47]], legTop: 36,
   arms: null, tail: null, tailX: null, fray: null,
 };
 
@@ -2409,40 +2802,58 @@ A.relighter = {
   body: 'stone', accent: 'gold', hard: 'goldleaf', core: 'gold',
   frames: 4, period: 1200, bob: 1, sway: 0, phase: 0.45,
   rows: [
-    '.....................o..........',
-    '....................ogo.........',
-    '...................ogggo........',
-    '..................oggcggo.......',
-    '..................oggcggo.......',
-    '...................ogggo........',
-    '....................ogo.........',
-    '.........oooo.......ogo.........',
-    '........oBBBBo.....ogo..........',
-    '........oBwBwo.....ogo..........',
-    '........oBeBeo....ogo...........',
-    '........oBBBBo....ogo...........',
-    'ooooooooooBBoooooogo............',
-    'oaaaaaaaaoBBBoaaaogo............',
-    'ooooooooooBBBoooogo.............',
-    '.........oBBBBBo.ogo............',
-    '........oaBBBBBao.o.............',
-    '.......oAoAoAoAoAo..............',
-    '.......oAoAoAoAoAo..............',
-    '.......oAoAoAoAoAo..............',
-    '......oAoAoAoAoAoAo.............',
-    '......oAoAoAoAoAoAo.............',
-    '......oooooooooooooo............',
-    '.......oBo......oBo.............',
-    '.......oBo......oBo.............',
-    '.......oBo......oBo.............',
-    '.......oBo......oBo.............',
-    '.......oBo......oBo.............',
-    '......oggo......oggo............',
-    '......oooo......oooo............',
+    '..................................oooooooooo....',
+    '.................................oggggggggggo...',
+    '.................................ogaaaaaaaago...',
+    '..................ooo............oggkkkkkkggo...',
+    '.................oLcLo...........oggkkkkkkggo...',
+    '.................oLCLo...........oggkkkkkkggo...',
+    '.................oBcBo...........oggkkkkkkggo...',
+    '.............oooooBoBooooo.......oggggggggggo...',
+    '............oLLBBBBLBBBBLLo......oggggggggggo...',
+    '............oLLBBBBLBBBBLLo.....oBBBoooooooo....',
+    '............oBBBBBBBBBBBBBo....oBBBo............',
+    '............oBBkkkBBBkkkBBo...oBBBo.............',
+    '............oBBwwkBBBwwkBBo..oBBBo..............',
+    '............oBBeekBBBeekBBo.oBBBo...............',
+    '............oBBkkkBBBkkkBBooBBBo................',
+    '............oBBkkkBBBkkkBBoBBBo.................',
+    '............oBBkkkBBBkkkBBBBBo..................',
+    '............oBBBBBBBBBBBBBBBo...................',
+    '............oBBBBBBBBBBBBBBo....................',
+    '............oBBBBBBBBBBBBBo.....................',
+    '...ooooooooooddBBBdddBBBddoooooo................',
+    '..oBBBBBBBBBBddBBBdddBBBddBBBBBBo...............',
+    '..oBBBBBBBBBBDDBBBDDDBBBDDBBBBBBo...............',
+    '..oBaaaaaaaaaaaaaaaaaaaaaaaaaaaBo...............',
+    '..oBBBBBBBBBBBBBBBBBBBBBBBBBBBBBo...............',
+    '..oBBBBBBBBBBBBBBBBBBBBBBBBBBBBBo...............',
+    '...oAAAAAoAAAAAoAAAAAoAAAAAoAAAAAo..............',
+    '...oAAcAAoAAcAAoAAcAAoAAcAAoAAcAAo..............',
+    '...oAAAAAoAAAAAoAAAAAoAAAAAoAAAAAo..............',
+    '....oooAAAAAoAAAAAoAAAAAoAAAAAooo...............',
+    '......oAAcAAoAAcAAoAAcAAoAAcAAo.................',
+    '....oooAAAAAoAAAAAoAAAAAoAAAAAooo...............',
+    '...oAAAAAoAAAAAoAAAAAoAAAAAoAAAAAo..............',
+    '...oAAcAAoAAcAAoAAcAAoAAcAAoAAcAAo..............',
+    '...oAAAAAoAAAAAoAAAAAoAAAAAoAAAAAo..............',
+    '....oooAAAAAoAAAAAoAAAAAoAAAAAooo...............',
+    '......oAAcLLLLAcAAoAALLLLAAcAAo.................',
+    '......oAAABBBBAAAAoAABBBBAAAAAo.................',
+    '.......oooBBBBoooo.ooBBBBooooo..................',
+    '.........oBBBBo.....oBBBBo......................',
+    '.........oBBBBo.....oBBBBo......................',
+    '.........oBBBBo.....oBBBBo......................',
+    '.........oBBBBo.....oBBBBo......................',
+    '.........oddddo.....oddddo......................',
+    '.........oDDDDoooo..oDDDDoooo...................',
+    '.........oggggggggo.oggggggggo..................',
+    '.........oggggggggo.oggggggggo..................',
+    '..........oooooooo...oooooooo...................',
   ],
-  head: [7, 12], headX: [7, 14], spine: [12, 22],
-  legs: [[6, 10], [14, 19]], legTop: 23,
-  arms: [[16, 23, 0, 17]], tail: null, tailX: null, fray: null,
+head: [0, 20], headX: [12, 26], spine: [21, 38],
+  legs: [[9, 18], [20, 29]], legTop: 36,
+  arms: [[18, 44, 0, 24]], tail: null, tailX: null, fray: null,
 };
 
 /* Complexity Tower. A thin cold figure on the stair, and behind it another
@@ -2457,41 +2868,58 @@ A.the_doubling = {
   body: 'cyan', accent: 'frost', hard: 'chrome', core: 'cyan',
   frames: 4, period: 1500, bob: 1, sway: 0, phase: 0.30,
   rows: [
-    '....................oooooooo....',
-    '.................ooaaaaaaaaaao..',
-    '...............ooaaaaaaaaaaaaao.',
-    '..............oaaaaaaaaaaaaaaaao',
-    '.............oaaaaaaaaaaaaaaaaaa',
-    '.............oaaaaaaaaaaaaaaaaaa',
-    '.............oaaaaaaaaaaaaaaaaaa',
-    '.............oaaaaaaaaaaaaaaaaaa',
-    '..............oaaaaaaaaaaaaaaaaa',
-    '...............oaaaaaaaaaaaaaaaa',
-    '................ooaaaaaaaaaaaaaa',
-    '..ooooo............oaaaaaaaaaaaa',
-    '..oBBBo...........oaaaaaaaaaaaaa',
-    '..oBwBo..........oaaaaaaaaaaaaaa',
-    '..oBeBo.........oaaaaaaaaaaaaaaa',
-    '..oBBBo........oaaaaaaaaaaaaaaaa',
-    '.ooBBBoo......oaaaaaaaaaaaaaaaaa',
-    'oaBBBBBao....oaaaaaaaaaaaaaaaaaa',
-    'oBBBccBBo....oaaaaaaaaaaaaaaaaaa',
-    'oBBcCCcBo....oaaaaaaaaaaaaaaaaaa',
-    'oBBBccBBo....oaaaaaaaaaaaaaaaaaa',
-    'oaBBBBBao....oaaaaaaaaaaaaaaaaaa',
-    '.oBBBBBoo....oaaaaaaaaaaaaaaaaaa',
-    '.oBBBBBo.....oaaaaaaaaaaaaaaaaaa',
-    '.oBBBBBo.....oaaaaaaaaaaaaaaaaaa',
-    '.oBBoBBo.....oaaaaaaaaaaaaaaaaaa',
-    '.oBo.oBo.....oaaaaaaaaaaaaaaaaaa',
-    '.oBo.oBo.....oaaaaaaaaaaaaaaaaaa',
-    '.oBo.oBo.....oaaaaaaaaaaaaaaaaaa',
-    'oggo.oggo....oaaaaaaaaaaaaaaaaaa',
-    'oooo.oooo....oaaaaaaaaaaaaaaaaaa',
+    '...................oaaaaooooaaaaooooaaaao.......',
+    '...................oaaaaooooaaaaooooaaaao.......',
+    '...................oaaaaaaaaaaaaaaaaaaaao.......',
+    '...................oaaaaaaaaaaaaaaaaaaaao.......',
+    '...................oaaaaaaaaaaaaaaaaaaaao.......',
+    '................ooooaaaaaaaaaaaaaaaaaaaaoooo....',
+    '...............oaaaaaaaaaaaaaaaaaaaaaaaaaaaao...',
+    '...............oaaaaaaaaaaaaaaaaaaaaaaaaaaaao...',
+    '...............oaaaaaaaaaaaaaaaaaaaaaaaaaaaao...',
+    '...............oaaaaaaaaaaaaaaaaaaaaaaaaaaaao...',
+    '................ooaaaaaaaaaaaaaaaaaaaaaaaaoo....',
+    '.................oaaaaaaaaaaaaaaaaaaaaaaaao.....',
+    '...oooooooooo....oaaaaaaaaaaaaaaaaaaaaaaaao.....',
+    '..oLLBBLLBBLLo...oaaaaaaaaaaaaaaaaaaaaaaaao.....',
+    '..oLLBBLLBBLLo...oaaaaaaaaaaaaaaaaaaaaaaaao.....',
+    '..oBBBBBBBBBBo...oaaaaaaaaaaaaaaaaaaaaaaaao.....',
+    '..oBBBBBBBBBBo...oaaaaaaaaaaaaaaaaaaaaaaaao.....',
+    '..oBBBBBBBBBBo...oaaaaaaaaaaaaaaaaaaaaaaaao.....',
+    '..oBBBBBBBBBBo...oaaaaaaaaaaaaaaaaaaaaaaaao.....',
+    '..oBBkkBBkkBBo...oaaaaaaaaaaaaaaaaaaaaaaaao.....',
+    '..oBBwkBBwkBBo...oaaaaaaaaaaaaaaaaaaaaaaaao.....',
+    '..oBBeBBBeBBBo...oaaaaaaaaaaaaaaaaaaaaaaaao.....',
+    '.ooddBBddBBddoo..oaaaaaaaaaaaaaaaaaaaaaaaao.....',
+    'oBBddBBddBBddLBo.oaaaaaaaaaaaaaaaaaaaaaaaao.....',
+    'oBBDDBBDDBBDDLBo.oaaaaaaaaaaaaaaaaaaaaaaaao.....',
+    '.oaaaaaaaaaaaBo..oaaaaaaaaaaaaaaaaaaaaaaaao.....',
+    '.oLLBBBBBBBBBBo..oaaaaaaaaaaaaaaaaaaaaaaaao.....',
+    '.oBBBBBBcBBBBBo..oaaaaaaaaaaaaaaaaaaaaaaaao.....',
+    '.oBBBBcccccBBBo..oaaaaaaaaaaaaaaaaaaaaaaaao.....',
+    '.oBBBcccCcccBBo..oaaaaaaaaaaaaaaaaaaaaaaaao.....',
+    '.oBBBccCCCccBBo..oaaaaaaaaaaaaaaaaaaaaaaaao.....',
+    '.oBBccCCCCCccBo..oaaaaaaaaaaaaaaaaaaaaaaaao.....',
+    '.oBBBccCCCccBBo..oaaaaaaaaaaaaaaaaaaaaaaaao.....',
+    '.oddBcccCcccBBo..oaaaaaaaaaaaaaaaaaaaaaaaao.....',
+    '.oDDBBcccccBBBo..oaaaaaaaaaaaaaaaaaaaaaaaao.....',
+    '.oaaaaaaaaaaaBo..oaaaaaaaaaaaaaaaaaaaaaaaao.....',
+    '.oLLLLLBLLLLLdo..oaaaaaaaaaaaaaaaaaaaaaaaao.....',
+    '.oBBBBBBBBBBBdooooaaaaaaaaaaaaaaaaaaaaaaaaoooooo',
+    '.oBBBBBBBBBBBDaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    '.oBBBBBoBBBBBoaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    '.oBBBBBoBBBBBoaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    '.oBBBBBoBBBBBoaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    '.oBBBBBoBBBBBoaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    '.odddddodddddoaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    '.oDDDDDoDDDDDoaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'oggggggggggggggaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'oggggggggggggggaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    '.oooooooooooooaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
   ],
-  head: [11, 17], headX: [1, 8], spine: [16, 28],
-  legs: [[1, 4], [5, 8]], legTop: 25,
-  front: [0, 8, 11, 30], arms: null, tail: null, tailX: null, fray: null,
+head: [13, 24], headX: [1, 14], spine: [24, 46],
+  legs: [[1, 7], [7, 15]], legTop: 39,
+  front: [0, 15, 12, 47], arms: null, tail: null, tailX: null, fray: null,
 };
 
 /* The Null King's Castle. A tall absence in the shape of a knight, carrying
@@ -2507,39 +2935,57 @@ A.the_unnamed = {
   frames: 3, period: 1800, bob: 2, sway: 1, phase: 0.60,
   oy: 0,
   rows: [
-    '............oooooo..............',
-    '..........ookkkkkkoo............',
-    '.........okkkkkkkkkko...........',
-    '.........okkkccckkkko...........',
-    '.........okkcwwwckkko...........',
-    '.........okkkccckkkko...........',
-    '.........okkkkkkkkkko...........',
-    '..........okkkkkkkko............',
-    '..........ookkkkkkoo............',
-    '.......ooooooBBBBoooooo.........',
-    '.....ooBBBBBoBBBBoBBBBBoo.......',
-    '...ooBBBBBBBoBBBBoBBBBBBBoo.....',
-    '..oBBBBBBBBBoBBBBoBBBBBBBBBo....',
-    '.oBBBBBBBBBBBBBBBBBBBBBBBBBBo...',
-    '.oBBBBBoooooooooooooooooBBBBo...',
-    'oBBBBBo................oBBBBBo..',
-    'oBBBBo..................oBBBBo..',
-    'oBBBBo..................oBBBBo..',
-    'oBBBBo..................oBBBBo..',
-    'oBBBBoooooooooooooooooooooBBBo..',
-    'oBBBBBBBBBBBBBBBBBBBBBBBBBBBBo..',
-    '.oBBBBBBBBBBBBBBBBBBBBBBBBBBo...',
-    '.oBBBBBBBBBBBBBBBBBBBBBBBBBo....',
-    '..oBBBBBBBBBBBBBBBBBBBBBBBo.....',
-    '..oBBBBBBBBBBBBBBBBBBBBBBo......',
-    '...oBBBBBBBBBBBBBBBBBBBBo.......',
-    '...oBBBBBBBBBBBBBBBBBBBo........',
-    '....oBBBoBBBoBBBoBBBoBBo........',
-    '.....o..o.o..o.o..o.o..o........',
-    '.....................o..........',
+    '..............okkkkkkkkkkkkkkkkkkko.............',
+    '..............okkkkkkkkkkkkkkkkkkko.............',
+    '..............okkkkkkkkkkkkkkkkkkko.............',
+    '..............okkkkkkkkkkkkkkkkkkko.............',
+    '..............okkkkkkkkkckkkkkkkkko.............',
+    '..............okkkkkkccccccckkkkkko.............',
+    '..............okkkkkccccwcccckkkkko.............',
+    '..............okkkkkcccwwwccckkkkko.............',
+    '..............okkkkcccwwwwwccckkkko.............',
+    '..............okkkkkcccwwwccckkkkko.............',
+    '..............okkkkkccccwcccckkkkko.............',
+    '..............okkkkkkccccccckkkkkko.............',
+    '..............okkkkkkkkkckkkkkkkkko.............',
+    '............oookkkkkkkkkkkkkkkkkkkooo...........',
+    '...........oLLLLLLLLLLLLLLLLLLLLLLLLLo..........',
+    '..........oLBBBBBBBBBBBBBBBBBBBBBBBBBLo.........',
+    '.........oBBBBBBBBBBBBBBBBBBBBBBBBBBBBBo........',
+    '........oBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBo.......',
+    '.......oBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBo......',
+    '.....ooBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBoo....',
+    '....oLBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBLo...',
+    '....oLBBBBBdddddddddddddddddddddddddddBBBBBLo...',
+    '....oBBBBBBDDDDDDDDDDDDDDDDDDDDDDDDDDDBBBBBBo...',
+    '....oBaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaBo...',
+    '....oBLLLLLBBBBBBBBBBBBBBBBBBBBBBBBBBBLLLLLBo...',
+    '....oBLLLLLBBBBBBBBBBBBBBBBBBBBBBBBBBBLLLLLBo...',
+    '....oBBBBBBoooooooooooooooooooooooooooBBBBBBo...',
+    '....oBBBBBBo.........................oBBBBBBo...',
+    '....oBBBBBBo.........................oBBBBBBo...',
+    '...oLBBBBBBo.........................oBBBBBBLo..',
+    '...oBBBBBBBo.........................oBBBBBBBo..',
+    '...oBBBBBBBo.........................oBBBBBBBo..',
+    '..oBBBBBBBBo.........................oBBBBBBBBo.',
+    '..oBBBBBBBBo.........................oBBBBBBBBo.',
+    '..oBBBBBBBBo.........................oBBBBBBBBo.',
+    '.oLBBddddddo.........................oddddddBBLo',
+    '.oBBdddddddo.........................odddddddBBo',
+    '.oBBDDDDDDDoooooooooooooooooooooooooooDDDDDDDBBo',
+    'oBBaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaBB',
+    'oBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
+    'oBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
+    'BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
+    'BBdBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBdB',
+    'BBDBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBDB',
+    'oooooooooooooooooooooooooooooooooooooooooooooooo',
+    '................................................',
+    '................................................',
+    '................................................',
   ],
-  head: [0, 9], headX: [8, 22], spine: [9, 27],
-  legs: [], legTop: 32, fray: [26, 29], arms: null, tail: null, tailX: null,
+head: [0, 16], headX: [13, 35], spine: [16, 44],
+  legs: [], legTop: 48, fray: [40, 45], arms: null, tail: null, tailX: null,
 };
 
 /* The apex fallback. The same unmarked body as `strayling`, in the apex box, so
@@ -2552,28 +2998,59 @@ A.strayapex = {
   gait: 'lumber', idle: 'breathe',
   body: 'cloth', accent: 'cloth', hard: 'bone', core: null,
   frames: 4, period: 900, bob: 1, sway: 0, phase: 0.00,
-  oy: 6,
+  oy: 0,
   rows: [
-    '.........ooooooooooo............',
-    '.......ooBBBBBBBBBBBoo..........',
-    '......oBBBBBBBBBBBBBBBo.........',
-    '.....oBBBBBBBBBBBBBBBBBo........',
-    '.....oBBwBBBBBBBBBBBwBBo........',
-    '.....oBBeBBBBBBBBBBBeBBo........',
-    '.....oBBBBBBBBBBBBBBBBBo........',
-    '.....oBBBBBBBBBBBBBBBBBo........',
-    '......oBBBBBBBBBBBBBBBo.........',
-    '......oBBBBBBBBBBBBBBBo.........',
-    '......oBBBoBBBBBBBoBBBo.........',
-    '......oBBo.oBBBBBo.oBBo.........',
-    '......oBBo.oBBBBBo.oBBo.........',
-    '......oBBo.oBBBBBo.oBBo.........',
-    '......oBBo.oBBBBBo.oBBo.........',
-    '......oggo.ogggggo.oggo.........',
-    '......oooo.ooooooo.oooo.........',
+    '................................................',
+    '................................................',
+    '................................................',
+    '........................o.......................',
+    '...................oooooLooooo..................',
+    '.................ooLLLLLLLLLLLoo................',
+    '................oLLLLLLLBLLLLLLLo...............',
+    '...............oLLLBBBBBBBBBBBLLLo..............',
+    '..............oLLBBBBBBBBBBBBBBBLLo.............',
+    '.............oLLBBBBBBBBBBBBBBBBBLLo............',
+    '............oLLBBBBBBBBBBBBBBBBBBBLLo...........',
+    '............oLBBBBBBBBBBBBBBBBBBBBBLo...........',
+    '...........oLBBBBBBBBBBBBBBBBBBBBBBBLo..........',
+    '...........oBBBBBBBBBBBBBBBBBBBBBBBBBo..........',
+    '...........oBBBBBBBBBBBBBBBBBBBBBBBBBo..........',
+    '...........oBBBBBBBBBBBBBBBBBBBBBBBBBo..........',
+    '..........oBBBBBBBBBBBBBBBBBBBBBBBBBBBo.........',
+    '...........oBBBBBBBBBBBBBBBBBBBBBBBBBo..........',
+    '...........oBBBBBBBBBBBBBBBBBBBBBBBBBo..........',
+    '...........odBBBBBBBBBBBBBBBBBBBBBBBdo..........',
+    '...........oDdBBBBBBBBBBBBBBBBBBBBBdDo..........',
+    '............odBBBBBBBBBBBBBBBBBBBBBdo...........',
+    '............oDBBBBBBBBBBBBBBBBBBBBBDo...........',
+    '...........oooBBBBBBBBBBBBBBBBBBBBBooo..........',
+    '..........oLLLBBBBBBBBBBBBBBBBBBBBBLLLo.........',
+    '..........oLLLBBBBBBBBBBBBBBBBBBBBBLLLo.........',
+    '..........oBBBBBBBBBBBBBBBBBBBBBBBBBBBo.........',
+    '.........oLBBBBBBBBBBBBBBBBBBBBBBBBBBBLo........',
+    '.........oLBBBBBBBBBBBBBBBBBBBBBBBBBBBLo........',
+    '.........oBBBBBBBBBBBBBBBBBBBBBBBBBBBBBo........',
+    '........oLBBBBBBBBBBBBBBBBBBBBBBBBBBBBBLo.......',
+    '........oLBBBBBBBBBBBBBBBBBBBBBBBBBBBBBLo.......',
+    '........oBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBo.......',
+    '.......oLBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBLo......',
+    '.......oLBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBLo......',
+    '.......oBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBo......',
+    '......oLBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBLo.....',
+    '......oBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBo.....',
+    '......oBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBo.....',
+    '.....oBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBo....',
+    '.....oBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBo....',
+    '.....oBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBo....',
+    '....oBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBo...',
+    '....oBBBdddddddddddddddddddddddddddddddddBBBo...',
+    '....oBBdddddddddddddddddddddddddddddddddddBBo...',
+    '...oBBBDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDBBBo..',
+    '....ooooooooooooooooooooooooooooooooooooooooo...',
+    '................................................',
   ],
-  head: [0, 9], headX: [5, 22], spine: [1, 10],
-  legs: [[6, 9], [11, 17], [19, 22]], legTop: 10,
+head: [0, 20], headX: [11, 37], spine: [20, 45],
+  legs: [[8, 22], [25, 39]], legTop: 40,
   tail: null, tailX: null, fray: null, arms: null,
 };
 
@@ -2613,22 +3090,40 @@ for (const key of Object.keys(M)) {
   place(M[key], MON_SIZE);
 }
 for (const key of Object.keys(A)) {
-  A[key].key = key; A[key].size = APEX_SIZE; A[key].apex = true;
-  place(A[key], APEX_SIZE);
+  A[key].key = key;
+  A[key].rank = A[key].rank || 'apex';
+  A[key].size = A[key].rank === 'elite' ? ELITE_SIZE : APEX_SIZE;
+  A[key].apex = true;
+  place(A[key], A[key].size);
 }
 
 /** Every creature, mob and apex, keyed by its own name. */
 export const MONSTERS = Object.assign({}, M, A);
 export const MOB_KEYS = Object.keys(M).filter(k => !M[k].fallback);
 export const APEX_KEYS = Object.keys(A)
-  .filter(k => !A[k].fallback && !A[k].unassigned && A[k].region);
+  .filter(k => !A[k].fallback && A[k].rank === 'apex' && A[k].region);
 
-/* Authored, good, and not currently the hunter of anywhere. Kept rather than
- * deleted: gauntlet/hunters.py reassigns its seventeen freely and a later pass
- * that wants a second apex tier, a dungeon set piece or a region nobody has
- * written yet gets these for nothing. They are excluded from APEX_KEYS so the
- * count still equals the number of regions. */
-export const APEX_UNASSIGNED = Object.keys(A).filter(k => A[k].unassigned);
+/* THE ELITE RUNG, and where it came from.
+ *
+ * It was not invented for this pass and it is not a second apex tier. Two
+ * things were already true and nobody had put them beside each other:
+ *
+ *   1. `overworld.js` spawns markers of kind 'elite' and draws them with
+ *      `monsterart.pickFor(region, ...)` — which returns a MOB — tinted
+ *      '#d84a7a'. An elite has been an ordinary monster wearing a pink filter.
+ *   2. Seven apex-class bodies in this file were authored at 32x32, measured,
+ *      and assigned to nothing, because hunters.py named a different animal for
+ *      each of their regions.
+ *
+ * §B calls 4x4 tiles `elite`. Moving the seventeen hunters up to the 48x48 apex
+ * rung vacates 32x32, and the seven bodies already standing in it are what an
+ * elite marker should have been fielding all along. Only ONE was drawn for this
+ * pass — `kilnwalker`, because six of the seven elements had a spare body and
+ * FIRE did not.
+ *
+ * `APEX_UNASSIGNED` is the name this list used to have and still answers to. */
+export const ELITE_KEYS = Object.keys(A).filter(k => A[k].rank === 'elite');
+export const APEX_UNASSIGNED = ELITE_KEYS;
 export const MONSTER_KEYS = Object.keys(MONSTERS);
 
 /* The shape class of each creature, which is what an alias resolves TO.
@@ -2715,6 +3210,22 @@ export const BIOME_ROSTER = {
 /** The region's apex, by region id. */
 export const REGION_APEX = {};
 for (const key of APEX_KEYS) REGION_APEX[A[key].region] = key;
+
+/** The elite a BIOME fields, keyed the way BIOME_ROSTER is.
+ *
+ * Seven bodies over seventeen biomes, so the two biomes that share an element
+ * share its elite — exactly the compromise BIOME_ROSTER already makes with the
+ * mobs, and for the same reason: an element that fields two different elites
+ * would be inventing creatures to fill a table rather than to be fought. COLD
+ * is the one element with two, because it was drawn with two, and the Pass gets
+ * the one whose comment names the Pass. */
+export const BIOME_ELITE = {};
+for (const key of ELITE_KEYS) BIOME_ELITE[A[key].biome] = key;
+for (const [biome, element] of Object.entries(BIOME_ELEMENT)) {
+  if (BIOME_ELITE[biome]) continue;
+  const sib = ELITE_KEYS.find(k => A[k].family === element);
+  if (sib) BIOME_ELITE[biome] = sib;
+}
 
 /** The apexes' display names, for a UI that wants to print one before
  *  gauntlet/hunters.py has opinions of its own. hunters.py wins wherever it
@@ -2933,6 +3444,32 @@ export function apexKeyFor(region, opts) {
   return resolveMonster(region, o).key;
 }
 
+/** The elite a region fields, by region id, biome, or a row carrying either.
+ *
+ *  Returns '' — not a creature — for a place this module does not know. There
+ *  is no unmarked elite body and there is not going to be one invented on the
+ *  spot: handing back a real species so the caller's layout does not move is
+ *  the exact lie `strayling` and `strayapex` exist to avoid, and a caller that
+ *  gets '' already knows what to draw, because it was drawing a mob before it
+ *  asked. `monsterFrame(eliteKeyFor(r) || pickFor(r, seed), ...)` is the whole
+ *  migration.
+ *
+ *  WHAT THIS IS FOR, precisely: `overworld.js` draws an `elite` marker with
+ *  `pickFor()`, which returns a 24x24 MOB, and separates it from an ordinary
+ *  encounter with a pink colour override. That is a tint doing a silhouette's
+ *  job. The change is two lines and it belongs to whoever owns overworld.js:
+ *
+ *      const key = m.kind === 'elite'
+ *        ? (monsterart.eliteKeyFor(regionId) || monsterart.pickFor(regionId, seed))
+ *        : monsterart.pickFor(regionId, seed);
+ *
+ *  `monsterSize()` already answers 32 for it and the marker's own draw code
+ *  already reads that, so nothing else there moves. */
+export function eliteKeyFor(region, opts) {
+  const biome = biomeOf(region || (opts && opts.region) || '');
+  return (biome && own(BIOME_ELITE, biome)) || '';
+}
+
 /** Deterministic roster pick. Same region and same seed, same creature, every
  *  run — a spawn table can call this from a draw path without reaching for
  *  Math.random, which is not allowed here. */
@@ -3056,13 +3593,26 @@ function thicken(grid, w) {
 
 /* A sparse ring outside the outline. Sparse because a solid ring is a halo and
  * a halo is a blob: every third candidate cell by a hash of its own coordinates,
- * so it is stable frame to frame and identical on two runs. */
-function aura(grid, seed, density, w) {
+ * so it is stable frame to frame and identical on two runs.
+ *
+ * `floorGuard` keeps it off the last row of the box. A creature whose gait is
+ * `hover` is making a claim — that it does not touch the ground — and the aura
+ * is the one pass that can break that claim without any authored cell moving:
+ * it runs LAST, outside the outline that thicken() has already pushed out by
+ * one, so a body drawn with two rows of clearance ends up with none. The
+ * Bonecrown was exactly that: 30 authored rows in a 32 box, thicken() onto row
+ * 30, aura onto row 31, and the rendered sprite resting on the floor line in
+ * five of its eight frames while monsterGrid() — which is the pre-thicken,
+ * pre-aura grid — went on reporting touchesFloor false. The guard costs two to
+ * five decorative specks on one row of one creature and costs no authored art
+ * at all, which is why it is here rather than in the rows above. */
+function aura(grid, seed, density, w, floorGuard) {
   const src = rowsOf(grid, w);
   const h = src.length;
   const out = src.map(r => r.split(''));
   const at = (y, x) => (y < 0 || y >= h || x < 0 || x >= w) ? '.' : src[y][x];
-  for (let y = 0; y < h; y++) {
+  const lastRow = floorGuard ? h - 1 : h;
+  for (let y = 0; y < lastRow; y++) {
     for (let x = 0; x < w; x++) {
       if (!EMPTY_CH(src[y][x])) continue;
       let touch = 0;
@@ -3504,7 +4054,7 @@ export const MON_FRAME_COUNT = 4;
  *  player actually looks at while reading a problem statement. */
 export const MON_IDLE_FRAMES = 4;
 
-/** The mirrored box for a creature. Mobs 24, apexes 32. */
+/** The mirrored box for a creature. Mobs 24, elites 32, apexes 48. */
 export function monsterSize(name, opts) {
   return (MONSTERS[monsterKeyFor(name, opts)] || {}).size || MON_SIZE;
 }
@@ -3535,8 +4085,8 @@ function monsterGrid(key, frame, pose) {
  *                unmarked body in the region's colours and never throws.
  *  @param frame  any integer; wrapped into that creature's own cycle
  *  @param opts   { region, colour, pose: 'walk'|'idle', apex, flip }
- *  @returns a canvas, 24x24 or 32x32. It is the CACHED instance — draw it, do
- *           not edit it.
+ *  @returns a canvas, 24x24, 32x32 or 48x48. It is the CACHED instance — draw
+ *           it, do not edit it.
  */
 export function monsterFrame(name, frame = 0, opts) {
   const o = opts || {};
@@ -3572,7 +4122,7 @@ export function monsterFrame(name, frame = 0, opts) {
 
   // The aura goes on last of all, outside the outline, after the lighting has
   // finished. It is not a surface, so it must not be lit like one.
-  if (apex) grid = aura(grid, `${key}:${f}:${pose}`, 4, size);
+  if (apex) grid = aura(grid, `${key}:${f}:${pose}`, 4, size, m.gait === 'hover');
 
   const canvas = gridSprite(grid, monsterPalette(m, { colour }), size, size);
   monCache.set(ck, canvas);
@@ -3716,6 +4266,23 @@ function silDiff(a, b) {
   return n;
 }
 
+/* Is anything painted on the last row of a rendered frame? One getImageData
+ * per frame, on the canvas monsterFrame() hands back, so the answer is the
+ * player's answer and not the grid's. Returns false rather than throwing on a
+ * host with no 2d context — a stats call that cannot read pixels must not
+ * invent a floor contact it did not see. */
+function bottomRowIsPainted(img) {
+  if (!img || !img.width || !img.height) return false;
+  let data;
+  try {
+    const c = img.getContext && img.getContext('2d');
+    if (!c || !c.getImageData) return false;
+    data = c.getImageData(0, img.height - 1, img.width, 1).data;
+  } catch (e) { return false; }
+  for (let x = 0; x < img.width; x++) if (data[x * 4 + 3]) return true;
+  return false;
+}
+
 export function monsterArtStats() {
   const rows = [];
   const sils = {};
@@ -3750,12 +4317,23 @@ export function monsterArtStats() {
         }
       }
     }
-    // Does it ever touch the floor? A thing with no legs must not, in any frame
-    // of either pose, or the gait is lying about what the creature is.
+    /* Does it ever touch the floor? A thing with no legs must not, in any frame
+     * of either pose, or the gait is lying about what the creature is.
+     *
+     * MEASURED OFF THE RASTER, NOT OFF THE GRID. This scanned the last row of
+     * monsterGrid(), which is the authored grid BEFORE thicken() pushes the
+     * outline out by one and BEFORE aura() stipples a ring outside that. Those
+     * two passes are exactly what can put a hovering creature on the floor
+     * without an authored cell moving, so the one check meant to catch it was
+     * reading the one grid that cannot show it — and the Bonecrown rendered
+     * with its bottom row ON row 31 of 31 while this returned false. What the
+     * player sees is monsterFrame(); that is what gets scanned. */
     let touchesFloor = false;
-    for (const g of walk.concat(idle)) {
-      const last = g[size - 1] || '';
-      if ([...last].some(c => !EMPTY_CH(c))) touchesFloor = true;
+    for (const pose of ['walk', 'idle']) {
+      const count = pose === 'idle' ? MON_IDLE_FRAMES : n;
+      for (let f = 0; f < count && !touchesFloor; f++) {
+        if (bottomRowIsPainted(monsterFrame(key, f, { pose }))) touchesFloor = true;
+      }
     }
     const sil = monsterSilhouette(key, 0);
     sils[key] = sil;
@@ -3848,8 +4426,12 @@ export function monsterArtStats() {
  * animals, which is the bug this whole file is a fix for.
  *
  * Sizes are not uniform and must not be assumed: monsterSize(name, opts) is 24
- * for a mob and 32 for an apex, and monsterShadow() returns the footprint that
- * goes under it. Both answer for a fallback too.
+ * for a mob, 32 for an elite and 48 for an apex, and monsterShadow() returns
+ * the footprint that goes under it. Both answer for a fallback too. On the
+ * battle stage the apex blits at 2 where a mob blits at 4, which lands both on
+ * the same 96 logical pixels — an apex is not bigger ON THE STAGE, it is the
+ * same footprint drawn at twice the detail. Bigger than the mob is what it is
+ * in the BESTIARY and on the overworld, where both draw at 1.
  *
  * WHEN gauntlet/hunters.py LANDS. Nothing here needs to change. Pass the hunter
  * row straight to apexKeyFor(): a row carrying `region` resolves by region, a

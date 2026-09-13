@@ -681,15 +681,80 @@ function panelCols(viewW, s) {
  * If what he said will not fit in the band, the hand drops to 1x before
  * anything is cut, and only a genuinely tiny window ever loses a word.
  */
-const LAYOUT = { s: 2, cols: 0, maxLines: 0, set: null, innerW: 0, innerH: 0, x0: 0, y0: 0 };
-export function heroTopOnScreen(viewH, worldScale) {
+const LAYOUT = { s: 2, cols: 0, maxLines: 0, set: null, innerW: 0, innerH: 0,
+                 x0: 0, y0: 0, below: false };
+
+/* THE CAMERA ONLY CENTRES HIM WHEN IT CAN, and the rest of this file was
+ * written as though it always did.
+ *
+ * `viewH / 2 + (8 - 24) * scale` is where the top of the hero's head is while
+ * the camera is FREE. At a map edge the camera clamps — that is what stops the
+ * frame showing void — and he is then wherever the clamp left him. Standing on
+ * the north edge of a 48x34 map he is 24 to 40 pixels down the frame depending
+ * on the scale, and PANEL_TOP is 28 with the words running to 88: the panel
+ * that is forbidden from standing in front of him was printing across his head
+ * at every window size, measured in scripts/verify/field.mjs part C.
+ *
+ * This is older than the zoom and the zoom did not cause it — but the zoom is
+ * what made it findable, because raising the scale is what made the clamped
+ * band worth measuring. It gets RARER at FF6 scale, not commoner: the vertical
+ * span the camera has to fit shrank from 258..376 world pixels to 206..251, so
+ * there is more map above and below the player before the clamp bites.
+ *
+ * `actualTop` is that measured number when a caller has one. Nobody is required
+ * to pass it and the old estimate is what happens when nobody does, so every
+ * existing call site keeps the behaviour it was written against. */
+export function heroTopOnScreen(viewH, worldScale, actualTop) {
+  if (Number.isFinite(actualTop)) return Math.round(actualTop);
   return Math.round(viewH / 2 + (8 - 24) * (worldScale || 3));
 }
-function layout(text, viewW, viewH, worldScale) {
-  const ceiling = heroTopOnScreen(viewH, worldScale) - 6;
+
+/* Where the hero's head actually is, off the same world object placement
+ * already reads. Returns undefined — not a guess — when the object does not
+ * carry a camera, so heroTopOnScreen falls back rather than inventing a number
+ * out of half a frame. */
+function heroTopFromWorld(w) {
+  if (!w || !w.player) return undefined;
+  const s = w.scale;
+  if (!(s > 0) || !Number.isFinite(w.camY) || !Number.isFinite(w.player.py)) return undefined;
+  return (w.player.py + TILE - HERO_H - w.camY) * s;
+}
+
+/* WHEN THERE IS NO ROOM ABOVE HIS HEAD, THE WORDS GO UNDER IT.
+ *
+ * The band above the hero is viewH/2-ish while the camera is free and it is
+ * enormous. Standing on the north edge of the map it is TWENTY-FOUR PIXELS,
+ * because the camera has clamped and the hero is at the top of the frame — less
+ * than PANEL_TOP, which is 28. The loop below has no way to express that: it
+ * drops the hand from 2 to 1 and then takes whatever 1 produced, fitting or
+ * not, so the panel printed straight across his head at every window size. It
+ * is the promise this whole file is built on, broken in the one place a player
+ * is guaranteed to stand — the way into every region is an edge.
+ *
+ * Dropping the hand further is not an answer; there is no hand small enough to
+ * fit four lines into twenty-four pixels, and shrinking his voice to escape him
+ * is the wrong shape of fix anyway. The band below his feet is 757 pixels in
+ * exactly the case the band above is 24, so the panel moves there. He is still
+ * not standing in front of you and he is still not writing in front of you; he
+ * has just stopped insisting on doing it from the top of the screen.
+ *
+ * The bottom margin is PANEL_TOP again rather than a new number, because what
+ * PANEL_TOP is FOR is clearing apex.js's two rim lanes (7 and 20 plus a 6px
+ * mark), and the rim at the bottom of the frame is the same rim. */
+function layout(text, viewW, viewH, worldScale, actualTop) {
+  const heroTop = heroTopOnScreen(viewH, worldScale, actualTop);
+  const ceiling = heroTop - 6;
+  /* One line at the smallest hand is the least a panel can be. If the band
+   * above cannot hold that, it cannot hold anything. */
+  const least = PANEL_PAD * 2 + LINE_ADVANCE;
+  const below = (ceiling - PANEL_TOP) < least;
+  const top = below
+    ? Math.round(heroTop + HERO_H * (worldScale || 3) + 6)
+    : PANEL_TOP;
+  const band = below ? (viewH - PANEL_TOP) - top : ceiling - top;
   for (const s of [2, 1]) {
     const cols = panelCols(viewW, s);
-    const room = Math.floor((ceiling - PANEL_TOP - PANEL_PAD * 2 * s) / (LINE_ADVANCE * s));
+    const room = Math.floor((band - PANEL_PAD * 2 * s) / (LINE_ADVANCE * s));
     const maxLines = clamp(room, 1, PANEL_MAX_LINES);
     const set = typeset(String(text || ''), cols, maxLines);
     if (set.lines.length <= maxLines || s === 1) {
@@ -697,21 +762,24 @@ function layout(text, viewW, viewH, worldScale) {
       LAYOUT.innerW = PANEL_GUTTER + cols * CHAR_ADVANCE + PANEL_PAD;
       LAYOUT.innerH = PANEL_PAD * 2 + set.lines.length * LINE_ADVANCE;
       LAYOUT.x0 = Math.round((viewW - LAYOUT.innerW * s) / 2);
-      LAYOUT.y0 = PANEL_TOP;
+      LAYOUT.y0 = top;
+      LAYOUT.below = below;
       return LAYOUT;
     }
   }
   return LAYOUT;
 }
 
-/** What a message will measure, without drawing it. */
-export function measurePanel(text, viewW, viewH, worldScale) {
-  const L = layout(text, viewW, viewH, worldScale);
+/** What a message will measure, without drawing it. `actualTop` is optional and
+ * is the hero's measured top on screen; see heroTopOnScreen. */
+export function measurePanel(text, viewW, viewH, worldScale, actualTop) {
+  const L = layout(text, viewW, viewH, worldScale, actualTop);
   return { scale: L.s, cols: L.cols, maxLines: L.maxLines, lines: L.set.lines.length,
            chars: L.set.total, x: L.x0, y: L.y0,
            w: L.innerW * L.s, h: L.innerH * L.s,
            bottom: L.y0 + L.innerH * L.s,
-           ceiling: heroTopOnScreen(viewH, worldScale) - 6 };
+           below: L.below,
+           ceiling: heroTopOnScreen(viewH, worldScale, actualTop) - 6 };
 }
 
 /* ------------------------------------------------------------------- state
@@ -1140,7 +1208,10 @@ export function drawIndexOnPlayer(ctx, pres, px, py, time, reducedMotion) {
  */
 export function drawKingPanel(ctx, pres, viewW, viewH, scale, time, reducedMotion) {
   if (!pres || pres.alpha <= 0.004) return 0;
-  const L = layout(pres.view.text, viewW, viewH, scale);
+  /* No new argument: the Presence already holds the world object placement was
+   * decided against, and the host keeps its camera fresh. A host that does not
+   * gets undefined and the centred estimate, exactly as before. */
+  const L = layout(pres.view.text, viewW, viewH, scale, heroTopFromWorld(pres.world));
   const s = L.s, set = L.set, innerW = L.innerW, innerH = L.innerH;
   const x0 = L.x0, y0 = L.y0;
   const prev = ctx.globalAlpha;

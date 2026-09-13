@@ -295,14 +295,20 @@ Every rung is an integer multiple of the 8x8 SNES tile. FFVI's field sprite is
 
 | rung | logical | tiles | FFVI reference | code today |
 |---|---|---|---|---|
-| field character | **16x24** | 2x3 | FFVI field/NPC sprite — exact | `HERO_W/HERO_H` sprites.js:476 — **unchanged** |
+| field character | **16x24** | 2x3 | FFVI field/NPC sprite — exact | `HERO_W/HERO_H` sprites.js:479-480 |
 | battle hero | **24x32** | 3x4 | FFVI battle sprites are larger than field sprites | **new** |
-| ordinary monster | **24x24** | 3x3 | FFVI small enemy (imp/lobo class) | `ENEMY_SIZE` sprites.js:2922, `MON_SIZE` monsterart.js:168 |
-| elite | **32x32** | 4x4 | FFVI mid enemy | `APEX_SIZE` monsterart.js:173 |
-| apex | **48x48** | 6x6 | FFVI large enemy | `APEX_SIZE` apex.js:751, `BOSS_SIZE` sprites.js:3645 |
-| boss | **64x64** | 8x8 | FFVI boss | `BOSS_W/H` bosses.js:97-98, `ART_W/H` bossart.js:168-169 |
-| wide boss | **96x64** | 12x8 | FFVI wide boss | `BOSS_WIDE_W` bosses.js:99, `ART_WIDE_W` bossart.js:170 |
-| final boss | **96x128** | 12x16 | FFVI's big summons (Bahamut, Alexander) | **new** |
+| ordinary monster | **24x24** | 3x3 | FFVI small enemy (imp/lobo class) | `ENEMY_SIZE` sprites.js:3231, `MON_SIZE` monsterart.js:230 |
+| elite | **32x32** | 4x4 | FFVI mid enemy | `ELITE_SIZE` monsterart.js:236 |
+| apex | **48x48** | 6x6 | FFVI large enemy | `APEX_SIZE` monsterart.js:247, `APEX_SIZE` apex.js:751, `BOSS_SIZE` sprites.js:3954 |
+| boss | **64x64** | 8x8 | FFVI boss | `BOSS_W/H` bosses.js:108-109, `ART_W/H` bossart.js:168-169 |
+| wide boss | **96x64** | 12x8 | FFVI wide boss | `BOSS_WIDE_W` bosses.js:110, `ART_WIDE_W` bossart.js:170 |
+| final boss | **96x128** | 12x16 | FFVI's big summons (Bahamut, Alexander) | `FINAL_BOSS_W/H` bosses.js:125-126, `ART_FINAL_W/H` bossart.js:177-178 |
+
+Every line reference in the "code today" column is checked by
+`scripts/verify/stage.mjs` §2, which now reads `ELITE_SIZE`, `FINAL_BOSS_W/H`
+and `ART_FINAL_W/H` as well — the elite and final rungs were outside the
+whole-tile check entirely, which is how the table above came to point `elite`
+at `APEX_SIZE`.
 
 **The drift this replaces.** This document previously claimed "48x64 bosses".
 No such size exists in the code. `sprites.js` has `BOSS_SIZE = 48` (square);
@@ -343,12 +349,36 @@ rung in logical pixels, at the cost of no art at all.
 192 centred on `enemyX` 184 runs 88..280, so each wide archetype carries a
 `bias` computed from its painted bounding box rather than guessed:
 
-| archetype | paints cols | bias | on screen |
-|---|---|---|---|
-| dragon | 9..89 | −12 | 94..255 |
-| hydra | 28..68 | 0 | 144..225 |
-| wyrm | 0..83 | 0 | 88..255 |
-| interpreter | 0..90 | −14 | 74..255 |
+The bias must absorb the SWAY as well as the pose. `drawBoss` blits at
+`left + dx` where `dx = clamp(round(pose.dx * scale), -4, 4)`, applied every
+frame forever because the ambient pose is continuous and the frames are not. A
+bias derived from a still is half a bias: three of these four sat at exactly
+column 255 with zero slack and spent part of every idle cycle over the edge —
+the dragon reaching 257, the wyrm and the interpreter 259.
+
+Measured over all six stages x five frames x six beats x every `dx` the clamp
+can produce — 540 to 900 sampled frames each, which is the full envelope the
+renderer can put on the glass:
+
+| archetype | paints cols | bias | on screen | fills its box | frames outside 0..255 |
+|---|---|---|---|---|---|
+| dragon | 4..89 | −14 | 80..255 | 90% | 0 of 540 |
+| hydra | 21..79 | 0 | 126..251 | **61%** | 0 of 900 |
+| wyrm | 0..84 | −6 | 78..255 | 89% | 0 of 900 |
+| interpreter | 0..93 | −24 | 60..255 | 98% | 0 of 900 |
+
+Each bias is the LARGEST that clears the edge, so the figures move the two or
+four columns they had to and not one more. Do not shrink the `dx` clamp instead
+— the ±4 cap is what keeps a 128-wide rig in frame in the first place.
+
+**The hydra does not use the rung it declares.** It asks for 96 columns and
+paints 59 of them (21..79) at a density of 19.7%, against 89–100% for the other
+three. This is pre-existing — its body grid and every offset are unchanged since
+17cccbf — and it is a real art decision, not a flag: re-authoring to 96 means
+finding somewhere for the two outer heads to go, and dropping to `wide: false`
+means shifting the body `ox`, every part `ox`, both faults and the core left by
+21. `stage.mjs` §5 prints the fill fraction for every rig and names this one on
+every run until it is settled one way or the other.
 
 The hero stands 32..95, so on the frames where the wyrm's and the interpreter's
 coils swing furthest left they reach behind him. **`fx.js` therefore draws the

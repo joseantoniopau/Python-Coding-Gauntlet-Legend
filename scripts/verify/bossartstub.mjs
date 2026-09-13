@@ -21,7 +21,14 @@ const run = (label, fn) => {
 };
 
 console.log('bossart.js under stub.mjs');
-console.log('  self check vs bosses.BOSS_GLYPHS:', JSON.stringify(BA.bossArtSelfCheck(B.BOSS_GLYPHS)));
+/* The ladder goes across too, not just the glyph table: ART_W/ART_H/
+ * ART_WIDE_W/ART_FINAL_W/ART_FINAL_H against bosses.js's five. That second
+ * argument is the whole reason bossArtSelfCheck grew one, and all three
+ * harnesses were calling it with one argument, so the check never ran. */
+const selfCheck = BA.bossArtSelfCheck(B.BOSS_GLYPHS,
+  { w: B.BOSS_W, h: B.BOSS_H, wide: B.BOSS_WIDE_W, finalW: B.FINAL_BOSS_W, finalH: B.FINAL_BOSS_H });
+console.log('  self check vs bosses.BOSS_GLYPHS + the ladder:', JSON.stringify(selfCheck));
+if (!selfCheck.ok) fail.push('self check: ' + selfCheck.problems.join('; '));
 
 /* Every look, every frame, every phase, every beat, plus the metadata calls. */
 let built = 0;
@@ -111,3 +118,6 @@ for (const k of ['nullImage', 'nonFinite', 'badPaint', 'allocInLoop']) {
 
 console.log('\n  VERDICT:', fail.length ? 'FAILURES' : 'clean');
 for (const f of fail.slice(0, 20)) console.log('   -', f);
+/* Same as bossart.mjs: a verdict nothing reports to the shell is a verdict
+ * nobody acts on. */
+process.exitCode = fail.length ? 1 : 0;

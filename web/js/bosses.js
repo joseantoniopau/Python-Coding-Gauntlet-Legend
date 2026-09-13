@@ -13,10 +13,21 @@
  * moment the game has that the player will describe to someone else afterwards.
  * So the bosses move out of the mob pipeline and get their own:
  *
- *   64x64, or 96x64 for the winged and serpentine ones, DRAWN AT 1.75 with its
- *     feet under the floor — 112 pixels against the hero's 72, reaching from
- *     just under the ceiling of the stage down through the ground line. A boss
- *     the same height as the thing fighting it is a mob with more health.
+ *   64x64, or 96x64 for the winged and serpentine ones, DRAWN AT 2 with its
+ *     feet under the floor — 128 logical rows against the hero's 96, reaching
+ *     from well down the sky through the ground line. A boss the same height as
+ *     the thing fighting it is a mob with more health. (This comment said 1.75
+ *     and "112 against 72" for a whole migration after the raster moved to
+ *     256x224 and BOSS_STAGE_SCALE became 2. Both numbers were the old stage's.
+ *     A comment that disagrees with the constant three lines of code away is
+ *     worse than no comment: it is a measurement nobody took again.)
+ *   AND ONE 96x128, DRAWN AT 1 — the final boss rung of docs/08 §B, and the
+ *     Interviewer is the only thing in the game that gets it. Twelve thousand
+ *     authored cells against a 64-box boss's four, at one logical pixel each,
+ *     so the last creature the player meets is the only one drawn at the
+ *     stage's own grain. Standing on the ground line it spans rows 47..174 —
+ *     the whole 128, none of it under the floor, which is eighteen more rows of
+ *     visible creature than any boss that sinks. See THE FINAL RUNG below.
  *   Five frames — idle, the exhale, a wind-up, the attack, and a hurt pose —
  *     and six BEATS inside the idle loop, which each moving part reads at its
  *     own rate. Uniform motion is the tell of cheap animation, and the fix is
@@ -98,6 +109,22 @@ export const BOSS_H = 64;
 export const BOSS_W = 64;
 export const BOSS_WIDE_W = 96;
 
+/* The final rung of docs/08 §B — 12x16 tiles, FFVI's own big-summon box — and
+ * exactly one creature is authored at it. It is not a bigger box for its own
+ * sake: at BOSS_STAGE_SCALE the 64-box rigs already reach §B's tallest 128
+ * logical rows, so the only thing left to buy is GRAIN. A 96x128 rig drawn at
+ * blit 1 puts one authored cell on one stage pixel, where every other figure in
+ * the game spends four (hero, mob) or two (boss). The Interviewer is the only
+ * thing the player ever sees at the stage's own resolution.
+ *
+ * Checked against the frame before a pixel of it was drawn: 128 rows standing
+ * on ground 175 with no sink spans 47..174, inside the 24..199 safe area with
+ * 23 rows in hand, and 96 columns centred on enemyX 184 runs 136..232, 23
+ * columns short of the right edge and 40 clear of the hero's 32..95. It is the
+ * one boss that needs no bias at all. */
+export const FINAL_BOSS_W = 96;
+export const FINAL_BOSS_H = 128;
+
 /* The marker box. Three quarters of the battle box, so a boss is 48 tall
  * against a 24-tall mob and a 24-tall hero on a 16-pixel tile grid: twice the
  * height of anything else that walks around out there, which is the point.
@@ -106,9 +133,34 @@ export const BOSS_WIDE_W = 96;
 export const BOSS_MAP_H = 48;
 export const BOSS_MAP_W = 48;
 export const BOSS_MAP_WIDE_W = 72;
+/* And the tall rung's marker, at the same three quarters: 72x96, which is four
+ * and a half tiles by six on a 16-pixel map against a 24-tall mob. The thing at
+ * the end of the game is twice the marker of every other boss out there, which
+ * is the overworld saying what the fight is going to say. */
+export const BOSS_MAP_FINAL_W = 72;
+export const BOSS_MAP_FINAL_H = 96;
 /* What the marker box costs against the battle box, used for the sink and the
  * shadow so a boss meets the ground the same way in both places. */
 export const BOSS_MAP_RATIO = BOSS_MAP_H / BOSS_H;
+
+/* Three boxes now, so the size stops being an inline ternary repeated in six
+ * places. `tall` wins over `wide`: the 96x128 rig is both wider than 64 and
+ * taller than 64 and there is no combination of the two flags that means
+ * anything else. Every caller that used to write `art.wide ? WIDE : W` reads
+ * these instead, which is what makes adding a fourth rung one edit. */
+function boxOf(art) {
+  if (art && art.tall) return { w: FINAL_BOSS_W, h: FINAL_BOSS_H };
+  return { w: art && art.wide ? BOSS_WIDE_W : BOSS_W, h: BOSS_H };
+}
+function mapBoxOf(art) {
+  if (art && art.tall) return { w: BOSS_MAP_FINAL_W, h: BOSS_MAP_FINAL_H };
+  return { w: art && art.wide ? BOSS_MAP_WIDE_W : BOSS_MAP_W, h: BOSS_MAP_H };
+}
+/* What the marker box costs against the battle box FOR THIS CREATURE. The
+ * exported constant above is the 64-rung's answer and stays what it was; a
+ * 96x128 rig reducing to 72x96 has the same 0.75, but computing it rather than
+ * assuming it is what stops the next rung from sinking into the floor. */
+function mapRatioOf(art) { return mapBoxOf(art).h / boxOf(art).h; }
 
 /* ---------------- glyph table ----------------
  * Every grid in this file draws from exactly this set. Anything else is a typo,
@@ -315,6 +367,7 @@ export function bossPalette(base, accentHex, phase = 0, element = null) {
  */
 const T = '.';
 const HALF = BOSS_W / 2;   // 32 authored columns become 64 drawn ones
+const FINAL_HALF = FINAL_BOSS_W / 2;   // 48 authored columns become 96 drawn ones
 
 function blank(w, h) {
   const row = T.repeat(w);
@@ -1090,6 +1143,25 @@ const POSES = {
     if (f === 2) return shiftRows(g, top, mid, -2);
     if (f === 3) return shiftRows(g, top, mid, 4);
     if (f === 4) return shiftRows(sinkRows(g, top, mid, 2), top, bottom, -2);
+    return g;
+  },
+  /* Throned. The only pose in the kit with no horizontal work in it at all.
+   *
+   * That is a constraint, not a style: shiftRows and skewRows DROP the columns
+   * they push past the edge, and the tall rung is authored full-bleed to
+   * columns 0 and 95. Any of the five poses above would cut three columns off
+   * the cape on the wind-up and the hurt frame and nowhere else, which is a
+   * silhouette that changes width with the frame. So this one moves mass up and
+   * down only — the head settles into the collar, the whole weight gathers, the
+   * hem compresses — and nothing ever leaves the frame. It also happens to be
+   * exactly right for the creature: a king does not sway. */
+  still(g, f) {
+    const [top, bottom] = filledBounds(g);
+    const mid = Math.round((top + bottom) / 2);
+    if (f === 1) return sinkRows(g, top, mid, 1);
+    if (f === 2) return sinkRows(g, top, top + 20, 2);
+    if (f === 3) return squashRows(sinkRows(g, top, mid, 2), mid, bottom - 2);
+    if (f === 4) return sinkRows(g, top, bottom - 2, 3);
     return g;
   },
   /* Rooted. The base never moves; only the crown answers the wind. */
@@ -2599,6 +2671,501 @@ const INTERP_STAFF = [
 ];
 
 /* ================================================================
+ * THE INTERVIEWER  —  the Null King, and the only 96x128 in the game
+ * ================================================================
+ * THE FINAL RUNG. docs/08 §B names a 96x128 final-boss box — FFVI's own
+ * big-summon size — and for a whole migration nothing in this tree drew one.
+ * The Interviewer is what it is for. It is authored as a 48-column half at 128
+ * rows and drawn at scale 1, so ONE authored cell is ONE stage pixel: the hero
+ * spends four stage pixels per authored cell and an ordinary boss two, and this
+ * is the only creature in the game rendered at the stage's own grain. The box
+ * is 12x16 tiles; the painted content fills all 128 rows and all 96 columns,
+ * which is deliberate — the geometry in §A-6 that justifies the ground line at
+ * 175 is only true if the rig is actually full-bleed.
+ *
+ * WHY IT IS NARROWER THAN THE BOSS IT REPLACES, AND WHY THAT IS THE POINT.
+ * The Interviewer used to be the knight: a 64x64 rig at scale 2, so 128x128
+ * logical, sunk nine authored rows into the floor. This is 96x128 at scale 1 —
+ * 32 logical columns NARROWER and exactly as tall. Measured that way it looks
+ * like a downgrade and it is worth saying why it is not:
+ *
+ *   IT IS TALLER WHERE IT COUNTS. The knight's bottom eighteen logical rows are
+ *     under the ground line and veiled by the floor. This one has a sink of 0,
+ *     so all 128 rows stand above the floor: rows 47..174 against the knight's
+ *     visible 65..174. Eighteen more rows of creature, and its crown clears the
+ *     hero's head by thirty-two.
+ *   A VERTICAL SILHOUETTE IS THE BIGGER SHAPE. 96x128 is 3:4. 128x128 is a
+ *     square, and a square the height of the frame reads as a wall rather than
+ *     as a figure. The two 96-column wide rigs are 192 logical across and read
+ *     as big by being broad; this one is the only thing in the cast that reads
+ *     as big by being TALL, which is the shape a king is.
+ *   IT HAS FOUR TIMES THE DRAWING. 12,288 authored cells against the knight's
+ *     4,096, and each of them survives to the screen as itself rather than as a
+ *     2x2 block. The crown's notches, the sigil's ring, the caret on the slate
+ *     and the nib of the pen are all one and two pixels wide and all of them
+ *     are legible, which none of them could be on a rig drawn at 2.
+ *
+ * WHO IT IS. gauntlet/bestiary.py: the last boss, region null_kings_castle,
+ * element VOID. A faceless great helm with NO VISOR SLIT — there is nothing
+ * behind it that needs to see out — under a crown of five spires whose band is
+ * the top of the head, because on this creature the crown and the skull cannot
+ * be told apart and that is the whole complaint. A null sigil on the chest: a
+ * gold ring with nothing inside it, and it is the ring's own hole that the core
+ * opens through at the LIT stage. Beside it, not held by anything, the rubric —
+ * a rectangle of nothing with a caret waiting in the corner — and the pen,
+ * which is the length of a spear and whose nib is the brightest pixel on the
+ * creature. Everything about this fight is somebody deciding about you with an
+ * instrument you never see used.
+ *
+ * VOID takes the contre-jour away (bossart.wantsRim is false for it), so the
+ * separation this one gets from a near-black stage is its own pale nullsteel
+ * and the two gold objects, not a rim. That is the element doing its job: the
+ * one creature in the cast that refuses the light the whole cast is lit by.
+ *
+ * It sheds the CROWN at the shorn stage — the largest silhouette change
+ * available on a figure this vertical — and at the crowned stage a second crown
+ * grows out of the bare head in void and glow, which is the fight's last beat
+ * said in geometry: you take the crown off it and it makes another one.
+ */
+const NULL_BODY = [
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  'oBBBBBGGG',
+  'oBBBBBBnGGG',
+  'oBBBBBBBBnGGG',
+  'oBBBBBBBBBnGGG',
+  'oBBBBBBBBBBnGGG',
+  'oBBBBBBBBBBBnGGG',
+  'oooooooooooooGGG',
+  'LLLLLLLLLLLLLGGG',
+  'BBBBBBBBBBBBBBBB',
+  'oDoooooooooooooo',
+  'oDDnnnnnnnnnnnnD',
+  'oDDnnnnnnnnnnnnD',
+  'oDDnnnnnnnnnnnD',
+  'oDDnnnnnnnnnnnD',
+  'oDDtttttttttnD',
+  'oDDttttttttnD',
+  'oDDttttttttnD',
+  'oDDttttttttttt',
+  'oHLnnnnnnnnnnBBB',
+  'oHLDDDDDDDDDDDBBB',
+  'oHLBBBBBBBBBBBBBBBB',
+  'oHLBBBBBBBBBBBBBBBBBB',
+  'oHLooooooooooooooooooo',
+  'oHLnnnnnnnnnnnnnnnnnnnn',
+  'oHLBBBBBBBBBBBBBBBBBBBBB',
+  'oHLBBBBBBBBBBBBBBBBBBBBB',
+  'oHLooooooooooooooooooooo',
+  'oHLnnnnnnnnnnnnnnnnnnnnnn',
+  'oHLBBBBBBBBBBBBBBBBBBBBBBB',
+  'oHLBBBBBBBBBBBBBBBBBBBBBBBB',
+  'oHLBBBBBBBBBBBBBBBBBBBBBBBB',
+  'oHLBBBBBBBBBBBBBBBBBBBBBBBB',
+  'oHLBBBBBBBBBBBBBBBBBBBBBBBBB',
+  'oHLBBBBBBBBBBBBBBBBBBBBBBBBB',
+  'oHLBBBBBBBBBBBBBBBBBBBBBBBBBB',
+  'oHLBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
+  'oHLBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
+  'oHLBnBBBnBBBnBBBnBBBBBBBBBBBBBBBBBBBBBBBB',
+  'oHLBHBBBHBBBHBBBHBBBmMmMBBBBBBBBBBBBBBBBB',
+  'oHLBBBBBBBBBBBBBBBBBBBBmMmMmMmBBBBBBBBBB',
+  'oHLBBBBBBBBBBBBBBBBBBBBBBBBBBBBMmMmMmMBBB',
+  'oHLDDDDDDDDDDDDDDDBBBBBBBBBBBBBBBBBBBBBBB',
+  'oHLnnnnnnnnnnnnnnnBBBBBBBBBBBBBBBBBBBBB',
+  'oHLnnnnnnnnnnnnnnBBBBBBBBBBBBBBBBBBB',
+  'oHBBBBBDno..nDnBBBBBBBBBBBBBBBBBBBB',
+  'oHBBBBDno..nDnBBBBBBBBBBBBBBBBBBBB',
+  'oooooooo..nDnoooooooooooooooooooo',
+  'oHBBDno..nDnHHHHHHHHHHHHHHHHHHHH',
+  'oHBDno..nDnoooooooooooooooooooo',
+  'oHDno..nDnBBBBBBBBBBBBBBBBZZZZ',
+  'oHDno..nDnBBBBBBBBBBBBBBZZZZZZ',
+  'oHDno..nDnBBBBBBBBBBBBBZZZZZZZ',
+  'oHDno..nDnBBBBBBBBBBBBZZZZkkkk',
+  'oHDno..nDnBBBBBBBBBBBZZZZkkkkk',
+  'ooooo..nDnBBBBBBBBBBBZZZkkkkkk',
+  'oHDno..nDnBBBBBBBBBBZZZZkkkkkk',
+  'oHDno..nDnBBBBBBBBBBZZZkkkkkkk',
+  'oHDno..nDnBBBBBBBBBBZZZkkkkkkk',
+  'oHDno..nDnBBBBBBBBBBzzzkkkkkkk',
+  'oHDno..nDnBBBBBBBBBBzzzkkkkkkk',
+  'oHDno..nDnBBBBBBBBBBzzzkkkkkkk',
+  'oHDno..nDnBBBBBBBBBBzzzzkkkkkk',
+  'ooooo..nDnBBBBBBBBBBBzzzkkkkkk',
+  'oHDno..nDnBBBBBBBBBBBzzzzkkkkk',
+  'oHDno..nDnBBBBBBBBBBBBzzzzkkkk',
+  'oHDno..nDnBBBBBBBBBBBBBzzzzzzz',
+  'oHDno..nDnBBBBBBBBBBBBBBzzzzzz',
+  'oHDno..nDnBBBBBBBBBBBBBBBBzzzz',
+  'oHDno..nDnBBBBBBBBBBBBBBBBBBBB',
+  'oHDno..nDnBBBBBBBBBBBBBBBBBBBB',
+  'ooooo..nDnBBBBBBBBBBBBBBBBBBdd',
+  'oHDno..nDnBBBBBBBBBBBBBBBBBBdd',
+  'oHDno..nDnBBBBBBBBBBBBBBBBBBdd',
+  'oHBDno..nDnBBBBBBBBBBBBBBBBBBdd',
+  'oHBDno..nDnBBBBBBBBBBBBBBBBBBdd',
+  'oHBDno..ooooooooooooooooooooooo',
+  'oHBDno..zzzzzzzzzzzzzzzzzzzzkkk',
+  'oHDno..ZZZZZZZZZZZZZZZZZZZZkkk',
+  'ooooo..zzzzzzzzzzzzzzzzzzzzkkk',
+  'oHDno..nnnnnnnnnnnnnnnnnnnnnnn',
+  'oooooooooooooooooooooooo',
+  'ooooooooooooooooooooooooo',
+  'oTsttTotttttttttTottoTsssss',
+  'oTstttTotttttttttTottoTsssss',
+  'oTsttttTotttttttttTottoTsssss',
+  'oTstttttTotttttttttTottoTsssss',
+  'oTsttttttTotttttttttTottoTsssss',
+  'oTstttttttTotttttttttTottoTsssss',
+  'oTstttttttTotttttttttTottoTsssss',
+  'oTsttttttttTotttttttttTottoTsssss',
+  'oTstttttttttTotttttttttTottoTsssss',
+  'oTstttttttttTotttttttttTottoTsssss',
+  'oTsotttttttttTotttttttttTottoTsssss',
+  'oTsotttttttttTotttttttttTottoTsssss',
+  'oTsTotttttttttTotttttttttTottoTsssss',
+  'oTsTotttttttttTotttttttttTottoTsssss',
+  'oTstTotttttttttTotttttttttTottoTsssss',
+  'oTstTotttttttttTotttttttttTottoTsssss',
+  'oTsttTotttttttttTotttttttttTottoTsssss',
+  'oTsttTotttttttttTotttttttttTottoTsssss',
+  'oTsttTotttttttttTotttttttttTottoTsssss',
+  'oTstttTotttttttttTotttttttttTottoTsssss',
+  'oTstttTotttttttttTotttttttttTottoTsssss',
+  'oTstttTotttttttttTotttttttttTottoTsssss',
+  'oTsttttTotttttttttTotttttttttTottoTsssss',
+  'oTsttttTotttttttttTottttoooooooooooossss',
+  'oTsttttTotttttttttTottttonnnnnnnnnnossss',
+  'oTsttttTotttttttttTottttonnnnnnnnnnossss',
+  'oTstttttTotttttttttTottttoHBBBBBBBBDossss',
+  'oTstttttTotttttttttTottttonnnnnnnnnnossss',
+  'oTstttttTotttttttttTottttoHBBBBBBBBDossss',
+  'TTTTTTTTTTTTTTTTTTTTTTTTTonnnnnnnnnnoTTTT',
+  'sssssssssssssssssssssssssoHBBBBBBBBDossss',
+  'ooooooooooooooooooooooooooooooooooooooooo',
+];
+
+/* The mantle. Its own layer, and BEHIND the body, so the cape passes behind the
+ * shoulders and pools out past the hem instead of being a painted-on border. It
+ * is what carries the rig to columns 0 and 95 at the floor. */
+const NULL_CAPE = [
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  'oTsso.........................',
+  'oTsso.........................',
+  'oTsso..........................',
+  'oTsso..........................',
+  'oTsso...........................',
+  'oTsso....................................',
+  'oTsso......................................',
+  'oTsso.......................................',
+  'oTsso.......................................',
+  'oTsso......................................',
+  'oTsso.......................................',
+  'oTsso.......................................',
+  'oTsso.....................................',
+  'oTsso..................................',
+  'oTssssssssso................................',
+  'oTssssssssso................................',
+  'oTssssssssso................................',
+  'oTssssssssso................................',
+  'oTssssssssso................................',
+  'oTssssssssso................................',
+  'oTssssssssso................................',
+  'oTssssssssso................................',
+  'oTssssssssso................................',
+  'oTssssssssso................................',
+  'oTssssssssso................................',
+  'oTssssssssso................................',
+  'oTssssssssso................................',
+  'oTsssssssso................................',
+  'oTsssssssso................................',
+  'oTsssssssso................................',
+  'oTsssssssso................................',
+  'oTsssssssso................................',
+  'oTsssssssso................................',
+  'oTsssssssso................................',
+  'oTsssssssso................................',
+  'oTsssssssso................................',
+  'oTsssssssso................................',
+  'oTsssssssso................................',
+  'oTsssssssso................................',
+  'oTsssssssso................................',
+  'oTsssssssso................................',
+  'oTsssssssso................................',
+  'oTsssssssso................................',
+  'oTsssssssso................................',
+  'oTsssssssso................................',
+  'oTsssssssso................................',
+  'oTsssssssso................................',
+  'oTsssssssso................................',
+  'oTsssssssso................................',
+  'oTsssssssso................................',
+  'oTsssssssso................................',
+  'oTsssssssso................................',
+  'oTsssssssssssssso...........................',
+  'oTssssssssssssso............................',
+  'oTsssssssssssso.............................',
+  'oTssssssssssso..............................',
+  'oTsssssssssso...............................',
+  'oTssssssssso................................',
+  'oTssssssssso................................',
+  'oTsssssssso.................................',
+  'oTssssssso..................................',
+  'oTssssssso..................................',
+  'oTsssssso...................................',
+  'oTsssssso...................................',
+  'oTssssso....................................',
+  'oTssssssso....................................',
+  'oTsssssso.....................................',
+  'oTsssssso.....................................',
+  'oTssssso......................................',
+  'oTssssso......................................',
+  'oTssssso......................................',
+  'oTsssso.......................................',
+  'oTsssso.......................................',
+  'oTsssso.......................................',
+  'oTssso........................................',
+  'oTssso........................................',
+  'oTsssssssTossssssssssssTossssssssssssTosssssssss',
+  'oTsssssssTossssssssssssTossssssssssssTosssssssss',
+  'oTsssssssTossssssssssssTossssssssssssTosssssssss',
+  'oTsssssssTossssssssssssTossssssssssssTosssssssss',
+  'oTsssssssTossssssssssssTossssssssssssTosssssssss',
+  'oTsssssssTossssssssssssTossssssssssssTosssssssss',
+  'tttttttttttttttttttttttttttttttttttttttttttttttt',
+  'oooooooooooooooooooooooooooooooooooooooooooooooo',
+];
+
+/* The crown. Five spires on a notched band, and the band is where the dome of
+ * the helm would be. Shed at the shorn stage. */
+const NULL_CROWN = [
+  '.............oooooooo.............',
+  '.............oZZooZZo.............',
+  '.............oZZooZZo.............',
+  '.............ozzoozzo.............',
+  '.......oooo..ozzoozzo..oooo.......',
+  '.......oZZo..ozzoozzo..oZZo.......',
+  '.......oZZo..ozzoozzo..oZZo.......',
+  '.......ozzo..ozzoozzo..ozzo.......',
+  '.......ozzo..ozzoozzo..ozzo.......',
+  '.oooo..ozzo..ozzoozzo..ozzo..oooo.',
+  '.oZZo..ozzo..ozzoozzo..ozzo..oZZo.',
+  '.oZZo..ozzo..ozzoozzo..ozzo..oZZo.',
+  '.ozzo..ozzo..ozzoozzo..ozzo..ozzo.',
+  '.ozzo..ozzo..ozzoozzo..ozzo..ozzo.',
+  '.ozzo..oZZZZZZZZZZZZZZZZZZo..ozzo.',
+  '....oZZZZZZZZZZZZZZZZZZZZZZZZo....',
+  '..ozzzzzzzzzzzzzzzzzzzzzzzzzzzzo..',
+  '.ozkkzzzkkzzzkkzzzkkzzzkkzzzkkzzo.',
+  '.ozkkzzzkkzzzkkzzzkkzzzkkzzzkkzzo.',
+  '.oooooooooooooooooooooooooooooooo.',
+];
+
+/* The rubric: a slate with a void face and a caret in the corner. */
+const NULL_RUBRIC = [
+  'ooooooooooooooo',
+  'oGGGGGGGGGGGGGo',
+  'ogggggggggggggo',
+  'oGgkkkkkkkkkgno',
+  'oGgkkkkkkkkkgno',
+  'oGgkiikkkkkkgno',
+  'oGgkiikkkkkkgno',
+  'oGgkkkkkkkkkgno',
+  'oGgkkkkkkkkkgno',
+  'oGgkkkkkkkkkgno',
+  'oGgkkkkkkkkkgno',
+  'oGgkkkkkkkkkgno',
+  'oGgkkkkkkkkkgno',
+  'oGgkkkkkkkkkgno',
+  'oGgkkkkkkkkkgno',
+  'oGgkkkkkkkkkgno',
+  'oGgkkkkkkkkkgno',
+  'oGgkkkkkkkkkgno',
+  'oGgkkkkkkkkkgno',
+  'oGgkkkkkkkkkgno',
+  'oGgkkkkkkkkkgno',
+  'oGgkkkkkkkkkgno',
+  'oGgkkkkkkkkkgno',
+  'oGgkkkkkkkkkgno',
+  'oGgkkkkkkkkkgno',
+  'ogggggggggggggo',
+  'onnnnnnnnnnnnno',
+  'ooooooooooooooo',
+];
+/* The same slate with the caret answered. Two frames of telegraph, and the only
+ * thing that changes is the one thing on it that was ever going to. */
+const NULL_RUBRIC_LIT = NULL_RUBRIC.map(row => row.replace(/i/g, 'W'));
+
+/* The pen. Point down in the guard, and it is the only part of this creature
+ * that ever moves fast. */
+const NULL_PEN = [
+  '.oooooo.',
+  '.zzzzzz.',
+  '.ZkkkkZ.',
+  '.zkkkkz.',
+  '.zzzzzz.',
+  '.oooooo.',
+  '..ozzo..',
+  '..oZZo..',
+  '..ozzo..',
+  '..ozzo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..onno..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..onno..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..onno..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '..oGgo..',
+  '...oo...',
+  '...WW...',
+  '...WW...',
+  '...W....',
+];
+const NULL_PEN_LIT = NULL_PEN.map(row => row.replace(/G/g, 'W').replace(/g/g, 'i'));
+
+/* What grows back at the crowned stage, out of a head you have already taken a
+ * crown off: thinner, taller, and made of the absence rather than the gold. */
+const NULL_NEWCROWN = [
+  '.............uuuu.............',
+  '.............uuuu.............',
+  '.............uuuu.............',
+  '.........uu..uuuu..uu.........',
+  '.........uu..uuuu..uu.........',
+  '.........uu..uuuu..uu.........',
+  '.........uu..uuuu..uu.........',
+  '.....uu..uu..uuuu..uu..uu.....',
+  '.....uu..uu..uuuu..uu..uu.....',
+  '.....uu..uu..uuuu..uu..uu.....',
+  '.....uu..uu..uuuu..uu..uu.....',
+  '.....uu..uu..uuuu..uu..uu.....',
+  '.uu..uu..uu..uuuu..uu..uu..uu.',
+  '.uu..uu..uu..uuuu..uu..uu..uu.',
+  '.uu..uu..uu..uuuu..uu..uu..uu.',
+  '.uu..uu..uu..uuuu..uu..uu..uu.',
+  '.uu..uu..uu..uuuu..uu..uu..uu.',
+  '.uu..uu..uu..uuuu..uu..uu..uu.',
+  '.uuuuuuuuuuuuuuuuuuuuuuuuuuuu.',
+  '.kkkkkkkkkkkkkkkkkkkkkkkkkkkk.',
+  '.kkkkkkkkkkkkkkkkkkkkkkkkkkkk.',
+  '.kkkkkkkkkkkkkkkkkkkkkkkkkkkk.',
+];
+
+/* ================================================================
  * REGISTRY
  * ================================================================
  * One entry per archetype. `body` is the authored mass; `parts` are the layers
@@ -2637,7 +3204,7 @@ const ART = {
     name: 'Dragon', wide: true, colour: '#3f9c5a', accent: '#d8c07a', anim: 'flap',
     body: { grid: DRAGON_BODY, ox: 40, oy: 28, drift: { x: 0, y: 1, rate: 1, phase: 0.20 } }, wear: 0.04,
     motion: { bob: 3, sway: 1, phase: 0.30, period: 1500, telegraph: 520 },
-    stage: { scale: 2, sink: 3, bias: -12 },
+    stage: { scale: 2, sink: 3, bias: -14 },  // -14, not -12: the sway is part of the box, below
     core: [55, 40],                                   // furnace behind the sternum
     faults: [[30, 26, 12], [52, 34, 14], [60, 46, 10]],
     shed: 'wing',                                // shorn: a wing is torn off at the shoulder
@@ -2709,6 +3276,24 @@ const ART = {
         drift: { x: 2, y: 2, rate: 0.5, phase: 0.25 } },
     ],
   },
+  /* THE ONE RIG THAT DOES NOT USE THE BOX IT ASKS FOR. `wide: true` declares
+   * 96 columns; the art paints columns 21..79 — 59 of 96, 61% — over all six
+   * stages, five frames and six beats, against 89-100% for every other rig in
+   * this table. Density 19.7%, the lowest in the roster. On stage at blit 2
+   * that is 118 logical columns where a 64-box boss gets 104-128 and a 24x24
+   * mob gets 96, so the widest DECLARED creature in the game is drawn barely
+   * wider than an ordinary monster. Its map form paints 30 of 72 columns.
+   *
+   * PRE-EXISTING: the body grid, its ox/oy and every part offset are unchanged
+   * since 17cccbf — only `stage` moved with the raster. It is recorded here
+   * rather than fixed because neither fix is small. Re-authoring to 96 means
+   * drawing the two outer heads somewhere they currently have nowhere to go.
+   * Dropping to `wide: false` means shifting the body ox 28, every part ox,
+   * both faults and the core left by 21 so the art still lands inside a 64 box
+   * — a one-line flag with a dozen-line tail, and a silhouette change to a
+   * named boss either way. scripts/verify/stage.mjs §5 prints the fill
+   * fraction for every rig and names this one on every run, so whichever way it
+   * goes, it goes deliberately. */
   hydra: {
     name: 'Hydra', wide: true, colour: '#4fb783', accent: '#d8e87a', anim: 'coil',
     body: { grid: HYDRA_BODY, ox: 28, oy: 35, drift: { x: 0, y: 1, rate: 1, phase: 0.4 } }, wear: 0.04,
@@ -2877,7 +3462,7 @@ const ART = {
     name: 'Wyrm', wide: true, colour: '#3f6f9c', accent: '#7fe6ff', anim: 'coil',
     body: { grid: WYRM_COIL, ox: 54, oy: 47 }, wear: 0.04,
     motion: { bob: 2, sway: 3, phase: 0.35, period: 1900, telegraph: 540 },
-    stage: { scale: 2, sink: 3, bias: 0 },
+    stage: { scale: 2, sink: 3, bias: -6 },   // -6, not -2: see THE 96-BOX at every stage, below
     core: [62, 44],
     faults: [[50, 38, 12], [64, 52, 12]],
     shed: 'fin',                                // shorn: the dorsal fin shears away
@@ -2917,7 +3502,7 @@ const ART = {
     // longest in the file on purpose: it gives you time, which is the one thing
     // the room it stands in does not.
     motion: { bob: 2, sway: 2, phase: 0.2, period: 2400, telegraph: 720 },
-    stage: { scale: 2, sink: 3, bias: -14 },
+    stage: { scale: 2, sink: 3, bias: -24 },  // -24, not -20: see THE 96-BOX at every stage, below
     core: [66, 43],
     faults: [[54, 37, 12], [68, 51, 12]],
     shed: 'hat',                                // shorn: the hat comes off. It does not pick it up.
@@ -2951,13 +3536,65 @@ const ART = {
         skew: [0, 1, -2, 3, -2] },
     ],
   },
+  interviewer: {
+    name: 'The Interviewer', wide: false, tall: true,
+    colour: '#d8d8e0', accent: '#8f7ad8', anim: 'still',
+    body: { half: NULL_BODY, oy: 0, drift: { x: 0, y: 1, rate: 0.5, phase: 0 } }, wear: 0.01,
+    /* The slowest clock and the longest telegraph in the file. It is not being
+     * generous: it is giving you time to answer, which is the thing the room
+     * this stands in is for. */
+    motion: { bob: 1, sway: 1, phase: 0.75, period: 3600, telegraph: 940 },
+    /* Scale 1 and sink 0, and both are the whole argument of THE FINAL RUNG
+     * above: one authored cell per stage pixel, and not one row of it under the
+     * floor. bias 0 because 96 centred on enemyX 184 is already 23 columns
+     * clear of the frame at both ends — the only boss in the roster that needs
+     * no correction at all. */
+    stage: { scale: 1, sink: 0, bias: 0 },
+    core: [48, 72],                                   // the hole in the null sigil
+    /* FIVE fault anchors, not three, and the count is a measurement rather than
+     * a taste. spall() takes five contour bites per fault at the chipped stage,
+     * each two rows deep and two to four pixels wide; on a 64-box rig that is
+     * plenty, and on this one — three and a half times the painted mass —
+     * fifteen bites moved FIVE cells of the 24x24 normalised silhouette
+     * bossforms.mjs scores, the weakest first turn in the roster. Two more
+     * anchors on the pauldron and cape edges, where the contour is longest,
+     * take the same stage to a number that reads. */
+    faults: [[20, 62, 30], [76, 62, 30], [34, 104, 22], [10, 46, 20], [86, 46, 20]],
+    shed: 'crown',                               // shorn: the crown comes off the head
+    grow: [
+      { name: 'nullcrown', grid: NULL_NEWCROWN, ox: 33, oy: 0,
+        frames: [[0, 0], [0, 1], [0, -2], [0, 2], [0, 1]],
+        drift: { x: 1, y: 1, rate: 0.5, phase: 0.2 } },
+    ],
+    parts: [
+      { name: 'cape', grid: NULL_CAPE, ox: 0, oy: 0, behind: true,
+        frames: [[0, 0], [0, 1], [-1, -1], [1, 2], [-1, 1]],
+        drift: { x: 1, y: 1, rate: 0.4, phase: 0.1 } },
+      { name: 'crown', grid: NULL_CROWN, ox: 31, oy: 0,
+        frames: [[0, 0], [0, 1], [0, -2], [0, 3], [0, 2]],
+        drift: { x: 0, y: 1, rate: 0.75, phase: 0.35 } },
+      { name: 'rubric', grid: NULL_RUBRIC, ox: 0, oy: 66,
+        frames: [[0, 0], [0, 1], [-2, -3], [3, 4], [-3, 2]],
+        drift: { x: 2, y: 2, rate: 1.5, phase: 0 },
+        alt: { 2: NULL_RUBRIC_LIT, 3: NULL_RUBRIC_LIT } },
+      { name: 'pen', grid: NULL_PEN, ox: 88, oy: 16,
+        frames: [[0, 0], [0, 1], [-1, -6], [-4, 9], [2, 3]],
+        drift: { x: 1, y: 2, rate: 1, phase: 0.5 },
+        skew: [0, 0, -2, 3, -1],
+        alt: { 2: NULL_PEN_LIT, 3: NULL_PEN_LIT } },
+    ],
+  },
 };
 
 /* ---------------- key resolution ----------------
  * world.py names a sprite per boss. Two notes on the mapping:
- *   - "interviewer" resolves to the knight. The final boss of a game about
- *     interviews is a faceless thing in mirror armour holding a rubric; making
- *     it the knight is the strongest read available and costs one line to undo.
+ *   - "interviewer" used to resolve to the knight, on the argument that the
+ *     final boss of a game about interviews is a faceless thing in mirror
+ *     armour holding a rubric and that the knight already was one. It still is
+ *     one; it is simply no longer the LAST one. The Interviewer has its own
+ *     96x128 rig now (THE FINAL RUNG, above) and the knight keeps the 64-box
+ *     body, which is still reachable — it is what an unknown castle key hashes
+ *     onto, and it is the region's ordinary armoured thing.
  *   - two entries in world.BOSSES share the key "titan", and two identical
  *     silhouettes in one playthrough is a defect the player can see. BOSS_ART_FOR_ID
  *     sends the Rolling Titan to the colossus instead. Art-only override; nothing
@@ -2969,7 +3606,7 @@ export const BOSS_SHAPE_FOR = Object.freeze({
   titan: 'titan', hydra: 'hydra', wraith: 'wraith', behemoth: 'behemoth',
   golem: 'golem', dragon: 'dragon', ent: 'ent', necromancer: 'necromancer',
   automaton: 'automaton', lich: 'lich', demon: 'demon', wyrm: 'wyrm',
-  interviewer: 'knight', knight: 'knight', colossus: 'colossus',
+  interviewer: 'interviewer', knight: 'knight', colossus: 'colossus',
   // world.FINAL_TRIAL. Not a boss and not in world.BOSSES — the practical is
   // measured rather than fought — but it has a face now and the face has to
   // resolve from the same table as everything else with one.
@@ -2994,7 +3631,7 @@ export const BOSS_ART_FOR_ID = Object.freeze({
   path_sum_ent: 'ent',            graph_necromancer: 'necromancer',
   rolling_titan: 'colossus',      editor_automaton: 'automaton',
   complexity_wyrm: 'wyrm',        serialization_lich: 'lich',
-  bug_demon: 'demon',             the_interviewer: 'knight',
+  bug_demon: 'demon',             the_interviewer: 'interviewer',
 
   /* ---- gauntlet/hunters.py, the seventeen roaming apexes ----
    * Transcribed from hunters.APEXES: each row's `sprite` is a key its author
@@ -3051,7 +3688,8 @@ export const BOSS_ELEMENT = Object.freeze({
   wyrm: 'COLD',             // complexity_tower / tower
   lich: 'VOID',             // recursive_forest / deepforest
   demon: 'FIRE',            // debugging_dungeon / dungeon
-  knight: 'VOID',           // the_interviewer, null_kings_castle / castle
+  knight: 'VOID',           // null_kings_castle / castle
+  interviewer: 'VOID',      // the_interviewer, null_kings_castle / castle
   interpreter: 'VOID',      // FINAL_TRIAL, under null_kings_castle
 
   /* The same fourteen again, by ID. The archetype rows above answer a caller
@@ -3363,8 +4001,7 @@ export function bossArtKey(boss) {
 }
 
 export function bossSize(key) {
-  const art = ART[resolveBoss(key)];
-  return { w: art.wide ? BOSS_WIDE_W : BOSS_W, h: BOSS_H };
+  return boxOf(ART[resolveBoss(key)]);
 }
 
 /* ---------------- motion metadata ----------------
@@ -3386,6 +4023,12 @@ export const BOSS_MOTION = Object.freeze(Object.fromEntries(
       telegraph: art.motion.telegraph,
       anim: art.anim,
       wide: !!art.wide,
+      /* The third rung, exposed for the same reason `wide` is: a caller sizing
+       * a card, a codex cell or a preview needs to know which box it is getting
+       * without calling bossSize() and without inferring it from the scale. */
+      tall: !!art.tall,
+      w: boxOf(art).w,
+      h: boxOf(art).h,
       floats,
       /* What the battle stage should draw it at, and how far its feet go under
        * the floor. A 64-box boss at 2 stands 128 tall against a 96-tall hero
@@ -3408,10 +4051,17 @@ export const BOSS_MOTION = Object.freeze(Object.fromEntries(
        * means the palette is left exactly as authored. */
       element: BOSS_ELEMENT[k] && BOSS_ELEMENT[k] !== 'NEUTRAL' ? BOSS_ELEMENT[k] : null,
       /* The marker. Same creature, 0.75 of the box, its own outline weight. */
-      mapW: art.wide ? BOSS_MAP_WIDE_W : BOSS_MAP_W,
-      mapH: BOSS_MAP_H,
-      mapSink: Math.round(((art.stage && art.stage.sink) || 0) * (BOSS_MAP_H / BOSS_H)),
-      shadow: art.wide ? 44 : 30,
+      mapW: mapBoxOf(art).w,
+      mapH: mapBoxOf(art).h,
+      mapSink: Math.round(((art.stage && art.stage.sink) || 0) * mapRatioOf(art)),
+      mapRatio: mapRatioOf(art),
+      /* The ground shadow's half-width, in the units drawBoss multiplies by the
+       * archetype's own scale: `shadow * scale * 0.5` is the ellipse's rx. A
+       * 64-box boss at 2 gets 30 -> 60 device-logical pixels of shadow under a
+       * 128-wide creature, so the shadow is 47% of the width it stands in. The
+       * tall rung is drawn at 1 and is 96 wide, so 60 keeps that same fraction
+       * rather than inheriting a number written for a different scale. */
+      shadow: art.tall ? 60 : art.wide ? 44 : 30,
       colour: art.colour,
       accent: art.accent,
     })];
@@ -3483,16 +4133,68 @@ export function bossMotion(key) {
  *
  * WHAT 192 COSTS, MEASURED, AND WHY IT IS PAID. 192 centred on enemyX 184 runs
  * 88..280, so each wide archetype carries a `bias` that pulls its PAINTED box
- * back inside the frame — computed from the painted bounding box, not guessed:
- *   dragon       paints cols  9..89  ->  bias -12, on screen  94..255
- *   hydra        paints cols 28..68  ->  bias   0, on screen 144..225
- *   wyrm         paints cols  0..83  ->  bias   0, on screen  88..255
- *   interpreter  paints cols  0..90  ->  bias -14, on screen  74..255
+ * back inside the frame — computed from the painted bounding box, not guessed.
+ *
+ * THE 96-BOX AT EVERY STAGE, WHICH IS WHERE THE FIRST SET OF BIASES CAME FROM.
+ * The numbers this comment used to carry were measured over stages 0..2 and
+ * frames 0..4 with no beat, which is what scripts/verify/stage.mjs §5 samples.
+ * The last two stages are the ones that ADD — spall bites the contour, and
+ * crown() puts spines out of it — so the widest the creature ever gets is at a
+ * stage nobody was measuring. Re-measured over all six stages, all five frames
+ * and all six beats:
+ *   dragon       bias -12, on screen  84..255   widest at stage 0
+ *   hydra        bias   0, on screen 130..247   widest at stage 5
+ *   wyrm         bias  -2, on screen  86..255   widest at stage 4  (was 0: 257)
+ *   interpreter  bias -20, on screen  68..255   widest at stage 5  (was -14: 261)
+ * Two of the four ran off the right edge of a 256-wide frame at their last
+ * stage — the wyrm by 2 columns, the interpreter by 6 — so the spines the final
+ * form is FOR were the pixels being clipped.
+ *
+ * AND THEN THE SWAY, WHICH THAT MEASUREMENT STILL LEFT OUT. Every line above is
+ * a STILL: it places the sprite at `left = round(x + bias - w/2)` and stops.
+ * drawBoss does not stop there — it adds `dx = clamp(round(pose.dx * scale),
+ * -4, 4)` on top, every frame, forever, because the ambient pose is continuous
+ * and the frames are not. So three of the four rigs above, sitting at exactly
+ * 255 with zero slack, spent part of every idle cycle over the edge:
+ *   dragon       sway 1 -> dx +-2   right edge 257   2 columns of tail cut
+ *   wyrm         sway 3 -> dx +-4   right edge 259   4 columns of the 3rd coil
+ *   interpreter  sway 2 -> dx +-4   right edge 259   4 columns, and it is the staff
+ * A bias derived from a still is not a bias, it is half of one. Re-derived over
+ * all six stages x five frames x six beats x every dx the clamp can produce —
+ * the full envelope the renderer can actually put on the glass:
+ *   dragon       bias -14, on screen  80..255   0 of 540 frames outside
+ *   hydra        bias   0, on screen 126..251   0 of 900 frames outside
+ *   wyrm         bias  -6, on screen  78..255   0 of 900 frames outside
+ *   interpreter  bias -24, on screen  60..255   0 of 900 frames outside
+ * Each is the LARGEST bias that clears the edge, so the figures move the two
+ * or four columns they had to and not one more: the composition is off-centre
+ * by as little as the frame allows. Do not shrink the dx clamp instead — the
+ * +-4 cap is what keeps the 128-wide rigs in frame in the first place.
+ * scripts/verify/stage.mjs §5 now sweeps the same envelope, sway included, so
+ * a still-derived bias cannot pass again. docs/08 §B-2 carries this table.
+ *
  * The hero stands 32..95. So on the frames where the wyrm's and the
  * interpreter's coils swing furthest left they reach BEHIND him — which is why
  * fx.js now draws the hero after the enemy rather than before it. A creature
  * this size cannot both clear the party and keep its own tail, and of the two
  * the party is the one that must never be hidden.
+ *
+ * COULD THE WIDE RUNG BE 96x96 SO IT IS GENUINELY TALLER? No, and the frame is
+ * what says so rather than taste. A wide rig is drawn at 2, so 96 authored rows
+ * are 192 logical ones; standing on ground 175 with the sink of 3 the feet land
+ * at 178 and the top at 178 - 192 = -14, so 38 of the creature's rows are off
+ * the canvas or in the overscan before a pixel of it is redrawn. The ceiling is
+ * the safe area: 175 - 24 = 151 rows above the ground line, plus the sink, so
+ * the tallest whole-blit rig that fits at scale 2 is 96x72 -> 192x144, spanning
+ * rows 34..177. That is 16 logical rows taller than today and it costs
+ * re-authoring four rigs and every part offset, fault and core inside them; it
+ * is written down here rather than done because the rung that actually needed
+ * drawing was the one nothing in the tree had at all, which is FINAL_BOSS_H.
+ *
+ * AND THE FINAL RUNG, WHICH IS NOT SUBJECT TO ANY OF THIS. 96x128 at blit 1 is
+ * 96 logical columns centred on 184: cols 136..231, twenty-four clear of the
+ * right edge and forty clear of the hero. It is the only boss whose `bias` is
+ * 0 because it is the only one that never needed one.
  *
  * `sink` drops from 4 to 3 so the feet keep the same 6 logical rows under the
  * ground line they had at 1.5.
@@ -3593,11 +4295,12 @@ function partsFor(art, phase) {
 
 function assemble(key, frame, beat, phase = 0) {
   const art = ART[key];
-  const w = art.wide ? BOSS_WIDE_W : BOSS_W;
-  const canvasGrid = blank(w, BOSS_H);
+  const box = boxOf(art);
+  const canvasGrid = blank(box.w, box.h);
+  const half = art.tall ? FINAL_HALF : HALF;
 
   let body = art.body.half
-    ? mirror(halfRect(art.body.half, HALF), HALF)
+    ? mirror(halfRect(art.body.half, half), half)
     : rect(art.body.grid);
   body = (POSES[art.anim] || POSES.heavy)(body, frame);
   /* The body gets a beat too, one pixel of it, so the parts are not drifting
@@ -3758,7 +4461,8 @@ function heavyOutline(grid) {
 
 function assembleMap(key, frame, phase, rawKey, element) {
   const art = ART[key];
-  const boxW = art.wide ? BOSS_MAP_WIDE_W : BOSS_MAP_W;
+  const mbox = mapBoxOf(art);
+  const boxW = mbox.w;
   let grid = assemble(key, frame, 0, phase);
   /* The same damage passes, in the same order, BEFORE the reduction. A crack
    * opened after the reduction would be a crack drawn at the wrong scale; a
@@ -3774,15 +4478,20 @@ function assembleMap(key, frame, phase, rawKey, element) {
   /* Dressed at battle scale and THEN reduced — see dress() for why this is the
    * order the "same creature" claim depends on. */
   grid = dress(grid, rawKey, element, frame, 0, lightPhase(phase));
-  grid = despeckle(reduceGrid(grid, boxW - MAP_INSET * 2, BOSS_MAP_H - MAP_INSET * 2));
-  const box = blank(boxW, BOSS_MAP_H);
+  grid = despeckle(reduceGrid(grid, boxW - MAP_INSET * 2, mbox.h - MAP_INSET * 2));
+  const box = blank(boxW, mbox.h);
   stamp(box, grid, MAP_INSET, MAP_INSET);
-  return rimPass(applyRim(heavyOutline(box)));
+  /* Same rule as the battle form, and for the same measured reason: an element
+   * that refuses the contre-jour must refuse it in BOTH forms or the marker and
+   * the fight disagree about what the creature is made of — and the marker is
+   * the one that was still spending a palette slot on it. */
+  const lit = applyRim(heavyOutline(box));
+  return (!element || wantsRim(ELEMENT_STUB[element])) ? rimPass(lit) : lit;
 }
 
 export function bossMapSize(key) {
   const art = ART[resolveBoss(key)];
-  return { w: art.wide ? BOSS_MAP_WIDE_W : BOSS_MAP_W, h: BOSS_MAP_H };
+  return mapBoxOf(art);
 }
 
 /* The overworld form. Two frames, three phases, no beats — see above for why.
@@ -3798,7 +4507,8 @@ export function bossMapSprite(spriteKey, colour, frame = 0, opts = {}) {
   const cacheKey = `M|${key}|${lookOf(spriteKey).id}|${base}|${f}|${ph}|${el || '-'}`;
   const hit = cacheGet(cacheKey);
   if (hit) return hit;
-  const { canvas, ctx } = offscreen(art.wide ? BOSS_MAP_WIDE_W : BOSS_MAP_W, BOSS_MAP_H);
+  const mbox = mapBoxOf(art);
+  const { canvas, ctx } = offscreen(mbox.w, mbox.h);
   drawGrid(ctx, assembleMap(key, f, ph, spriteKey, el),
     bossPalette(base, art.accent, lightPhase(ph), el));
   return cachePut(cacheKey, canvas);
@@ -3853,7 +4563,7 @@ const spriteCache = new Map();
  * keys on the LOOK, so the fourteen named bosses, the seventeen apexes and the
  * final trial are thirty-two distinct entries where there used to be fifteen.
  * scripts/verify/bossforms.mjs warms the whole ARCHETYPE roster at every stage
- * — 15 x 6 x 17 = 1530, inside this cap — and counts rebuilds, so the next time
+ * — 16 x 6 x 17 = 1632, inside this cap — and counts rebuilds, so the next time
  * the unit changes it is a failing harness rather than a slow frame nobody
  * attributes to this.) */
 const CACHE_CAP = 2048;
@@ -3943,10 +4653,24 @@ export function bossSprite(spriteKey, colour, frame = 0, opts = {}) {
    * run before it: applyRim derives the light from the silhouette, and a spur
    * grown after the fact would be an unlit spur on a lit creature. */
   grid = dress(grid, spriteKey, el, f, beat, lightPhase(ph));
-  grid = rimPass(applyRim(grid));
+  /* The contre-jour, and the one cast that does not get it.
+   *
+   * bossart.wantsRim() has said since it was written that VOID and BRUTE refuse
+   * the low-left rim — void because being the exception to the cast's one light
+   * IS void, stone because rock does not emit — and this file imported the
+   * function and never called it. The rim was painted on every creature and the
+   * palette was then asked to hide it, which it does badly: measured on the
+   * Interviewer, 'Q' lands at #231c2e against an outline of #362b46 and renders
+   * 50 pixels of a SIXTEENTH colour on a sprite that is otherwise exactly at
+   * fifteen. Not painting it is both the cheaper answer and the one the rule
+   * already asked for. 'Q' is written inside the body, never on the boundary,
+   * so no silhouette moves; what changes is that four VOID and three BRUTE
+   * archetypes each give a palette slot back. */
+  grid = applyRim(grid);
+  if (!el || wantsRim(ELEMENT_STUB[el])) grid = rimPass(grid);
 
-  const w = art.wide ? BOSS_WIDE_W : BOSS_W;
-  const { canvas, ctx } = offscreen(w, BOSS_H);
+  const box = boxOf(art);
+  const { canvas, ctx } = offscreen(box.w, box.h);
   drawGrid(ctx, grid, bossPalette(base, art.accent, lightPhase(ph), el));
   return cachePut(cacheKey, canvas);
 }
@@ -4110,10 +4834,10 @@ export function drawBoss(ctx, key, x, y, opts = {}) {
    * is planted in its stage is planted on its tile too. Scaled by the ratio of
    * the two boxes rather than copied, or a 48-tall marker would sink eleven
    * pixels and stand in a hole. */
-  const sink = mapped ? (opts.sink === undefined ? Math.round(m.sink * BOSS_MAP_RATIO) : opts.sink)
+  const sink = mapped ? (opts.sink === undefined ? m.mapSink : opts.sink)
     : staged ? (opts.sink === undefined ? m.sink : opts.sink) : 0;
   const bias = mapped ? 0 : staged ? (opts.bias === undefined ? m.bias : opts.bias) : 0;
-  const spread = mapped ? m.shadow * BOSS_MAP_RATIO : m.shadow;
+  const spread = mapped ? m.shadow * m.mapRatio : m.shadow;
 
   const w = Math.round(img.width * scale);
   const h = Math.round(img.height * scale);

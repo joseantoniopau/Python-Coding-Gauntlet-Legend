@@ -135,6 +135,68 @@ if (!roster) {
   }
 }
 
+/* ---------------------------------------------------------------- REGALIA
+ *
+ * petart.js exports petArtStats(), which measures every worn piece against the
+ * animal without it, and until now NOTHING CALLED IT — not this file, not
+ * companion.mjs, not any page. Both pet harnesses exited 0 without ever
+ * rendering a worn piece, and neither output string contained the word
+ * 'regalia'. So the module's own headline, "pieces that change nothing: 0 of
+ * 31", was produced by a function nobody ran: a piece going invisible would
+ * have shipped green.
+ *
+ * Two numbers per piece per facing — pixels REPAINTED (the code ran) and pixels
+ * of OUTLINE ADDED (a player can see it from six tiles away). The MINIMUM
+ * across facings is reported, not the maximum: a collar that is perfect from
+ * three sides and absent from the fourth is a bug, and a max hides it exactly
+ * where it matters.
+ *
+ * The one legitimate zero is built into anchorAt(): an `eye` or `mouth` piece
+ * is deliberately refused on the view where the animal has its back turned,
+ * because a bit in the mouth is on the other side of the head. That is allowed
+ * for ONE facing. Two would mean the anchor is missing, not hidden. */
+{
+  const st = PA.petArtStats();
+  const HIDEABLE = new Set(['eye', 'mouth']);
+  const rows = [];
+  for (const r of st.regalia) {
+    const per = Object.entries(r.per);
+    const paints = per.map(([, v]) => v[0]);
+    const lines = per.map(([, v]) => v[1]);
+    const blindPaint = per.filter(([, v]) => v[0] === 0).map(([f]) => f);
+    const blindLine = per.filter(([, v]) => v[1] === 0).map(([f]) => f);
+    rows.push({ id: r.id, at: r.at, icon: r.icon,
+      minPixelsRepainted: Math.min(...paints), maxPixelsRepainted: Math.max(...paints),
+      minOutlineAdded: Math.min(...lines), maxOutlineAdded: Math.max(...lines),
+      facingsPaintingNothing: blindPaint, facingsAddingNoOutline: blindLine });
+
+    // Invisible everywhere: the piece is in the table and not on the animal.
+    if (Math.max(...paints) === 0) {
+      fail.push(`regalia ${r.id}: paints nothing on any facing — the piece is declared and not drawn`);
+    }
+    // Invisible from a side it should be visible from.
+    const allowed = HIDEABLE.has(r.at) ? 1 : 0;
+    if (blindPaint.length > allowed) {
+      fail.push(`regalia ${r.id} (at ${r.at}): paints nothing facing ${blindPaint.join(',')}`
+        + ` — ${allowed ? 'only the away view may be empty' : 'this anchor is never hidden'}`);
+    }
+    // A piece that never breaks the outline is a recolour. Legitimate only for
+    // an `eye` piece, which sits inside the silhouette by construction.
+    if (Math.max(...lines) === 0 && r.at !== 'eye') {
+      fail.push(`regalia ${r.id} (at ${r.at}): adds no outline on any facing — `
+        + 'it is a recolour, invisible at map distance');
+    }
+  }
+  out.regalia = {
+    pieces: st.regalia.length,
+    measuredOn: 'jaguar',
+    weakest: rows.slice().sort((a, b) => a.minOutlineAdded - b.minOutlineAdded
+      || a.minPixelsRepainted - b.minPixelsRepainted).slice(0, 6),
+    pureRecolours: rows.filter(r => r.maxOutlineAdded === 0).map(r => `${r.id} (at ${r.at})`),
+    rows,
+  };
+}
+
 out.failures = fail.length;
 out.detail = fail;
 console.log(JSON.stringify(out, null, 1));

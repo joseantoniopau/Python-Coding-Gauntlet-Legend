@@ -118,6 +118,38 @@ export const STAGE = Object.freeze({
 export const FIGURE_SCALE = 4;        // 16x24 blitted at 4 -> 64x96 logical
 const FIGURE_H = 24 * FIGURE_SCALE;   // 96
 
+/* WHAT TO BLIT A NON-BOSS ENEMY AT, DERIVED FROM ITS BOX RATHER THAN ASSUMED.
+ *
+ * FIGURE_SCALE is 4 because the rig it was named for is 24 rows: 24 x 4 = 96
+ * logical rows, standing on ground 175 with its top at 79, comfortably inside
+ * the safe area. That held while every creature on the stage was 24px. It
+ * stopped holding when monsterart grew two more rungs — ELITE_SIZE 32 and
+ * APEX_SIZE 48 — and this constant did not: a 48px body at 4 is 192 logical
+ * rows with its top at -17, which is not merely in the overscan, it is 17 rows
+ * off the 224-row raster entirely. Eighteen keys in the roster carry a 48 box.
+ *
+ * Nothing reaches this with one today — I resolved all 38 sprite names the
+ * server can emit across all 17 regions, 646 resolutions, and every one comes
+ * back 24px, and the overworld's pickFor() returns MOB_KEYS only — so this is
+ * a trap rather than a live break. It is still a trap the next caller falls
+ * into, and the fix is to stop asserting the box:
+ *
+ *   24 -> 4    96 logical rows
+ *   32 -> 3    96 logical rows
+ *   48 -> 2    96 logical rows
+ *
+ * Every rung lands on the same 96 rows the hero already occupies, which is the
+ * point — the ladder in docs/08 §B is a ladder of DETAIL, not of stage
+ * presence. A bigger box buys more pixels in the same silhouette, not a
+ * creature that outgrows the frame. Bosses keep their own 2: bossStageScale()
+ * owns that rung and it is deliberately the one thing on the stage allowed to
+ * be taller than the hero. */
+export function figureScale(img, boss) {
+  if (boss) return 2;
+  const h = img && img.height ? img.height : 24;
+  return h >= 48 ? 2 : h >= 32 ? 3 : FIGURE_SCALE;
+}
+
 /* THE SAFE AREA, as the two rows that bound it. Anything the player must READ
  * is placed against these and never against 0 or STAGE.h: rows 0..23 and
  * 200..223 are drawn but fall off the canvas, exactly as they fell off a tube.
@@ -1662,7 +1694,11 @@ export class BattleFX {
   dissolve() {
     const img = this._sprite(0);
     if (img && !this.reducedMotion) {
-      const scale = this.scene && this.scene.boss ? 2 : FIGURE_SCALE;
+      /* The same box-aware step as the live blit above. If these two ever
+       * disagree the death particles scatter at a different scale from the
+       * creature they came off, which reads as the sprite jumping size on the
+       * frame it dies. */
+      const scale = figureScale(img, this.scene && this.scene.boss);
       const w = img.width * scale, h = img.height * scale;
       const x0 = STAGE.enemyX - w / 2;
       const y0 = STAGE.ground - h;
@@ -2420,7 +2456,7 @@ export class BattleFX {
     const img = this._sprite(frame);
     if (!img) return;
     const boss = false;
-    const S = boss ? 2 : FIGURE_SCALE;
+    const S = figureScale(img, boss);
     const bob = this.reducedMotion ? 0 : Math.round(Math.sin(this.clock * 2.4) * 1) * S;
     /* THE SQUASH IS A SOURCE CROP, NOT A DESTINATION STRETCH — same fix and
      * same reason as the hero's breathe above.

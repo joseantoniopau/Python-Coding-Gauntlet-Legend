@@ -17,7 +17,7 @@ const fail = [];
 const note = (m) => fail.push(m);
 
 /* ---------------- 1. self check, and glyph agreement with bosses.js -------- */
-const self = BA.bossArtSelfCheck(B.BOSS_GLYPHS);
+const self = BA.bossArtSelfCheck(B.BOSS_GLYPHS, { w: B.BOSS_W, h: B.BOSS_H, wide: B.BOSS_WIDE_W, finalW: B.FINAL_BOSS_W, finalH: B.FINAL_BOSS_H });
 console.log('1. SELF CHECK');
 console.log('   glyph table identical to bosses.BOSS_GLYPHS:', BA.ART_GLYPHS === B.BOSS_GLYPHS);
 console.log('   ok:', self.ok, self.problems.length ? self.problems : '');
@@ -423,3 +423,10 @@ console.log('\n14. CO-IMPORT (bossart alongside everything main.js loads)');
 console.log('\n================ VERDICT ================');
 console.log(fail.length ? 'FAILURES (' + fail.length + '):' : 'no failures');
 for (const f of fail.slice(0, 30)) console.log('  -', f);
+/* And SAY SO to the shell. This file collected failures into `fail` and then
+ * exited 0 regardless, so every run was green to a caller that checks the exit
+ * status — which is every caller, since nobody reads 400 lines of harness
+ * output by hand. The ladder-drift check added above was the proof: bossart.js
+ * and bosses.js disagreeing on FINAL_BOSS_H printed a FAILURES block and still
+ * returned success. */
+process.exitCode = fail.length ? 1 : 0;

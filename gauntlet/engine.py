@@ -1022,6 +1022,43 @@ class Game:
         player["stamina"] = min(player["stamina"], player["stamina_max"])
         player["mana"] = min(player["mana"], player["mana_max"])
 
+    def _pet_rows(self) -> list:
+        """pets.catalogue() with THE WORN PIECE MERGED IN.
+
+        petart.js has a complete regalia system — PET_REGALIA, petRegaliaFor(),
+        wear(), REGALIA_SHAPES, thirty-one pieces — and until now nothing could
+        reach it, because the worn piece never left the server. It lives in
+        state["regalia"]["worn"] and travelled on exactly one route, /api/regalia,
+        which the world screen does not fetch; the forty keys pets.catalogue()
+        ships did not include it. So overworld.js had nothing to pass even once
+        it learned to ask, and no companion in the field has ever worn anything.
+
+        TWO ROSTERS, and they are worn differently. regalia.py's twenty-four are
+        worn PER COMPANION — regalia.worn_by(state, pet_id) — and carry their own
+        authored colour, which is the point of them: a jade collar is jade
+        because regalia.py says so, not because the rarity ramp happened to land
+        there. quests.py's seven are worn ONE AT A TIME by the party
+        (REGALIA_ACTIVE_LIMIT is 1) and have no colour and no pet, so they are
+        given to the ACTIVE companion only — putting the party's one collar on
+        all twelve animals in the roster would be a different lie from the one
+        being fixed. A quest piece sends no colour and petart falls back to the
+        rarity accent, which is its documented behaviour for a piece that has
+        none.
+        """
+        rows = pets.catalogue(self.state["pets"])
+        worn_state = self.state.get(regalia.REGALIA_STATE_KEY)
+        quest_piece = quests.worn_regalia(self.state["quests"]) or {}
+        out = []
+        for row in rows:
+            piece_id = regalia.worn_by(worn_state, row["id"])
+            colour = ""
+            if piece_id:
+                colour = getattr(regalia.BY_ID.get(piece_id), "colour", "") or ""
+            elif row.get("active") and quest_piece.get("id"):
+                piece_id = quest_piece["id"]
+            out.append({**row, "regalia": piece_id, "regalia_colour": colour})
+        return out
+
     def loadout(self) -> dict:
         """The kit screen. DEGRADE — docs/10-sealed-views.md §4.E.
 
@@ -2069,6 +2106,13 @@ class Game:
                             "name": built.name}
         self.save()
 
+        # One boss per region for the overworld marker. Six regions have none
+        # and four have two; the FIRST row in world.BOSSES for a region is the
+        # one whose key gates it, which is the one the marker stands for.
+        region_boss: dict[str, dict] = {}
+        for b in world.BOSSES:
+            region_boss.setdefault(b["region"], b)
+
         return {
             "player": {**player, "xp_into_level": into, "xp_for_level": need},
             "skills": [
@@ -2088,10 +2132,21 @@ class Game:
             # fetch and no new client plumbing. It carries the condition now
             # AND the next two hours of it, so the client stays right as time
             # passes without asking again — see weather.strip().
+            # THE BOSS MARKER'S SPRITE TRAVELS WITH THE REGION, for the same
+            # reason `weather` does: the client already receives a region
+            # record per region, and the overworld's boss marker had no way to
+            # learn which creature it was standing for. It drew `m.boss ||
+            # 'titan'` with nothing ever setting `m.boss`, so every region in
+            # the game put a Hash Titan on its boss tile — including the Null
+            # King's Castle, whose Interviewer has a 72x96 map form that no
+            # player could ever have seen. Blank for the six regions that have
+            # no boss; overworld.js keeps its own fallback for those.
             "regions": [
                 {**r, "unlocked": r["id"] in open_regions,
                  "tier": world.town_tier(skills.get(r["skill"],
                                                     skillmod.SkillState(name="x")).mastery),
+                 "boss_sprite": region_boss.get(r["id"], {}).get("sprite", ""),
+                 "boss_colour": region_boss.get(r["id"], {}).get("colour", ""),
                  "weather": weathermod.forecast(r["id"], self.world.seed, now)}
                 for r in world.REGIONS
             ],
@@ -2165,7 +2220,7 @@ class Game:
                                              due_retests=len(due_now), limit=6),
             "quests": quests.board(ctx, self.state),
             "quest_next": quests.next_steps(ctx, self.state),
-            "pets": pets.catalogue(self.state["pets"]),
+            "pets": self._pet_rows(),
             "pet_hints": pets.undiscovered_hints(self._pet_evidence(),
                                                  self.state["pets"]["found"]),
             "dungeon": dungeon_view,

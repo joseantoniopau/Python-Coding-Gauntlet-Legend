@@ -15,7 +15,8 @@
  *   petFrame(animal, facing, frame, opts) -> a cached canvas, 16x16
  *   petSprites(animal, opts)              -> the whole set, ready to index
  *   petSilhouette(animal, ...)            -> the readability check, colour gone
- *   PET_ANIMALS                           -> what is authored
+ *   petRegaliaFor(idOrRow)                -> a worn object, resolved
+ *   PET_ANIMALS / PET_REGALIA             -> what is authored
  *
  * It owns no state the caller has to manage and it never throws on a name it
  * does not know: gauntlet/pets.py is being rewritten while this is being read,
@@ -28,16 +29,22 @@
  *     scripts/verify/raster.mjs, the same instrument the hero rig is measured
  *     with — and never off the palette dict, because a dict with fifteen
  *     entries that a shading pass turns into sixteen is still over budget.
- *  2. One pixel grid. 16x16, integer scale, the same grain as the 16x24 hero
- *     and the 16x16 terrain. A pet is two thirds the hero's height on purpose:
- *     it reads as a companion rather than as a second character.
+ *  2. One pixel grid. 16x16, integer scale, the same grain as the 16x24 field
+ *     hero and the 16x16 terrain. That box was re-examined when the battle
+ *     raster moved to 256x224 and it did not move, for a measured reason: the
+ *     companion never appears on the battle stage, the FIELD hero is still
+ *     16x24, and the overworld bottom-aligns a pet on a 16px tile. Beside that
+ *     hero's 23 rows of ink the twelve carry 11 to 16, which is roughly half
+ *     his height — an animal at a man's knee, which is where a companion goes.
  *  3. No Math.random and no Date.now on a draw path. Every variation in here is
  *     a hash of the inputs, so two runs of the same frame are the same bytes.
  *  4. No per-frame allocation in a hot loop. Frames are cached under a cap and
  *     evicted oldest-first, exactly as the hero rig does it.
- *  5. Merge, then light, once. mergeGrids -> applyRim -> rimLowLeft, borrowed
- *     from sprites.js rather than reimplemented, because a second lighting model
- *     is how a cast stops looking like a cast.
+ *  5. Merge, then light, once. mergeGrids -> liteAll -> applyRim -> rimLowLeft,
+ *     borrowed from sprites.js rather than reimplemented, because a second
+ *     lighting model is how a cast stops looking like a cast. liteAll() is not
+ *     one: it is applyRim run a second time, on a second material, from the
+ *     same lamp in the same direction.
  *
  * SILHOUETTE IS THE WHOLE JOB
  *
@@ -54,8 +61,21 @@
  *   crow        compact body, heavy beak, forked tail, feet together
  *   axolotl     a wide soft head wearing gill plumes
  *   nautilus    a spiral that floats, trailing ragged tentacles
+ *   boar        a shoulder hump above the line of the back, and no neck at all
+ *   octopus     a smooth bell over a ragged fan of arms, and no hard part on it
  *
  * Each is checked with colour discarded by petSilhouette().
+ *
+ * THE LAST TWO ARE NEW AND THEY ARE THE TWO THAT MATTERED MOST
+ *
+ * STUB is the animal the player walks the whole tutorial beside; it dies at the
+ * first boss and comes back as BARROW, which is the same pig at LEGENDARY. The
+ * MIMIC is the hidden twelfth. Between them that is the most-seen companion in
+ * the game and the rarest one, and all three were being drawn by something
+ * else: both boars landed on `beast`, the fallback whose own comment says it is
+ * "deliberately no markings and no character", and the mimic aliased to
+ * `nautilus`, which is the one cephalopod in the sea that is mostly shell. The
+ * roster ships twelve companions and it now has twelve shapes.
  *
  * AND SO IS GAIT
  *
@@ -75,25 +95,45 @@
  *
  * Everything above is a claim, so here are the numbers behind them, taken off
  * the rendered raster rather than off this file's intentions. Re-take them with
- * petArtStats() and scripts/verify/raster.mjs.
+ * petArtStats(), scripts/verify/petroster.mjs and scripts/verify/companion.mjs.
  *
- *   colour budget   29,130 frames swept — ten animals plus two unknown names,
- *                   seven tiers, ten server colours, four facings, two poses,
- *                   four frames. Worst frame: 14 colours (penguin, LEGENDARY,
- *                   where crest, mark and halo are all present). Dead frames:
- *                   4 colours, every animal.
- *   gait            pixels changing between consecutive frames of the side
- *                   walk, out of 256: tortoise 11-29 at the low end, crow
- *                   77-151 at the high end. Outline-only, colour discarded:
- *                   6-88. Nothing in here animates by brightness.
- *   silhouette      TUTORIAL < COMMON < LEGENDARY in lit area for all ten,
+ *   colour budget   1,153,152 frames swept — twelve animals, seven tiers, ten
+ *                   server colours, four facings, four frames, both poses, the
+ *                   fainted frame, and every one of the thirty-one worn
+ *                   objects. Worst frame: 15 colours, and it is a LEGENDARY
+ *                   penguin wearing regalia, where the crest, the halo, the
+ *                   mark and the object are all present at once. Without an
+ *                   object the ceiling is 14, so regalia costs exactly one
+ *                   slot and it is the last one. Fainted frames: 4-5.
+ *   size            ink rows inside the 16-row box, standing: 11 to 16. The
+ *                   field hero is 23 of 24. Nothing here fills its box and
+ *                   nothing here is supposed to.
+ *   tone            every one of the twelve renders at least three body tones,
+ *                   a hard near-black outline of 37-68 pixels, and a rim of
+ *                   6-17. The tortoise's shell went from ONE tone to three when
+ *                   liteAll() started lighting the hard material.
+ *   gait            pixels of outline changing between consecutive frames of
+ *                   the side walk, out of 256: axolotl 28 at the low end, crow
+ *                   184 at the high end. Nothing in here animates by brightness.
+ *   fainted         pixels of outline that move between standing and fainted:
+ *                   52 to 142, which is 36% to 104% of the whole standing
+ *                   outline. Before this pass it was 3 pixels on the jaguar.
+ *                   Ink rows drop from 11-16 to 6-15.
+ *   regalia         all thirty-one repaint the sprite, 4 to 28 pixels at the
+ *                   facing each is best seen from. Thirty of the thirty-one
+ *                   also add outline, 1 to 12 pixels of it. The exception is
+ *                   trough_lens, which is a monocle strapped over an eye and is
+ *                   inside the head by definition.
+ *   silhouette      TUTORIAL < COMMON < LEGENDARY in lit area for all twelve,
  *                   monotonically: e.g. jaguar 139 / 144 / 178 pixels.
- *   the return      100% of the COMMON silhouette survives into LEGENDARY, for
- *                   all ten animals. The legendary form is the same animal with
- *                   things added, never a redrawn one.
- *   determinism     2,464 frames hash identically warm, cold and rebuilt.
- *   steady state    240 redraws of one settled companion: 0 canvases. The whole
- *                   roster at two tiers, re-rendered four times over: 0.
+ *   the return      100% of the COMMON silhouette survives into LEGENDARY on
+ *                   the contact frame, for all twelve animals and all four
+ *                   facings. Across all four frames and both poses the worst is
+ *                   94.4%. The legendary form is the same animal with things
+ *                   added, never a redrawn one.
+ *   determinism     3,852 frames hash identically warm, cold and rebuilt.
+ *   steady state    the whole roster at two tiers, bare and wearing regalia,
+ *                   re-rendered twice over: 0 canvases.
  */
 
 import {
@@ -163,7 +203,7 @@ const ANIMALS = {};
 /* ---- jaguar: long, low, four-beat. The back sits below the shoulder. ---- */
 ANIMALS.jaguar = {
   body: 'hide', accent: 'earth', hard: 'bone', family: 'organic',
-  gait: 'prowl', idle: 'tailflick',
+  gait: 'prowl', idle: 'tailflick', fallen: 'fold',
   period: 640, idlePeriod: 2800, bob: 1, sway: 0,
   side: {
     grid: [
@@ -187,6 +227,7 @@ ANIMALS.jaguar = {
     legs: [[1, 3], [5, 7], [10, 12], [13, 15]],
     legTop: 12, spine: [8, 11], head: [4, 7], headX: [10, 15],
     tail: [2, 6], tailX: [1, 4], mark: [4, 9],
+    on: { throat: [11, 7], brow: [13, 5], back: [6, 8], leg: [11, 13] },
     crest: { ox: 9, oy: 2, rows: ['.ccc.', 'cccco', '.cco.'] },
   },
   down: {
@@ -211,6 +252,7 @@ ANIMALS.jaguar = {
     legs: [[3, 5], [10, 12], [7, 8]],
     legTop: 12, spine: [8, 11], head: [2, 7], headX: [4, 11],
     tail: null, tailX: null, mark: [5, 9],
+    on: { throat: [7, 7], brow: [7, 3], back: [7, 10], leg: [4, 13] },
     crest: { ox: 4, oy: 0, rows: ['.c....c.', 'cccccccc', '.c.cc.c.'] },
     back: [{ ox: 11, oy: 4, rows: ['.oo.', 'oBBo', 'oBBo', 'oBBo', 'oBBo', 'oBBo', 'oBB.'] }],
   },
@@ -219,7 +261,7 @@ ANIMALS.jaguar = {
 /* ---- python: a line. No legs anywhere in the grid, and none in the gait. --- */
 ANIMALS.snake = {
   body: 'venom', accent: 'grass', hard: 'bone', family: 'organic',
-  gait: 'undulate', idle: 'tongue',
+  gait: 'undulate', idle: 'tongue', fallen: 'slack',
   period: 900, idlePeriod: 2400, bob: 0, sway: 1,
   side: {
     grid: [
@@ -242,6 +284,7 @@ ANIMALS.snake = {
     ],
     legs: [], legTop: 16, spine: [7, 13], head: [4, 7], headX: [9, 15],
     tail: [8, 13], tailX: [0, 6], mark: [4, 9],
+    on: { throat: [11, 8], brow: [11, 5], back: [4, 7], leg: null },
     crest: { ox: 9, oy: 2, rows: ['.cc..', 'cccc.', 'cc.c.'] },
   },
   down: {
@@ -265,6 +308,7 @@ ANIMALS.snake = {
     ],
     legs: [], legTop: 16, spine: [2, 9], head: [10, 14], headX: [4, 11],
     tail: [2, 5], tailX: [2, 13], mark: [5, 7],
+    on: { throat: [7, 10], brow: [7, 10], back: [7, 4], leg: null },
     crest: { ox: 3, oy: 9, rows: ['.c......c.', 'cc......cc'] },
     back: [{ ox: 3, oy: 9, rows: ['__________', '__________', '__________',
                                   '__________', '__________', '__________',
@@ -276,7 +320,7 @@ ANIMALS.snake = {
 /* ---- llama: neck and legs. The neck bobs a frame behind the feet. ---- */
 ANIMALS.llama = {
   body: 'bone', accent: 'leather', hard: 'bone', family: 'organic',
-  gait: 'stilt', idle: 'earflick',
+  gait: 'stilt', idle: 'earflick', fallen: 'fold',
   period: 760, idlePeriod: 3000, bob: 1, sway: 0,
   side: {
     grid: [
@@ -300,6 +344,7 @@ ANIMALS.llama = {
     legs: [[1, 3], [5, 7], [9, 11], [12, 14]],
     legTop: 12, spine: [8, 11], head: [1, 5], headX: [10, 15],
     tail: [7, 9], tailX: [1, 4], mark: [4, 9],
+    on: { throat: [12, 6], brow: [12, 2], back: [6, 9], leg: [13, 13] },
     crest: { ox: 9, oy: 0, rows: ['..cc.', '.ccc.', 'cc.c.'] },
   },
   down: {
@@ -324,6 +369,7 @@ ANIMALS.llama = {
     legs: [[3, 5], [10, 12], [7, 8]],
     legTop: 12, spine: [8, 11], head: [1, 5], headX: [5, 10],
     tail: null, tailX: null, mark: [5, 9],
+    on: { throat: [7, 7], brow: [7, 2], back: [7, 10], leg: [4, 13] },
     crest: { ox: 5, oy: 0, rows: ['c....c', 'cc..cc', '.c..c.'] },
     back: [{ ox: 11, oy: 6, rows: ['.oo.', 'oBBo', 'oBBo', 'oBB.'] }],
   },
@@ -332,7 +378,7 @@ ANIMALS.llama = {
 /* ---- penguin: weighted teardrop. It rocks. It cannot stride. ---- */
 ANIMALS.penguin = {
   body: 'gunmetal', accent: 'bone', hard: 'bronze', family: 'metal',
-  gait: 'rock', idle: 'lean',
+  gait: 'rock', idle: 'lean', fallen: 'topple',
   period: 820, idlePeriod: 2600, bob: 1, sway: 1,
   side: {
     grid: [
@@ -356,6 +402,7 @@ ANIMALS.penguin = {
     legs: [[4, 6], [7, 12]],
     legTop: 14, spine: [6, 13], head: [2, 5], headX: [4, 11],
     tail: null, tailX: null, mark: [5, 11],
+    on: { throat: [7, 6], brow: [7, 3], back: [5, 8], leg: [5, 14] },
     crest: { ox: 4, oy: 0, rows: ['..cc..', '.cccc.', 'cc..cc'] },
   },
   down: {
@@ -380,6 +427,7 @@ ANIMALS.penguin = {
     legs: [[3, 6], [9, 12]],
     legTop: 14, spine: [6, 13], head: [2, 5], headX: [4, 11],
     tail: null, tailX: null, mark: [4, 11],
+    on: { throat: [7, 6], brow: [7, 3], back: [7, 7], leg: [5, 14] },
     crest: { ox: 5, oy: 0, rows: ['.c..c.', 'cccccc', '.c..c.'] },
     back: [{ ox: 3, oy: 6, rows: ['..oBBBBBBo..', '.oBBBBBBBBo.',
                                   'oBBBBBBBBBBo', 'oBBaBBBBaBBo',
@@ -393,7 +441,7 @@ ANIMALS.penguin = {
 /* ---- velociraptor: a horizontal spine over two legs, tail counterweighting -- */
 ANIMALS.raptor = {
   body: 'rust', accent: 'blood', hard: 'bone', family: 'organic',
-  gait: 'twobeat', idle: 'headjerk',
+  gait: 'twobeat', idle: 'headjerk', fallen: 'fold',
   period: 420, idlePeriod: 2200, bob: 1, sway: 0,
   side: {
     grid: [
@@ -417,6 +465,7 @@ ANIMALS.raptor = {
     legs: [[2, 4], [10, 13]],
     legTop: 11, spine: [7, 10], head: [1, 4], headX: [9, 15],
     tail: [5, 6], tailX: [1, 6], mark: [6, 8],
+    on: { throat: [11, 5], brow: [12, 2], back: [8, 7], leg: [11, 12] },
     crest: { ox: 10, oy: 0, rows: ['.ccc.', 'cccc.', '.cc..'] },
   },
   down: {
@@ -441,6 +490,7 @@ ANIMALS.raptor = {
     legs: [[2, 5], [10, 13]],
     legTop: 11, spine: [7, 10], head: [2, 6], headX: [4, 11],
     tail: null, tailX: null, mark: [5, 8],
+    on: { throat: [7, 6], brow: [7, 3], back: [7, 9], leg: [4, 12] },
     crest: { ox: 5, oy: 0, rows: ['.cccc.', 'cc..cc', '.c..c.'] },
     back: [{ ox: 5, oy: 7, rows: ['.oBBBB.', 'oBBBBBo', 'oBBBBBo'] },
            { ox: 5, oy: 12, rows: ['oBBBBo', 'oBBBBo', '.oooo.'] }],
@@ -450,7 +500,7 @@ ANIMALS.raptor = {
 /* ---- axolotl: a wide soft head wearing gill plumes. Barely lifts a foot. --- */
 ANIMALS.axolotl = {
   body: 'skin', accent: 'blood', hard: 'bone', family: 'organic',
-  gait: 'paddle', idle: 'gills',
+  gait: 'paddle', idle: 'gills', fallen: 'fold',
   period: 700, idlePeriod: 2000, bob: 1, sway: 1,
   side: {
     grid: [
@@ -474,6 +524,7 @@ ANIMALS.axolotl = {
     legs: [[3, 5], [9, 11]],
     legTop: 12, spine: [7, 11], head: [4, 8], headX: [8, 15],
     tail: [5, 6], tailX: [1, 5], mark: [5, 9],
+    on: { throat: [9, 9], brow: [11, 7], back: [6, 10], leg: [10, 13] },
     crest: { ox: 8, oy: 1, rows: ['.c.c.c', 'cc.cc.', '.ccc..'] },
   },
   down: {
@@ -498,6 +549,7 @@ ANIMALS.axolotl = {
     legs: [[2, 4], [10, 12]],
     legTop: 12, spine: [9, 12], head: [2, 5], headX: [2, 13],
     tail: null, tailX: null, mark: [5, 9],
+    on: { throat: [7, 9], brow: [7, 5], back: [7, 11], leg: [3, 13] },
     crest: { ox: 2, oy: 0, rows: ['.c........c.', 'ccc......ccc', '.c........c.'] },
     back: [{ ox: 4, oy: 5, rows: ['.oBBBBBBo.', 'oBBBBBBBBo', 'oBBaBBaBBo',
                                   'oBBBBBBBBo'] },
@@ -508,7 +560,7 @@ ANIMALS.axolotl = {
 /* ---- tortoise: a dome on four stumps. The dome never moves, ever. ---- */
 ANIMALS.tortoise = {
   body: 'grass', accent: 'earth', hard: 'wood', family: 'world',
-  gait: 'plod', idle: 'blink',
+  gait: 'plod', idle: 'blink', fallen: 'capsize',
   period: 1400, idlePeriod: 3400, bob: 0, sway: 0,
   side: {
     grid: [
@@ -532,6 +584,7 @@ ANIMALS.tortoise = {
     legs: [[1, 3], [7, 9], [11, 13]],
     legTop: 12, spine: [9, 11], head: [9, 12], headX: [11, 15],
     tail: null, tailX: null, shell: [3, 8], mark: [4, 5], crestHead: false,
+    on: { throat: [11, 11], brow: [12, 9], back: [6, 4], leg: [12, 13] },
     crest: { ox: 2, oy: 1, rows: ['.c..c..c..c.', 'cccccccccccc'] },
   },
   down: {
@@ -556,6 +609,7 @@ ANIMALS.tortoise = {
     legs: [[2, 4], [11, 13]],
     legTop: 12, spine: [11, 13], head: [12, 15], headX: [6, 9],
     tail: null, tailX: null, shell: [2, 10], mark: [5, 5], crestHead: false,
+    on: { throat: [7, 11], brow: [7, 12], back: [7, 6], leg: [3, 13] },
     crest: { ox: 1, oy: 1, rows: ['..c..c..c..c..', 'cccccccccccccc'] },
     back: [{ ox: 5, oy: 11, rows: ['________', '________', '________', '________'] },
            { ox: 5, oy: 11, rows: ['.oBBBBo.', '.oBBBBo.', '.oooooo.'] }],
@@ -565,7 +619,7 @@ ANIMALS.tortoise = {
 /* ---- nautilus: a spiral that floats. Ragged tentacles, never a leg. ---- */
 ANIMALS.nautilus = {
   body: 'bone', accent: 'violet', hard: 'bone', family: 'organic',
-  gait: 'drift', idle: 'chamber',
+  gait: 'drift', idle: 'chamber', fallen: 'sink',
   period: 1100, idlePeriod: 2600, bob: 2, sway: 1,
   side: {
     grid: [
@@ -588,6 +642,11 @@ ANIMALS.nautilus = {
     ],
     legs: [], legTop: 16, spine: [9, 11], head: [9, 11], headX: [2, 12],
     tail: [13, 15], tailX: [3, 11], mark: [6, 5], crestHead: false,
+    // The throat is the LOWER lip of the mantle, not the middle of it. Anchored
+    // at the middle, a band ran along a row that already had the shell above it
+    // and the body below it and repainted nineteen pixels for nought of
+    // outline: the Twice-Ringing Pin was on the animal and could not be found.
+    on: { throat: [7, 11], brow: [7, 2], back: [7, 4], leg: [4, 13] },
     crest: { ox: 4, oy: 0, rows: ['.cc..cc.', 'cc.cc.cc'] },
   },
   down: {
@@ -611,6 +670,7 @@ ANIMALS.nautilus = {
     ],
     legs: [], legTop: 16, spine: [10, 12], head: [10, 12], headX: [3, 12],
     tail: [14, 15], tailX: [2, 13], mark: [5, 5], crestHead: false,
+    on: { throat: [7, 12], brow: [7, 2], back: [7, 5], leg: [3, 14] },
     crest: { ox: 4, oy: 0, rows: ['.c..c..c.', 'cc.cc.cc.'] },
     back: [{ ox: 2, oy: 13, rows: ['____________', '____________', '____________'] },
            { ox: 4, oy: 10, rows: ['.oBBBBo.', 'oBBBBBBo', 'oBBaaBBo', '.oooooo.'] }],
@@ -620,7 +680,7 @@ ANIMALS.nautilus = {
 /* ---- crow: compact, heavy beak, forked tail, both feet together. ---- */
 ANIMALS.crow = {
   body: 'void', accent: 'violet', hard: 'gunmetal', family: 'magic',
-  gait: 'hop', idle: 'headturn',
+  gait: 'hop', idle: 'headturn', fallen: 'topple',
   period: 620, idlePeriod: 2200, bob: 1, sway: 0,
   side: {
     grid: [
@@ -644,6 +704,7 @@ ANIMALS.crow = {
     legs: [[4, 6], [7, 9]],
     legTop: 12, spine: [6, 11], head: [2, 6], headX: [9, 15],
     tail: [5, 8], tailX: [1, 4], mark: [4, 8],
+    on: { throat: [11, 6], brow: [12, 3], back: [5, 7], leg: [5, 13] },
     crest: { ox: 9, oy: 0, rows: ['..cc..', '.cccc.', 'cc..c.'] },
   },
   down: {
@@ -668,12 +729,165 @@ ANIMALS.crow = {
     legs: [[4, 6], [7, 9]],
     legTop: 13, spine: [7, 12], head: [2, 6], headX: [4, 11],
     tail: null, tailX: null, mark: [4, 9],
+    on: { throat: [7, 7], brow: [7, 3], back: [7, 10], leg: [5, 14] },
     crest: { ox: 5, oy: 0, rows: ['.c..c.', 'cc..cc', '.cccc.'] },
     back: [{ ox: 4, oy: 7, rows: ['.oBBBBBBo.', 'oBBBBBBBBo',
                                   'oBBaBBaBBo', 'oBBBBBBBBo'] },
            { ox: 2, oy: 8, rows: ['oB........Bo', 'oB........Bo',
                                   'oB........Bo', 'oo........oo'] },
            { ox: 5, oy: 11, rows: ['oBBBBo', 'oBBBBo', '.o..o.'] }],
+  },
+};
+
+/* ---- boar: all head and shoulder. The hump is higher than the rump. ----
+ *
+ * This one is drawn rather than borrowed because of who wears it. STUB is the
+ * animal the player walks the entire tutorial beside, and BARROW is the same
+ * animal returned at LEGENDARY after the fall at the first boss — between them
+ * they are on screen for more of the game than any other companion. Both were
+ * landing on `beast`, the fallback whose own comment says it is "deliberately
+ * no markings and no character": the most-seen companion in the game was being
+ * drawn by the shape that exists to mean nobody has drawn this yet.
+ *
+ * A boar is not a dog with a different palette, and the three things that say
+ * so at 16px are all in the outline: the SHOULDER HUMP standing above the line
+ * of the back, the head set straight on with no neck between them, and a tusk
+ * on the front of the face pointing up out of the jaw. */
+ANIMALS.boar = {
+  body: 'leather', accent: 'earth', hard: 'bone', family: 'organic',
+  gait: 'shove', idle: 'root', fallen: 'fold',
+  period: 660, idlePeriod: 2400, bob: 1, sway: 0,
+  side: {
+    grid: [
+      '................',
+      '................',
+      '................',
+      '.......oooo.....',
+      '..oo..oBBBBoo...',
+      '..oBoooBBBBBBoo.',
+      '.oBBBBBBBBBBBBBo',
+      '.oBBBBBBBBBBBBBo',
+      '.oBaBBBaBBBBwBgo',
+      '.oBBBBBBBBBBeBgo',
+      '.oBBBBBBBBBBgggo',
+      '.oBBBBBBBBBBoooo',
+      '.oBBoBBoBBoBo...',
+      '.oBo.oBo.oBo....',
+      '.oBo.oBo.oBo....',
+      '.ogo.ogo.ogo....',
+    ],
+    // Three rows of leg under twelve rows of animal. A boar is a wedge carried
+    // on short legs, and the first draft gave it four rows of daylight
+    // underneath, which turned the same outline into a deer.
+    legs: [[1, 3], [5, 7], [9, 11]],
+    legTop: 13, spine: [6, 11], head: [6, 10], headX: [11, 15],
+    tail: [4, 6], tailX: [2, 4], mark: [4, 7], crestHead: false,
+    // The bristle ridge runs along the BACK, not on the skull, so it is not
+    // part of the head block — the same `crestHead: false` the tortoise's shell
+    // spines need and for the same reason. Without it the legendary boar's head
+    // band grew to swallow the whole ridge, the gait's nod then moved eleven
+    // columns of animal instead of five, and seven pixels of the COMMON outline
+    // did not survive into LEGENDARY. On this animal that is not a rounding
+    // error: STUB dies at the barrow and comes back as BARROW, and the whole
+    // scene is the player recognising the same pig.
+    on: { throat: [11, 7], brow: [12, 6], back: [9, 5], leg: [10, 13] },
+    crest: { ox: 6, oy: 2, rows: ['.c.c.c', 'cc.ccc'] },
+  },
+  down: {
+    grid: [
+      '................',
+      '................',
+      '................',
+      '....oooooooo....',
+      '..ooBBBBBBBBoo..',
+      '.oBBwBBBBBBwBBo.',
+      '.oBBeBBBBBBeBBo.',
+      'ogBBBBBggBBBBBgo',
+      '.oBBBBBggBBBBBo.',
+      '..oBBBBBBBBBBo..',
+      '...oBBBBBBBBo...',
+      '...oBBaBBaBBo...',
+      '...oBo.oo.oBo...',
+      '...oBo.oo.oBo...',
+      '...oBo.oo.oBo...',
+      '...ogo.oo.ogo...',
+    ],
+    legs: [[3, 5], [10, 12], [7, 8]],
+    legTop: 12, spine: [9, 11], head: [3, 8], headX: [1, 14],
+    tail: null, tailX: null, mark: [5, 10], crestHead: false,
+    on: { throat: [7, 9], brow: [7, 4], back: [7, 11], leg: [4, 13] },
+    crest: { ox: 5, oy: 1, rows: ['.c..c.', 'cc.ccc'] },
+    back: [{ ox: 3, oy: 4, rows: ['.oBBBBBBBBo.', 'oBBBBBBBBBBo',
+                                  'oBBaBBBBaBBo', 'oBBBBBBBBBBo',
+                                  '.oBBBBBBBBo.'] }],
+  },
+};
+
+/* ---- octopus: a soft bell wearing eight arms. No shell anywhere. ----
+ *
+ * MIMIC, the hidden companion, was resolving through PET_ALIAS to `nautilus`,
+ * and a nautilus is the one cephalopod in the sea that is mostly SHELL. The
+ * hidden animal was therefore arriving as the exact opposite of what it is: a
+ * rigid spiral where the whole character of the thing is that it has no hard
+ * parts and can be any shape it likes.
+ *
+ * What separates the two at 16px is one decision about the outline. The
+ * nautilus is a closed convex disc with a small fringe under it. This is a
+ * smooth bell on top and a RAGGED FAN underneath — the arms reach past the
+ * width of the body on both sides and they end at different rows, so the
+ * bottom half of the silhouette is broken where the nautilus's is solid. */
+ANIMALS.octopus = {
+  body: 'violet', accent: 'blood', hard: 'bone', family: 'magic',
+  gait: 'creep', idle: 'impression', fallen: 'sink',
+  period: 980, idlePeriod: 2200, bob: 1, sway: 1,
+  side: {
+    grid: [
+      '................',
+      '.....oooo.......',
+      '...ooBBBBoo.....',
+      '..oBBBBBBBBo....',
+      '.oBBBaBBBaBBo...',
+      '.oBBBBBBBBBBo...',
+      '.oBBBBBBBwwBBo..',
+      '.oBBBBBBBweBBo..',
+      '..oBBBBBBBBBo...',
+      '.oBoBoBoBoBoBo..',
+      'oBo.oBoBoBo.oBo.',
+      'oo..oBo.oBo..oBo',
+      '....oBo..oBo..oo',
+      '...oBo...oBo....',
+      '...oBo....oo....',
+      '...oo...........',
+    ],
+    legs: [], legTop: 16, spine: [2, 8], head: [4, 8], headX: [1, 13],
+    tail: [9, 15], tailX: [0, 15], mark: [4, 4],
+    on: { throat: [6, 8], brow: [6, 3], back: [6, 5], leg: [5, 11] },
+    crest: { ox: 4, oy: 0, rows: ['.c.cc.c.', 'cc.cc.cc'] },
+  },
+  down: {
+    grid: [
+      '................',
+      '......oooo......',
+      '....ooBBBBoo....',
+      '...oBBBBBBBBo...',
+      '..oBBBaBBaBBBo..',
+      '..oBBBBBBBBBBo..',
+      '..oBwBBBBBBwBo..',
+      '..oBeBBBBBBeBo..',
+      '...oBBBBBBBBo...',
+      '..oBoBoBoBoBo...',
+      '.oBo.oBoBo.oBo..',
+      'oBo..oBo.oBo.oBo',
+      'oo...oBo.oBo..oo',
+      '....oBo...oBo...',
+      '....oo.....oo...',
+      '................',
+    ],
+    legs: [], legTop: 16, spine: [2, 8], head: [4, 8], headX: [2, 13],
+    tail: [9, 14], tailX: [0, 15], mark: [4, 4],
+    on: { throat: [7, 8], brow: [7, 3], back: [7, 5], leg: [5, 12] },
+    crest: { ox: 4, oy: 0, rows: ['.c..c..c.', 'cc.cc.cc.'] },
+    back: [{ ox: 3, oy: 6, rows: ['.oBBBBBBBBo.', 'oBBBaBBaBBBo'] }],
   },
 };
 
@@ -687,7 +901,7 @@ ANIMALS.crow = {
  * ever goes looking for it. */
 ANIMALS.beast = {
   body: 'leather', accent: 'earth', hard: 'bone', family: 'organic',
-  gait: 'trot', idle: 'breath',
+  gait: 'trot', idle: 'breath', fallen: 'fold',
   period: 700, idlePeriod: 2600, bob: 1, sway: 0,
   side: {
     grid: [
@@ -711,6 +925,7 @@ ANIMALS.beast = {
     legs: [[1, 3], [5, 7], [10, 12], [13, 15]],
     legTop: 12, spine: [8, 11], head: [4, 7], headX: [10, 15],
     tail: [3, 6], tailX: [2, 4], mark: [4, 9],
+    on: { throat: [11, 7], brow: [13, 5], back: [6, 8], leg: [11, 13] },
     crest: { ox: 9, oy: 2, rows: ['.cc..', 'cccc.', '.cc..'] },
   },
   down: {
@@ -742,6 +957,7 @@ ANIMALS.beast = {
     legs: [[3, 5], [10, 12], [7, 8]],
     legTop: 12, spine: [8, 11], head: [2, 7], headX: [3, 12],
     tail: null, tailX: null, mark: [5, 9],
+    on: { throat: [7, 8], brow: [7, 4], back: [7, 10], leg: [4, 13] },
     crest: { ox: 5, oy: 0, rows: ['.c..c.', 'cccccc', '.c..c.'] },
     back: [{ ox: 11, oy: 6, rows: ['.oo.', 'oBBo', 'oBBo', 'oBB.'] }],
   },
@@ -769,16 +985,20 @@ export const PET_ALIAS = {
   turtle: 'tortoise', terrapin: 'tortoise',
   alpaca: 'llama', vicuna: 'llama', guanaco: 'llama', camel: 'llama',
   salamander: 'axolotl', newt: 'axolotl', ambystoma: 'axolotl',
-  ammonite: 'nautilus', shell: 'nautilus', squid: 'nautilus',
-  octopus: 'nautilus', cuttlefish: 'nautilus',
+  ammonite: 'nautilus', shell: 'nautilus',
+  squid: 'octopus', cuttlefish: 'octopus', cephalopod: 'octopus',
+  mimic: 'octopus', kraken: 'octopus',
   auk: 'penguin', puffin: 'penguin',
-  wolf: 'beast', dog: 'beast', fox: 'beast', hound: 'beast', boar: 'beast',
+  wolf: 'beast', dog: 'beast', fox: 'beast', hound: 'beast',
+  pig: 'boar', hog: 'boar', sow: 'boar', swine: 'boar', warthog: 'boar',
+  stub: 'boar', barrow: 'boar',
   // The starter dies at the barrow and comes back as BARROW, whose sprite key
   // is `boar_great`. It resolves to the same authored body as `boar` on
   // purpose and not by falling through: the return scene only lands if the
   // player recognises the animal, so the two ids must not be free to drift
-  // apart the day somebody draws a real boar.
-  boar_great: 'beast', great_boar: 'beast', dire_boar: 'beast',
+  // apart. They are ONE authored animal at two rungs of the tier ladder, which
+  // is what the scene is: the same pig, come back larger.
+  boar_great: 'boar', great_boar: 'boar', dire_boar: 'boar',
 };
 
 /** The animal key for anything a caller might hand over: a pets.py `sprite`, a
@@ -1026,8 +1246,13 @@ function applyBack(grid, strip) {
  *
  * Sparse is the whole design: a solid one-pixel ring around a 16px animal is a
  * blob with an animal-shaped hole in it, and the silhouette — the thing the
- * player actually reads the pet by — disappears. Every third candidate cell is
- * kept, chosen by a hash of its own coordinates plus a seed, so it is stable
+ * player actually reads the pet by — disappears. It got sparser again once
+ * regalia existed to compete with: at every second candidate cell the MYTHIC
+ * aura was a fifth to a quarter of every painted pixel on the frame — on the
+ * mimic it read as an animal covered in sparks rather than one lit from inside,
+ * and the Borrowed Eye it was wearing disappeared into it. Every third and
+ * every fourth candidate cell now. Chosen by a hash of its own coordinates plus
+ * a seed, so it is stable
  * across frames of a walk (no shimmer), identical between two runs (the
  * determinism harness checks this), and different between two animals.
  *
@@ -1105,6 +1330,54 @@ const GAITS = {
       g = moveBlock(g, v.headX[0], v.headX[1], v.head[0], v.head[1], 0, 1);
       if (v.tail) g = raiseBlock(g, v.tailX[0], v.tailX[1], v.tail[0], v.tail[1], -1);
     }
+    return g;
+  },
+
+  /* Boar. All the drive is at the BACK. The hind legs work as a pair and throw
+   * the hump up on the push frame while the head goes down, so the animal moves
+   * the way a wedge moves: nose low, weight behind it. The head dip is a whole
+   * two rows because there is no neck here to absorb it — a boar nods with its
+   * shoulders, which is the exact opposite of the llama and the reason these
+   * two never read alike even though both are quadrupeds with a four-row body. */
+  shove(v, g, f, dir) {
+    const hind = [v.legs[0], v.legs[1]];
+    if (f === 0 || f === 2) {
+      for (const leg of hind) if (leg) g = moveBlock(g, leg[0], leg[1], v.legTop, PET_H - 1, 0, -1);
+      // Only the TOP half of the head band dips, which is the same rule
+      // breathe() works to. It matters more here than anywhere else in the file
+      // because a boar has no neck: its head band is most of the sprite facing
+      // forward, so nodding the whole block slid fourteen columns of animal
+      // down a row and painted over the throat — taking the collar, the bell
+      // and every other piece of regalia tied there with it.
+      const mid = Math.floor((v.head[0] + v.head[1]) / 2);
+      g = moveBlock(g, v.headX[0], v.headX[1], v.head[0], mid, 0, 1);
+    } else {
+      const fore = v.legs[2];
+      if (fore) g = moveBlock(g, fore[0], fore[1], v.legTop, PET_H - 1, 0, -1);
+      // the hump lifts as the front end unloads: the top two rows of the back
+      // only, so the belly line stays where the legs left it
+      g = raiseBlock(g, v.on && v.on.back ? v.on.back[0] - 3 : 4,
+                     (v.on && v.on.back ? v.on.back[0] : 7) + 3,
+                     v.spine[0] - 2, v.spine[0], -1);
+    }
+    return g;
+  },
+
+  /* Octopus. It does not swim here, it WALKS on two arms — which is a real
+   * thing a mimic octopus does and is the single most recognisable fact about
+   * the animal. So two of the arms take turns being legs while the other six
+   * ripple half a beat behind, and the bell rocks over whichever arm has the
+   * weight. Nothing in this gait is symmetrical on any frame, because an
+   * octopus that moves symmetrically reads as a jellyfish. */
+  creep(v, g, f, dir) {
+    const step = [[-1, 0], [0, -1], [1, 0], [0, 1]][f];
+    // the two walking arms: the outer columns of the fan, moved against each
+    // other so one is always planted
+    g = moveBlock(g, 0, 4, v.tail[0], PET_H - 1, step[0], 0);
+    g = moveBlock(g, PET_W - 5, PET_W - 1, v.tail[0], PET_H - 1, -step[0], 0);
+    // the bell leans over the planted side, above the arm roots only
+    if (step[1]) g = moveBlock(g, 0, PET_W - 1, 0, v.tail[0] - 1, 0, step[1]);
+    if (f === 3) g = swapAccent(g);
     return g;
   },
 
@@ -1312,11 +1585,314 @@ const IDLES = {
     g = breathe(v, g, f);
     return f === 3 ? moveBlock(g, v.headX[0], v.headX[1], v.head[0], v.head[1], -1, 0) : g;
   },
+  /* Boar: it roots. The head goes DOWN into the ground and stays there for the
+   * tell frame, which is the only idle in the file where the animal stops
+   * looking at the world entirely. A pig at rest is a pig with its face in the
+   * dirt and it is not thinking about you. */
+  root(v, g, f, dir) {
+    g = breathe(v, g, f);
+    if (f !== 3) return g;
+    const mid = Math.floor((v.head[0] + v.head[1]) / 2);
+    g = moveBlock(g, v.headX[0], v.headX[1], v.head[0], mid, 0, 1);
+    return raiseBlock(g, v.on && v.on.back ? v.on.back[0] - 2 : 5,
+                      (v.on && v.on.back ? v.on.back[0] : 8) + 2,
+                      v.spine[0] - 1, v.spine[0] + 1, -1);
+  },
+  /* Octopus: it does an impression. The accents invert and the arms shift a
+   * pixel out of line with each other — the animal has changed what it looks
+   * like rather than moved, which is the whole joke of the hidden companion and
+   * the only idle here whose tell is a texture and a stagger at once. */
+  impression(v, g, f, dir) {
+    if (f === 1) g = moveBlock(g, 0, PET_W - 1, 0, v.tail[0] - 1, 0, -1);
+    if (f !== 3) return g;
+    g = swapAccent(g);
+    g = moveBlock(g, 0, 4, v.tail[0], PET_H - 1, 1, 0);
+    return moveBlock(g, PET_W - 5, PET_W - 1, v.tail[0], PET_H - 1, -1, 0);
+  },
   /* The fallback. Breathing and a small shift of weight, which is the least an
    * unknown animal is allowed to do and still count as alive. */
   breath(v, g, f, dir) {
     g = breathe(v, g, f);
     return f === 3 ? moveBlock(g, 0, PET_W - 1, v.spine[0], v.spine[1], 1, 0) : g;
+  },
+};
+
+/* ------------------------------------------------------------------ fallen
+ *
+ * A companion takes AoE damage and goes down, and the player has to be able to
+ * tell WHICH of those two things just happened from across a busy overworld,
+ * at 16 pixels, without stopping to look.
+ *
+ * Before this pass the fainted frame was the standing frame in a darker
+ * palette. Measured against the standing pose it differed by THREE pixels of
+ * silhouette on the jaguar and three on the axolotl, out of a hundred and ten
+ * — the animal was upright, all four feet planted, head level, in mourning
+ * colours. That is a recolour, and a recolour is the exact failure every
+ * harness in this project exists to refuse: a piece of armour that only
+ * repaints the sprite has not been implemented, and neither has a faint.
+ *
+ * So a fainted companion is a POSE. Five of them, one per body plan, and every
+ * one takes the outline from TALL to LOW AND WIDE, which is the thing the eye
+ * resolves before it has resolved a single interior pixel. The numbers are in
+ * petArtStats().fallen: ink height, and the share of the standing silhouette
+ * that moves.
+ *
+ * What they deliberately do NOT do is redraw the animal. Every pose below is
+ * the authored grid with blocks moved — the same ops the gaits are written in —
+ * so a fallen jaguar is still spotted, a fallen tortoise is still carrying its
+ * shell, and the roster screen is showing the player the animal they lost
+ * rather than a generic corpse. That is the same promise the tier ladder makes
+ * at the other end of the file, for the same reason.
+ */
+
+function inkRows(grid) {
+  let top = -1, bot = -1;
+  for (let y = 0; y < PET_H; y++) {
+    const any = grid[y].indexOf('.') !== grid[y].length
+      && [...grid[y]].some(c => c !== '.' && c !== ' ');
+    if (!any) continue;
+    if (top < 0) top = y;
+    bot = y;
+  }
+  return [top, bot];
+}
+
+function inkCols(grid) {
+  let lo = PET_W, hi = -1;
+  for (let y = 0; y < PET_H; y++) {
+    for (let x = 0; x < PET_W; x++) {
+      const c = grid[y][x];
+      if (c === '.' || c === ' ') continue;
+      if (x < lo) lo = x;
+      if (x > hi) hi = x;
+    }
+  }
+  return [lo, hi];
+}
+
+/* The eyes. One glyph, and it is the only change on this page a player will
+ * consciously name afterwards — the rest of the pose is what tells them before
+ * they have noticed they have been told. */
+function shut(grid) {
+  return rowsOf(grid).map(r => r.replace(/w/g, 'o').replace(/e/g, 'o'));
+}
+
+/* Lift a block out of the grid and hand it back on its own, with the hole it
+ * left behind. A fallen pose has to take the legs OFF the bottom of the animal
+ * and put them somewhere else entirely, and that is two operations, not one. */
+function lift(grid, x0, x1, y0, y1) {
+  const src = rowsOf(grid);
+  const rest = src.map(r => r.split(''));
+  const part = [];
+  for (let y = 0; y < PET_H; y++) part.push(new Array(PET_W).fill('.'));
+  for (let y = Math.max(0, y0); y <= Math.min(PET_H - 1, y1); y++) {
+    for (let x = Math.max(0, x0); x <= Math.min(PET_W - 1, x1); x++) {
+      const ch = src[y][x];
+      if (ch === '.' || ch === ' ') continue;
+      part[y][x] = ch;
+      rest[y][x] = '.';
+    }
+  }
+  return [rest.map(r => r.join('')), part.map(r => r.join(''))];
+}
+
+/* Lay two grids over one another. Later wins, '.' never erases. */
+function over(a, b) {
+  const A = rowsOf(a), B = rowsOf(b);
+  const out = A.map(r => r.split(''));
+  for (let y = 0; y < PET_H; y++) {
+    for (let x = 0; x < PET_W; x++) {
+      const ch = B[y][x];
+      if (ch !== '.' && ch !== ' ') out[y][x] = ch;
+    }
+  }
+  return out.map(r => r.join(''));
+}
+
+/* Settle a grid until its lowest ink is on `row`. */
+function restOn(grid, row) {
+  const [, bot] = inkRows(rowsOf(grid));
+  if (bot < 0) return rowsOf(grid);
+  const dy = row - bot;
+  return dy ? moveBlock(grid, 0, PET_W - 1, 0, PET_H - 1, 0, dy) : rowsOf(grid);
+}
+
+/* How many rows of leg are left sticking out of a fainted quadruped. Measured
+ * rather than picked: at four the outline is as tall as the standing animal and
+ * the pose stops reading from a distance; at two the legs vanish into the body
+ * and it reads as a rock. */
+const FALLEN_LEG = 3;
+
+const FALLEN = {
+  /* Four legs, off them.
+   *
+   * The first version of this dropped the animal and then dropped the head into
+   * it, and what came out was a five-row dark bar: a shape on the ground, but
+   * not an animal on the ground. The fix is the legs. They are not cleared and
+   * they are not stubbed in afterwards — they are LIFTED off the bottom of the
+   * sprite and put back on TOP of it, which is where the legs of a thing lying
+   * on its side actually are. That is the read: a low body, a head laid out
+   * flat at the front of it, and four feet in the air.
+   */
+  fold(v, g, dir) {
+    const src = rowsOf(g);
+    // 1. the feet come off the floor, kept whole — each leg in its OWN column
+    //    range, never in one rectangle spanning all of them. The raptor is why:
+    //    its two legs sit at the ends of the grid and the bounding box between
+    //    them is most of the belly, so lifting the box tore the animal in half
+    //    and what landed was four disconnected pieces.
+    let body = src, feet = null;
+    for (const leg of (v.legs || [])) {
+      const [rest, part] = lift(body, leg[0], leg[1], v.legTop, PET_H - 1);
+      body = rest;
+      feet = feet ? over(feet, part) : part;
+    }
+    // 2. the body comes down onto the floor, one row of contact left under it
+    const [, wasBot] = inkRows(body);
+    if (wasBot < 0) return shut(src);
+    const drop = (PET_GROUND - 1) - wasBot;
+    if (drop) body = moveBlock(body, 0, PET_W - 1, 0, PET_H - 1, 0, drop);
+    const [bodyTop] = inkRows(body);
+    // 3. the head is the only part that was being held up by anything, so it is
+    //    the part that falls furthest: flat at the front, level with the spine.
+    const hy0 = Math.max(0, v.head[0] + drop), hy1 = Math.min(PET_H - 1, v.head[1] + drop);
+    const headFall = (PET_GROUND - 1) - hy1;
+    if (headFall > 0) body = moveBlock(body, v.headX[0], v.headX[1], hy0, hy1, 0, headFall);
+    // 4. and the tail stops being a flag
+    if (v.tail) {
+      const ty1 = Math.min(PET_H - 1, v.tail[1] + drop);
+      const tf = (PET_GROUND - 1) - ty1;
+      if (tf > 0) body = moveBlock(body, v.tailX[0], v.tailX[1],
+                                   Math.max(0, v.tail[0] + drop), ty1, 0, tf);
+    }
+    // 5. the feet go back on, above the body, pointing at the sky — and only
+    //    the thigh end of them. A whole leg stood on end is as tall as the leg
+    //    was, which puts the fainted outline back at the height of the standing
+    //    one and throws away the low-and-wide read the other four rows bought.
+    //    Three rows of shin is a leg in the air; twelve is a fence.
+    if (feet) {
+      const [, footBot] = inkRows(feet);
+      const up = (bodyTop + 1) - footBot;
+      if (up) feet = moveBlock(feet, 0, PET_W - 1, 0, PET_H - 1, 0, up);
+      const cut = Math.max(0, (bodyTop + 1) - FALLEN_LEG);
+      feet = rowsOf(feet).map((r, y) => (y < cut ? '.'.repeat(PET_W) : r));
+      body = over(body, feet);
+    }
+    return shut(body);
+  },
+
+  /* A biped goes over sideways rather than down: the mass is already stacked
+   * over the feet, so what fails is balance and not the legs. The top of the
+   * body leans three pixels — far enough that the centre of it is outside the
+   * feet, which is the geometry a viewer reads as falling rather than as
+   * leaning — and then the whole thing lands. */
+  topple(v, g, dir) {
+    let out = rowsOf(g);
+    for (let y = 0; y < v.legTop; y++) {
+      const lean = 1 + Math.round(2 * (v.legTop - 1 - y) / Math.max(1, v.legTop - 1));
+      out = moveBlock(out, 0, PET_W - 1, y, y, -lean, 0);
+    }
+    out = out.map((r, y) => (y >= v.legTop ? '.'.repeat(PET_W) : r));
+    let [, bot] = inkRows(out);
+    if (bot < 0) return shut(rowsOf(g));
+    const drop = PET_GROUND - bot;
+    if (drop > 0) out = moveBlock(out, 0, PET_W - 1, 0, PET_H - 1, 0, drop);
+    // the feet, out from under, on the side it did not fall towards
+    const g2 = rowsOf(out).map(r => r.split(''));
+    const [, hi] = inkCols(rowsOf(out));
+    for (let i = 1; i <= 3; i++) {
+      const x = hi + i;
+      if (x >= PET_W) break;
+      g2[PET_GROUND - 1][x] = i === 3 ? 'g' : 'B';
+      g2[PET_GROUND][x] = 'o';
+      if (g2[PET_GROUND - 2][x] === '.') g2[PET_GROUND - 2][x] = 'o';
+    }
+    return shut(g2.map(r => r.join('')));
+  },
+
+  /* A snake does not collapse, it goes slack.
+   *
+   * It is the hardest of the five, because a coiled snake was already the
+   * lowest thing in the roster and height cannot carry the difference. What
+   * carries it is that the COIL COMES APART: a snake holds that shape with
+   * muscle, so a snake that has stopped holding it is a loose line lying in the
+   * dirt with its head off the end. The loops are pulled down into one another
+   * and the head is laid out past the body, which turns a compact round thing
+   * into a long flat one without moving it an inch lower.
+   */
+  slack(v, g, dir) {
+    const src = rowsOf(g);
+    const [top, bot] = inkRows(src);
+    if (bot < 0) return shut(src);
+    // the head off the coil first, so it is not dragged down with it
+    let [body, head] = lift(src, v.headX[0], v.headX[1], v.head[0], v.head[1]);
+    // the loops fall into each other: every row above the middle of the coil
+    // comes down by two, which is the coil unwinding rather than sinking
+    const mid = Math.floor((top + bot) / 2);
+    for (let y = mid; y >= top; y--) body = moveBlock(body, 0, PET_W - 1, y, y, 0, 2);
+    body = restOn(body, PET_GROUND);
+    // and the head lies out past the end of it, flat on the floor
+    const [hlo, hhi] = inkCols(head);
+    const [blo, bhi] = inkCols(body);
+    if (hhi >= hlo) {
+      const push = hlo >= (blo + bhi) / 2 ? (bhi + 1) - hlo : (blo - 1) - hhi;
+      head = moveBlock(head, 0, PET_W - 1, 0, PET_H - 1, push, 0);
+      head = restOn(head, PET_GROUND);
+    }
+    return shut(over(body, head));
+  },
+
+  /* Neutrally buoyant, and then not.
+   *
+   * A thing that was floating does not topple, it settles — so the bell comes
+   * down and DEFLATES, and the arms that were hanging under it go out flat on
+   * both sides. Two changes rather than one, because the standing silhouette
+   * was already a low round mass and a round mass that has only moved down is a
+   * round mass. Squashed and spread, it is the widest and shortest of the five
+   * poses, which is exactly what the other four are not.
+   */
+  sink(v, g, dir) {
+    const src = rowsOf(g);
+    const arms = v.tail ? v.tail[0] : Math.min(PET_H - 1, v.spine[1] + 1);
+    let [bell, fan] = lift(src, 0, PET_W - 1, arms, PET_H - 1);
+    // the bell loses a third of its height: the top rows come down into it
+    const [top] = inkRows(bell);
+    if (top >= 0) {
+      const squash = Math.max(1, Math.round((arms - top) / 3));
+      for (let y = top + squash; y >= top; y--) {
+        bell = moveBlock(bell, 0, PET_W - 1, y, y, 0, squash);
+      }
+    }
+    // the arms go out, hard, and lie in the two rows the bell is standing on
+    const half = Math.floor(PET_W / 2);
+    fan = moveBlock(fan, 0, half - 1, 0, PET_H - 1, -3, 0);
+    fan = moveBlock(fan, half, PET_W - 1, 0, PET_H - 1, 3, 0);
+    const [fTop, fBot] = inkRows(fan);
+    if (fBot >= 0) {
+      for (let y = fTop; y < fBot; y++) fan = moveBlock(fan, 0, PET_W - 1, y, y, 0, fBot - y);
+    }
+    fan = restOn(fan, PET_GROUND);
+    bell = restOn(bell, PET_GROUND - 1);
+    return shut(over(fan, bell));
+  },
+
+  /* The tortoise is the only one of the twelve whose faint needed no invention,
+   * because there is exactly one thing that has ever happened to a tortoise
+   * that everybody already reads instantly. It is on its back. The grid is
+   * flipped top to bottom, which puts the shell on the floor and four stumps in
+   * the air, and nothing else in the file produces a shape like it. */
+  capsize(v, g, dir) {
+    const src = rowsOf(g);
+    const flipped = [];
+    for (let y = 0; y < PET_H; y++) flipped.push(src[PET_H - 1 - y]);
+    // a flip leaves the animal hanging from the ceiling: settle it back down
+    const [, bot] = inkRows(flipped);
+    let out = flipped;
+    if (bot >= 0) {
+      const drop = PET_GROUND - bot;
+      if (drop > 0) out = moveBlock(out, 0, PET_W - 1, 0, PET_H - 1, 0, drop);
+    }
+    return shut(out);
   },
 };
 
@@ -1339,6 +1915,18 @@ function mirrorStrip(strip) {
   };
 }
 
+/* A collar is on the throat whichever way the animal is pointing, so the
+ * anchors mirror with the grid. They are single cells rather than ranges, which
+ * is why this is four lines instead of reusing flipX. */
+function mirrorAnchors(on) {
+  if (!on) return on;
+  const out = {};
+  for (const k of Object.keys(on)) {
+    out[k] = on[k] ? [PET_W - 1 - on[k][0], on[k][1]] : null;
+  }
+  return out;
+}
+
 function mirrorView(v) {
   const flipX = ([x0, x1]) => [PET_W - 1 - x1, PET_W - 1 - x0];
   return {
@@ -1349,6 +1937,7 @@ function mirrorView(v) {
     tailX: v.tailX ? flipX(v.tailX) : null,
     shell: v.shell || null,
     mark: [PET_W - 1 - v.mark[0], v.mark[1]],
+    on: mirrorAnchors(v.on),
     crest: mirrorStrip(v.crest),
   };
 }
@@ -1367,6 +1956,13 @@ function backView(v) {
     headX: v.headX, crestHead: v.crestHead,
     tail: v.tail, tailX: v.tailX, shell: v.shell || null,
     mark: v.mark, crest: v.crest,
+    // What you can see of a worn object from BEHIND. A collar at the throat is
+    // on the far side of the animal and a lens over its eye is not there at
+    // all, so the face anchors are dropped rather than drawn on the back of the
+    // skull; `back` and `leg` survive, which is why a harness, a barding and a
+    // leg ring are the pieces that still read when the pet is walking away.
+    on: v.on ? { back: v.on.back, leg: v.on.leg, brow: v.on.brow,
+                 throat: null, hidden: true } : null,
   };
 }
 
@@ -1390,6 +1986,487 @@ function viewFor(key, dir) {
   return v;
 }
 
+/* ----------------------------------------------------------- second material
+ *
+ * applyRim() only knows one glyph. It turns 'B' into four steps and leaves
+ * every other mass exactly as authored, which was fine while the non-body
+ * masses were markings — a rosette, a beak, two pixels of claw. It stopped
+ * being fine the moment it was measured: a tortoise is a dome of 'g' with two
+ * specks on it, a penguin is a slab of 'A', and a nautilus is a shell of 'A'.
+ * Those three animals were rendering their largest surface in ONE FLAT COLOUR,
+ * which is why the tortoise read as a brown rounded rectangle with legs.
+ *
+ * The fix is not a second lighting model — rule 5 forbids that, and correctly:
+ * a cast stops looking like a cast the moment two things in it are lit from two
+ * places. It is the SAME function, run again on a different material. The mass
+ * is promoted to 'B', everything else in the sprite becomes an edge, applyRim
+ * runs, and its four answers are translated back into that material's own
+ * steps. One lamp, one direction, two surfaces.
+ */
+function liteMass(grid, mass, steps) {
+  const src = rowsOf(grid);
+  // Only a real SURFACE gets the second pass. A llama's muzzle and its four
+  // hooves are five cells of 'g' between them, and shading five cells costs a
+  // whole palette slot to say something nobody can see: swept over every
+  // animal, tier, colour, facing, frame and worn object, that one slot was the
+  // difference between a worst case of fifteen colours and one of fourteen.
+  // Sixteen cells is where a mass starts having an inside, and it is a measured
+  // number rather than a taste: across the twenty-two authored views the areas
+  // are 2, 3, 4, 5, 6, 8 ... 29, 40, 51, 52, 90. There is nothing between eight
+  // and twenty-nine, so the threshold is sitting in a real gap and only the
+  // tortoise's shell, the penguin's front and the nautilus's wall are on the
+  // far side of it — which are exactly the three surfaces that were flat.
+  let area = 0;
+  for (const row of src) for (const ch of row) if (ch === mass) area++;
+  if (area < LIT_MASS_MIN) return src;
+  const masked = src.map(r => r.split('').map(ch => (
+    ch === mass ? 'B' : (ch === '.' || ch === ' ') ? '.' : 'o')).join(''));
+  const lit = applyRim(masked);
+  const out = src.map(r => r.split(''));
+  for (let y = 0; y < PET_H; y++) {
+    for (let x = 0; x < PET_W; x++) {
+      if (src[y][x] !== mass) continue;
+      const ch = lit[y][x];
+      const t = ch === 'H' ? steps[0] : ch === 'L' ? steps[1]
+              : ch === 'd' ? steps[2] : ch === 'D' ? steps[3] : null;
+      if (t) out[y][x] = t;
+    }
+  }
+  return out.map(r => r.join(''));
+}
+
+/* Which masses get the second pass, in the order they are painted.
+ *
+ *   'g'  shell, beak, tusk, hoof, claw — the hard material. It costs one
+ *        palette slot ('k') and buys form on the single largest surface three
+ *        of the twelve animals own.
+ *   'A'  the light accent: a penguin's front, a nautilus's shell wall. This one
+ *        is free, because its shadow step resolves to 'a', which the sprite is
+ *        already wearing.
+ */
+const LIT_MASS_MIN = 16;
+const LIT_MASSES = [['g', ['c', 'g', 'k', 'k']], ['A', ['A', 'A', 'a', 'a']]];
+
+function liteAll(grid) {
+  let g = grid;
+  for (const [mass, steps] of LIT_MASSES) g = liteMass(g, mass, steps);
+  return g;
+}
+
+/* ------------------------------------------------------------------ regalia
+ *
+ * gauntlet/regalia.py ships twenty-four objects, two per companion, and
+ * gauntlet/quests.py ships seven more that go on whichever animal is in the
+ * field. Thirty-one in all, and until this pass not one of them existed as a
+ * pixel: a player could earn the Jade Collar and the jaguar walking in front of
+ * them was the same jaguar it had been the day before.
+ *
+ * That is the same failure the hero rig keeps a whole harness pointed at — a
+ * piece of armour that does not change the sprite has not been implemented —
+ * so this is held to the same measurement. petArtStats().regalia reports, for
+ * every one of the thirty-one, the pixels it repaints and the pixels of OUTLINE
+ * it adds, per facing, counted off the grid.
+ *
+ * PYTHON ALREADY DECIDED THIS AND THIS FILE DOES NOT GET A SECOND OPINION
+ *
+ * Every row in regalia.py carries an `icon`, a `colour` and a sentence saying
+ * where it is worn:
+ *
+ *    jade_collar     "One band, worn loose, and it does not rattle."
+ *    mystic_scarf    "Wound twice and trailing, which on a penguin is most of
+ *                     the animal."
+ *    trough_lens     "Strapped over one eye. The other eye is doing nothing."
+ *    rooks_tally     "Carried in the beak, set down to speak, picked up again."
+ *    closed_half_ring "Through the ear that is still there."
+ *
+ * So the table below is those sentences resolved to an ANCHOR and nothing more.
+ * The shape comes from `icon`, the colour comes off the row at runtime, and a
+ * piece nobody has listed here still draws — as a band at the throat, which is
+ * where most tack goes — rather than silently not existing.
+ *
+ * The seven from quests.py are the exception and are marked: that module ships
+ * no `icon` and no `colour`, so both are authored here, and if it grows them
+ * they are the ones to delete.
+ *
+ * WHY EVERY PIECE HAS TO LEAVE THE OUTLINE
+ *
+ * At sixteen pixels an object painted entirely INSIDE the animal is three cells
+ * of a different hue on a body already wearing five, and it is gone the instant
+ * the pet walks in front of a bush. So every band here hangs something below
+ * it, every pendant sits proud of the belly line, and the scarf trails. The
+ * number that matters is not how many pixels a piece paints. It is how many
+ * pixels of SILHOUETTE it adds, and that is the one the harness fails on.
+ */
+
+/* Where on the animal. Six names, four of them authored per view in the
+ * ANIMALS table as `on:`, two of them found in the grid because the grid
+ * already marks them: the eye is the 'w', the mouth is the outermost 'g'
+ * inside the head band. Found rather than authored so they keep working when
+ * the gait has moved the head, which is the same reason protrude() finds the
+ * snake's mouth instead of being told where it is. */
+function anchorAt(v, name) {
+  const on = v.on || {};
+  // An anchor that lands on air is not an anchor. The snake is the case that
+  // found it: its back view SUBTRACTS the head, so the throat coordinate its
+  // front view was authored against points at empty space once the face has
+  // been taken off, and the Kept Skin was being tied round three pixels of
+  // nothing an inch below the animal. A piece with nowhere to hang is a piece
+  // you cannot see from that side, which is the truth and is fine.
+  const solid = (a) => !!a && SOLID(rowsOf(v.grid), a[1], a[0]);
+  const ok = (a) => (solid(a) ? a : null);
+  if (name === 'eye' || name === 'mouth') {
+    if (on.hidden) return null;              // it is on the far side of the animal
+    const found = findIn(v.grid, v.head, name === 'eye' ? 'w' : 'g');
+    if (found) return found;
+    return ok(on.brow) || ok(on.throat);
+  }
+  if (name === 'leg') return ok(on.leg) || ok(on.back) || ok(on.throat);
+  if (name === 'back') return ok(on.back) || ok(on.throat);
+  if (name === 'brow') return ok(on.brow) || ok(on.throat);
+  return ok(on.throat) || ok(on.brow);
+}
+
+function findIn(grid, band, glyph) {
+  const src = rowsOf(grid);
+  const y0 = Math.max(0, band ? band[0] : 0);
+  const y1 = Math.min(PET_H - 1, band ? band[1] : PET_H - 1);
+  let best = null;
+  for (let y = y0; y <= y1; y++) {
+    for (let x = 0; x < PET_W; x++) {
+      if (src[y][x] !== glyph) continue;
+      if (!best || x > best[0]) best = [x, y];
+    }
+  }
+  return best;
+}
+
+/* ---- the primitives every piece is built out of ----
+ *
+ * The first version of this was a table of fixed pixel strips stamped at the
+ * anchor, and it measured at twelve pixels repainted and ZERO pixels of
+ * silhouette added: a jade collar that was three cells of green inside a
+ * jaguar, gone the moment the animal stood in front of a bush. So none of the
+ * shapes below are authored at a fixed size. Each one MEASURES the animal at
+ * the anchor and then deliberately leaves it — a band runs one pixel past the
+ * limb at both ends, a pendant hangs off the underside, a plate sits proud of
+ * the back — because the only regalia a player can see at sixteen pixels is
+ * regalia that is part of the outline.
+ */
+/* How wide a band gets, and how far a pendant drops before it gives up looking
+ * for air. Both are caps rather than sizes: the shapes measure the animal
+ * first and these stop the measurement running away on a body that has no gap
+ * in it anywhere below the throat. */
+const BAND_MAX = 6;
+const HANG_MAX = 2;
+const PAST_MAX = 2;
+
+const SOLID = (src, y, x) => y >= 0 && y < PET_H && x >= 0 && x < PET_W
+  && src[y][x] !== '.' && src[y][x] !== ' ';
+
+function runH(src, x, y) {
+  let a = x, b = x;
+  while (SOLID(src, y, a - 1)) a--;
+  while (SOLID(src, y, b + 1)) b++;
+  return [a, b];
+}
+function runV(src, x, y) {
+  let a = y, b = y;
+  while (SOLID(src, a - 1, x)) a--;
+  while (SOLID(src, b + 1, x)) b++;
+  return [a, b];
+}
+
+function put(g, x, y, ch) {
+  if (x < 0 || x >= PET_W || y < 0 || y >= PET_H) return;
+  g[y][x] = ch;
+}
+
+/* Draw the outline back around whatever was just stamped.
+ *
+ * Every band already caps its own two ends, but a pendant, a plate or a lens
+ * sits in the middle of a body and has nothing separating it from that body but
+ * hue. The Keybrass Bell is the case that proves it: brass on a cream llama at
+ * sixteen pixels, and the bell was nine pixels of a colour four steps from the
+ * one underneath it. A hard edge is what the hardware would have given it and
+ * it is what makes a worn object read on twelve differently-coloured animals
+ * instead of on the five it happens to contrast with. */
+function edge(g, cells) {
+  for (const [x, y] of cells) {
+    for (const [dx, dy] of [[0, -1], [0, 1], [-1, 0], [1, 0]]) {
+      const nx = x + dx, ny = y + dy;
+      if (nx < 0 || nx >= PET_W || ny < 0 || ny >= PET_H) continue;
+      const ch = g[ny][nx];
+      if (ch === 'j' || ch === 'w' || ch === 'o' || ch === 'O') continue;
+      if (cells.some(c => c[0] === nx && c[1] === ny)) continue;
+      g[ny][nx] = 'o';
+    }
+  }
+}
+
+/* A band around whatever limb the anchor is on, one pixel past it at each end.
+ *
+ * Which way it runs is measured, not authored, and that is what lets one
+ * function put a collar on a jaguar's horizontal neck seen from the side AND on
+ * the same jaguar's vertical neck seen from the front. A band lies ACROSS the
+ * short axis of the body at the point it is tied, so it spans the shorter of
+ * the two runs through the anchor. Author it as a fixed horizontal strip and it
+ * lies along the neck instead of around it on half the facings in the file. */
+function strip(g, src, x, y, thick, glyph, gap) {
+  const [hx0, hx1] = runH(src, x, y), [vy0, vy1] = runV(src, x, y);
+  const across = (hx1 - hx0) <= (vy1 - vy0);
+  let lo = across ? hx0 : vy0, hi = across ? hx1 : vy1;
+  // A band is capped, and the cap is the difference between a collar and a
+  // racing stripe. The run through a jaguar's throat in side view is the whole
+  // animal from the ears to the floor, twelve pixels of it, and a band that
+  // honest ran top to bottom of the cat: it read as paint rather than as
+  // something tied on. Six is the widest a thing tied round a neck gets at this
+  // size, centred on where it was tied.
+  const anchor = across ? x : y;
+  if (hi - lo + 1 > BAND_MAX) {
+    lo = Math.max(lo, anchor - (BAND_MAX >> 1));
+    hi = Math.min(hi, lo + BAND_MAX - 1);
+    lo = Math.max(across ? hx0 : vy0, hi - BAND_MAX + 1);
+  }
+  for (let t = 0; t < (thick || 1); t++) {
+    for (let i = lo - 1; i <= hi + 1; i++) {
+      const edge = (i === lo - 1 || i === hi + 1);
+      if (gap && !edge && ((i - lo) & 1)) continue;
+      const ch = edge ? 'o' : glyph;
+      if (across) put(g, i, y + t, ch); else put(g, x + t, i, ch);
+    }
+  }
+  // Where the band ended and which way it ran, for the one piece that has to
+  // trail off the end of itself. `across` matters: `lo` is an x when the band
+  // lies horizontally and a y when it stands vertically, and a scarf that reads
+  // it as an x either way hangs its tail off the side of the wrong animal the
+  // first time somebody puts it on a llama.
+  return { lo: lo - 1, hi: hi + 1, across };
+}
+
+/* Straight down from the anchor until the animal ends, then keep going. What
+ * hangs off a collar is the part of it anybody can see from six tiles away. */
+function hang(g, src, x, y, rows, outline) {
+  const placed = [];
+  let by = y;
+  // At most two rows down before it hangs anyway. Walking to the first air cell
+  // is right on a jaguar's chest and wrong on a llama's neck, where the animal
+  // is solid from the throat all the way through the body and down a leg: the
+  // bell was being hung at row sixteen, off the bottom of the grid, and the
+  // Keybrass Bell — the loud one, by its own description — repainted three
+  // pixels. A bell that has to sit on the chest to be seen sits on the chest.
+  while (by < y + HANG_MAX && SOLID(src, by + 1, x)) by++;
+  for (let r = 0; r < rows.length; r++) {
+    const row = rows[r];
+    for (let c = 0; c < row.length; c++) {
+      const ch = row[c];
+      if (ch === '.') continue;
+      const px = x + c - ((row.length - 1) >> 1), py = by + 1 + r;
+      put(g, px, py, ch);
+      if (ch === 'j') placed.push([px, py]);
+    }
+  }
+  if (outline !== false) edge(g, placed);
+}
+
+/* Straight up from the anchor until the animal ends, then sit ON it. A plate, a
+ * rule, a gong, a lamp: things bolted to a back or a shell, which have to raise
+ * the top line of the silhouette or they are just a pattern. */
+function proud(g, src, x, y, rows) {
+  const placed = [];
+  let ty = y;
+  while (SOLID(src, ty - 1, x)) ty--;
+  for (let r = 0; r < rows.length; r++) {
+    const row = rows[r];
+    for (let c = 0; c < row.length; c++) {
+      const ch = row[c];
+      if (ch === '.') continue;
+      if (ch === 'j') placed.push([x + c - ((row.length - 1) >> 1), ty - rows.length + 1 + r]);
+      // The bottom row lands ON the surface, not one above it. A plate bolted to
+      // a shell with a pixel of daylight under it is a plate floating over a
+      // shell, and at x14 that gap is the first thing the eye finds.
+      put(g, x + c - ((row.length - 1) >> 1), ty - rows.length + 1 + r, ch);
+    }
+  }
+  edge(g, placed);
+}
+
+/* Out past the front of the face, in the direction the animal is pointing. */
+function past(g, src, x, y, dir, rows) {
+  const step = (dir === 'down' || dir === 'up') ? [0, 1] : [1, 0];
+  let px = x, py = y, n = 0;
+  // Capped for the same reason hang() is. Facing the camera, "past the mouth"
+  // points straight down through the whole bird, so an uncapped walk set the
+  // crow's tally down below row fifteen and drew nothing at all.
+  while (n++ < PAST_MAX && SOLID(src, py + step[1], px + step[0])) {
+    px += step[0]; py += step[1];
+  }
+  const placed = [];
+  for (let r = 0; r < rows.length; r++) {
+    for (let c = 0; c < rows[r].length; c++) {
+      const ch = rows[r][c];
+      if (ch === '.') continue;
+      const ax = px + step[0] + c - 1, ay = py + step[1] + r - 1;
+      put(g, ax, ay, ch);
+      if (ch === 'j') placed.push([ax, ay]);
+    }
+  }
+  edge(g, placed);
+}
+
+/* Every icon regalia.py ships, resolved to one of the four primitives above.
+ * `nail`, `chip`, `tooth`, `pin`, `whistle` and `reed` all land on `pendant`
+ * on purpose: they are six names for a thing on a cord, and drawing six
+ * distinguishable three-pixel objects would be six lies about how much
+ * resolution there is here. What separates them on screen is the colour, and
+ * the colour is Python's. */
+const REGALIA_SHAPES = {
+  band:    (g, s, x, y) => { strip(g, s, x, y, 1, 'j'); },
+  skin:    (g, s, x, y) => { strip(g, s, x, y, 2, 'j'); },
+  cord:    (g, s, x, y) => { strip(g, s, x, y, 1, 'j', true);
+                             hang(g, s, x, y, ['j', 'o']); },
+  collar:  (g, s, x, y) => { strip(g, s, x, y, 1, 'j');
+                             hang(g, s, x, y, ['j', 'o']); },
+  bell:    (g, s, x, y) => { strip(g, s, x, y, 1, 'j');
+                             hang(g, s, x, y, ['.j.', 'jjj', '.o.']); },
+  pendant: (g, s, x, y) => { strip(g, s, x, y, 1, 'j');
+                             hang(g, s, x, y, ['j.j', 'o.o']); },
+  // Wound twice and trailing, and on a penguin that is most of the animal. The
+  // only piece in the set whose tail is longer than the body part it is tied to.
+  scarf:   (g, s, x, y) => {
+             const band = strip(g, s, x, y, 2, 'j');
+             hang(g, s, x, y, ['jj.', 'jo.', 'o..']);
+             const tail = [];
+             for (let i = 1; i <= 3; i++) {
+               const tx = band.across ? band.lo - i : x - i;
+               const ty = band.across ? y + 1 + i : band.hi + i;
+               put(g, tx, ty, i === 3 ? 'o' : 'j');
+               if (i < 3) tail.push([tx, ty]);
+             }
+             edge(g, tail);
+           },
+  lens:    (g, s, x, y) => {
+             const ring = [];
+             for (const [dx, dy] of [[-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0],
+                                     [-1, 1], [0, 1], [1, 1]]) {
+               put(g, x + dx, y + dy, 'j'); ring.push([x + dx, y + dy]);
+             }
+             put(g, x, y, 'w');
+             edge(g, ring.concat([[x, y]]));
+           },
+  ring:    (g, s, x, y) => { strip(g, s, x, y, 1, 'j', true); },
+  cap:     (g, s, x, y) => { strip(g, s, x, y, 1, 'j');
+                             hang(g, s, x, y, ['jjj', 'o.o']); },
+  nub:     (g, s, x, y) => { proud(g, s, x, y, ['.j.', 'jjj']); },
+  rule:    (g, s, x, y) => { proud(g, s, x, y, ['jjjjj', 'ooooo']); },
+  disc:    (g, s, x, y) => { proud(g, s, x, y, ['.jj.', 'jjjj', '.jj.']); },
+  plates:  (g, s, x, y) => { proud(g, s, x, y, ['.jjj.', 'jjjjj', 'o.o.o']); },
+  harness: (g, s, x, y) => { proud(g, s, x, y, ['.w.', 'ojo', 'jjj']);
+                             strip(g, s, x, y, 1, 'j', true); },
+  muzzle:  (g, s, x, y, d) => { past(g, s, x, y, d, ['ojo', 'jjj', 'ojo']); },
+  // Carried, not worn. These three go PAST the mouth in the direction the
+  // animal is pointing rather than up from it: proud() walks to the top of
+  // whatever column it is given, so a tally anchored at a beak was being set
+  // down neatly on top of the crow's skull.
+  held:    (g, s, x, y, d) => { past(g, s, x, y, d, ['jj', 'jj', 'oo']); },
+  helddisc:(g, s, x, y, d) => { past(g, s, x, y, d, ['ojjo', 'jjjj', 'ojjo']); },
+};
+
+/* id -> where it goes and what it looks like. `icon` overrides regalia.py's own
+ * only where its twenty names collapse onto one shape: `nail`, `chip`, `tooth`,
+ * `pin`, `whistle` and `reed` are all a thing on a cord, and drawing six
+ * different three-pixel objects would be six lies about how much resolution
+ * there is. What separates them on screen is the colour, which is Python's. */
+export const PET_REGALIA = {
+  /* -- the boar, STUB -- */
+  porch_nail:       { at: 'throat', icon: 'pendant' },
+  doorbell_cord:    { at: 'leg',    icon: 'cord' },
+  /* -- the snake, IDIOM -- */
+  kept_skin:        { at: 'throat', icon: 'skin' },
+  doorstep_dish:    { at: 'mouth',  icon: 'helddisc' },
+  /* -- the llama -- */
+  plateau_blinder:  { at: 'brow',   icon: 'band' },
+  keybrass_bell:    { at: 'throat', icon: 'bell' },
+  /* -- the axolotl -- */
+  trough_lens:      { at: 'eye',    icon: 'lens' },
+  second_whistle:   { at: 'throat', icon: 'pendant' },
+  /* -- the jaguar -- */
+  three_path_cord:  { at: 'leg',    icon: 'cord' },
+  jade_collar:      { at: 'throat', icon: 'collar' },
+  /* -- the raptor, SICKLE -- */
+  spur_cap:         { at: 'leg',    icon: 'cap' },
+  duplicate_tooth:  { at: 'throat', icon: 'pendant' },
+  /* -- the penguin -- */
+  lamp_glass:       { at: 'throat', icon: 'lens' },
+  mystic_scarf:     { at: 'throat', icon: 'scarf' },
+  /* -- the nautilus -- */
+  inner_shell:      { at: 'back',   icon: 'nub' },
+  twice_ringing_pin:{ at: 'throat', icon: 'pendant' },
+  /* -- the crow -- */
+  road_ring:        { at: 'leg',    icon: 'ring' },
+  rooks_tally:      { at: 'mouth',  icon: 'held' },
+  /* -- the tortoise -- */
+  stair_rule:       { at: 'back',   icon: 'rule' },
+  shell_gong:       { at: 'back',   icon: 'disc' },
+  /* -- BARROW, the boar that came back -- */
+  lit_tile_chip:    { at: 'brow',   icon: 'nub' },
+  closed_half_ring: { at: 'brow',   icon: 'ring' },
+  /* -- the mimic octopus -- */
+  borrowed_eye:     { at: 'leg',    icon: 'lens' },
+  borrowed_reed:    { at: 'leg',    icon: 'cap' },
+
+  /* -- quests.py's seven, which fit any companion. These are the only rows
+   *    here carrying a colour, because quests.REGALIA ships none; delete the
+   *    hex the day it grows one. -- */
+  field_collar:     { at: 'throat', icon: 'collar',  colour: '#8a6a4a' },
+  keyed_bell:       { at: 'throat', icon: 'bell',    colour: '#c9a05a' },
+  sealed_muzzle:    { at: 'mouth',  icon: 'muzzle',  colour: '#8fa8c8' },
+  lantern_harness:  { at: 'back',   icon: 'harness', colour: '#f2c65a' },
+  lattice_tack:     { at: 'back',   icon: 'plates',  colour: '#7e8f6a' },
+  counted_barding:  { at: 'back',   icon: 'plates',  colour: '#c9a05a' },
+  unlabelled_collar:{ at: 'throat', icon: 'collar',  colour: '#6a6470' },
+};
+
+export const PET_REGALIA_IDS = Object.keys(PET_REGALIA);
+
+/** What a caller may hand over as `regalia`: an id, a whole regalia row from
+ *  Python, or nothing. Never throws; an id nobody has placed becomes a band at
+ *  the throat in its own colour, which is a wrong guess that is still visible
+ *  and is therefore still better than a silent no-op. */
+export function petRegaliaFor(worn) {
+  if (!worn) return null;
+  const id = (typeof worn === 'object')
+    ? String(worn.id || worn.regalia_id || '') : String(worn);
+  const key = id.toLowerCase().trim();
+  if (!key) return null;
+  const placed = PET_REGALIA[key] || { at: 'throat', icon: 'band' };
+  const colour = (typeof worn === 'object' && typeof worn.colour === 'string'
+                  && worn.colour.charAt(0) === '#') ? worn.colour
+               : (placed.colour || '');
+  return { id: key, at: placed.at, icon: placed.icon, colour };
+}
+
+/* Put it on. Stamped BEFORE the gait and before the tutorial head-shrink, for
+ * the same reason the crest is: a collar merged after the deformation is a
+ * collar that detaches from the throat on every frame the head moves, and at
+ * this size that does not read as a loose collar, it reads as a bug. */
+function wear(grid, v, piece, dir) {
+  if (!piece) return grid;
+  const hidden = !!(v.on && v.on.hidden);
+  // From behind, a collar is the back of a collar: the band goes all the way
+  // round a neck and is still there, but the bell, the tooth and the tag hanging
+  // off the front of it are on the other side of the animal. So a throat piece
+  // walking away from you is a plain band, and a lens or a bit in the mouth is
+  // nothing at all — which anchorAt() has already refused by this point.
+  const icon = (hidden && piece.at === 'throat') ? 'band' : piece.icon;
+  const draw = REGALIA_SHAPES[icon] || REGALIA_SHAPES.band;
+  const at = anchorAt(v, piece.at);
+  if (!at) return grid;
+  const src = rowsOf(grid);
+  const g = src.map(r => r.split(''));
+  draw(g, src, at[0], at[1], dir);
+  return g.map(r => r.join(''));
+}
+
 /* --------------------------------------------------------------- palette
  *
  * Every tone here comes off a shared ramp in palette.js, which is the rule that
@@ -1410,20 +2487,43 @@ function viewFor(key, dir) {
  *
  * Restrained, because the roster screen is where the player goes to look at the
  * animal that died and a headstone with a halo would be the game telling them
- * how to feel. So: the same pose, the same outline, three tones of the darkest
- * material we have plus one bone highlight, no rim light, no accent, no mark,
- * no aura — and the white gone out of the eye, which is the only change anybody
- * will consciously notice. It reads as the shape of the animal with the animal
- * no longer in it. */
+ * how to feel. So: three tones of the darkest material we have plus one bone
+ * highlight, no rim light, no accent, no mark, no aura, and the white gone out
+ * of the eye.
+ *
+ * THE POSE CHANGES. This said "the same pose, the same outline" and stopped
+ * being true when the FALLEN poses were authored — fold, topple, capsize,
+ * slack, sink, one per animal — and it is the sentence a reader checks to find
+ * out what fainted means, so it was the wrong sentence to leave stale. Measured
+ * by petArtStats() as the share of the standing outline that moves, side view:
+ *
+ *   boar      fold      36%   <- the least
+ *   jaguar    fold      67%
+ *   nautilus  sink      73%
+ *   snake     slack     80%
+ *   octopus   sink     104%   <- more outline moves than the animal had
+ *
+ * So the silhouette is doing the work and the palette is only confirming it,
+ * which is the right way round: a fainted companion that was merely a darker
+ * companion is the bug the faint measurement in petArtStats() exists to catch,
+ * and it WAS the bug for the whole of this file's first life — three pixels on
+ * the jaguar, three on the axolotl. What this palette contributes is that the
+ * changed pose reads as the shape of the animal with the animal no longer in
+ * it, rather than as a second animal lying down. */
 function deadPalette() {
+  const deep = RAMPS.void[SHADE.DEEP];
   const dark = RAMPS.void[SHADE.DARK];
   const mid = RAMPS.void[SHADE.MID];
   const bone = RAMPS.bone[SHADE.DARK];
   return {
-    o: OUTLINE, O: OUTLINE, e: OUTLINE, D: OUTLINE,
-    d: dark, B: mid, L: mid, H: bone,
-    a: dark, A: mid, g: bone, c: bone,
-    w: mid, R: dark, m: dark, r: dark,
+    o: OUTLINE, O: OUTLINE, e: OUTLINE,
+    // Three steps of body and a bone highlight. The first version folded the
+    // deepest step into the outline, which at this size meant the whole
+    // underside of a fallen animal merged with its own silhouette and the pose
+    // lost its form exactly where the pose is doing the work.
+    D: deep, d: dark, B: mid, L: mid, H: bone,
+    a: dark, A: mid, g: bone, k: dark, c: bone,
+    j: bone, w: mid, R: dark, m: dark, r: dark,
   };
 }
 
@@ -1454,7 +2554,10 @@ export function petPalette(animal, opts) {
     D: body[SHADE.DEEP], d: body[SHADE.DARK], B: body[SHADE.MID],
     L: lit(body[SHADE.LIGHT]), H: lit(body[SHADE.SPEC]),
     a: accent[SHADE.DARK], A: accent[SHADE.LIGHT],
-    g: hard[SHADE.LIGHT], c: hard[SHADE.SPEC],
+    // Three steps of the hard material, not one. 'g' was the whole of it until
+    // liteMass() started shading shells and beaks, and a dome painted in a
+    // single flat tone is a dome the light never reached.
+    g: hard[SHADE.LIGHT], c: hard[SHADE.SPEC], k: hard[SHADE.MID],
     w: '#f2f6ff',
     R: st.index >= 5 ? mix(rimTone(body[SHADE.SPEC]), rarity.accent, 0.45)
                      : rimTone(body[SHADE.SPEC]),
@@ -1467,6 +2570,14 @@ export function petPalette(animal, opts) {
   // tone the sprite was already wearing and the tier read as COMMON. Nudge
   // toward the key light until it separates; the mark keeps its own palette
   // slot either way, so this costs nothing against the budget.
+  // The worn object's own colour, straight off the Python row. It is the only
+  // entry in here that is not derived from a shared ramp, and that is the
+  // point: a jade collar is jade because regalia.py says so, and an object the
+  // player went and got should not be quietly restyled to match the animal.
+  const piece = o.regalia ? petRegaliaFor(o.regalia) : null;
+  if (piece && piece.colour) pal.j = piece.colour;
+  else if (piece) pal.j = rarity.accent;
+
   let markColour = rarity.accent;
   const worn = new Set(Object.values(pal));
   if (worn.has(markColour)) markColour = warmer(markColour, 14);
@@ -1479,16 +2590,20 @@ export function petPalette(animal, opts) {
  *
  * Same discipline as the hero rig: a Map keyed by an authored string, a cap, and
  * oldest-out eviction. The working set a walking companion actually asks for is
- * one animal x four facings x four frames x two poses, plus the dead frame: 33
- * entries. The cap is not sized for that, it is sized for the worst case the UI
- * can actually produce, which is the roster screen holding the whole roster at
- * two tiers at once — ten animals x 33 x 2 = 660. 768 clears it with room for
- * the fallback and a colour override, and it was measured rather than guessed:
- * at 384 the second pass over that set re-rendered 2600 canvases, which is a
- * cache doing nothing but evicting.
+ * one animal x four facings x four frames x two poses, plus the fainted frame:
+ * 33 entries. The cap is not sized for that, it is sized for the worst case the
+ * UI can actually produce, which is the roster screen holding the whole roster
+ * at once — and that worst case grew twice in this pass. It was ten animals x
+ * 33 x 2 tiers = 660, and 768 covered it. It is now TWELVE animals, and every
+ * one of them can be shown bare beside itself wearing its regalia, which is
+ * 12 x 33 x 2 = 792 — thirty entries over the old cap, which is the worst place
+ * to be: the set no longer fits, so every pass evicts the entries the next pass
+ * is about to ask for. Measured, not guessed: at 768 two further passes over
+ * that set re-rendered 1560 canvases. At 1024 they re-render none, and 1024
+ * sixteen-by-sixteen frames is a megabyte.
  */
 const petCache = new Map();
-const PET_CACHE_MAX = 768;
+const PET_CACHE_MAX = 1024;
 
 function capPetCache() {
   while (petCache.size > PET_CACHE_MAX) {
@@ -1514,7 +2629,7 @@ export const PET_FRAME_COUNT = 4;
 /* The authored grid for one animal, facing, frame and tier, before it is lit.
  * Split out from petFrame because the silhouette check wants the shape without
  * paying for a raster. */
-function petGrid(key, dir, f, tierKey, dead, pose) {
+function petGrid(key, dir, f, tierKey, dead, pose, worn) {
   const a = ANIMALS[key];
   const st = TIER_STYLE[tierKey];
   const v = viewFor(key, dir);
@@ -1540,6 +2655,15 @@ function petGrid(key, dir, f, tierKey, dead, pose) {
     }
   }
 
+  const vv = (head === v.head && headX === v.headX) ? v : { ...v, head, headX };
+
+  // The worn object goes on here: after the crest, before the shrink and before
+  // the gait, so it travels with whichever block of the animal it is attached
+  // to. A fainted animal is not wearing anything the player needs to read — the
+  // pose is the whole message, and a scarf stamped at a throat that is about to
+  // be moved onto the floor ends up hanging in the air behind the body.
+  if (worn && !dead) g = wear(g, vv, worn, sideish ? 'side' : dir);
+
   // A tutorial companion is a smaller one. The head settles a row into the
   // shoulders, which takes a row off the top of the outline — a real change to
   // the silhouette rather than a paler version of the same animal.
@@ -1547,10 +2671,11 @@ function petGrid(key, dir, f, tierKey, dead, pose) {
     const mid = Math.floor((head[0] + head[1]) / 2);
     g = moveBlock(g, headX[0], headX[1], head[0], mid, 0, st.shrink);
   }
-
-  const vv = (head === v.head && headX === v.headX) ? v : { ...v, head, headX };
-  // A dead companion is a still frame: no gait, no idle, nothing twitches.
-  if (!dead) {
+  // A fainted companion is a still frame and a DIFFERENT POSE: no gait, no
+  // idle, nothing twitches, and nothing is standing up either.
+  if (dead) {
+    g = (FALLEN[a.fallen] || FALLEN.fold)(vv, g, sideish ? 'side' : dir);
+  } else {
     const fn = (GAITS[a.gait] || GAITS.trot);
     g = (pose === 'idle' ? (IDLES[a.idle] || IDLES.breath) : fn)(
       vv, g, f, sideish ? 'side' : dir);
@@ -1594,26 +2719,46 @@ export function petFrame(animal, facing = 'down', frame = 0, opts) {
   const pose = dead ? 'idle' : (o.pose === 'idle' ? 'idle' : 'walk');
   const colour = (typeof o.colour === 'string' && o.colour.charAt(0) === '#')
     ? o.colour : '';
+  const worn = dead ? null : petRegaliaFor(o.regalia);
   const f = dead ? 0 : ((((frame | 0) % PET_FRAME_COUNT) + PET_FRAME_COUNT) % PET_FRAME_COUNT);
 
-  const ck = `${key}:${dir}:${f}:${pose}:${tier}:${colour}:${dead ? 1 : 0}`;
+  const ck = `${key}:${dir}:${f}:${pose}:${tier}:${colour}:${dead ? 1 : 0}`
+           + `:${worn ? worn.id + worn.colour : ''}`;
   const hit = petCache.get(ck);
   if (hit) return hit;
 
-  let grid = petGrid(key, dir, f, tier, dead, pose);
+  let grid = petGrid(key, dir, f, tier, dead, pose, worn);
 
   // One merge, then one light, in the order sprites.js fixed for the whole
   // cast: the soft upper-left fill, then the single hot rim from low-left
   // INSIDE the heavy outline. The eye, the mark and the halo are protected —
   // an authored pixel that the shading pass eats is an authored pixel wasted.
-  grid = rimLowLeft(applyRim(grid), 'R', 'wem');
+  // The hard material is lit first, by the same function and the same lamp, so
+  // that a shell has form before the body it is sitting on is shaded around it.
+  grid = rimLowLeft(applyRim(liteAll(grid)), 'R', 'wemj');
 
   // The halo goes on last of all, outside the outline, after the lighting has
   // finished. It is not a surface, so it must not be lit like one.
   const st = TIER_STYLE[tier];
-  if (st.halo && !dead) grid = halo(grid, `${key}:${dir}:${tier}`, st.halo === 1 ? 3 : 2);
+  if (st.halo && !dead) grid = halo(grid, `${key}:${dir}:${tier}`, st.halo === 1 ? 4 : 3);
 
-  const canvas = gridSprite(grid, petPalette(key, { tier, colour, dead }), PET_W, PET_H);
+  /* THE PALETTE ONLY HEARS ABOUT THE PIECE IF THE PIECE IS ACTUALLY ON THE
+   * GRID. `j` is the regalia channel and REGALIA_SHAPES are its only writers,
+   * so this asks the finished grid whether wear() stamped a single cell.
+   *
+   * It matters because petPalette() sets pal.j from the piece and then builds
+   * the mark-collision set out of Object.values(pal) — which meant a piece that
+   * drew NOTHING still nudged pal.m and still repainted pixels. Measured:
+   * petFrame('crow','up',0,{tier:'MASTER',regalia:'rooks_tally'}) differed from
+   * bare by 3 pixels with no tally anywhere on the sprite, and a typo'd id
+   * scored 11 on every facing. Any harness asking "did this piece change
+   * anything" got yes for a piece nobody can see, which is the one question
+   * that check exists to answer. Now a diff of zero means zero, and the
+   * collision nudge still runs whenever there is something to collide with. */
+  const jStamped = grid.some(row => row.indexOf('j') >= 0);
+  const canvas = gridSprite(
+    grid, petPalette(key, { tier, colour, dead, regalia: jStamped ? worn : null }),
+    PET_W, PET_H);
   petCache.set(ck, canvas);
   capPetCache();
   return canvas;
@@ -1659,10 +2804,11 @@ export function petSilhouette(animal, facing = 'side', frame = 0, opts) {
     : (PET_FACINGS.indexOf(facing) >= 0 ? facing : 'down');
   const f = (((frame | 0) % PET_FRAME_COUNT) + PET_FRAME_COUNT) % PET_FRAME_COUNT;
   let g = petGrid(key, dir, f, petTierKey(o.tier), !!o.dead,
-                  o.pose === 'idle' ? 'idle' : 'walk');
+                  o.pose === 'idle' ? 'idle' : 'walk',
+                  o.dead ? null : petRegaliaFor(o.regalia));
   const st = TIER_STYLE[petTierKey(o.tier)];
   if (st.halo && !o.dead) g = halo(g, `${key}:${dir}:${petTierKey(o.tier)}`,
-                                  st.halo === 1 ? 3 : 2);
+                                  st.halo === 1 ? 4 : 3);
   return silhouetteAt(g, PET_W);
 }
 
@@ -1757,13 +2903,77 @@ export function petArtStats() {
         }
       }
     }
+    // The faint, measured against the thing it has to be told apart from.
+    // Coverage only: the palette is allowed no part in this, because a fainted
+    // companion that is merely a darker companion is the bug this number
+    // exists to catch, and it was the bug for the whole of this file's first
+    // life — three pixels on the jaguar, three on the axolotl.
+    const stand = petGrid(key, 'right', 0, 'COMMON', false, 'walk', null);
+    const down = petGrid(key, 'right', 0, 'COMMON', true, 'idle', null);
+    let poseMoved = 0, standInk = 0;
+    for (let y = 0; y < PET_H; y++) {
+      for (let x = 0; x < PET_W; x++) {
+        const p = stand[y][x] !== '.', q = down[y][x] !== '.';
+        if (p) standInk++;
+        if (p !== q) poseMoved++;
+      }
+    }
+    const rowsWith = (g) => {
+      let top = -1, bot = -1;
+      for (let y = 0; y < PET_H; y++) {
+        if (![...g[y]].some(c => c !== '.' && c !== ' ')) continue;
+        if (top < 0) top = y; bot = y;
+      }
+      return top < 0 ? 0 : bot - top + 1;
+    };
     rows.push({
-      animal: key, gait: a.gait, idle: a.idle, legs: a.side.legs.length,
+      animal: key, gait: a.gait, idle: a.idle, fallen: a.fallen,
+      legs: a.side.legs.length,
       silhouette: { TUTORIAL: tut, COMMON: com, LEGENDARY: area(leg) },
       outlineChangedPerCycle: moved,
       shellPixelsMovedPerCycle: shellMoved,
+      fainted: {
+        outlineChangedFromStanding: poseMoved,
+        shareOfTheStandingOutline: standInk
+          ? +(poseMoved / standInk).toFixed(2) : null,
+        inkRowsStanding: rowsWith(stand), inkRowsFainted: rowsWith(down),
+      },
     });
   }
+
+  /* Every worn object, against the animal without it. Two numbers per piece and
+   * the second is the one that matters: pixels REPAINTED says the code ran,
+   * pixels of OUTLINE ADDED says a player can see it from six tiles away with a
+   * bush in the way. A piece scoring zero on the second on every facing is a
+   * piece that has been implemented and cannot be found. */
+  const regalia = [];
+  for (const id of PET_REGALIA_IDS) {
+    const piece = petRegaliaFor(id);
+    let paint = 0, outline = 0;
+    const per = {};
+    for (const facing of PET_FACINGS) {
+      const bare = petGrid('jaguar', facing, 0, 'COMMON', false, 'walk', null);
+      const worn = petGrid('jaguar', facing, 0, 'COMMON', false, 'walk', piece);
+      let p = 0, o = 0;
+      for (let y = 0; y < PET_H; y++) {
+        for (let x = 0; x < PET_W; x++) {
+          if (bare[y][x] !== worn[y][x]) p++;
+          if ((bare[y][x] !== '.') !== (worn[y][x] !== '.')) o++;
+        }
+      }
+      per[facing] = [p, o];
+      paint = Math.max(paint, p); outline = Math.max(outline, o);
+    }
+    regalia.push({ id, at: piece.at, icon: piece.icon,
+                   worstPixelsRepainted: paint, worstOutlineAdded: outline, per });
+  }
+
   return { animals: PET_ANIMALS.length, box: `${PET_W}x${PET_H}`,
-           tiers: PET_TIERS.length, cache: petCacheStats(), rows };
+           tiers: PET_TIERS.length, cache: petCacheStats(),
+           regaliaPieces: regalia.length,
+           regaliaThatChangeNothing: regalia.filter(r => !r.worstPixelsRepainted)
+             .map(r => r.id),
+           regaliaThatAddNoOutline: regalia.filter(r => !r.worstOutlineAdded)
+             .map(r => r.id),
+           regalia, rows };
 }

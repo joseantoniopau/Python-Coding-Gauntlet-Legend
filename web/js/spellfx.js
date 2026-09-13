@@ -41,7 +41,7 @@
  */
 import { rng, hash, shade, mix } from './sprites.js';
 
-export const SPELLFX_VERSION = '1.2.0';
+export const SPELLFX_VERSION = '1.3.0';   // 1.3: bodies re-scaled to the 256x224 raster
 
 /* Logical stage units. Same numbers as fx.js STAGE; overridable per effect.
  * Moved with the raster to 256x224 (docs/08-art-direction §A). safeTop/safeH
@@ -49,6 +49,83 @@ export const SPELLFX_VERSION = '1.2.0';
  * does not have to guess: rows 24..199 are the promise, the rest is overscan. */
 export const STAGE_GEOM = Object.freeze({
   w: 256, h: 224, safeTop: 24, safeH: 176, ground: 175, heroX: 64, enemyX: 184,
+});
+
+/* ---------------- THE BODY SCALE ----------------
+ * The raster move (c8167b9) took the frame from 192x128 to 256x224 and moved
+ * the eleven anchors that say WHERE an effect starts and lands. It did not move
+ * the geometry that says HOW BIG any of it is, so every effect kept drawing at
+ * its old absolute size inside a frame that had grown. Measured on the raster,
+ * union bounding box of each subclass's own art with the shared layers off:
+ * ORACLE fell from 78.9% of frame height to 62.1%, CODE_FRAGMENT from 63.3% to
+ * 41.1%, a plain hit from 29.7% to 17.0%, and the two shared signatures —
+ * windup and impact, which every one of the eleven wears — came out 1.00x wide.
+ * Not smaller than they should be: not grown at all.
+ *
+ * THE FACTOR IS 4/3 IN BOTH AXES, AND THE VERTICAL ONE IS NOT 1.75.
+ *
+ *   width    192 -> 256 is 4/3, and all of it is on screen in both rasters.
+ *   height   224/128 is 1.75, and that number is a trap. §A-3 of
+ *            docs/08-art-direction.md says the safe area is 256x176, rows
+ *            24..199, and that rows 0..23 and 200..223 are overscan where
+ *            "nothing load-bearing may live". fitBattleStage() fits the 176.
+ *            So the VISIBLE frame went 128 -> 176 rows: 1.375, which is 4/3
+ *            within three per cent. An effect scaled 1.75 vertically would be
+ *            27% taller than the fraction it used to hold and would put its top
+ *            in the overscan the player is not promised. ORACLE is the proof by
+ *            arithmetic: it held 78.9% of the old 128 rows, and 78.9% of the
+ *            new 224 is 177 rows — one row MORE than the whole safe area.
+ *
+ * WHERE THE EXTRA ROOM ACTUALLY IS, because it is not spread evenly. The ground
+ * line moved 100 -> 175 while the safe top moved 0 -> 24, so the visible
+ * headroom above the ground went 100 -> 151 rows: 1.51x, not 1.375x. That
+ * surplus belongs to the things that RISE from the ground, and it is spent
+ * there and nowhere else — PHOENIX's ignition column at 1.41x, fire's impact
+ * plume at 1.5x reach, the lightning strike's ceiling — each still clamped
+ * clear of row 24.
+ *
+ * WHAT DOES NOT SCALE: line weight. The logical pixel did not get finer, the
+ * frame got bigger, so a 1px rune outline is still a 1px rune outline and the
+ * 3x5 micro-font is still 3x5. Extents scale; detail does not. What the extra
+ * 1.9x of area buys instead is STEPS — more quills on the wing, more tongues in
+ * a plume, four bands of falloff in a light disc where there were three, ten
+ * runes on a bezel where there were eight — because a ring 4/3 longer drawn
+ * with the same eight steps is a ring with gaps in it. */
+/* Nothing below multiplies by this — every extent in this file is authored at
+ * scale rather than computed from a factor, because a file that multiplies at
+ * draw time draws on half-pixels and half-pixel art is soft art (see px()).
+ * It is exported so the NEXT raster move can find what this one used, instead
+ * of having to re-derive it from the commit that broke the last one. */
+/* AND 176 IS THE PROMISE, NOT THE DELIVERY — which matters to whoever moves
+ * the raster next, because it is the number that looks like it came off the
+ * renderer and did not. fx.js fits `px` to safeH but centres the WHOLE 224-row
+ * raster (`oy = round((canvasH - STAGE.h * px) / 2)`), so the canvas shows
+ * every row that lands on it, not the 176 it was sized for. Measured live, in
+ * a browser, at all four window sizes the game actually opens at:
+ *
+ *   1280x800, 1440x940    canvas 526x366  px 2  oy -41   rows  21..203  183
+ *   1600x1000, 1920x1080  canvas 782x542  px 3  oy -65   rows  22..202  181
+ *
+ * So the band is 181-183 rows and has never once been 176. The art grew 1.333
+ * against a window that grew 183/128 = 1.43, which costs every BODY here two
+ * to five points of the height fraction it used to hold — measured, worst
+ * first: PSEUDOSIGHT -3.0, heal -2.8, resist -1.6, miss -0.9. Against the 176
+ * promised rows the same bodies are within a point or two of where they were.
+ *
+ * THIS IS A COMPOSITION CALL AND IT IS DELIBERATE. 4/3 keeps the art inside the
+ * rows the player is PROMISED, and the extra five to seven rows the canvas
+ * happens to deliver are overscan that a different window, a different dpr or a
+ * different chrome takes straight back. Art placed in them is art that exists
+ * on one monitor. Do not re-derive 1.4375 from the delivered band: it would put
+ * the top of every rising effect in rows nothing guarantees. */
+export const SPELLFX_BODY_SCALE = Object.freeze({
+  fromRaster: '192x128', toRaster: '256x224', toSafeArea: '256x176',
+  x: 4 / 3,              // 192 -> 256, all of it visible in both
+  y: 4 / 3,              // 128 -> 176 PROMISED rows is 1.375; NOT 224/128
+  groundRise: 1.51,      // 100 -> 151 visible rows above the ground line
+  /* What the canvas actually hands over, measured rather than derived. Here so
+   * the next raster move starts from the delivery and not from the promise. */
+  deliveredRows: '181-183',
 });
 
 /* Mirrored from fx.js DAMAGE_KIND so ATTACK_ANIMATIONS can be keyed by it
@@ -102,31 +179,36 @@ export const ATTACK_COLOURS = Object.freeze({
  *
  * `holdScale` stretches or shortens that element's hold frame: frost and force
  * land heavier than lightning, which is over before it is seen.
+ *
+ * Speeds and gravities carry the 4/3 of the body scale. A mote's velocity is an
+ * extent per second, and under x' = 4/3 x, v' = 4/3 v, g' = 4/3 g the same
+ * trajectory comes out at the same times, 4/3 bigger — which is the whole
+ * requirement. Lifetimes, spreads and spins are angles and seconds and do not.
  */
 export const ELEMENTS = Object.freeze({
   fire: Object.freeze({
     id: 'fire', radial: false, dir: -Math.PI / 2, tangent: 0, spread: 1.5,
-    speed: 30, speedVar: 52, gravity: -42, life: 0.52, lifeVar: 0.50,
+    speed: 40, speedVar: 69, gravity: -56, life: 0.52, lifeVar: 0.50,
     spin: 6.5, chunk: 0.22, holdScale: 1.00,
   }),
   frost: Object.freeze({
     id: 'frost', radial: true, dir: 0, tangent: 0, spread: 0.5,
-    speed: 46, speedVar: 56, gravity: 230, life: 0.26, lifeVar: 0.20,
+    speed: 61, speedVar: 75, gravity: 307, life: 0.26, lifeVar: 0.20,
     spin: 0, chunk: 0.50, holdScale: 1.25,
   }),
   arcane: Object.freeze({
     id: 'arcane', radial: true, dir: 0, tangent: 1.35, spread: 0.5,
-    speed: 20, speedVar: 28, gravity: 6, life: 0.70, lifeVar: 0.55,
+    speed: 27, speedVar: 37, gravity: 8, life: 0.70, lifeVar: 0.55,
     spin: 12, chunk: 0.12, holdScale: 0.95,
   }),
   lightning: Object.freeze({
     id: 'lightning', radial: true, dir: 0, tangent: 0, spread: 0.8,
-    speed: 130, speedVar: 130, gravity: 420, life: 0.13, lifeVar: 0.10,
+    speed: 173, speedVar: 173, gravity: 560, life: 0.13, lifeVar: 0.10,
     spin: 0, chunk: 0.22, holdScale: 0.75,
   }),
   force: Object.freeze({
     id: 'force', radial: true, dir: 0, tangent: 0, spread: 0.3,
-    speed: 58, speedVar: 50, gravity: 170, life: 0.38, lifeVar: 0.28,
+    speed: 77, speedVar: 67, gravity: 227, life: 0.38, lifeVar: 0.28,
     spin: 0, chunk: 0.42, holdScale: 1.15,
   }),
 });
@@ -373,7 +455,7 @@ class Motes {
   }
 
   step(dt) {
-    const xlo = -28, xhi = this.bw + 28, ylo = -40, yhi = this.bh + 24;
+    const xlo = -37, xhi = this.bw + 37, ylo = -53, yhi = this.bh + 32;
     for (let i = 0; i < this.cap; i++) {
       if (!this.alive[i]) continue;
       this.t[i] += dt;
@@ -381,7 +463,7 @@ class Motes {
       this.vy[i] += this.g[i] * dt;
       this.x[i] += this.vx[i] * dt;
       this.y[i] += this.vy[i] * dt;
-      if (this.spin[i]) this.vx[i] += Math.sin(this.t[i] * this.spin[i]) * 24 * dt;
+      if (this.spin[i]) this.vx[i] += Math.sin(this.t[i] * this.spin[i]) * 32 * dt;
       /* Gone for good: retire it rather than carry it. This is not only a draw
        * saved, it hands the slot back to the pool, so a dense impact stops
        * starving its own sparks to feed debris that left the frame. */
@@ -439,6 +521,11 @@ function beam(ctx, x0, y0, x1, y1, width, col, alpha) {
   ctx.translate(x0, y0);
   ctx.rotate(Math.atan2(dy, dx));
   const w = Math.max(1, width);
+  /* Four bands now, not three. A wider beam with a hard shoulder reads as a
+   * painted stripe; the outer `deep` halo is what turns the same silhouette
+   * back into light without spending a sixteenth colour. */
+  ctx.fillStyle = rgba(col.deep, alpha * 0.3);
+  ctx.fillRect(0, px(-w / 2) - 3, px(len), px(w) + 6);
   ctx.fillStyle = rgba(col.ink, alpha * 0.55);
   ctx.fillRect(0, px(-w / 2) - 1, px(len), px(w) + 2);
   ctx.fillStyle = rgba(col.key, alpha * 0.9);
@@ -471,7 +558,7 @@ function runeRing(ctx, cx, cy, radius, count, spin, col, alpha) {
   ctx.stroke();
   ctx.strokeStyle = rgba(col.key, alpha * 0.45);
   ctx.beginPath();
-  ctx.arc(px(cx), px(cy), radius - 3, 0, Math.PI * 2);
+  ctx.arc(px(cx), px(cy), radius - 4, 0, Math.PI * 2);
   ctx.stroke();
   for (let i = 0; i < count; i++) {
     const a = spin + (Math.PI * 2 * i) / count;
@@ -494,7 +581,9 @@ function cracks(ctx, cx, cy, seed, count, length, colour, alpha, grow) {
     const a0 = (Math.PI * 2 * i) / count + r() * 0.5;
     let x = cx, y = cy, a = a0;
     ctx.moveTo(px(x), px(y));
-    const segs = 3;
+    const segs = 4;                    // one more articulation per arm: a crack
+                                       // 4/3 longer at three segments is a bent
+                                       // line, at four it is a crack
     for (let s = 0; s < segs; s++) {
       a += (r() - 0.5) * 0.9;
       const seg = (length / segs) * grow * (0.6 + r() * 0.8);
@@ -531,7 +620,7 @@ function bevelPlate(ctx, x, y, w, h, col, alpha, lit = 1) {
  * radius is light on this grid; a radial gradient is an airbrush, and an
  * airbrush belongs to a different decade than this game does.
  */
-function lightDisc(ctx, cx, cy, radius, colour, alpha, bands = 3) {
+function lightDisc(ctx, cx, cy, radius, colour, alpha, bands = 4) {
   if (!(alpha > 0) || !(radius > 1)) return;
   for (let i = bands; i >= 1; i--) {
     const r = Math.max(1, px((radius * i) / bands));
@@ -547,10 +636,10 @@ function lightDisc(ctx, cx, cy, radius, colour, alpha, bands = 3) {
  * and it does more for "the light is real" than anything else in it. */
 function groundPool(ctx, cx, groundY, rx, colour, alpha) {
   if (!(alpha > 0) || !(rx > 1)) return;
-  for (let i = 2; i >= 1; i--) {
-    const w = Math.max(1, px((rx * i) / 2));
-    const h = Math.max(1, px((rx * i) / 6));
-    ctx.fillStyle = rgba(colour, alpha * (1 - (i - 1) / 2));
+  for (let i = 3; i >= 1; i--) {
+    const w = Math.max(1, px((rx * i) / 3));
+    const h = Math.max(1, px((rx * i) / 9));
+    ctx.fillStyle = rgba(colour, alpha * (1 - (i - 1) / 3));
     ctx.beginPath();
     ctx.ellipse(px(cx), px(groundY), w, h, 0, 0, Math.PI * 2);
     ctx.fill();
@@ -584,30 +673,30 @@ function boltPath(ctx, x0, y0, x1, y1, seed, jag, segs) {
  * skips, and skipping it is exactly what makes a hit read as a flash. */
 function windupSignature(ctx, el, cx, cy, p, t, col, tn, alpha, power, seed, quiet) {
   if (!(alpha > 0)) return;
-  const R = (16 + 9 * power) * (1 - easeOut(p) * 0.68);
+  const R = (21 + 12 * power) * (1 - easeOut(p) * 0.68);
   ctx.lineWidth = 1;
 
   if (el.id === 'fire') {
     // Embers spiral UP into the hand on a golden angle, and a tongue licks off
     // it. Nothing in fire falls, and that is the whole tell.
-    for (let i = 0; i < 7; i++) {
+    for (let i = 0; i < 9; i++) {
       const a = i * 2.39996 + (quiet ? 0 : t * 4.2);
-      const rr = R * (1 - (i / 7) * 0.5);
+      const rr = R * (1 - (i / 9) * 0.5);
       const ex = cx + Math.cos(a) * rr;
-      const ey = cy + Math.sin(a) * rr * 0.55 - p * 11 - (i % 3);
+      const ey = cy + Math.sin(a) * rr * 0.55 - p * 15 - (i % 3);
       const s = 1 + (i & 1);
-      ctx.fillStyle = rgba(i < 3 ? col.hot : i < 5 ? col.key : tn.mid,
+      ctx.fillStyle = rgba(i < 4 ? col.hot : i < 6 ? col.key : tn.mid,
         alpha * (0.45 + 0.55 * p));
       ctx.fillRect(px(ex), px(ey), s, s);
     }
-    const h = 4 + 13 * p * power;
-    for (let i = 0; i < 5; i++) {
-      const q = i / 4;
-      const w = Math.max(1, px((1 - q) * 5 * power));
-      const wob = quiet ? 0 : Math.sin(t * 11 - q * 3) * (1 + 2 * q);
+    const h = 5 + 17 * p * power;
+    for (let i = 0; i < 7; i++) {
+      const q = i / 6;
+      const w = Math.max(1, px((1 - q) * 7 * power));
+      const wob = quiet ? 0 : Math.sin(t * 11 - q * 3) * (1.3 + 2.7 * q);
       ctx.fillStyle = rgba(q < 0.35 ? col.hot : q < 0.8 ? col.key : tn.mid,
         alpha * (1 - q * 0.5));
-      ctx.fillRect(px(cx - w / 2 + wob), px(cy - q * h), w, 2);
+      ctx.fillRect(px(cx - w / 2 + wob), px(cy - q * h), w, 3);
     }
     return;
   }
@@ -618,10 +707,10 @@ function windupSignature(ctx, el, cx, cy, p, t, col, tn, alpha, power, seed, qui
     for (let i = 0; i < 6; i++) {
       const a = (Math.PI * 2 * i) / 6 + 0.26;
       const dx = Math.cos(a), dy = Math.sin(a);
-      for (let s = 0; s < 4; s++) {
-        const q = s / 3;
+      for (let s = 0; s < 5; s++) {
+        const q = s / 4;
         const rr = lerp(R, R * 0.3, easeOut(p) * q + q * 0.4);
-        const w = Math.max(1, px((1 - q) * 3));
+        const w = Math.max(1, px((1 - q) * 4));
         ctx.fillStyle = rgba(q > 0.6 ? col.hot : col.key, alpha * (0.4 + 0.6 * q));
         ctx.fillRect(px(cx + dx * rr), px(cy + dy * rr), w, w);
       }
@@ -633,8 +722,8 @@ function windupSignature(ctx, el, cx, cy, p, t, col, tn, alpha, power, seed, qui
     // Two rings close on the point, counter-rotating. Arcane is the only
     // element whose wind-up keeps turning after it has arrived.
     const spin = quiet ? 0 : t * 4;
-    runeRing(ctx, cx, cy, Math.max(4, R), 6, spin, col, alpha * 0.85);
-    runeRing(ctx, cx, cy, Math.max(3, R * 0.55), 4, -spin * 1.4, col, alpha * 0.5);
+    runeRing(ctx, cx, cy, Math.max(5, R), 8, spin, col, alpha * 0.85);
+    runeRing(ctx, cx, cy, Math.max(4, R * 0.55), 5, -spin * 1.4, col, alpha * 0.5);
     return;
   }
 
@@ -645,7 +734,7 @@ function windupSignature(ctx, el, cx, cy, p, t, col, tn, alpha, power, seed, qui
     const on = quiet ? 1 : (tick % 3 === 2 ? 0.18 : 1);
     ctx.strokeStyle = rgba(col.hot, alpha * on);
     boltPath(ctx, cx - R, cy - R * 0.5, cx + R * 0.4, cy + R * 0.35,
-      seed + tick, 5 + 4 * power, 5);
+      seed + tick, 7 + 5 * power, 7);
     ctx.fillStyle = rgba(col.hot, alpha * on);
     ctx.fillRect(px(cx - R) - 1, px(cy - R * 0.5) - 1, 3, 3);
     ctx.fillRect(px(cx + R * 0.4) - 1, px(cy + R * 0.35) - 1, 3, 3);
@@ -656,14 +745,14 @@ function windupSignature(ctx, el, cx, cy, p, t, col, tn, alpha, power, seed, qui
   // the ground under it darkens before anything has been thrown.
   const r = Math.max(2, R);
   shockRing(ctx, cx, cy, r, col.key, alpha * 0.8);
-  for (let i = 0; i < 8; i++) {
-    const a = (Math.PI * 2 * i) / 8;
+  for (let i = 0; i < 10; i++) {
+    const a = (Math.PI * 2 * i) / 10;
     const dx = Math.cos(a), dy = Math.sin(a);
-    const rr = r + 5 * (1 - easeOut(p));
+    const rr = r + 7 * (1 - easeOut(p));
     // The tick's own trail, one step down the ramp, so the eye can see which
     // way it is travelling before the ring has finished closing.
     ctx.fillStyle = rgba(tn.mid, alpha * (0.3 + 0.4 * p));
-    ctx.fillRect(px(cx + dx * (rr + 3)), px(cy + dy * (rr + 3)), 2, 2);
+    ctx.fillRect(px(cx + dx * (rr + 4)), px(cy + dy * (rr + 4)), 2, 2);
     ctx.fillStyle = rgba(col.hot, alpha * (0.4 + 0.6 * p));
     ctx.fillRect(px(cx + dx * rr), px(cy + dy * rr), 2, 2);
   }
@@ -672,22 +761,30 @@ function windupSignature(ctx, el, cx, cy, p, t, col, tn, alpha, power, seed, qui
 /* ACT TWO INTO ACT THREE. The impact signature: what the element does to the
  * place it landed on, and how that dies down. `fall` is the whole envelope, so
  * a caller that wants nothing drawn passes zero. */
-function impactSignature(ctx, el, cx, cy, p, t, col, tn, fall, power, seed, groundY, quiet) {
+function impactSignature(ctx, el, cx, cy, p, t, col, tn, fall, power, seed, groundY, quiet,
+  ceilY) {
   if (!(fall > 0.004)) return;
   ctx.lineWidth = 1;
-  const reach = 15 + 24 * power;
+  const reach = 20 + 32 * power;
+  /* The row above which nothing load-bearing may be drawn: the caller passes
+   * the stage's own safe top. Lightning is the one branch that reaches for the
+   * ceiling, and on the old 128-row frame it clamped at a literal 3. */
+  const ceil = ceilY === undefined ? 3 : ceilY;
 
   if (el.id === 'fire') {
     // Up, and it keeps going up. Tongues climb and narrow; the ring that
     // leaves the point rises off the floor instead of lying on it.
-    const h = reach * 1.3 * easeOut(p);
-    for (let i = 0; i < 9; i++) {
-      const q = i / 8;
-      const w = Math.max(1, px((1 - q) * (5 + 9 * power) * (0.6 + 0.4 * noise(seed + i, 3))));
-      const wob = quiet ? 0 : Math.sin(q * 7 + t * 10) * (2 + 2 * q);
+    /* 1.5, not 1.3: fire is the branch that spends the extra ground headroom
+     * the raster move opened (100 visible rows above the ground line became
+     * 151). It is the only reach in this painter that goes past 4/3. */
+    const h = Math.min(reach * 1.5 * easeOut(p), Math.max(8, cy - ceil));
+    for (let i = 0; i < 12; i++) {
+      const q = i / 11;
+      const w = Math.max(1, px((1 - q) * (7 + 12 * power) * (0.6 + 0.4 * noise(seed + i, 3))));
+      const wob = quiet ? 0 : Math.sin(q * 7 + t * 10) * (2.7 + 2.7 * q);
       ctx.fillStyle = rgba(q < 0.3 ? col.hot : q < 0.7 ? col.key : tn.mid,
         fall * (1 - q * 0.5));
-      ctx.fillRect(px(cx - w / 2 + wob), px(cy - q * h), w, 3);
+      ctx.fillRect(px(cx - w / 2 + wob), px(cy - q * h), w, 4);
     }
     shockRing(ctx, cx, cy - h * 0.3, Math.max(1, reach * easeOut(p) * 0.8),
       col.key, fall * 0.7);
@@ -698,13 +795,13 @@ function impactSignature(ctx, el, cx, cy, p, t, col, tn, fall, power, seed, grou
     // One stab outward, frozen at a third of the window, then the crust cracks.
     // The stillness in the middle of the effect is the identity.
     const grow = easeOut(clamp(p / 0.34, 0, 1));
-    for (let i = 0; i < 8; i++) {
-      const a = (Math.PI * 2 * i) / 8 + 0.19;
+    for (let i = 0; i < 10; i++) {
+      const a = (Math.PI * 2 * i) / 10 + 0.19;
       const dx = Math.cos(a), dy = Math.sin(a);
       const len = reach * grow * (0.55 + 0.45 * noise(seed + i, 11));
-      for (let s = 0; s < 5; s++) {
-        const q = s / 4;
-        const w = Math.max(1, px((1 - q) * 4));
+      for (let s = 0; s < 6; s++) {
+        const q = s / 5;
+        const w = Math.max(1, px((1 - q) * 5));
         ctx.fillStyle = rgba(q < 0.35 ? col.hot : col.key, fall * (1 - q * 0.35));
         ctx.fillRect(px(cx + dx * len * q), px(cy + dy * len * q), w, w);
       }
@@ -719,7 +816,7 @@ function impactSignature(ctx, el, cx, cy, p, t, col, tn, fall, power, seed, grou
     }
     ctx.closePath();
     ctx.stroke();
-    if (p > 0.34) cracks(ctx, cx, cy, seed + 17, 5, reach * 0.5, col.key, fall * 0.7, 1);
+    if (p > 0.34) cracks(ctx, cx, cy, seed + 17, 6, reach * 0.5, col.key, fall * 0.7, 1);
     return;
   }
 
@@ -728,8 +825,8 @@ function impactSignature(ctx, el, cx, cy, p, t, col, tn, fall, power, seed, grou
     // figure turns for as long as it exists and never travels.
     const spin = quiet ? 0 : t * 5.2;
     const open = 0.35 + easeOut(p) * 0.8;
-    runeRing(ctx, cx, cy, Math.max(4, reach * 0.42 * open), 6, spin, col, fall * 0.9);
-    runeRing(ctx, cx, cy, Math.max(4, reach * 0.8 * open), 4, -spin * 0.65, col, fall * 0.55);
+    runeRing(ctx, cx, cy, Math.max(5, reach * 0.42 * open), 8, spin, col, fall * 0.9);
+    runeRing(ctx, cx, cy, Math.max(5, reach * 0.8 * open), 5, -spin * 0.65, col, fall * 0.55);
     const d = Math.max(1, px(reach * 0.18 * (1 - p)));
     ctx.fillStyle = rgba(col.hot, fall);
     ctx.beginPath();
@@ -749,24 +846,27 @@ function impactSignature(ctx, el, cx, cy, p, t, col, tn, fall, power, seed, grou
     const tick = quiet ? 4 : (t * 26) | 0;
     const on = quiet ? 1 : (tick % 3 === 2 ? 0.2 : 1);
     const a = fall * on;
-    const top = Math.max(3, cy - reach * 1.3);
+    /* 1.5 like fire, and for the same reason, but clamped to the safe top
+     * rather than to a literal: a strike whose head is in the overscan is a
+     * strike the player is not promised to see arrive. */
+    const top = Math.max(ceil, cy - reach * 1.5);
     ctx.strokeStyle = rgba(col.hot, a);
-    boltPath(ctx, cx, top, cx, cy, seed + tick, 8 + 5 * power, 7);
+    boltPath(ctx, cx, top, cx, cy, seed + tick, 11 + 7 * power, 9);
     ctx.strokeStyle = rgba(col.key, a * 0.75);
-    for (let b = 0; b < 3; b++) {
-      const q = 0.3 + b * 0.22;
+    for (let b = 0; b < 4; b++) {
+      const q = 0.26 + b * 0.18;
       const ang = -Math.PI / 2 + (noise(seed + tick, b * 13) - 0.5) * 2.6;
       const sy = lerp(top, cy, q);
       boltPath(ctx, cx, sy, cx + Math.cos(ang) * reach * 0.9,
         sy + Math.sin(ang) * reach * 0.5, seed + tick * 7 + b, 6, 4);
     }
-    cracks(ctx, cx, cy, seed + tick, 5, reach * 0.7, col.hot, a * 0.7, 1);
+    cracks(ctx, cx, cy, seed + tick, 7, reach * 0.7, col.hot, a * 0.7, 1);
     return;
   }
 
   // force: one pressure front. Three rings leave on a stagger and the dust
   // stays on the floor, because force pushes out rather than up.
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 4; i++) {
     const span = Math.max(0.01, 1 - i * 0.16);
     const q = clamp(p - i * 0.16, 0, 1) / span;
     if (q <= 0) continue;
@@ -774,13 +874,13 @@ function impactSignature(ctx, el, cx, cy, p, t, col, tn, fall, power, seed, grou
       i === 0 ? col.hot : col.key, fall * (1 - q) * (1 - i * 0.22));
   }
   const spread = reach * 1.7 * easeOut(p);
-  const gy = px(Math.min(groundY - 1, cy + 4));
+  const gy = px(Math.min(groundY - 1, cy + 5));
   for (let d = 0; d < 2; d++) {
     const dir = d ? 1 : -1;
-    for (let i = 0; i < 4; i++) {
-      const q = i / 3;
+    for (let i = 0; i < 5; i++) {
+      const q = i / 4;
       const x = cx + dir * spread * (0.35 + q * 0.65);
-      const w = Math.max(1, px(4 * (1 - q) * power));
+      const w = Math.max(1, px(5 * (1 - q) * power));
       ctx.fillStyle = rgba(i < 2 ? col.key : tn.mid, fall * (1 - q) * 0.8);
       ctx.fillRect(px(x), gy - (i & 1), w, 2);
     }
@@ -932,10 +1032,20 @@ class Effect {
       x: o.to && o.to.x !== undefined ? o.to.x : S.enemyX,
       y: o.to && o.to.y !== undefined ? o.to.y : S.ground - 40,
     };
-    /* Bounding box of the thing being hit. Bosses are 48 logical units and mobs
-     * 24 at their draw scale, so the caller passes the real one when it knows. */
-    const bw = o.targetBox && o.targetBox.w ? o.targetBox.w : (o.boss ? 60 : 36);
-    const bh = o.targetBox && o.targetBox.h ? o.targetBox.h : (o.boss ? 68 : 46);
+    /* Bounding box of the thing being hit, for a caller that does not pass one
+     * — and fx.js does not. The two defaults track what the stage ACTUALLY
+     * blits, which is the only thing that makes the hit flash land on the
+     * creature rather than beside it:
+     *
+     *   mob   24x24 rig at FIGURE_SCALE, 3 -> 4 with the raster: 72 -> 96
+     *         logical. 36x46 was 50% and 64% of the old blit, so 48x62 is the
+     *         same judgement on the new one. Straight 4/3.
+     *   boss  64x64 art at BOSS_STAGE_SCALE, 1.5 -> 2: 72 -> 128 logical. That
+     *         rung grew 1.78x, not 4/3, so 60x68 at the same 83%/94% of the
+     *         blit is 104x120. Scaling this one by 4/3 would have left the box
+     *         inside a boss that had outgrown it. */
+    const bw = o.targetBox && o.targetBox.w ? o.targetBox.w : (o.boss ? 104 : 48);
+    const bh = o.targetBox && o.targetBox.h ? o.targetBox.h : (o.boss ? 120 : 62);
     this.box = {
       x: o.targetBox && o.targetBox.x !== undefined ? o.targetBox.x : this.to.x - bw / 2,
       y: o.targetBox && o.targetBox.y !== undefined ? o.targetBox.y : S.ground - bh,
@@ -1055,13 +1165,13 @@ class Effect {
       const n = Math.round(d.debris * clamp(this.power, 0.5, 1.9));
       const r = this.prand;
       for (let i = 0; i < n; i++) {
-        this._emitElement(r, P.x + (r() - 0.5) * 10, P.y + (r() - 0.5) * 12, 1);
+        this._emitElement(r, P.x + (r() - 0.5) * 13, P.y + (r() - 0.5) * 16, 1);
       }
     }
     const settle = Math.max(0.06, d.settle);
     if (this.k < a + settle) {
       const q = 1 - (this.k - a) / settle;
-      this.drip(dt, 90 * q * q * this.power, this._tailEmit);
+      this.drip(dt, 120 * q * q * this.power, this._tailEmit);
     }
   }
 
@@ -1077,11 +1187,16 @@ class Effect {
     if (r() < el.chunk) {
       /* Debris always falls, even fire's: a burning chunk of something is still
        * a chunk of something, and watching it drop is what says "that broke". */
-      this.motes.emitChunk(x, y, Math.cos(a) * sp * 0.7, Math.sin(a) * sp * 0.7 - 14,
-        Math.abs(el.gravity) * 1.4 + 50, life * 1.7, 2 + ((r() * 2) | 0), c, el.spin);
+      this.motes.emitChunk(x, y, Math.cos(a) * sp * 0.7, Math.sin(a) * sp * 0.7 - 19,
+        Math.abs(el.gravity) * 1.4 + 67, life * 1.7, 2 + ((r() * 3) | 0), c, el.spin);
     } else {
+      /* Sparks are the one place detail DOES move with the raster, and the
+       * reason is the screen and not the frame: the launcher's window dropped
+       * from scale 3 to scale 2 with the raster, so a 1px spark went from three
+       * device pixels to two. The mix shifts toward 2px rather than the size
+       * scaling — a 1.33px spark is not a thing this grid can draw. */
       this.motes.emit(x, y, Math.cos(a) * sp, Math.sin(a) * sp, el.gravity, life,
-        r() < 0.28 ? 2 : 1, c, el.spin);
+        r() < 0.45 ? 2 : 1, c, el.spin);
     }
   }
 
@@ -1107,8 +1222,8 @@ class Effect {
      * inside the loop is the difference between zero garbage and a closure a
      * frame for a third of a second. */
     this._tailEmit = (r) => {
-      this._emitElement(r, this.hitAt.x + (r() - 0.5) * 12,
-        this.hitAt.y + (r() - 0.5) * 14, 0.6);
+      this._emitElement(r, this.hitAt.x + (r() - 0.5) * 16,
+        this.hitAt.y + (r() - 0.5) * 19, 0.6);
     };
     this.build();
   }
@@ -1137,8 +1252,8 @@ class Effect {
     const x = this.from.x + d.windDx, y = this.from.y;
     const prevOp = ctx.globalCompositeOperation;
     ctx.globalCompositeOperation = 'lighter';
-    lightDisc(ctx, x, y, (7 + 9 * this.power) * w, this.tone.dim, a * 0.34, 2);
-    groundPool(ctx, x, this.stage.ground, (9 + 11 * this.power) * w,
+    lightDisc(ctx, x, y, (9 + 12 * this.power) * w, this.tone.dim, a * 0.34, 3);
+    groundPool(ctx, x, this.stage.ground, (12 + 15 * this.power) * w,
       this.tone.dim, a * 0.3);
     ctx.globalCompositeOperation = prevOp;
     windupSignature(ctx, this.element, x, y, w, this.t, this.colour, this.tone,
@@ -1162,20 +1277,42 @@ class Effect {
     const fall = (1 - p) * (1 - p);
     const prevOp = ctx.globalCompositeOperation;
 
-    /* The hit flash. Hard light over the whole target box on the frame of the
-     * hit, plus a one-pixel frame so the silhouette pops off the backdrop. */
+    /* The hit flash.
+     *
+     * THIS USED TO BE A HARD WHITE RECTANGLE, and at the old raster it was a
+     * small one. One flat additive fillRect over the target box plus a 1px
+     * frame around it drew a pale SQUARE standing on the enemy for five frames
+     * of every crit and every spell impact — visible in a contact sheet of the
+     * old build too, and 4/3 more visible now the box is bigger. A creature is
+     * not a rectangle and neither is the light landing on it.
+     *
+     * So: a banded additive disc over the middle of the box, which has no
+     * corners at all and brightens the creature the way every other light in
+     * this file does; and corner ticks instead of a frame, the same survey-
+     * bracket idiom VISION's x-ray already uses. The silhouette pop the frame
+     * was there for is drawn properly by fx.js, which flashes the enemy's real
+     * alpha mask — this never needed to draw a box to do it.
+     *
+     * Tried first and rejected by looking at it: three inset bands. Nested
+     * rectangles with visible steps are still nested rectangles. */
     const hf = this._targetFlashAt(this.k);
     if (hf > 0.01 && d.impactWhere === 'target') {
       const b = this.box;
       ctx.globalCompositeOperation = 'lighter';
-      ctx.fillStyle = rgba(col.hot, hf * 0.5);
-      ctx.fillRect(px(b.x), px(b.y), px(b.w), px(b.h));
+      lightDisc(ctx, b.x + b.w / 2, b.y + b.h * 0.46,
+        Math.max(b.w, b.h) * 0.52, col.hot, hf * 0.42, 4);
       ctx.globalCompositeOperation = prevOp;
       ctx.fillStyle = rgba(col.hot, hf * 0.9);
-      ctx.fillRect(px(b.x) - 1, px(b.y) - 1, px(b.w) + 2, 1);
-      ctx.fillRect(px(b.x) - 1, px(b.y + b.h), px(b.w) + 2, 1);
-      ctx.fillRect(px(b.x) - 1, px(b.y), 1, px(b.h));
-      ctx.fillRect(px(b.x + b.w), px(b.y), 1, px(b.h));
+      const tick = 7;
+      for (let sx = 0; sx < 2; sx++) {
+        for (let sy = 0; sy < 2; sy++) {
+          const cx = sx ? px(b.x + b.w) - tick : px(b.x) - 1;
+          const cy = sy ? px(b.y + b.h) : px(b.y) - 1;
+          ctx.fillRect(cx, cy, tick + 1, 1);
+          ctx.fillRect(sx ? px(b.x + b.w) : px(b.x) - 1,
+            sy ? px(b.y + b.h) - tick : px(b.y) - 1, 1, tick + 1);
+        }
+      }
     }
 
     /* Additive light. Not a sprite of a glow: everything already on the canvas
@@ -1183,10 +1320,10 @@ class Effect {
     const lit = this._lightAt(this.k);
     if (lit > 0.01) {
       ctx.globalCompositeOperation = 'lighter';
-      lightDisc(ctx, P.x, P.y, (12 + 24 * this.power) * (0.5 + p * 0.8),
-        col.key, lit * 0.3, 3);
+      lightDisc(ctx, P.x, P.y, (16 + 32 * this.power) * (0.5 + p * 0.8),
+        col.key, lit * 0.3, 4);
       groundPool(ctx, P.x, this.stage.ground,
-        (14 + 26 * this.power) * (0.4 + p), col.key, lit * 0.24);
+        (19 + 35 * this.power) * (0.4 + p), col.key, lit * 0.24);
       if (d.wash > 0) {
         ctx.fillStyle = rgba(tn.dim, lit * d.wash * 0.5);
         ctx.fillRect(0, 0, this.stage.w, this.stage.h);
@@ -1195,7 +1332,8 @@ class Effect {
     }
 
     impactSignature(ctx, this.element, P.x, P.y, p, this.t, col, tn,
-      fall, this.power, this.seed, this.stage.ground, this.reducedMotion);
+      fall, this.power, this.seed, this.stage.ground, this.reducedMotion,
+      this.stage.safeTop + 2);
   }
 
   _fireBeats() {
@@ -1261,7 +1399,7 @@ class OracleEffect extends Effect {
        * before it spends it. */
       this.drip(dt, 60 * charge, (r) => {
         const a = r() * Math.PI * 2;
-        const rad = 26 + r() * 14;
+        const rad = 35 + r() * 19;
         this.motes.emit(
           this.eye.x + Math.cos(a) * rad, this.eye.y + Math.sin(a) * rad,
           -Math.cos(a) * rad * 2.4, -Math.sin(a) * rad * 2.4,
@@ -1272,9 +1410,9 @@ class OracleEffect extends Effect {
     if (hit > 0 && this.k < 0.70) {
       this.drip(dt, 150, (r) => {
         const a = -Math.PI / 2 + (r() - 0.5) * 2.6;
-        const sp = 30 + r() * 70;
-        this.motes.emit(this.aim.x + (r() - 0.5) * 10, this.aim.y + (r() - 0.5) * 12,
-          Math.cos(a) * sp, Math.sin(a) * sp, 120, 0.5 + r() * 0.4,
+        const sp = 40 + r() * 93;
+        this.motes.emit(this.aim.x + (r() - 0.5) * 13, this.aim.y + (r() - 0.5) * 16,
+          Math.cos(a) * sp, Math.sin(a) * sp, 160, 0.5 + r() * 0.4,
           r() < 0.3 ? 2 : 1, r() < 0.5 ? this.colour.hot : this.colour.key);
       });
     }
@@ -1289,13 +1427,17 @@ class OracleEffect extends Effect {
     const live = 1 - fade;
 
     // The bezel: contracts as it gathers, so the ring reads as closing on the eye.
-    const radius = lerp(34, 23, easeOut(gather)) + this.osc(3.1) * 0.6;
-    runeRing(ctx, this.eye.x, this.eye.y, radius, 8,
+    /* 34 -> 45 and 23 -> 31. The closed bezel was 11.5% of the old 192 frame
+     * and had fallen to 8.6% of 256; 31 puts it back at 12.1%, and the ring is
+     * carried on ten runes rather than eight because the same eight on a
+     * circumference 4/3 longer left gaps between them. */
+    const radius = lerp(45, 31, easeOut(gather)) + this.osc(3.1) * 0.8;
+    runeRing(ctx, this.eye.x, this.eye.y, radius, 10,
       this.t * (this.reducedMotion ? 0 : 0.9), col, easeOut(gather) * live);
 
     // Lid aperture. A closed eye is a flat line; that line is also the wind-up.
     const lid = Math.max(0.04, easeOut(open) * (1 - easeIn(this.ph(0.82, 1))));
-    const w = 30, h = 15 * lid;
+    const w = 40, h = 20 * lid;
     ctx.lineWidth = 1;
     ctx.fillStyle = rgba(col.deep, live * 0.95);
     ctx.beginPath();
@@ -1313,7 +1455,7 @@ class OracleEffect extends Effect {
     ctx.stroke();
 
     if (lid > 0.25) {
-      const irisR = Math.max(1, 5 * lid * (1 + fire * 0.5));
+      const irisR = Math.max(2, 7 * lid * (1 + fire * 0.5));
       ctx.fillStyle = rgba(col.key, live);
       ctx.beginPath();
       ctx.arc(px(this.eye.x), px(this.eye.y), irisR, 0, Math.PI * 2);
@@ -1321,31 +1463,35 @@ class OracleEffect extends Effect {
       ctx.fillStyle = rgba(col.ink, live);
       ctx.fillRect(px(this.eye.x) - 1, px(this.eye.y - irisR * 0.8), 2, px(irisR * 1.6));
       ctx.fillStyle = rgba(col.hot, live);
-      ctx.fillRect(px(this.eye.x) + 1, px(this.eye.y) - 2, 1, 1);
+      ctx.fillRect(px(this.eye.x) + 2, px(this.eye.y) - 3, 2, 2);
     }
 
     // The beam: one shot, snapping wide then settling thin.
     if (this.k > 0.52 && this.k < 0.86) {
       const life = this.ph(0.52, 0.86);
-      const wdt = lerp(9, 2, easeOut(Math.min(1, life * 1.8))) * this.power;
+      const wdt = lerp(12, 3, easeOut(Math.min(1, life * 1.8))) * this.power;
       const a = (1 - easeIn(life)) * 0.95;
       beam(ctx, this.eye.x, this.eye.y + 1, this.aim.x, this.aim.y, wdt, col, a);
       // Lens crossbar at the muzzle: the flare that says this is light, not paint.
       const flare = arc(this.ph(0.52, 0.66));
       ctx.fillStyle = rgba(col.hot, flare * 0.9);
-      ctx.fillRect(px(this.eye.x - 14), px(this.eye.y), 28, 1);
-      ctx.fillRect(px(this.eye.x), px(this.eye.y - 10), 1, 20);
+      ctx.fillRect(px(this.eye.x - 19), px(this.eye.y), 37, 1);
+      ctx.fillRect(px(this.eye.x), px(this.eye.y - 13), 1, 27);
     }
 
     // Impact: a ring and a bright column standing on the target.
     if (fire > 0) {
       const imp = this.ph(0.54, 0.84);
-      shockRing(ctx, this.aim.x, this.aim.y, lerp(2, 30, easeOut(imp)),
+      shockRing(ctx, this.aim.x, this.aim.y, lerp(3, 40, easeOut(imp)),
         col.key, (1 - imp) * 0.9, 1);
-      shockRing(ctx, this.aim.x, this.aim.y, lerp(2, 18, easeOut(imp)),
+      shockRing(ctx, this.aim.x, this.aim.y, lerp(3, 24, easeOut(imp)),
         col.hot, (1 - imp) * 0.7, 1);
+      /* A third ring, inside the other two: three steps of falloff where the
+       * old frame only had room to state two. */
+      shockRing(ctx, this.aim.x, this.aim.y, lerp(3, 13, easeOut(imp)),
+        col.hot, (1 - imp) * 0.45, 1);
       ctx.fillStyle = rgba(col.hot, (1 - imp) * 0.5);
-      ctx.fillRect(px(this.aim.x) - 1, px(this.box.y), 2, px(this.box.h));
+      ctx.fillRect(px(this.aim.x) - 1, px(this.box.y), 3, px(this.box.h));
     }
   }
 }
@@ -1358,7 +1504,11 @@ class OracleEffect extends Effect {
 class RevealPathEffect extends Effect {
   build() {
     const S = this.stage;
-    const n = 10;
+    /* Twelve nodes, not ten: the lattice spans 4/3 further across and 4/3
+     * higher, and ten pips over that run is a dotted line rather than a graph.
+     * The rows go 24/56 above the ground to 32/75 — the 4/3 that puts the upper
+     * row back where it sat in the frame. */
+    const n = 12;
     this.nodes = [];
     for (let i = 0; i < n; i++) {
       const p = i / (n - 1);
@@ -1366,8 +1516,8 @@ class RevealPathEffect extends Effect {
        * reads as a path, and this spell is about structure. */
       const row = i % 2;
       this.nodes.push({
-        x: lerp(this.from.x - 4, this.to.x + 2, p) + (this.rand() - 0.5) * 8,
-        y: S.ground - (row ? 56 : 24) - this.rand() * 10,
+        x: lerp(this.from.x - 5, this.to.x + 3, p) + (this.rand() - 0.5) * 11,
+        y: S.ground - (row ? 75 : 32) - this.rand() * 13,
         pop: p * 0.22,
       });
     }
@@ -1386,29 +1536,35 @@ class RevealPathEffect extends Effect {
         const a = this.nodes[e.a], b = this.nodes[e.b];
         const p = r();
         this.motes.emit(lerp(a.x, b.x, p), lerp(a.y, b.y, p),
-          (r() - 0.5) * 20, -10 - r() * 20, 40, 0.4, 1, this.colour.key);
+          (r() - 0.5) * 27, -13 - r() * 27, 53, 0.4, 1, this.colour.key);
       });
     }
     if (this.k > 0.66 && this.k < 0.80) {
       this.drip(dt, 130, (r) => {
         const a = r() * Math.PI * 2;
-        const sp = 20 + r() * 60;
+        const sp = 27 + r() * 80;
         this.motes.emit(this.to.x, this.to.y, Math.cos(a) * sp, Math.sin(a) * sp,
-          60, 0.5, 1, r() < 0.4 ? this.colour.hot : this.colour.key);
+          80, 0.5, 1, r() < 0.4 ? this.colour.hot : this.colour.key);
       });
     }
   }
 
   _nodeSprite(ctx, x, y, alpha, hot) {
     const col = this.colour;
-    stamp(ctx, `rp:node:${hot ? 1 : 0}:${col.key}`, 7, 7, (c) => {
+    /* 7x7 -> 9x9, and the extra two rows go into a cross with a lit centre
+     * rather than a fatter blob: at 9 there is room for an ink frame, a key
+     * arm and a hot core, which is the three-tone rule §3 asks of every piece
+     * of art in this game and which a 7px pip could only hint at. */
+    stamp(ctx, `rp:node9:${hot ? 1 : 0}:${col.key}`, 9, 9, (c) => {
       c.fillStyle = col.ink;
-      c.fillRect(2, 0, 3, 7); c.fillRect(0, 2, 7, 3);
+      c.fillRect(3, 0, 3, 9); c.fillRect(0, 3, 9, 3);
+      c.fillStyle = col.deep;
+      c.fillRect(4, 1, 1, 7); c.fillRect(1, 4, 7, 1);
       c.fillStyle = hot ? col.hot : col.key;
-      c.fillRect(3, 1, 1, 5); c.fillRect(1, 3, 5, 1);
+      c.fillRect(4, 2, 1, 5); c.fillRect(2, 4, 5, 1);
       c.fillStyle = col.hot;
-      c.fillRect(3, 3, 1, 1);
-    }, x - 3, y - 3, alpha);
+      c.fillRect(4, 4, 1, 1);
+    }, x - 4, y - 4, alpha);
   }
 
   _draw(ctx) {
@@ -1452,9 +1608,11 @@ class RevealPathEffect extends Effect {
     // The lattice lands: a hard ring and a square bracket around the target.
     if (collapse > 0) {
       const imp = this.ph(0.66, 0.92);
-      shockRing(ctx, this.to.x, this.to.y, lerp(4, 34, easeOut(imp)),
+      shockRing(ctx, this.to.x, this.to.y, lerp(5, 45, easeOut(imp)),
         col.key, (1 - imp) * 0.95);
-      const b = this.box, g = lerp(6, 0, easeOut(imp));
+      shockRing(ctx, this.to.x, this.to.y, lerp(5, 27, easeOut(imp)),
+        col.hot, (1 - imp) * 0.6);
+      const b = this.box, g = lerp(8, 0, easeOut(imp));
       ctx.strokeStyle = rgba(col.hot, (1 - imp) * 0.8);
       ctx.strokeRect(px(b.x - g) + 0.5, px(b.y - g) + 0.5, px(b.w + g * 2), px(b.h + g * 2));
     }
@@ -1472,33 +1630,35 @@ class VisionEffect extends Effect {
     /* The armature: a spine with ribs and a core. Procedural from the seed, so
      * every enemy reads as having its own insides without any of them being a
      * drawn creature. */
-    this.spine = { x: b.x + b.w / 2, y0: b.y + 4, y1: b.y + b.h - 6 };
+    this.spine = { x: b.x + b.w / 2, y0: b.y + 5, y1: b.y + b.h - 8 };
     this.ribs = [];
-    const n = 4 + ((this.rand() * 3) | 0);
+    /* The box grew, so the armature gets more ribs rather than longer gaps
+     * between the same number of them. */
+    const n = 5 + ((this.rand() * 4) | 0);
     for (let i = 0; i < n; i++) {
       const p = (i + 0.6) / (n + 0.2);
       this.ribs.push({
         y: lerp(this.spine.y0, this.spine.y1, p),
         w: (b.w * 0.22) + this.rand() * b.w * 0.2,
-        drop: 1 + ((this.rand() * 3) | 0),
+        drop: 1 + ((this.rand() * 4) | 0),
       });
     }
-    this.core = { y: lerp(this.spine.y0, this.spine.y1, 0.34), r: 3 + this.rand() * 2 };
+    this.core = { y: lerp(this.spine.y0, this.spine.y1, 0.34), r: 4 + this.rand() * 3 };
   }
 
   _step(dt) {
     if (this.k > 0.20 && this.k < 0.64) {
       const x = this._sweepX();
       this.drip(dt, 55, (r) => {
-        this.motes.emit(x + (r() - 0.5) * 4, this.stage.ground - r() * 70,
-          -20 - r() * 30, (r() - 0.5) * 20, 0, 0.45, 1,
+        this.motes.emit(x + (r() - 0.5) * 5, this.stage.ground - r() * 94,
+          -27 - r() * 40, (r() - 0.5) * 27, 0, 0.45, 1,
           r() < 0.35 ? this.colour.hot : this.colour.key);
       });
     }
   }
 
   _sweepX() {
-    return lerp(this.from.x - 20, this.stage.w + 16, easeInOut(this.ph(0.18, 0.66)));
+    return lerp(this.from.x - 27, this.stage.w + 21, easeInOut(this.ph(0.18, 0.66)));
   }
 
   _draw(ctx) {
@@ -1508,7 +1668,7 @@ class VisionEffect extends Effect {
     const fade = this.ph(0.84, 1);
     const live = 1 - easeIn(fade);
     const x = this._sweepX();
-    const half = lerp(2, 11, easeOut(rise)) * this.power;
+    const half = lerp(3, 15, easeOut(rise)) * this.power;
 
     // The wall of light. Banded, not blurred: three hard columns and a core.
     if (this.k < 0.72) {
@@ -1522,10 +1682,14 @@ class VisionEffect extends Effect {
       /* Refraction: the trailing edge is drawn as offset slices rather than a
        * pixel read-back, which keeps this at one fillRect per band instead of a
        * getImageData per frame. */
-      for (let y = 0; y < S.h; y += 4) {
-        const off = Math.sin((y * 0.4) + this.t * 8) * 2 * (this.reducedMotion ? 0 : 1);
+      for (let y = 0; y < S.h; y += 5) {
+        const off = Math.sin((y * 0.4) + this.t * 8) * 2.7 * (this.reducedMotion ? 0 : 1);
         ctx.fillStyle = rgba(col.hot, a * 0.16);
-        ctx.fillRect(px(x - half * 3 + off), y, px(half), 2);
+        ctx.fillRect(px(x - half * 3 + off), y, px(half), 3);
+        /* A second, fainter slice further back: the wall now has a trailing
+         * gradient of two steps instead of one hard edge. */
+        ctx.fillStyle = rgba(col.key, a * 0.09);
+        ctx.fillRect(px(x - half * 5 - off), y, px(half * 0.7), 3);
       }
     }
 
@@ -1557,14 +1721,14 @@ class VisionEffect extends Effect {
       ctx.fill();
 
       // Survey brackets: corner ticks, the way a diagram frames its subject.
-      const g = 3;
+      const g = 4;
       ctx.fillStyle = rgba(col.key, hold * 0.9);
       for (const sx of [-1, 1]) {
         for (const sy of [-1, 1]) {
           const cx = sx < 0 ? b.x - g : b.x + b.w + g - 1;
           const cy = sy < 0 ? b.y - g : b.y + b.h + g - 1;
-          ctx.fillRect(px(cx - (sx < 0 ? 0 : 4)), px(cy), 5, 1);
-          ctx.fillRect(px(cx), px(cy - (sy < 0 ? 0 : 4)), 1, 5);
+          ctx.fillRect(px(cx - (sx < 0 ? 0 : 6)), px(cy), 7, 1);
+          ctx.fillRect(px(cx), px(cy - (sy < 0 ? 0 : 6)), 1, 7);
         }
       }
     }
@@ -1579,17 +1743,23 @@ class VisionEffect extends Effect {
 class PseudosightEffect extends Effect {
   build() {
     const S = this.stage;
+    /* 52x58 -> 70x77: the 4/3 that puts the page back at 27% of the frame
+     * width and 44% of the safe area's height, where it sat on the 192 frame.
+     * The runes inside it stay 3x5. The micro-font is a font — a 4x6.67 glyph
+     * is not a thing, and a page that is 4/3 bigger with the same rune size is
+     * a page with MORE LINES ON IT, which is what a spellbook page opening
+     * should look like anyway. Fourteen rows becomes eighteen. */
     this.page = {
-      x: lerp(this.from.x, this.to.x, 0.34) - 26,
+      x: lerp(this.from.x, this.to.x, 0.34) - 35,
       y: S.ground - 112,
-      w: 52, h: 58,
+      w: 70, h: 77,
     };
     this.rows = [];
-    const n = 14;
+    const n = 18;
     for (let i = 0; i < n; i++) {
       this.rows.push({
         indent: (this.rand() * 3) | 0,
-        cells: 4 + ((this.rand() * 7) | 0),
+        cells: 5 + ((this.rand() * 9) | 0),
         seed: (this.seed + i * 2657) >>> 0,
         y: i * 7,
       });
@@ -1601,16 +1771,16 @@ class PseudosightEffect extends Effect {
     if (this.k > 0.18 && this.k < 0.66) {
       this.drip(dt, 30, (r) => {
         this.motes.emit(this.page.x + r() * this.page.w, this.page.y + this.page.h * 0.6,
-          (r() - 0.5) * 12, -18 - r() * 22, 0, 0.6, 1,
+          (r() - 0.5) * 16, -24 - r() * 29, 0, 0.6, 1,
           r() < 0.3 ? this.colour.hot : this.colour.key);
       });
     }
     if (this.k > 0.70 && this.k < 0.84) {
       this.drip(dt, 110, (r) => {
         const a = r() * Math.PI * 2;
-        const sp = 18 + r() * 55;
+        const sp = 24 + r() * 73;
         this.motes.emit(this.to.x, this.to.y, Math.cos(a) * sp, Math.sin(a) * sp,
-          70, 0.5, 1, r() < 0.4 ? this.colour.hot : this.colour.key);
+          93, 0.5, 1, r() < 0.4 ? this.colour.hot : this.colour.key);
       });
     }
   }
@@ -1645,17 +1815,17 @@ class PseudosightEffect extends Effect {
 
     // Spine rule down the left margin: the page has an edge, not just rows.
     ctx.fillStyle = rgba(col.deep, live);
-    ctx.fillRect(px(P.x + 4), px(y), 1, px(h));
+    ctx.fillRect(px(P.x + 5), px(y), 1, px(h));
 
     for (const row of this.rows) {
       // Wrapped scroll, so the page never runs out of text mid-read.
-      let ry = y + h - 6 + row.y - scroll;
+      let ry = y + h - 8 + row.y - scroll;
       while (ry < y - GLYPH_H) ry += this.scrollSpan;
       if (ry > y + h) continue;
       const dist = Math.abs(ry - readY);
-      const lit = clamp(1 - dist / 14, 0, 1);
+      const lit = clamp(1 - dist / 19, 0, 1);
       const a = live * (0.28 + lit * 0.72);
-      const rx = P.x + 7 + row.indent * 4;
+      const rx = P.x + 9 + row.indent * 4;
       drawGlyphStrip(ctx, rx, ry, row.cells, row.seed,
         lit > 0.75 ? col.hot : col.key, a);
       if (lit > 0.75) {
@@ -1669,7 +1839,7 @@ class PseudosightEffect extends Effect {
     ctx.fillRect(px(P.x + 2), px(readY) + GLYPH_H + 1, px(P.w - 4), 1);
     const cur = (this.reducedMotion ? 0.5 : (this.t * 2.2) % 1);
     ctx.fillStyle = rgba(col.hot, live * (this.reducedMotion ? 0.9 : (cur < 0.5 ? 1 : 0.35)));
-    ctx.fillRect(px(P.x + 7 + cur * (P.w - 16)), px(readY), 2, GLYPH_H);
+    ctx.fillRect(px(P.x + 9 + cur * (P.w - 20)), px(readY), 2, GLYPH_H);
     ctx.restore();
 
     // The torn row flies out and stamps on the target.
@@ -1682,12 +1852,12 @@ class PseudosightEffect extends Effect {
       drawGlyphStrip(ctx, fx - row.cells * 2, fy - 2, row.cells, row.seed,
         col.hot, live * (1 - e * 0.4));
       ctx.fillStyle = rgba(col.key, live * (1 - e) * 0.5);
-      ctx.fillRect(px(fx - 14), px(fy), 28, 1);
+      ctx.fillRect(px(fx - 19), px(fy), 37, 1);
     }
     const imp = this.ph(0.74, 0.96);
     if (imp > 0) {
-      shockRing(ctx, this.to.x, this.to.y, lerp(3, 30, easeOut(imp)), col.key, (1 - imp) * 0.9);
-      runeRing(ctx, this.to.x, this.to.y, lerp(6, 20, easeOut(imp)), 6,
+      shockRing(ctx, this.to.x, this.to.y, lerp(4, 40, easeOut(imp)), col.key, (1 - imp) * 0.9);
+      runeRing(ctx, this.to.x, this.to.y, lerp(8, 27, easeOut(imp)), 8,
         this.reducedMotion ? 0 : this.t * 2, col, (1 - imp) * 0.8);
     }
   }
@@ -1703,25 +1873,44 @@ class CodeFragmentEffect extends Effect {
     const S = this.stage;
     this.anchor = { x: lerp(this.from.x, this.to.x, 0.42), y: S.ground - 83 };
     this.lines = [];
-    const n = 5;
+    /* Six lines at a pitch of 8 rather than five at 7. The block has to hold
+     * 4/3 of its old height (39 -> 53) and the runes inside it do not scale, so
+     * the height is bought as one more line plus a row of air between them —
+     * which is also what makes a stack of runes read as CODE rather than as a
+     * paragraph. */
+    const n = 6;
     for (let i = 0; i < n; i++) {
       const indent = i === 0 || i === n - 1 ? 0 : 1 + ((this.rand() * 2) | 0);
       const side = this.rand() < 0.5 ? -1 : 1;
       this.lines.push({
         indent,
-        cells: 5 + ((this.rand() * 6) | 0),
+        cells: 6 + ((this.rand() * 8) | 0),
         seed: (this.seed + i * 7919) >>> 0,
-        y: i * 7,
-        fx: side < 0 ? -53 - this.rand() * 53 : S.w + 27 + this.rand() * 53,
+        y: i * 8,
+        /* The right-hand start has to clear the frame on the FIRST DRAWN
+         * frame, not on paper. A strip is placed at lerp(fx, tx, overshoot(
+         * lock)), and overshoot() is already ~0.48 the first time a line is
+         * drawn, so the effective entry is roughly 0.52*fx + 0.48*tx plus the
+         * strip's own width — not fx. At S.w + 27 that put the first painted
+         * frame INSIDE the frame for 38 of 389 seeds, closest at x = 238,
+         * seventeen columns in: the strip appeared out of clear air instead of
+         * flying in from off-stage. (This is not a regression from the raster
+         * move — the old 192-wide frame popped in at the same ~10% rate, 3 of
+         * 19 seeds, closest x = 186. It was always wrong; it is only now
+         * measured.) S.w + 80 satisfies 0.52*fx + 0.48*tx + stripW >= S.w for
+         * every seed: 0 of 389 pop in, closest entry x = 273, eighteen columns
+         * clear of the edge. The left start needs no equivalent — its strips
+         * enter from -53 and further, and tx is nowhere near it. */
+        fx: side < 0 ? -53 - this.rand() * 53 : S.w + 80 + this.rand() * 53,
         fy: S.ground - 147 + this.rand() * 120,
         at: 0.14 + i * 0.055,
       });
     }
     this.blockW = 0;
     for (const l of this.lines) {
-      this.blockW = Math.max(this.blockW, 6 + l.indent * 4 + l.cells * GLYPH_ADVANCE);
+      this.blockW = Math.max(this.blockW, 8 + l.indent * 5 + l.cells * GLYPH_ADVANCE);
     }
-    this.blockH = n * 7 + 4;
+    this.blockH = n * 8 + 5;
   }
 
   _step(dt) {
@@ -1733,16 +1922,16 @@ class CodeFragmentEffect extends Effect {
           const r = this.prand;
           this.motes.emit(this.anchor.x - this.blockW / 2 + r() * this.blockW,
             this.anchor.y - this.blockH / 2 + l.y,
-            (r() - 0.5) * 60, -20 - r() * 40, 160, 0.4, 1, this.colour.hot);
+            (r() - 0.5) * 80, -27 - r() * 53, 213, 0.4, 1, this.colour.hot);
         }
       }
     }
     if (this.k > 0.60 && this.k < 0.78) {
       this.drip(dt, 160, (r) => {
         const a = -Math.PI * 0.5 + (r() - 0.5) * 3;
-        const sp = 30 + r() * 80;
-        this.motes.emit(this.to.x + (r() - 0.5) * 12, this.to.y + (r() - 0.5) * 14,
-          Math.cos(a) * sp, Math.sin(a) * sp, 170, 0.55,
+        const sp = 40 + r() * 107;
+        this.motes.emit(this.to.x + (r() - 0.5) * 16, this.to.y + (r() - 0.5) * 19,
+          Math.cos(a) * sp, Math.sin(a) * sp, 227, 0.55,
           r() < 0.25 ? 2 : 1, r() < 0.5 ? this.colour.hot : this.colour.key);
       });
     }
@@ -1775,8 +1964,8 @@ class CodeFragmentEffect extends Effect {
     for (const l of this.lines) {
       const lock = clamp((this.k - l.at) / 0.06, 0, 1);
       if (lock <= 0) continue;
-      const tx = x0 + 3 + l.indent * 4;
-      const ty = y0 + 2 + l.y;
+      const tx = x0 + 4 + l.indent * 5;
+      const ty = y0 + 3 + l.y;
       const sx = lerp(l.fx, tx, overshoot(lock));
       const sy = lerp(l.fy, ty, overshoot(lock));
       const a = live * (0.5 + 0.5 * lock);
@@ -1789,7 +1978,7 @@ class CodeFragmentEffect extends Effect {
       // Indent rule: the thing that makes a stack of runes read as code.
       if (l.indent) {
         ctx.fillStyle = rgba(col.deep, a * 0.9);
-        ctx.fillRect(px(x0 + 3), px(sy), px(l.indent * 4 - 1), GLYPH_H);
+        ctx.fillRect(px(x0 + 4), px(sy), px(l.indent * 5 - 1), GLYPH_H);
       }
       drawGlyphStrip(ctx, sx, sy, l.cells, l.seed, lock < 1 ? col.hot : col.key, a);
       if (lock > 0 && lock < 1) {
@@ -1812,9 +2001,10 @@ class CodeFragmentEffect extends Effect {
     if (strike > 0) {
       const imp = this.ph(0.62, 0.90);
       ctx.fillStyle = rgba(col.hot, (1 - imp) * live);
-      ctx.fillRect(px(cx) - 1, px(cy - this.blockH / 2), 2, px(this.blockH));
-      shockRing(ctx, this.to.x, this.to.y, lerp(3, 32, easeOut(imp)), col.key, (1 - imp) * 0.9);
-      cracks(ctx, this.to.x, this.to.y, this.seed + 3, 6, 18, col.hot,
+      ctx.fillRect(px(cx) - 1, px(cy - this.blockH / 2), 3, px(this.blockH));
+      shockRing(ctx, this.to.x, this.to.y, lerp(4, 43, easeOut(imp)), col.key, (1 - imp) * 0.9);
+      shockRing(ctx, this.to.x, this.to.y, lerp(4, 25, easeOut(imp)), col.hot, (1 - imp) * 0.55);
+      cracks(ctx, this.to.x, this.to.y, this.seed + 3, 8, 24, col.hot,
         (1 - imp) * 0.85, easeOut(imp));
     }
   }
@@ -1830,20 +2020,25 @@ class PhoenixEffect extends Effect {
   build() {
     const S = this.stage;
     this.nest = { x: this.from.x, y: S.ground - 3 };
-    this.apex = { x: lerp(this.from.x, this.to.x, 0.42), y: S.ground - 112 };
+    /* The apex goes past 4/3. ground-84 scaled to ground-112 with the anchors;
+     * ground-120 is 1.43x, and it is affordable because the VISIBLE headroom
+     * above the ground grew 1.51x (100 rows -> 151) while the frame's own
+     * height grew 1.75x. At 120 the bird's crest sits at row 55 minus its own
+     * 24 rows of glow: 31, still seven clear of the safe top at 24. */
+    this.apex = { x: lerp(this.from.x, this.to.x, 0.42), y: S.ground - 120 };
     this.gathers = [];
-    for (let i = 0; i < 22; i++) {
+    for (let i = 0; i < 30; i++) {
       this.gathers.push({
         x: this.rand() * S.w,
-        y: S.ground - this.rand() * 96,
+        y: S.ground - this.rand() * 129,
         at: this.rand() * 0.2,
       });
     }
     this.feathers = [];
-    for (let i = 0; i < 14; i++) {
+    for (let i = 0; i < 18; i++) {
       this.feathers.push({
         x: this.rand(), y: this.rand(), rot: this.rand() * Math.PI * 2,
-        drift: (this.rand() - 0.5) * 26,
+        drift: (this.rand() - 0.5) * 35,
       });
     }
   }
@@ -1852,8 +2047,8 @@ class PhoenixEffect extends Effect {
     // Ignition column throws embers straight up off the nest.
     if (this.k > 0.30 && this.k < 0.55) {
       this.drip(dt, 220, (r) => {
-        this.motes.emit(this.nest.x + (r() - 0.5) * 16, this.nest.y,
-          (r() - 0.5) * 26, -70 - r() * 90, 46, 0.7 + r() * 0.5,
+        this.motes.emit(this.nest.x + (r() - 0.5) * 21, this.nest.y,
+          (r() - 0.5) * 35, -93 - r() * 120, 61, 0.7 + r() * 0.5,
           r() < 0.3 ? 2 : 1, r() < 0.45 ? this.colour.hot : this.colour.key);
       });
     }
@@ -1861,17 +2056,17 @@ class PhoenixEffect extends Effect {
     if (this.k > 0.55 && this.k < 0.88) {
       const b = this._birdAt();
       this.drip(dt, 180, (r) => {
-        this.motes.emit(b.x + (r() - 0.5) * 24, b.y + (r() - 0.5) * 14,
-          (r() - 0.5) * 30, 10 + r() * 40, 30, 0.6 + r() * 0.5, 1,
+        this.motes.emit(b.x + (r() - 0.5) * 32, b.y + (r() - 0.5) * 19,
+          (r() - 0.5) * 40, 13 + r() * 53, 40, 0.6 + r() * 0.5, 1,
           r() < 0.4 ? this.colour.hot : this.colour.key);
       });
     }
     if (this.k > 0.80 && this.k < 0.92) {
       this.drip(dt, 200, (r) => {
         const a = r() * Math.PI * 2;
-        const sp = 40 + r() * 90;
-        this.motes.emit(this.to.x, this.to.y - 6, Math.cos(a) * sp, Math.sin(a) * sp,
-          -20, 0.9, r() < 0.3 ? 2 : 1, r() < 0.5 ? this.colour.hot : this.colour.key);
+        const sp = 53 + r() * 120;
+        this.motes.emit(this.to.x, this.to.y - 8, Math.cos(a) * sp, Math.sin(a) * sp,
+          -27, 0.9, r() < 0.3 ? 2 : 1, r() < 0.5 ? this.colour.hot : this.colour.key);
       });
     }
   }
@@ -1882,49 +2077,64 @@ class PhoenixEffect extends Effect {
     const cross = easeInOut(this.ph(0.62, 0.86));
     return {
       x: lerp(lerp(this.nest.x, this.apex.x, rise), this.to.x, cross),
-      y: lerp(lerp(this.nest.y - 6, this.apex.y, rise), this.to.y - 10, cross),
+      y: lerp(lerp(this.nest.y - 8, this.apex.y, rise), this.to.y - 13, cross),
       spread: clamp(this.ph(0.48, 0.70), 0, 1),
       flap: this.reducedMotion ? 0.7 : 0.62 + Math.sin(this.t * 9) * 0.38,
     };
   }
 
   _drawBird(ctx, b, alpha) {
-    const col = this.colour;
+    const col = this.colour, tn = this.tone;
     const open = easeOut(b.spread);
-    const span = 34 * open;
+    /* 34 -> 45: a 90-unit wingspan was 47% of the old frame width and had
+     * fallen to 35% of 256. Nine quills a side rather than seven, because the
+     * wing is a third longer and seven strokes across it left the trailing half
+     * of the wing see-through. */
+    const span = 45 * open;
     const lift = b.flap;
     ctx.lineWidth = 1;
     // Wings: stacked flame quills swept back, brighter toward the leading edge.
     for (const dir of [-1, 1]) {
-      for (let i = 0; i < 7; i++) {
-        const p = i / 6;
+      for (let i = 0; i < 9; i++) {
+        const p = i / 8;
         const len = span * (0.45 + 0.55 * Math.sin(Math.PI * (0.25 + p * 0.75)));
         const ex = b.x + dir * len;
-        const ey = b.y - (1 - p) * 10 * lift + p * 12;
-        ctx.strokeStyle = rgba(i < 2 ? col.hot : mix(col.key, col.deep, p * 0.5),
+        const ey = b.y - (1 - p) * 13 * lift + p * 16;
+        /* Stepped down the ramp this module already memoises, not mixed here.
+         * mix() builds a string, and this line runs nine times a wing, twice a
+         * frame, for the length of the flight — the file says in its own words
+         * at tonesFor() that that must never happen in a frame, and then did
+         * it here and in the tail below. key -> mid -> deep is three steps of
+         * the same ramp and costs nothing. */
+        ctx.strokeStyle = rgba(i < 3 ? col.hot : i < 6 ? col.key : tn.mid,
           alpha * (0.55 + 0.45 * (1 - p)));
         ctx.beginPath();
-        ctx.moveTo(px(b.x + dir * 2), px(b.y - 2 + p * 3));
-        ctx.quadraticCurveTo(px(b.x + dir * len * 0.6), px(b.y - 8 * lift + p * 4),
+        ctx.moveTo(px(b.x + dir * 3), px(b.y - 3 + p * 4));
+        ctx.quadraticCurveTo(px(b.x + dir * len * 0.6), px(b.y - 11 * lift + p * 5),
           px(ex), px(ey));
         ctx.stroke();
       }
     }
     // Body, crest and the ember tail streaming behind.
     ctx.fillStyle = rgba(col.ink, alpha * 0.8);
-    ctx.fillRect(px(b.x) - 3, px(b.y) - 6, 6, 13);
+    ctx.fillRect(px(b.x) - 4, px(b.y) - 8, 8, 17);
+    ctx.fillStyle = rgba(col.deep, alpha);
+    ctx.fillRect(px(b.x) - 3, px(b.y) - 7, 6, 15);
     ctx.fillStyle = rgba(col.key, alpha);
-    ctx.fillRect(px(b.x) - 2, px(b.y) - 5, 4, 11);
+    ctx.fillRect(px(b.x) - 3, px(b.y) - 7, 5, 14);
     ctx.fillStyle = rgba(col.hot, alpha);
-    ctx.fillRect(px(b.x) - 1, px(b.y) - 4, 2, 6);
-    ctx.fillRect(px(b.x) - 1, px(b.y) - 8, 2, 3);           // head
+    ctx.fillRect(px(b.x) - 2, px(b.y) - 5, 3, 8);
+    ctx.fillRect(px(b.x) - 2, px(b.y) - 11, 3, 4);          // head
+    ctx.fillStyle = rgba(col.ink, alpha * 0.9);
+    ctx.fillRect(px(b.x), px(b.y) - 10, 1, 1);              // eye
     ctx.fillStyle = rgba(col.hot, alpha * 0.9);
-    ctx.fillRect(px(b.x) + 1, px(b.y) - 9, 3, 1);           // beak
-    for (let i = 0; i < 5; i++) {                            // tail
-      const p = i / 4;
-      const wob = this.reducedMotion ? 0 : Math.sin(this.t * 7 - p * 3) * 3 * p;
-      ctx.fillStyle = rgba(mix(col.key, col.deep, p), alpha * (1 - p * 0.7));
-      ctx.fillRect(px(b.x - 1 + wob), px(b.y + 6 + i * 3), 2, 3);
+    ctx.fillRect(px(b.x) + 1, px(b.y) - 12, 4, 2);          // beak
+    for (let i = 0; i < 6; i++) {                            // tail
+      const p = i / 5;
+      const wob = this.reducedMotion ? 0 : Math.sin(this.t * 7 - p * 3) * 4 * p;
+      ctx.fillStyle = rgba(p < 0.34 ? col.key : p < 0.67 ? tn.mid : tn.dim,
+        alpha * (1 - p * 0.7));
+      ctx.fillRect(px(b.x - 2 + wob), px(b.y + 8 + i * 4), 3, 4);
     }
   }
 
@@ -1944,25 +2154,37 @@ class PhoenixEffect extends Effect {
         const gx = lerp(g.x, this.nest.x, e);
         const gy = lerp(g.y, this.nest.y - 4, e);
         ctx.fillStyle = rgba(p > 0.7 ? col.hot : col.key, live * (1 - p * 0.5) * 0.9);
-        ctx.fillRect(px(gx), px(gy), p > 0.6 ? 2 : 1, p > 0.6 ? 2 : 1);
+        ctx.fillRect(px(gx), px(gy), p > 0.6 ? 3 : 2, p > 0.6 ? 3 : 2);
       }
       // The ground under the caster heats before anything else happens.
+      /* A pool, not a plank. 28x2 was a bar on the floor at the old raster and
+       * 50x4 would have been a bigger one; groundPool is the same three-step
+       * ellipse every other impact in this file puts its light on the ground
+       * with, so the caster's feet heat the way everything else does. */
       const heat = easeOut(gather);
-      ctx.fillStyle = rgba(col.key, live * heat * 0.4);
-      ctx.fillRect(px(this.nest.x - 19 * heat), px(S.ground - 3), px(37 * heat), 3);
+      const prevHeat = ctx.globalCompositeOperation;
+      ctx.globalCompositeOperation = 'lighter';
+      groundPool(ctx, this.nest.x, S.ground - 1, 34 * heat, col.deep, live * heat * 0.5);
+      groundPool(ctx, this.nest.x, S.ground - 1, 20 * heat, col.key, live * heat * 0.45);
+      ctx.globalCompositeOperation = prevHeat;
     }
 
     // Ignition column.
     const ign = this.ph(0.30, 0.58);
     if (ign > 0 && ign < 1) {
-      const hgt = lerp(0, 92, easeOut(ign));
+      /* 92 -> 130 is 1.41x, past the 4/3 the rest of the file takes, and it is
+       * the clearest place to spend the 1.51x of ground headroom: the column
+       * tops out at row 42 against a safe top of 24. Twenty steps, not sixteen,
+       * or the column comes out as a ladder. */
+      const hgt = lerp(0, 130, easeOut(ign));
       const a = live * (1 - easeIn(ign)) * 0.95;
-      for (let i = 0; i < 16; i++) {
-        const p = i / 15;
-        const w = Math.max(1, (1 - p) * 16 * (0.7 + 0.3 * Math.sin(p * 9 + this.t * 12)));
-        const wob = this.reducedMotion ? 0 : Math.sin(p * 6 + this.t * 9) * 3;
-        ctx.fillStyle = rgba(p < 0.35 ? col.hot : col.key, a * (1 - p * 0.55));
-        ctx.fillRect(px(this.nest.x - w / 2 + wob), px(this.nest.y - p * hgt), px(w), 3);
+      for (let i = 0; i < 20; i++) {
+        const p = i / 19;
+        const w = Math.max(1, (1 - p) * 21 * (0.7 + 0.3 * Math.sin(p * 9 + this.t * 12)));
+        const wob = this.reducedMotion ? 0 : Math.sin(p * 6 + this.t * 9) * 4;
+        ctx.fillStyle = rgba(p < 0.2 ? col.hot : p < 0.55 ? col.key : this.tone.mid,
+          a * (1 - p * 0.55));
+        ctx.fillRect(px(this.nest.x - w / 2 + wob), px(this.nest.y - p * hgt), px(w), 4);
       }
     }
 
@@ -1970,9 +2192,16 @@ class PhoenixEffect extends Effect {
     if (this.k > 0.44 && this.k < 0.94) {
       const b = this._birdAt();
       // Warm glow it carries, drawn under the bird so the bird stays crisp.
+      /* The warm light the bird carries. This was a 52x36 fillRect — a brown
+       * RECTANGLE sitting behind the firebird in every frame of its flight,
+       * plainly visible in a contact sheet of the shipped build. A banded light
+       * disc is the idiom the rest of this file already uses for light, costs
+       * the same colours, and does not have corners. */
       const glow = live * (0.35 + 0.25 * Math.abs(this.osc(6)));
-      ctx.fillStyle = rgba(col.deep, glow * 0.5);
-      ctx.fillRect(px(b.x - 26), px(b.y - 18), 52, 36);
+      const prevBird = ctx.globalCompositeOperation;
+      ctx.globalCompositeOperation = 'lighter';
+      lightDisc(ctx, b.x, b.y, 38, col.deep, glow * 0.42, 4);
+      ctx.globalCompositeOperation = prevBird;
       this._drawBird(ctx, b, live * clamp(this.ph(0.44, 0.52), 0, 1));
     }
 
@@ -1988,16 +2217,18 @@ class PhoenixEffect extends Effect {
       ctx.fillStyle = rgba(col.hot, a * 0.16);
       ctx.fillRect(0, 0, S.w, S.h);
       ctx.globalCompositeOperation = prevOp;
-      shockRing(ctx, this.to.x, this.to.y - 6, lerp(6, 56 * pw, easeOut(imp)), col.hot, a * 0.9);
-      shockRing(ctx, this.to.x, this.to.y - 6, lerp(2, 34 * pw, easeOut(imp)), col.key, a);
+      shockRing(ctx, this.to.x, this.to.y - 8, lerp(8, 75 * pw, easeOut(imp)), col.hot, a * 0.9);
+      shockRing(ctx, this.to.x, this.to.y - 8, lerp(3, 45 * pw, easeOut(imp)), col.key, a);
+      shockRing(ctx, this.to.x, this.to.y - 8, lerp(3, 22 * pw, easeOut(imp)), col.hot, a * 0.6);
       // Feathers fall out of the impact and settle.
       for (const f of this.feathers) {
-        const fx = this.to.x + (f.x - 0.5) * 70;
-        const fy = lerp(this.to.y - 40, S.ground - 3, easeIn(imp)) + f.y * 16;
-        stamp(ctx, `ph:feather:${col.key}`, 7, 4, (c) => {
-          c.fillStyle = col.ink; c.fillRect(0, 1, 7, 2);
-          c.fillStyle = col.key; c.fillRect(1, 1, 5, 1);
-          c.fillStyle = col.hot; c.fillRect(2, 2, 3, 1);
+        const fx = this.to.x + (f.x - 0.5) * 93;
+        const fy = lerp(this.to.y - 53, S.ground - 3, easeIn(imp)) + f.y * 21;
+        stamp(ctx, `ph:feather9:${col.key}`, 9, 5, (c) => {
+          c.fillStyle = col.ink; c.fillRect(0, 1, 9, 3);
+          c.fillStyle = col.deep; c.fillRect(1, 2, 7, 2);
+          c.fillStyle = col.key; c.fillRect(1, 1, 7, 1);
+          c.fillStyle = col.hot; c.fillRect(3, 2, 4, 1);
         }, fx + f.drift * imp, fy, a * 1.1);
       }
     }
@@ -2046,15 +2277,25 @@ function paintSigil(size, col) {
     c.beginPath();
     for (let i = 0; i < 6; i++) {
       const a = (Math.PI / 3) * i - Math.PI / 2;
-      const x = cx + Math.cos(a) * (r - 3), y = cy + Math.sin(a) * (r - 3);
+      const x = cx + Math.cos(a) * (r - 4), y = cy + Math.sin(a) * (r - 4);
       if (i === 0) c.moveTo(x, y); else c.lineTo(x, y);
     }
     c.closePath();
     c.strokeStyle = col.key; c.stroke();
+    /* A third, innermost hex in the mid tone. The plate is 4/3 wider and two
+     * concentric outlines around one rune pair left a flat field between them. */
+    c.beginPath();
+    for (let i = 0; i < 6; i++) {
+      const a = (Math.PI / 3) * i - Math.PI / 2;
+      const x = cx + Math.cos(a) * (r - 8), y = cy + Math.sin(a) * (r - 8);
+      if (i === 0) c.moveTo(x, y); else c.lineTo(x, y);
+    }
+    c.closePath();
+    c.strokeStyle = col.deep; c.stroke();
     paintGlyph(c, 5, col.hot, Math.round(cx - 5), Math.round(cy - 2));
     paintGlyph(c, 20, col.hot, Math.round(cx + 2), Math.round(cy - 2));
     c.fillStyle = STEEL;
-    c.fillRect(Math.round(cx - 3), Math.round(cy - r + 2), 6, 1);
+    c.fillRect(Math.round(cx - 4), Math.round(cy - r + 3), 8, 1);
   };
 }
 
@@ -2062,16 +2303,16 @@ function paintSigil(size, col) {
 class HitEffect extends Effect {
   build() {
     this.angle = -0.7 + this.rand() * 0.5;
-    this.reach = 26 + this.rand() * 6;
+    this.reach = 35 + this.rand() * 8;
   }
 
   _step(dt) {
     if (this.k > 0.32 && this.k < 0.6) {
       this.drip(dt, 220, (r) => {
         const a = this.angle + Math.PI / 2 + (r() - 0.5) * 2.2;
-        const sp = 40 + r() * 90;
-        this.motes.emit(this.to.x + (r() - 0.5) * 8, this.to.y + (r() - 0.5) * 10,
-          Math.cos(a) * sp, Math.sin(a) * sp, 220, 0.3 + r() * 0.25, 1,
+        const sp = 53 + r() * 120;
+        this.motes.emit(this.to.x + (r() - 0.5) * 11, this.to.y + (r() - 0.5) * 13,
+          Math.cos(a) * sp, Math.sin(a) * sp, 293, 0.3 + r() * 0.25, 1,
           r() < 0.4 ? this.colour.hot : this.colour.key);
       });
     }
@@ -2089,14 +2330,14 @@ class HitEffect extends Effect {
       ctx.strokeStyle = rgba(col.hot, a);
       ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.arc(px(this.from.x + 8), px(this.from.y), 8, -1.2, 0.4);
+      ctx.arc(px(this.from.x + 11), px(this.from.y), 11, -1.2, 0.4);
       ctx.stroke();
     }
     // The cut: a swept arc that crosses the target box.
     if (cut > 0) {
       const e = easeOut(cut);
       const a = (1 - easeIn(fade)) * 0.95;
-      const cx = lerp(this.from.x + 10, this.to.x, e);
+      const cx = lerp(this.from.x + 13, this.to.x, e);
       const cy = lerp(this.from.y, this.to.y, e);
       /* The blade is as long as the blow is hard. Same art, scaled: a chip of
        * damage cuts a short arc, a heavy one cuts across the whole box. */
@@ -2104,16 +2345,18 @@ class HitEffect extends Effect {
       ctx.save();
       ctx.translate(px(cx), px(cy));
       ctx.rotate(this.angle);
+      ctx.fillStyle = rgba(col.deep, a * 0.3);
+      ctx.fillRect(px(-reach * e), -4, px(reach * 2 * e), 8);
       ctx.fillStyle = rgba(col.ink, a * 0.6);
-      ctx.fillRect(px(-reach * e), -2, px(reach * 2 * e), 4);
+      ctx.fillRect(px(-reach * e), -3, px(reach * 2 * e), 5);
       ctx.fillStyle = rgba(col.key, a * 0.85);
-      ctx.fillRect(px(-reach * e), -1, px(reach * 2 * e), 2);
+      ctx.fillRect(px(-reach * e), -1, px(reach * 2 * e), 3);
       ctx.fillStyle = rgba(col.hot, a);
       ctx.fillRect(px(-reach * e), 0, px(reach * 2 * e), 1);
       ctx.restore();
       if (cut >= 1) {
         const imp = this.ph(0.5, 1);
-        shockRing(ctx, this.to.x, this.to.y, lerp(2, 16 * this.power, easeOut(imp)),
+        shockRing(ctx, this.to.x, this.to.y, lerp(3, 21 * this.power, easeOut(imp)),
           col.hot, (1 - imp) * 0.8);
       }
     }
@@ -2125,15 +2368,15 @@ class HitEffect extends Effect {
 class CritEffect extends Effect {
   build() {
     this.shards = [];
-    for (let i = 0; i < 16; i++) {
-      const a = (Math.PI * 2 * i) / 16 + this.rand() * 0.4;
+    for (let i = 0; i < 20; i++) {
+      const a = (Math.PI * 2 * i) / 20 + this.rand() * 0.4;
       this.shards.push({
-        a, sp: 60 + this.rand() * 110, spin: (this.rand() - 0.5) * 14,
-        w: 3 + ((this.rand() * 4) | 0), h: 2 + ((this.rand() * 3) | 0),
+        a, sp: 80 + this.rand() * 147, spin: (this.rand() - 0.5) * 14,
+        w: 4 + ((this.rand() * 5) | 0), h: 3 + ((this.rand() * 4) | 0),
       });
     }
-    this.sigilSize = 26;
-    this.hover = { x: this.to.x, y: this.box.y - 14 };
+    this.sigilSize = 36;
+    this.hover = { x: this.to.x, y: this.box.y - 19 };
   }
 
   _step(dt) {
@@ -2141,7 +2384,7 @@ class CritEffect extends Effect {
       // Charge: motes drawn up into the sigil as it forms.
       this.drip(dt, 90, (r) => {
         const a = r() * Math.PI * 2;
-        const rad = 24 + r() * 16;
+        const rad = 32 + r() * 21;
         this.motes.emit(this.hover.x + Math.cos(a) * rad, this.hover.y + Math.sin(a) * rad,
           -Math.cos(a) * rad * 2.6, -Math.sin(a) * rad * 2.6, 0, 0.4, 1, this.colour.key);
       });
@@ -2149,9 +2392,9 @@ class CritEffect extends Effect {
     if (this.k > 0.36 && this.k < 0.62) {
       this.drip(dt, 240, (r) => {
         const a = r() * Math.PI * 2;
-        const sp = 50 + r() * 140;
-        this.motes.emit(this.to.x + (r() - 0.5) * 10, this.to.y + (r() - 0.5) * 10,
-          Math.cos(a) * sp, Math.sin(a) * sp, 260, 0.45 + r() * 0.45,
+        const sp = 67 + r() * 187;
+        this.motes.emit(this.to.x + (r() - 0.5) * 13, this.to.y + (r() - 0.5) * 13,
+          Math.cos(a) * sp, Math.sin(a) * sp, 347, 0.45 + r() * 0.45,
           r() < 0.3 ? 2 : 1, r() < 0.5 ? this.colour.hot : this.colour.key);
       });
     }
@@ -2169,14 +2412,17 @@ class CritEffect extends Effect {
     if (form > 0 && slam < 1) {
       const y = lerp(this.hover.y, this.to.y, easeIn(slam));
       const scale = lerp(1.8, 1, easeOut(form)) * lerp(1, 1.25, slam);
-      runeRing(ctx, this.hover.x, y, lerp(30, 18, easeOut(form)), 6,
+      runeRing(ctx, this.hover.x, y, lerp(40, 24, easeOut(form)), 8,
         this.reducedMotion ? 0 : this.t * 2.4, col, easeOut(form) * (1 - slam));
       stampRot(ctx, `crit:sigil:${col.key}:${this.sigilSize}`,
         this.sigilSize, this.sigilSize, paintSigil(this.sigilSize, col),
         this.hover.x, y, this.osc(2) * 0.05, easeOut(form), scale);
-      // The shadow the sigil casts on the target: the tell that it is coming.
-      ctx.fillStyle = rgba(col.ink, easeOut(form) * 0.35);
-      ctx.fillRect(px(this.to.x - 16), px(this.stage.ground - 3), 32, 3);
+      /* The shadow the sigil casts on the target: the tell that it is coming.
+       * An ellipse, not the 32x3 bar it used to be — a hexagonal plate does not
+       * cast a rectangle, and at the new raster the bar was 43x4 of solid ink
+       * lying on the floor. */
+      groundPool(ctx, this.to.x, this.stage.ground - 1, 30,
+        col.ink, easeOut(form) * 0.4);
     }
 
     // Shatter: cracks, two rings, and the plate blowing apart into shards.
@@ -2185,14 +2431,40 @@ class CritEffect extends Effect {
       /* Every dimension of the shatter rides the damage: how far the rings get,
        * how deep the cracks run, how hard the shards are thrown. */
       const pw = clamp(this.power, 0.6, 1.8);
-      shockRing(ctx, this.to.x, this.to.y, lerp(4, 52 * pw, e), col.hot, (1 - burst) * live);
-      shockRing(ctx, this.to.x, this.to.y, lerp(2, 30 * pw, e), col.key, (1 - burst) * live * 0.9);
-      cracks(ctx, this.to.x, this.to.y, this.seed, 9, 26 * pw, col.hot,
+      shockRing(ctx, this.to.x, this.to.y, lerp(5, 69 * pw, e), col.hot, (1 - burst) * live);
+      shockRing(ctx, this.to.x, this.to.y, lerp(3, 40 * pw, e), col.key, (1 - burst) * live * 0.9);
+      shockRing(ctx, this.to.x, this.to.y, lerp(3, 20 * pw, e), col.hot, (1 - burst) * live * 0.55);
+      cracks(ctx, this.to.x, this.to.y, this.seed, 11, 35 * pw, col.hot,
         (1 - burst) * live * 0.95, e);
+      /* THE FALL IS SCALED BY THE APRON THAT EXISTS, NOT BY 4/3, AND IT STOPS
+       * AT THE LAST PROMISED ROW.
+       *
+       * Everything else in this file grew 4/3 with the raster and that was
+       * right, because the room it grew into grew too. The room UNDER the
+       * burst did not. Measured: the old frame put the burst centre at row 60
+       * with the last visible row at 127 — 67 rows of fall; the new one puts it
+       * at 135 with the last visible row at 199 — 64. The room shrank by three
+       * rows and the throw was multiplied by 4/3 anyway, so a third of the
+       * shatter went somewhere nobody can see it. Counted over six seeds on an
+       * unclipped canvas: the old crit threw 1.85% of its ink past the bottom
+       * of the visible frame, which is what an explosion is allowed to do; this
+       * one threw 4.65%, two and a half times as much, and 81% of that excess
+       * was these shards.
+       *
+       * Two changes, and they do different jobs. 45 -> 30 is the gravity term
+       * re-derived against the apron it falls into (34 x 24/27, the apron that
+       * exists rather than the 4/3 that was assumed) — that governs the SHAPE
+       * of the arc. The clamp is the backstop, and it is needed because the
+       * radial throw alone carries a shard 113 rows from a centre only 64 rows
+       * above the floor of the frame: no gravity term can fix that, only a
+       * ceiling can. Together they put the discarded ink back at 1.88% against
+       * the old 1.85%. The same idiom is already in this file — _paintImpact
+       * passes safeTop + 2 to impactSignature as a ceiling. */
       for (const s of this.shards) {
         const d = s.sp * burst * 0.5 * pw;
         const x = this.to.x + Math.cos(s.a) * d;
-        const y = this.to.y + Math.sin(s.a) * d + burst * burst * 34;
+        const y = Math.min(this.stage.safeTop + this.stage.safeH - 1,
+          this.to.y + Math.sin(s.a) * d + burst * burst * 30);
         stampRot(ctx, `crit:shard:${col.key}:${s.w}:${s.h}`, s.w + 2, s.h + 2, (c) => {
           c.fillStyle = col.ink; c.fillRect(0, 0, s.w + 2, s.h + 2);
           c.fillStyle = col.key; c.fillRect(1, 1, s.w, s.h);
@@ -2203,7 +2475,7 @@ class CritEffect extends Effect {
       if (burst < 0.2) {
         const b = this.box;
         ctx.fillStyle = rgba(col.hot, (1 - burst / 0.2) * 0.5);
-        ctx.fillRect(px(b.x - 2), px(b.y - 2), px(b.w + 4), px(b.h + 4));
+        ctx.fillRect(px(b.x - 3), px(b.y - 3), px(b.w + 6), px(b.h + 6));
       }
     }
   }
@@ -2213,10 +2485,13 @@ class CritEffect extends Effect {
  * reason the player reads it as "wrong tool" rather than "missed". --- */
 class ResistEffect extends Effect {
   build() {
-    this.wall = { x: this.box.x - 4, y: this.to.y };
+    this.wall = { x: this.box.x - 5, y: this.to.y };
     this.facets = [];
-    for (let i = 0; i < 5; i++) {
-      this.facets.push({ y: this.box.y + 6 + i * (this.box.h - 12) / 4, r: 7 + this.rand() * 3 });
+    /* Six facets on a box that is 4/3 taller, each one 4/3 across: the barrier
+     * has to look like a surface, and five hexes with gaps between them reads
+     * as five hexes. */
+    for (let i = 0; i < 6; i++) {
+      this.facets.push({ y: this.box.y + 8 + i * (this.box.h - 16) / 5, r: 9 + this.rand() * 4 });
     }
   }
 
@@ -2224,9 +2499,9 @@ class ResistEffect extends Effect {
     if (this.k > 0.48 && this.k < 0.72) {
       this.drip(dt, 120, (r) => {
         const a = Math.PI + (r() - 0.5) * 1.8;
-        const sp = 30 + r() * 70;
-        this.motes.emit(this.wall.x, this.wall.y + (r() - 0.5) * 18,
-          Math.cos(a) * sp, Math.sin(a) * sp - 20, 210, 0.45, 1, this.colour.key);
+        const sp = 40 + r() * 93;
+        this.motes.emit(this.wall.x, this.wall.y + (r() - 0.5) * 24,
+          Math.cos(a) * sp, Math.sin(a) * sp - 27, 280, 0.45, 1, this.colour.key);
       });
     }
   }
@@ -2241,22 +2516,22 @@ class ResistEffect extends Effect {
     // Outbound bolt, then the same bolt thrown back over the caster's shoulder.
     if (fly > 0 && back <= 0) {
       const e = easeOut(fly);
-      const x = lerp(this.from.x + 8, this.wall.x, e);
+      const x = lerp(this.from.x + 11, this.wall.x, e);
       const y = lerp(this.from.y, this.wall.y, e);
       ctx.fillStyle = rgba(col.ink, live * 0.7);
-      ctx.fillRect(px(x) - 4, px(y) - 2, 9, 5);
+      ctx.fillRect(px(x) - 5, px(y) - 3, 12, 7);
       ctx.fillStyle = rgba(col.key, live);
-      ctx.fillRect(px(x) - 3, px(y) - 1, 7, 3);
+      ctx.fillRect(px(x) - 4, px(y) - 2, 9, 4);
       ctx.fillStyle = rgba(col.hot, live);
-      ctx.fillRect(px(x), px(y), 3, 1);
+      ctx.fillRect(px(x), px(y) - 1, 4, 2);
     } else if (back > 0) {
       const e = easeOut(back);
-      const x = lerp(this.wall.x, this.wall.x - 70, e);
-      const y = lerp(this.wall.y, this.wall.y - 40, e) + e * e * 46;
+      const x = lerp(this.wall.x, this.wall.x - 93, e);
+      const y = lerp(this.wall.y, this.wall.y - 53, e) + e * e * 61;
       ctx.fillStyle = rgba(col.key, live * (1 - back) * 0.9);
-      ctx.fillRect(px(x), px(y), 3, 2);
+      ctx.fillRect(px(x), px(y), 4, 3);
       ctx.fillStyle = rgba(col.hot, live * (1 - back) * 0.6);
-      ctx.fillRect(px(x) + 3, px(y), 2, 1);
+      ctx.fillRect(px(x) + 4, px(y), 3, 2);
     }
 
     // The barrier: a stack of hex facets lighting on contact, then rippling out.
@@ -2264,7 +2539,7 @@ class ResistEffect extends Effect {
       const flash = 1 - easeIn(this.ph(0.5, 0.86));
       ctx.lineWidth = 1;
       for (const f of this.facets) {
-        const push = easeOut(this.ph(0.5, 0.8)) * 3;
+        const push = easeOut(this.ph(0.5, 0.8)) * 4;
         ctx.strokeStyle = rgba(col.hot, flash * live * 0.9);
         ctx.beginPath();
         for (let i = 0; i < 6; i++) {
@@ -2280,7 +2555,7 @@ class ResistEffect extends Effect {
       }
       // A dull chip mark: the hit happened, it just did not get through.
       ctx.fillStyle = rgba(STEEL, flash * live * 0.7);
-      ctx.fillRect(px(this.wall.x) - 1, px(this.wall.y) - 3, 2, 6);
+      ctx.fillRect(px(this.wall.x) - 1, px(this.wall.y) - 4, 3, 8);
     }
   }
 }
@@ -2289,6 +2564,9 @@ class ResistEffect extends Effect {
  * closes in, which is what stops it reading as another kind of hit. --- */
 class HealEffect extends Effect {
   build() {
+    /* rx/ry already carry the 4/3: 16x5 went to 21x7 with the anchors in the
+     * raster commit, which is the one piece of body geometry that move did
+     * bring with it. Everything else in this effect below did not. */
     this.circle = { x: this.from.x, y: this.stage.ground - 1, rx: 21, ry: 7 };
   }
 
@@ -2298,7 +2576,7 @@ class HealEffect extends Effect {
         const a = r() * Math.PI * 2;
         this.motes.emit(this.circle.x + Math.cos(a) * this.circle.rx,
           this.circle.y + Math.sin(a) * this.circle.ry,
-          (r() - 0.5) * 8, -34 - r() * 40, -18, 0.8, r() < 0.25 ? 2 : 1,
+          (r() - 0.5) * 11, -45 - r() * 53, -24, 0.8, r() < 0.4 ? 2 : 1,
           r() < 0.4 ? this.colour.hot : this.colour.key);
       });
     }
@@ -2317,20 +2595,20 @@ class HealEffect extends Effect {
     ctx.ellipse(px(C.x), px(C.y), C.rx * ins, C.ry * ins, 0, 0, Math.PI * 2);
     ctx.stroke();
     const turn = this.reducedMotion ? 0 : this.t * 0.8;
-    for (let i = 0; i < 6; i++) {
-      const a = (Math.PI * 2 * i) / 6 + turn;
+    for (let i = 0; i < 8; i++) {
+      const a = (Math.PI * 2 * i) / 8 + turn;
       drawGlyphStrip(ctx, C.x + Math.cos(a) * C.rx * ins - 1,
         C.y + Math.sin(a) * C.ry * ins - 2, 1, 991 + i * 37, col.key, live * ins * 0.8);
     }
 
     const col2 = this.ph(0.2, 0.7);
     if (col2 > 0) {
-      const hgt = lerp(0, 40, easeOut(col2));
-      for (let i = 0; i < 8; i++) {
-        const p = i / 7;
-        const w = Math.max(1, (1 - p) * 14);
+      const hgt = lerp(0, 53, easeOut(col2));
+      for (let i = 0; i < 10; i++) {
+        const p = i / 9;
+        const w = Math.max(1, (1 - p) * 19);
         ctx.fillStyle = rgba(p < 0.4 ? col.hot : col.key, live * (1 - p) * 0.4);
-        ctx.fillRect(px(C.x - w / 2), px(C.y - p * hgt), px(w), 3);
+        ctx.fillRect(px(C.x - w / 2), px(C.y - p * hgt), px(w), 4);
       }
     }
 
@@ -2338,10 +2616,15 @@ class HealEffect extends Effect {
     // rune flash. No medical iconography; this is a spellbook, not a clinic.
     const mend = this.ph(0.55, 0.86);
     if (mend > 0) {
-      const r = lerp(26, 4, easeOut(mend));
-      shockRing(ctx, this.from.x, this.from.y - 4, r, col.hot, (1 - mend) * live);
+      const r = lerp(35, 5, easeOut(mend));
+      shockRing(ctx, this.from.x, this.from.y - 5, r, col.hot, (1 - mend) * live);
+      /* The echo ring closes INSIDE the leading one, not outside it. Outside,
+       * at 1.4x, it took the effect to 35.9% of the frame width against the
+       * 26.0% it held on the 192 frame — a restore that overshot into a new
+       * regression. Inside, the outer extent is still 2r = 27.3%. */
+      shockRing(ctx, this.from.x, this.from.y - 5, r * 0.72, col.key, (1 - mend) * live * 0.5);
       const flash = arc(mend);
-      drawGlyphStrip(ctx, this.from.x - 6, this.from.y - 8, 3, 4242, col.hot,
+      drawGlyphStrip(ctx, this.from.x - 8, this.from.y - 10, 4, 4242, col.hot,
         flash * live * 0.95);
     }
   }
@@ -2350,7 +2633,7 @@ class HealEffect extends Effect {
 /* --- MISS: nothing connects. A pale arc passes through the target box and the
  * barrier never even lights. Short, quiet, and unmistakably a nil result. --- */
 class MissEffect extends Effect {
-  build() { this.lift = 18 + this.rand() * 8; }
+  build() { this.lift = 24 + this.rand() * 11; }
 
   _draw(ctx) {
     const col = this.colour;
@@ -2358,19 +2641,19 @@ class MissEffect extends Effect {
     const live = 1 - easeIn(this.ph(0.6, 1));
     if (fly <= 0) return;
     const e = easeOut(fly);
-    const x = lerp(this.from.x + 8, this.to.x + 40, e);
-    const y = lerp(this.from.y, this.to.y - 6, e) - Math.sin(Math.PI * e) * this.lift;
+    const x = lerp(this.from.x + 11, this.to.x + 53, e);
+    const y = lerp(this.from.y, this.to.y - 8, e) - Math.sin(Math.PI * e) * this.lift;
     ctx.fillStyle = rgba(col.key, live * 0.75);
-    ctx.fillRect(px(x), px(y), 3, 2);
+    ctx.fillRect(px(x), px(y), 4, 3);
     ctx.fillStyle = rgba(col.hot, live * 0.5);
-    ctx.fillRect(px(x) - 4, px(y), 4, 1);
+    ctx.fillRect(px(x) - 5, px(y), 5, 1);
     // Trail, so the eye can follow a shot that did nothing.
-    for (let i = 1; i < 5; i++) {
-      const p = clamp(e - i * 0.06, 0, 1);
-      const tx = lerp(this.from.x + 8, this.to.x + 40, p);
-      const ty = lerp(this.from.y, this.to.y - 6, p) - Math.sin(Math.PI * p) * this.lift;
-      ctx.fillStyle = rgba(col.key, live * 0.3 * (1 - i / 5));
-      ctx.fillRect(px(tx), px(ty), 2, 1);
+    for (let i = 1; i < 7; i++) {
+      const p = clamp(e - i * 0.05, 0, 1);
+      const tx = lerp(this.from.x + 11, this.to.x + 53, p);
+      const ty = lerp(this.from.y, this.to.y - 8, p) - Math.sin(Math.PI * p) * this.lift;
+      ctx.fillStyle = rgba(col.key, live * 0.3 * (1 - i / 7));
+      ctx.fillRect(px(tx), px(ty), 3, 2);
     }
   }
 }
@@ -2513,6 +2796,43 @@ export const SPELL_ANIMATIONS = Object.freeze({
   }, PhoenixEffect),
 });
 
+/* ============================================================================
+ * A HARNESS-ONLY RUNG. NOTHING IN THE SHIPPED GAME DRAWS ANY OF THESE FIVE.
+ * ============================================================================
+ * Read this before spending a pass re-scaling eleven effects: six of them are
+ * on screen and five are not.
+ *
+ * There is exactly ONE call to createEffect() in the whole client —
+ * fx.js:1546, inside BattleFX.castSpell() — and its only caller is
+ * main.js:3019, which passes `rung.spell`, always one of the six SPELL_IDS. So
+ * ORACLE, REVEAL_PATH, VISION, PSEUDOSIGHT, CODE_FRAGMENT and PHOENIX reach a
+ * player and hit/crit/resist/heal/miss do not. BattleFX.hit() draws its own
+ * primitives instead — a damageNumber, a burst and a _ring — and never touches
+ * this module. The only things that exercise the five are
+ * scripts/verify/spells2.mjs and steady.mjs, which iterate FX.DAMAGE_KIND
+ * directly.
+ *
+ * WHY THEY ARE NOT WIRED UP, which is the question the next reader will ask.
+ * Not an oversight to be tidied away with one line in hit(): these effects are
+ * built as single, deliberate, once-per-cast animations, and hit() is not
+ * called that way. resolveTrials() fires it once per trial at an interval of
+ * 0.09s, so routing it here would put
+ *
+ *     hit     0.55s / 0.09s  ->   6 live at once
+ *     resist  0.75s / 0.09s  ->   8 live at once
+ *     crit    1.25s / 0.09s  ->  14 live at once
+ *
+ * on the stage during one ordinary test run — fourteen simultaneous copies of
+ * the biggest non-spell effect in the game, each with twenty shards, three
+ * shock rings, a rune ring, a sigil, a ground pool and a white frame over the
+ * target. That is a whiteout, not a fight. Wiring them up means first giving
+ * hit() a rate limit or a single reusable instance, and that is a combat-feel
+ * change, not a rename.
+ *
+ * So: the five are kept, measured and maintained as a rung that the harnesses
+ * hold to the same standard as the six — but a defect in one of them is a
+ * defect in art nobody can currently see, and should be priced that way.
+ * ============================================================================ */
 export const ATTACK_ANIMATIONS = Object.freeze({
   [DAMAGE_KIND.HIT]: defineEffect({
     id: 'hit', family: 'attack', label: 'HIT',
@@ -2624,10 +2944,19 @@ export function warmCache(kinds, opts = {}) {
   const before = canvasCache.size;
   for (const kind of list) {
     const e = createEffect(kind, opts);
-    /* Twelve samples across the whole effect touches every cached tile without
-     * paying for a full playthrough. */
-    for (let i = 0; i <= 12; i++) {
-      e.t = (e.duration * i) / 12;
+    /* Samples across the whole effect, to touch every cached tile without
+     * paying for a full playthrough. Twelve was enough when PSEUDOSIGHT had
+     * fourteen rune rows and CODE_FRAGMENT five; at eighteen and six, twelve
+     * samples walked past strips that then rasterised on the first real cast.
+     * MEASURED, warming and casting the same seed: 12 samples leaves 8 canvases
+     * to build during play, 32 leaves 1. (steady.mjs reports 49 either way
+     * because it warms the default seed and plays seed 9 — a mismatch in the
+     * harness, not a miss in here. The seed a cast will use has to be the seed
+     * it was warmed with, and for the six spells it already is: _configure
+     * defaults to hash(def.id) and fx.js casts with hash(name), the same
+     * string.) */
+    for (let i = 0; i <= 32; i++) {
+      e.t = (e.duration * i) / 32;
       e.rawK = clamp(e.t / e.duration, 0, 1);
       e.k = e._warp(e.rawK);
       /* _paint, not _draw: the shared wind-up and impact layer rasterise rune
