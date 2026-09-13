@@ -8036,7 +8036,6 @@ async function boot() {
   }).catch(() => { /* synthesis covers it */ });
 
   G.overworld = new Overworld($('#world-canvas'));
-  try { window.__DBG_G = G; } catch (e) {}
   // The overworld reads the companion out of the state we already hold, the
   // same way partyui.js reads it — no second fetch, and no knowledge of pets
   // in this file, so the pets rewrite lands without touching the shell.
