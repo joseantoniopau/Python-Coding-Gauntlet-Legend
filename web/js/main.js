@@ -92,6 +92,8 @@ const G = {
   // submission carries one; so do heal(), rest() and the town square. This
   // client never works one out for itself — a threshold with two homes is a
   // sprite that flashes at one health and a heartbeat that starts at another.
+  // The choices of an MCQ encounter, which ARE the encounter. See renderMcq.
+  mcq: null,
   alarm: null,
   alarmNode: null,     // the red wash over the hero, while it is up
   alarmBeat: null,     // the heartbeat interval, at upkeep's own BPM
@@ -828,6 +830,9 @@ function enterBattle(payload) {
   // subsequent encounter, and only a page reload clears it.
   $('#btn-submit').disabled = false;
   $('#btn-submit').style.display = '';
+  // Cleared before the branch, so a code fight after a question never inherits
+  // the question's answers as its trials.
+  G.mcq = null;
   if (puzzleui.isPuzzle(p.encounter_kind)) {
     renderPuzzle(p);
   } else if (p.entry && p.entry.kind === 'mcq') {
@@ -853,7 +858,9 @@ function enterBattle(payload) {
   // The turn, both pairs of bars, the statuses and the belt. Drawn before the
   // screen is shown so the fight never appears without its own state on it.
   paintCombatHud(hudFromPayload(payload));
-  setTab(visibleTab(interview ? 'approach' : 'trials'));
+  // An MCQ stays on trials even in a measured run: `approach` would hide the
+  // only way to answer, and the seal is about help, not about the question.
+  setTab(G.mcq ? 'trials' : visibleTab(interview ? 'approach' : 'trials'));
   show('battle');
   audio.play(enemy.boss ? 'boss' : 'battle');
 
@@ -1464,12 +1471,33 @@ async function playUnmaking() {
  * Anything looser and a four-second cinematic starts landing on ordinary
  * clears, which is how a payoff becomes a thing people press escape through.
  */
+/* WHAT A CLUTCH CLEAR IS NOT, learned by playing it: my first gate fired the
+ * whole four-second cinematic on ENCOUNTER ONE, for correctly answering a
+ * multiple-choice question about `print(10 - 4)`. An S rank with no hints is
+ * not evidence of anything when the problem is GUIDED and the answer is one of
+ * four buttons — the corpus is 473 GUIDED/TUTORIAL problems deep precisely so
+ * the opening hours are easy, and a reward that fires there fires constantly.
+ *
+ * So the difficulty is part of the gate, and so is having actually WRITTEN
+ * something. transform.js's own header is the specification: "a hard problem
+ * solved unaided, a boss taken down at low health", and "gated on evidence
+ * rather than on a cooldown, or it becomes an interruption instead of a
+ * payoff". */
+const CLUTCH_DIFFICULTY = new Set(['MEDIUM', 'HARD']);
+
 function isClutchClear(result) {
   if (!result || !result.solved) return false;
   const p = (G.state && G.state.player) || {};
   const max = Math.max(1, Number(p.stamina_max) || 1);
   const ratio = (Number(result.stamina) || 0) / max;
+  // A boss taken down in the red, at any difficulty: the fight is the evidence.
   if ((result.boss || {}).defeated && ratio <= 0.35) return true;
+
+  // Otherwise it has to be a hard problem the player actually wrote, cleanly.
+  const prob = G.problem || {};
+  if (!CLUTCH_DIFFICULTY.has(String(prob.difficulty || '').toUpperCase())) return false;
+  // Picking the right button is not writing code, however clean the pick.
+  if ((prob.entry || {}).kind === 'mcq') return false;
   const probes = Number((result.combat || {}).probes_used) || 0;
   const hints = Number((result.combat || {}).hints_used || result.hints_used) || 0;
   return result.rank === 'S' && probes === 0 && hints === 0;
@@ -2126,19 +2154,32 @@ function renderPuzzle(p) {
   $('#btn-submit').disabled = !G.puzzle.ready();
 }
 
+/* THE CHOICES ARE THE ENCOUNTER, so they cannot live in a node somebody else
+ * owns. They used to be appended straight into #battle-side-body — which
+ * `setTab` empties on every call — and `enterBattle` calls `setTab` four lines
+ * after rendering the problem. The result was the FIRST ENCOUNTER OF A NEW GAME
+ * showing its question, hiding the CAST button (correctly: the answers are the
+ * button), and offering nothing to click. Clicking any tab did the same thing.
+ *
+ * So the choices are registered as what the trials tab IS for this encounter,
+ * and repainting is now what restores them rather than what destroys them. */
 function renderMcq(p) {
   $('#editor-host').style.display = 'none';
   $('#btn-run').style.display = 'none';
-  // The answers ARE the choices below. Leaving a primary submit button on
-  // screen just offers a way to fail an encounter without answering it.
+  // The answers ARE the choices. Leaving a primary submit button on screen
+  // just offers a way to fail an encounter without answering it.
   $('#btn-submit').style.display = 'none';
-  const body = $('#battle-side-body');
+  G.mcq = p.mcq;
   setTab('trials');
-  body.innerHTML = '';
-  if (p.mcq.code) {
-    body.appendChild(el('pre', 'spell-body', p.mcq.code));
-  }
-  p.mcq.choices.forEach((choice, i) => {
+}
+
+/* Painted by setTab, so it survives a tab round-trip and the repaint at the
+ * end of enterBattle. */
+function paintMcq(body) {
+  const mcq = G.mcq;
+  if (!mcq) return;
+  if (mcq.code) body.appendChild(el('pre', 'spell-body', mcq.code));
+  (mcq.choices || []).forEach((choice, i) => {
     const item = el('div', 'list-item', `<span class="d">${markdownish(choice)}</span>`);
     item.onclick = async () => {
       try {
@@ -2238,6 +2279,9 @@ function setTab(tab) {
   // An incantation fight has no problem, no trials and no probes. Its side is
   // the battlefield: the names in scope and what the fight is asking for.
   if (G.incant) { paintIncantSide(body); return; }
+  // An MCQ owns the trials slot: there are no trials to show, and the choices
+  // are the only way to answer the encounter.
+  if (G.mcq && tab === 'trials') { paintMcq(body); return; }
   if (tab === 'trials') paintTrials(body);
   else if (tab === 'tactics') paintTactics(body);
   else if (tab === 'spells') paintSpells(body);

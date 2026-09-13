@@ -790,9 +790,22 @@ class Game:
         it. Everything downstream — selection, the quest log, the world map —
         reads this one object, which is why the floor lives on it.
         """
-        book = skillmod.SkillBook(
-            {name: skillmod.SkillState(**data)
-             for name, data in self.state["skills"].items()})
+        # THROUGH saves._skill_states, NOT SkillState(**data) DIRECTLY, and the
+        # difference is whether the game starts.
+        #
+        # A raw splat trusts the save to have exactly today's fields. It does
+        # not: a save written by a build with one extra column raises
+        # `TypeError: SkillState.__init__() got an unexpected keyword argument`
+        # at BOOT, before a screen is drawn, and the player sees a traceback
+        # instead of a game. That is not hypothetical — it is in this machine's
+        # own ~/Library/Logs/GauntletLegend/launch.log, from a bundle built
+        # before `tier_clears` existed reading a save written after it.
+        #
+        # saves._skill_states already answers this properly: unknown keys are
+        # dropped, a row that still will not build falls back to a fresh state
+        # for that skill, and every missing skill is filled in. One loader, so
+        # the two doors into a save cannot disagree about what a save is.
+        book = skillmod.SkillBook(saves._skill_states(self.state))
         placement = (self.state.get("diagnostic") or {}).get("placement") or {}
         return book.with_floor(placement.get("chapter_index", 0))
 

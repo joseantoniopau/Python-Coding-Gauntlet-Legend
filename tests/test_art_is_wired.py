@@ -210,5 +210,48 @@ class TestEveryServerModuleIsReachable(unittest.TestCase):
                          "orphan allowlist")
 
 
+# ------------------------------------------------- the first encounter
+#
+# THE BUG THIS EXISTS TO CATCH, found by starting a fresh game and looking at
+# it: encounter one is a multiple-choice question, and it had no answers on
+# screen. `renderMcq` appended the choices straight into #battle-side-body —
+# a node `setTab` empties on every call — and `enterBattle` calls `setTab` four
+# lines later. So the first thing a new player ever saw was a question, no CAST
+# button (correctly hidden: the answers are the button), and nothing to click.
+# Clicking any tab did the same thing to any MCQ, anywhere in the game.
+#
+# The fix was to make the choices what the trials tab IS for that encounter, so
+# a repaint restores them instead of destroying them. These are cheap static
+# checks; the real proof is driving it in a browser, but a source guard is what
+# a future edit will actually trip over.
+
+MAIN = JS / "main.js"
+
+
+class TestTheFirstEncounterIsAnswerable(unittest.TestCase):
+    def test_setTab_knows_about_mcq_choices(self):
+        src = MAIN.read_text()
+        self.assertIn("function setTab(", src)
+        i = src.index("function setTab(")
+        body = src[i:i + 1400]
+        self.assertIn("G.mcq", body,
+                      "setTab empties #battle-side-body and does not know an "
+                      "MCQ owns it — the choices will be wiped")
+
+    def test_renderMcq_does_not_paint_into_a_node_it_does_not_own(self):
+        src = MAIN.read_text()
+        i = src.index("function renderMcq(")
+        body = src[i:src.index("\n}", i)]
+        self.assertNotIn("battle-side-body", body,
+                         "renderMcq is appending into the tab body again; "
+                         "setTab will empty it on the next call")
+
+    def test_an_mcq_stays_on_the_tab_that_shows_its_answers(self):
+        src = MAIN.read_text()
+        self.assertIn("G.mcq ? 'trials'", src,
+                      "a measured-run MCQ would open on `approach`, hiding "
+                      "the only way to answer it")
+
+
 if __name__ == "__main__":
     unittest.main()
