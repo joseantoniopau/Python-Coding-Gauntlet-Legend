@@ -10,7 +10,7 @@ const ctx = newCtx(192, 128);
 const kinds = [...V.spells, ...Object.values(FX.DAMAGE_KIND)];
 
 function play(kind, reduced) {
-  const e = S.createEffect(kind, { x: 136, y: 100, reducedMotion: reduced, seed: 9 });
+  const e = S.createEffect(kind, { x: 184, y: 175, reducedMotion: reduced, seed: 9 });
   for (let i = 0; i < Math.ceil(e.duration / 0.016) + 5; i++) { e.step(0.016); e.draw(ctx); }
   e.cancel();
 }

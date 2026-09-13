@@ -25,14 +25,105 @@ import * as stagelayer from './battlescene.js';
 /* ---------------- stage geometry ----------------
  * The stage is drawn in a fixed logical grid and then scaled by a whole number,
  * so a source pixel is always an exact square of screen pixels. Every offset
- * below is in logical units. */
+ * below is in logical units.
+ *
+ * 256x224 IS THE SNES FRAME, and it is what FFVI shipped. docs/08-art-direction
+ * §A-1. The raster moved 192x128 -> 256x224 here, and room for a 96x128 boss
+ * standing on the ground line came with it.
+ *
+ * WHAT THE PLAYER ACTUALLY SEES IS NOT 57,344 PIXELS, and this comment used to
+ * say it was. 224 lines are AUTHORED; main.js fits the 176-line safe area
+ * (STAGE_LOGICAL.fitH), so the canvas is never tall enough to hold all 224.
+ * Counted off the live stage at every window size this game opens at — all 256
+ * columns reach the canvas, and of the 224 rows:
+ *   1280x800  dpr1  px 2   canvas 526x366    184 rows touched, 182 whole
+ *   1440x940  dpr1  px 2   canvas 526x366    184 rows touched, 182 whole
+ *   1600x1000 dpr1  px 3   canvas 782x542    182 rows touched, 180 whole
+ *   1920x1080 dpr1  px 3   canvas 782x542    182 rows touched, 180 whole
+ *   1440x940  dpr2  px 5   canvas 1308x908   182 rows touched, 180 whole
+ *   1600x1000 dpr2  px 6   canvas 1564x1084  182 rows touched, 180 whole
+ * So delivered art is 256x182..184 = about 46,600-47,100 pixels per frame
+ * against the old frame's 24,576. That is a 1.90x-1.92x gain, not 2.33x. The
+ * remaining 40-42 rows are drawn as overscan and fall off the canvas.
+ *
+ * AND THE STAGE BOX IS 16:11 BY CONSTRUCTION, NOT 8:7. It is sized to safeH,
+ * not to h: 256/176 = 1.4545, and the measured boxes above are 526/366 = 1.437
+ * and 782/542 = 1.443 once the border and gutter are in. An 8:7 box would be a
+ * box fitted to all 224 lines, which costs a whole scale step at 1280x800 —
+ * see the note on STAGE_LOGICAL in main.js, which refuses that trade and says
+ * what it costs.
+ *
+ * THE SAFE AREA IS THE PART THAT ACTUALLY MAKES IT FIT. A naive swap costs a
+ * whole scale step at 1280x800 and pushes the editor below its own floor at
+ * 1024x640 (§A-3), because the box this stage lives in is 3:2 and the new
+ * raster is 8:7. So we do what console artists did against an NTSC set that
+ * cropped the tube: author 224 lines, TRUST 176. main.js fits `safeH`; the
+ * canvas renders all `h` and lets the overscan fall off the top and bottom.
+ *
+ * NOTHING LOAD-BEARING MAY LIVE IN ROWS 0..23 OR 200..223 — no sprite the
+ * player must read, no gauge, no number, and above all not the ground line.
+ * Those rows are atmosphere: parallax sky, foreground apron, weather.
+ *
+ * The anchors below keep the shipped proportions exactly (§A-6), so no scene
+ * re-composes: ground 100/128 = 78.1% -> 175/224; hero 46/192 = 24.0% ->
+ * 64/256 = 25.0%; enemy 136/192 = 70.8% -> 184/256 = 71.9%. 64 and 184 are
+ * both multiples of 8, so the foot centres land on the SNES tile grid.
+ *
+ * PARTY LEFT, ENEMY RIGHT is deliberately unchanged. Rule 4 of the art
+ * direction asks for the opposite and the code has always disagreed; flipping
+ * it re-derives every travel path, camera focus and knockback vector in this
+ * file and deserves its own commit (§F-7). It is NOT part of the raster move. */
 export const STAGE = Object.freeze({
-  w: 192,
-  h: 128,
-  ground: 100,   // horizon: where feet land and shadows sit
-  heroX: 46,     // foot centres, not sprite origins
-  enemyX: 136,
+  w: 256,
+  h: 224,
+  safeTop: 24,   // first row the player is promised to see
+  safeH: 176,    // rows 24..199 inclusive; what fitBattleStage() fits
+  ground: 175,   // horizon: where feet land and shadows sit
+  heroX: 64,     // foot centres, not sprite origins
+  enemyX: 184,
 });
+
+/* ---------------- how big things are on this stage ----------------
+ *
+ * THE FIGURE IS 96 LOGICAL ROWS TALL, and every vertical offset below is
+ * measured against that.
+ *
+ * The field rig is 16x24 source pixels and does not change (docs/08 §B). It is
+ * blitted into stage space at a whole number, and that number is what decides
+ * the composition. The shipped stage used 3: a 72-row figure on a 128-row
+ * frame, 56% of the height. The frame is now 224 rows with a 176-row safe
+ * area, so 3 would leave the same figure filling 41% of what the player can
+ * actually see — the fight would read as having moved further away, which is
+ * not what 2.33x the art budget was spent on.
+ *
+ * 4 puts it back: 24 * 4 = 96, which is 54.5% of the safe area. One and a half
+ * points off where it has always been.
+ *
+ * AND IT IS THE NUMBER THE NEXT RIG LANDS ON. §B's battle hero is 24x32, and
+ * 32 * 3 is also 96. So when that rig is drawn it drops in at a factor of 3
+ * with the same silhouette height and twice the pixels inside it, and not one
+ * offset in this file has to move a second time.
+ *
+ * The blanket factor for everything else is 4/3 — the stage went 192 -> 256
+ * wide, exactly 4/3, and the figure went 72 -> 96, also exactly 4/3. Offsets
+ * from the ground line, effect radii, bar widths and glyph sizes were all
+ * authored against the old frame and have all been multiplied by it. (The safe
+ * area grew by 176/128 = 1.375, which rounds to the same pixel on every number
+ * in this file, so one factor covers both.)
+ */
+/* Exported because deathfx.js has to blit the same rig at the same size. It
+ * did not, and drew the hero 1:1 — a 16x24 figure on a 256x224 frame where the
+ * fight had just been showing a 64x96 one, so the player's own character shrank
+ * fourfold on the cut the death screen's header promises will be seamless. */
+export const FIGURE_SCALE = 4;        // 16x24 blitted at 4 -> 64x96 logical
+const FIGURE_H = 24 * FIGURE_SCALE;   // 96
+
+/* THE SAFE AREA, as the two rows that bound it. Anything the player must READ
+ * is placed against these and never against 0 or STAGE.h: rows 0..23 and
+ * 200..223 are drawn but fall off the canvas, exactly as they fell off a tube.
+ * A gauge, a number or a name placed at STAGE.h - 10 would simply not exist. */
+const SAFE_TOP = STAGE.safeTop;                     // 24, first promised row
+const SAFE_BOT = STAGE.safeTop + STAGE.safeH;       // 200, one past the last
 
 /* Damage readouts are colour-coded because the player has to tell four
  * different outcomes apart at a glance, mid-sequence. These match the CSS
@@ -46,11 +137,11 @@ export const DAMAGE_KIND = Object.freeze({
 });
 
 const DAMAGE_STYLE = {
-  hit:    { colour: '#ffe8a0', outline: '#3a2a10', size: 9,  rise: 22, shake: 2 },
-  crit:   { colour: '#ffd97a', outline: '#4a2a00', size: 13, rise: 30, shake: 5 },
-  resist: { colour: '#9b96b8', outline: '#14121f', size: 8,  rise: 16, shake: 0 },
-  heal:   { colour: '#8fd07a', outline: '#132a10', size: 9,  rise: 24, shake: 0 },
-  miss:   { colour: '#7ec8ff', outline: '#0b1a2a', size: 8,  rise: 18, shake: 0 },
+  hit:    { colour: '#ffe8a0', outline: '#3a2a10', size: 12, rise: 29, shake: 3 },
+  crit:   { colour: '#ffd97a', outline: '#4a2a00', size: 17, rise: 40, shake: 7 },
+  resist: { colour: '#9b96b8', outline: '#14121f', size: 11, rise: 21, shake: 0 },
+  heal:   { colour: '#8fd07a', outline: '#132a10', size: 12, rise: 32, shake: 0 },
+  miss:   { colour: '#7ec8ff', outline: '#0b1a2a', size: 11, rise: 24, shake: 0 },
 };
 
 /* ---------------- the wheel, as motion ----------------
@@ -269,10 +360,10 @@ function buildBackdrop(pal, biome, seed) {
   }
   // A low sun band just above the horizon gives the scene a light direction.
   sky.ctx.fillStyle = withAlpha(pal.accent, 0.16);
-  sky.ctx.fillRect(0, STAGE.ground - 18, STAGE.w, 18);
+  sky.ctx.fillRect(0, STAGE.ground - 24, STAGE.w, 24);
 
-  const far = silhouette(form, pal, seed + 11, W, 46, pixel.shade(pal.far, -6));
-  const mid = silhouette(form, pal, seed + 97, W, 34, pixel.shade(pal.mid, -22));
+  const far = silhouette(form, pal, seed + 11, W, 61, pixel.shade(pal.far, -6));
+  const mid = silhouette(form, pal, seed + 97, W, 45, pixel.shade(pal.mid, -22));
 
   // Ground plane, with a lit lip on the horizon line and a darker apron in front.
   const ground = offscreen(STAGE.w, STAGE.h - STAGE.ground + 1);
@@ -321,6 +412,22 @@ export class BattleFX {
     this.flashCache = new WeakMap();
     this.hero = null;
     this.gear = null;           // {weapon: itemDict} — the forged blade, if any
+    /* THE FACE THE FIGHT PUTS ON HIM.
+     *
+     * sprites.js has authored seven emotes and two frames of each since §C, and
+     * NOTHING in the shipped game ever set opts.emote. Grepped across web/ and
+     * gauntlet/: the only writes outside sprites.js were deathfx.js's two, one
+     * of which hardcodes 'neutral'. heroOpts fell back to DEFAULT_HERO.emote
+     * every time, so six of the seven hero faces were unreachable — authored,
+     * measured, verified and never drawn.
+     *
+     * This is the seam that reaches the most of them: the hero's face is a
+     * function of what the fight just did to him. It holds for `emoteHold`
+     * seconds and falls back to neutral, so the face is an EVENT rather than a
+     * state the player has to read. */
+    this.heroTint = null;       // the look setScene was handed, kept for re-render
+    this.emote = 'neutral';
+    this.emoteUntil = 0;
     this.holdUntil = 0;         // the impact freeze, in render-clock seconds
 
     this.numbers = [];
@@ -569,17 +676,11 @@ export class BattleFX {
     // regions' metal for is the thing in the hand on the stage — not a recoloured
     // rusty blade. Falls back the moment anything about that is missing.
     this.gear = (gear && gear.weapon) ? gear : null;
-    try {
-      this.hero = this.gear
-        ? lootart.equippedHeroSprites(this.gear, tint)
-        : sprites.heroSprites(tint);
-    } catch (e) {
-      try {
-        this.hero = sprites.heroSprites(tint);
-      } catch (e2) {
-        this.hero = null;   // the stage is still worth showing without a hero
-      }
-    }
+    this.heroTint = tint;
+    this.emote = 'neutral';
+    this.emoteUntil = 0;
+    this._buildHero();
+    this._warmEmotes();
 
     this.hpMax = Math.max(1, (enemy && enemy.hp_max) || 1);
     this.hp = (enemy && enemy.hp !== undefined) ? enemy.hp : this.hpMax;
@@ -592,6 +693,65 @@ export class BattleFX {
     this.flash = 0;
     this.shakeMag = 0;
     this.xpShown = 0; this.xpTarget = 0; this.xpBar = null;
+    return this;
+  }
+
+  /* Build the four-facing sprite set for the look AND the emote currently on
+   * him. sprites.heroFrame caches per (look, emote, facing, frame), so the
+   * second time an emote comes round nothing is rasterised. */
+  _buildHero() {
+    const t = this.heroTint;
+    /* heroOpts() has a branch for a raw PALETTE — `if (opts.sky && opts.ground)`
+     * — that throws every other field away and keeps only the accent, so
+     * spreading an emote onto one would have been silently dropped. Hand it the
+     * one field that branch honours instead, plus the emote. */
+    const look = (t && t.sky && t.ground)
+      ? { trim: t.accent, emote: this.emote }
+      : { ...(t || {}), emote: this.emote };
+    try {
+      this.hero = this.gear
+        ? lootart.equippedHeroSprites(this.gear, look)
+        : sprites.heroSprites(look);
+    } catch (e) {
+      try {
+        this.hero = sprites.heroSprites(look);
+      } catch (e2) {
+        this.hero = null;   // the stage is still worth showing without a hero
+      }
+    }
+    return this.hero;
+  }
+
+  /* Every face this fight can put on him, built at the door.
+   *
+   * Counted through raster.mjs: the first time an emote is asked for it
+   * rasterises 28 canvases (four facings x four walk frames, two idles and a
+   * cast) and every time after that it costs nothing, because sprites.js keys
+   * its cache on the emote. Twenty-eight allocations on the frame the player
+   * just took a hit is a hitch on exactly the frame they are paying most
+   * attention to, which is the same argument deathfx.js makes for warmDeath().
+   * The five below are the ones the outcomes and the impact handler can reach. */
+  _warmEmotes() {
+    const held = this.emote;
+    for (const e of ['strained', 'alarmed', 'stubborn', 'delighted', 'defeated']) {
+      this.emote = e;
+      try { this._buildHero(); } catch (err) { /* a warm is never load-bearing */ }
+    }
+    this.emote = held;
+    this._buildHero();
+    return this;
+  }
+
+  /* Put a face on him. Unknown keys land on neutral, which is the one failure
+   * mode that never looks like a bug; an emote that is already up is a no-op,
+   * so this is safe to call every frame. `hold` is in render-clock seconds and
+   * 0 means "until something else changes it". */
+  setEmote(emote, hold = 2.4) {
+    const key = sprites.EMOTE_KEYS.indexOf(emote) >= 0 ? emote : 'neutral';
+    this.emoteUntil = hold > 0 ? this.clock + hold : 0;
+    if (key === this.emote) return this;
+    this.emote = key;
+    this._buildHero();
     return this;
   }
 
@@ -662,7 +822,7 @@ export class BattleFX {
   damageNumber(value, { kind = DAMAGE_KIND.HIT, x, y } = {}) {
     const style = DAMAGE_STYLE[kind] || DAMAGE_STYLE.hit;
     const ex = x === undefined ? STAGE.enemyX : x;
-    const ey = y === undefined ? STAGE.ground - 46 : y;
+    const ey = y === undefined ? STAGE.ground - 61 : y;
     this.numbers.push({
       text: typeof value === 'number' ? String(Math.round(value)) : String(value),
       x: ex + (Math.random() * 14 - 7),
@@ -679,14 +839,14 @@ export class BattleFX {
   hit({ damage = 1, kind = DAMAGE_KIND.HIT, label, x, y } = {}) {
     const style = DAMAGE_STYLE[kind] || DAMAGE_STYLE.hit;
     const ix = x === undefined ? STAGE.enemyX + (Math.random() * 10 - 5) : x;
-    const iy = y === undefined ? STAGE.ground - 30 : y;
+    const iy = y === undefined ? STAGE.ground - 40 : y;
 
     // HEAL, RESIST and MISS are readouts only. Healing on this stage belongs to
     // the player, whose stamina lives on the top bar, not to the enemy's health.
     if (kind !== DAMAGE_KIND.RESIST && kind !== DAMAGE_KIND.MISS
         && kind !== DAMAGE_KIND.HEAL) {
       this.flash = Math.max(this.flash, kind === DAMAGE_KIND.CRIT ? 1 : 0.75);
-      this.knock = Math.max(this.knock, this._amp(kind === DAMAGE_KIND.CRIT ? 9 : 5));
+      this.knock = Math.max(this.knock, this._amp(kind === DAMAGE_KIND.CRIT ? 12 : 7));
       this.setEnemyHp(this.hp - damage);
     }
     this.shake(style.shake);
@@ -695,10 +855,10 @@ export class BattleFX {
       x: ix, y: iy,
       colour: style.colour,
       count: kind === DAMAGE_KIND.CRIT ? 22 : 12,
-      power: kind === DAMAGE_KIND.CRIT ? 70 : 44,
+      power: kind === DAMAGE_KIND.CRIT ? 93 : 59,
     });
     if (kind === DAMAGE_KIND.CRIT) {
-      this.effects.push(this._ring(ix, iy, style.colour, 34, 0.45));
+      this.effects.push(this._ring(ix, iy, style.colour, 45, 0.45));
     }
     this._sfx(kind === DAMAGE_KIND.CRIT ? 'crit' : kind === DAMAGE_KIND.RESIST
       ? 'tick' : 'hit');
@@ -709,7 +869,8 @@ export class BattleFX {
    * pressed the button, the feedback should start almost immediately. */
   cast() {
     this.heroPose = 1;
-    this.heroLunge = this._amp(6);
+    this.heroLunge = this._amp(8);
+    this.setEmote('stubborn', 1.6);
     this.effects.push(this._sweep('#a89aff', 0.32));
     this._sfx('spell');
     return this._wait(this._t(0.3));
@@ -767,7 +928,7 @@ export class BattleFX {
     // The wind-up. Longer at the top of the ladder, because the anticipation is
     // most of what makes a big hit read as a big hit.
     this.heroPose = 1;
-    this.heroLunge = this._amp(5 + 7 * k);
+    this.heroLunge = this._amp(7 + 9 * k);
     if (this.cam) {
       this.cam.focus(STAGE.heroX);
       this.cam.cast(0.035 + 0.055 * k, 0.5 + 0.5 * k, 0.2 + 0.2 * k);
@@ -781,8 +942,8 @@ export class BattleFX {
     // rung, and the flash is capped at 1 because a screen cannot go whiter.
     this.effects.push(this._arc(colour, edge, 0.3 + 0.2 * k, k));
     this.flash = Math.min(1, 0.55 + 0.45 * k);
-    this.knock = Math.max(this.knock, this._amp(6 + 8 * k));
-    this.shake(3 + 8 * k);
+    this.knock = Math.max(this.knock, this._amp(8 + 11 * k));
+    this.shake(4 + 11 * k);
     if (this.cam) {
       this.cam.punch(0.05 + 0.1 * k, 0.35 + 0.2 * k);
       this.cam.snap();
@@ -791,26 +952,27 @@ export class BattleFX {
       this.cam.hold(this._t(0.09 + 0.3 * k, { keep: true }));
     }
     this.burst({
-      x: STAGE.enemyX, y: STAGE.ground - 30, colour,
-      count: Math.round(14 + 26 * k), power: 46 + 74 * k,
-      gravity: 120, life: 0.5 + 0.4 * k,
+      x: STAGE.enemyX, y: STAGE.ground - 40, colour,
+      count: Math.round(14 + 26 * k), power: 61 + 99 * k,
+      gravity: 160, life: 0.5 + 0.4 * k,
     });
     // One ring at the bottom of the ladder, four nested ones at the top, each
     // a beat behind the last. This is the cheapest legible way to say "bigger".
     const rings = 1 + Math.round(3 * k);
     for (let i = 0; i < rings; i++) {
       this.effects.push(this._ring(
-        STAGE.enemyX, STAGE.ground - 30, i % 2 ? edge : colour,
-        26 + 18 * i + 22 * k, (0.34 + 0.16 * k) * (1 + i * 0.35)));
+        STAGE.enemyX, STAGE.ground - 40, i % 2 ? edge : colour,
+        35 + 24 * i + 29 * k, (0.34 + 0.16 * k) * (1 + i * 0.35)));
     }
     if (rank) {
       // The rank's trailing numeral, not its whole name. "THE MEASURED CUT IX"
-      // is a banner; a floating readout on a 192-pixel stage is two characters
-      // wide before it starts overhanging the frame.
+      // is a banner; a floating readout on a 256-pixel stage is still only two
+      // or three characters wide before it starts overhanging the frame — the
+      // glyphs grew by the same 4/3 the frame did.
       const mark = String(rank).trim().split(/\s+/).pop().toUpperCase();
       this.damageNumber(mark, {
         kind: crit ? DAMAGE_KIND.CRIT : DAMAGE_KIND.HIT,
-        x: STAGE.enemyX, y: STAGE.ground - 62 - 8 * k,
+        x: STAGE.enemyX, y: STAGE.ground - 83 - 11 * k,
       });
     }
     this._sfx(rung >= 6 ? 'victory' : rung >= 3 ? 'crit' : 'hit');
@@ -832,9 +994,9 @@ export class BattleFX {
   /* The wind-up: motes drawn IN toward the blade hand, tightening as they
    * arrive. The count and the reach are the rung. */
   _charge(colour, edge, dur, k) {
-    const cx = STAGE.heroX + 6, cy = STAGE.ground - 26;
+    const cx = STAGE.heroX + 8, cy = STAGE.ground - 35;
     const n = 5 + Math.round(9 * k);
-    const reach = 20 + 26 * k;
+    const reach = 27 + 35 * k;
     return { t: 0, dur, draw: (ctx, p) => {
       const pull = easeIn(p);
       for (let i = 0; i < n; i++) {
@@ -853,9 +1015,9 @@ export class BattleFX {
   /* The blow: one arc swept from over the hero's shoulder through the enemy,
    * with a trailing wake. Width, sweep and the wake's depth are the rung. */
   _arc(colour, edge, dur, k) {
-    const x0 = STAGE.heroX + 4, x1 = STAGE.enemyX + 10;
-    const top = STAGE.ground - 58 - 14 * k;
-    const bottom = STAGE.ground - 8;
+    const x0 = STAGE.heroX + 5, x1 = STAGE.enemyX + 13;
+    const top = STAGE.ground - 77 - 19 * k;
+    const bottom = STAGE.ground - 11;
     const thick = 2 + Math.round(4 * k);
     const wake = 2 + Math.round(4 * k);
     return { t: 0, dur, draw: (ctx, p) => {
@@ -878,8 +1040,8 @@ export class BattleFX {
         const cut = (p - 0.45) / 0.55;
         ctx.fillStyle = withAlpha('#ffffff', (1 - cut) * (0.5 + 0.5 * k));
         const h = Math.round(2 + 6 * k);
-        ctx.fillRect(STAGE.enemyX - 22 - 14 * k, STAGE.ground - 34 - 4 * k,
-                     Math.round(44 + 28 * k), h);
+        ctx.fillRect(STAGE.enemyX - 29 - 19 * k, STAGE.ground - 45 - 5 * k,
+                     Math.round(59 + 37 * k), h);
       }
     } };
   }
@@ -982,7 +1144,7 @@ export class BattleFX {
     const opposed = kind === 'OPPOSED';
     const shrugged = kind === 'SAME';
     const x = side === 'hero' ? STAGE.heroX : STAGE.enemyX;
-    const y = STAGE.ground - 30;
+    const y = STAGE.ground - 40;
 
     if (this.cam) this.cam.focus(x);
 
@@ -1002,16 +1164,19 @@ export class BattleFX {
     // Weight. Every one of these is the same lerp off `k`, so the difference
     // between a counter and a shrug is one number and not six special cases.
     this.flash = Math.max(this.flash, shrugged ? 0.12 : 0.25 + 0.55 * k);
-    this.shake(shrugged ? 1 : 2 + 7 * k);
+    this.shake(shrugged ? 1 : 3 + 9 * k);
     if (side === 'enemy') {
-      this.knock = Math.max(this.knock, this._amp(3 + 8 * k));
+      this.knock = Math.max(this.knock, this._amp(4 + 11 * k));
       this.setEnemyHp(this.hp - Math.max(0, damage));
     } else {
       // The hero rocks back rather than the enemy rocking forward. Nothing goes
       // red and the character stays standing: being wrong is never punished
       // with a death screen in this game, and the stage holds that line too.
-      this.knock = this._amp(-(2 + 5 * k));
+      this.knock = this._amp(-(3 + 7 * k));
       this.heroPose = 2;
+      // A graze is effort; a heavy one is a fright. One number decides which
+      // face he wears, the same number that decides the knockback.
+      this.setEmote(k >= 0.6 ? 'alarmed' : 'strained');
     }
     if (this.cam) {
       this.cam.punch(0.03 + 0.09 * k, 0.3 + 0.2 * k);
@@ -1020,10 +1185,10 @@ export class BattleFX {
     this.burst({
       x, y, colour: shrugged ? fx.dark : fx.colour,
       count: Math.round((shrugged ? 5 : 10) + 20 * k),
-      power: 34 + 60 * k,
+      power: 45 + 80 * k,
       // Fire and void refuse gravity in opposite directions, which is most of
       // what makes the two of them impossible to confuse at a glance.
-      gravity: fx.motion === 'rise' ? -70 : fx.motion === 'implode' ? -10 : 130,
+      gravity: fx.motion === 'rise' ? -93 : fx.motion === 'implode' ? -13 : 173,
       life: 0.4 + 0.4 * k,
     });
     for (let i = 0; i < (opposed ? 3 : shrugged ? 0 : 1); i++) {
@@ -1078,7 +1243,7 @@ export class BattleFX {
                label = '' } = {}) {
     const fx = elementFx(element);
     const x = side === 'hero' ? STAGE.heroX : STAGE.enemyX;
-    const y = STAGE.ground - 26;
+    const y = STAGE.ground - 35;
     this.effects.push(this._motes(fx.colour, fx.dark, 0.7, x, y,
                                   String(status).toUpperCase() === 'POISONED'));
     if (damage > 0) {
@@ -1101,10 +1266,10 @@ export class BattleFX {
    * deliberately short: it is not a turn, and an animation long enough to feel
    * like one would be the interface arguing with the rule. */
   drink({ colour = '#ff6a7a', amount = 0, name = '' } = {}) {
-    const x = STAGE.heroX, y = STAGE.ground - 24;
+    const x = STAGE.heroX, y = STAGE.ground - 32;
     this.effects.push(this._guard(colour, 0.45));
     this.burst({ x, y, colour, count: this.reducedMotion ? 4 : 14,
-                 power: 30, gravity: -60, life: 0.5 });
+                 power: 40, gravity: -80, life: 0.5 });
     if (amount > 0) {
       this.damageNumber(`+${amount}`, { kind: DAMAGE_KIND.HEAL, x, y: y - 14 });
     }
@@ -1204,7 +1369,7 @@ export class BattleFX {
       for (let i = 0; i < n; i++) {
         const phase = (p * 0.8 + i / n) % 1;
         const off = Math.sin(i * 3.7) * spread;
-        const py = STAGE.ground - 4 - rise * phase;
+        const py = STAGE.ground - 5 - rise * phase;
         const r = Math.max(1, Math.round(1 + 2.5 * (1 - phase) + 2 * k));
         ctx.fillStyle = withAlpha(i % 3 ? colour : dark,
                                   fade * (1 - phase) * (shrugged ? 0.4 : 0.85));
@@ -1213,7 +1378,7 @@ export class BattleFX {
       // the low cloud, which is what makes it read as air rather than as sparks
       ctx.fillStyle = withAlpha(dark, fade * 0.3 * (shrugged ? 0.5 : 1));
       const w = spread * 2 * (0.6 + 0.4 * easeOut(p));
-      ctx.fillRect(Math.round(x - w / 2), STAGE.ground - 6, Math.round(w), 6);
+      ctx.fillRect(Math.round(x - w / 2), STAGE.ground - 8, Math.round(w), 8);
     } };
   }
 
@@ -1224,10 +1389,10 @@ export class BattleFX {
     return { t: 0, dur, draw: (ctx, p) => {
       const fall = easeIn(clamp(p / 0.35, 0, 1));
       if (p < 0.4) {
-        const top = lerp(STAGE.ground - 92, STAGE.ground - 30, fall);
+        const top = lerp(STAGE.ground - 123, STAGE.ground - 40, fall);
         ctx.fillStyle = withAlpha(colour, 0.9);
         ctx.fillRect(Math.round(x - w / 2), Math.round(top), w,
-                     Math.round(STAGE.ground - 26 - top));
+                     Math.round(STAGE.ground - 35 - top));
         ctx.fillStyle = withAlpha('#ffffff', 0.5 * (1 - fall));
         ctx.fillRect(Math.round(x - 2), Math.round(top), 4,
                      Math.round(STAGE.ground - 26 - top));
@@ -1380,13 +1545,13 @@ export class BattleFX {
     // hit flagged .fallback rather than throwing mid-fight.
     const effect = spellfx.createEffect(name, {
       x: STAGE.enemyX,
-      y: STAGE.ground - 30,
-      from: { x: STAGE.heroX, y: STAGE.ground - 24 },
-      to: { x: STAGE.enemyX, y: STAGE.ground - 30 },
+      y: STAGE.ground - 40,
+      from: { x: STAGE.heroX, y: STAGE.ground - 32 },
+      to: { x: STAGE.enemyX, y: STAGE.ground - 40 },
       reducedMotion: this.reducedMotion,
       seed: hash(name),
       onImpact: () => {
-        this.shake(name === 'PHOENIX' ? 8 : 4);
+        this.shake(name === 'PHOENIX' ? 11 : 5);
         this.flash = Math.max(this.flash, name === 'PHOENIX' ? 0.7 : 0.35);
       },
     });
@@ -1403,6 +1568,7 @@ export class BattleFX {
   async victory({ rank = 'B', xp = 0, xpFrom, xpTo, loot, levelUp = false } = {}) {
     const colour = RANK_COLOUR[rank] || '#ffe8a0';
     this._sfx(rank === 'S' ? 'victory' : 'crit');
+    this.setEmote('delighted', 0);      // 0: it stays up, the fight is over
 
     this.setEnemyHp(0);
     await this.dissolve();
@@ -1414,10 +1580,10 @@ export class BattleFX {
         : 'RANK',
       colour, t: 0, dur: this.reducedMotion ? 1.2 : 1.6, slam: true,
     };
-    this.shake(rank === 'S' ? 7 : 4);
+    this.shake(rank === 'S' ? 9 : 5);
     this.burst({
-      x: STAGE.w / 2, y: STAGE.h / 2, colour, count: 26, power: 90,
-      gravity: 40, life: 0.8,
+      x: STAGE.w / 2, y: STAGE.h / 2, colour, count: 26, power: 120,
+      gravity: 53, life: 0.8,
     });
     await this._wait(this._t(0.45, { keep: true }));
     if (!this.el) return this;
@@ -1437,13 +1603,13 @@ export class BattleFX {
       this.chips.push({
         text: String(loot.name || loot).toUpperCase(),
         colour: loot.rarity_colour || '#e8c37d',
-        x: STAGE.enemyX, y: STAGE.ground - 34,
-        tx: STAGE.w / 2, ty: STAGE.ground - 18,
+        x: STAGE.enemyX, y: STAGE.ground - 45,
+        tx: STAGE.w / 2, ty: STAGE.ground - 24,
         t: 0, dur: this.reducedMotion ? 1.4 : 2.2,
       });
       this.burst({
-        x: STAGE.enemyX, y: STAGE.ground - 30,
-        colour: loot.rarity_colour || '#e8c37d', count: 18, power: 55, life: 0.7,
+        x: STAGE.enemyX, y: STAGE.ground - 40,
+        colour: loot.rarity_colour || '#e8c37d', count: 18, power: 73, life: 0.7,
       });
       await this._wait(this._t(0.4, { keep: true }));
     }
@@ -1454,8 +1620,8 @@ export class BattleFX {
         dur: this.reducedMotion ? 1.0 : 1.4, slam: true,
       };
       this.burst({
-        x: STAGE.heroX, y: STAGE.ground - 20, colour: '#ffe8a0',
-        count: 24, power: 70, gravity: -30, life: 1.0,
+        x: STAGE.heroX, y: STAGE.ground - 27, colour: '#ffe8a0',
+        count: 24, power: 93, gravity: -40, life: 1.0,
       });
       await this._wait(this._t(0.5, { keep: true }));
     }
@@ -1467,16 +1633,17 @@ export class BattleFX {
    * and the feedback layer has to hold that line too. */
   async defeat({ message, passed, total } = {}) {
     this._sfx('fail');
+    this.setEmote('defeated', 0);
     this.heroPose = 2;
-    this.knock = this._amp(-4);            // the hero rocks back, not the enemy
-    this.shake(2);
+    this.knock = this._amp(-5);            // the hero rocks back, not the enemy
+    this.shake(3);
     this.tintColour = '#7ec8ff';
     this.tint = this.reducedMotion ? 0.12 : 0.22;
     this.effects.push(this._guard('#7ec8ff', 0.7));
 
     if (passed !== undefined && total) {
       this.damageNumber(`${passed}/${total}`, {
-        kind: DAMAGE_KIND.MISS, x: STAGE.enemyX, y: STAGE.ground - 58,
+        kind: DAMAGE_KIND.MISS, x: STAGE.enemyX, y: STAGE.ground - 77,
       });
     }
     this.banner = {
@@ -1495,7 +1662,7 @@ export class BattleFX {
   dissolve() {
     const img = this._sprite(0);
     if (img && !this.reducedMotion) {
-      const scale = this.scene && this.scene.boss ? 2 : 3;
+      const scale = this.scene && this.scene.boss ? 2 : FIGURE_SCALE;
       const w = img.width * scale, h = img.height * scale;
       const x0 = STAGE.enemyX - w / 2;
       const y0 = STAGE.ground - h;
@@ -1560,8 +1727,8 @@ export class BattleFX {
       this.pipsLit = i;
       this._sfx('tick');
       this.burst({
-        x: this._pipX(i - 1), y: STAGE.ground - 70,
-        colour: '#ff6a7a', count: 5, power: 26, life: 0.3,
+        x: this._pipX(i - 1), y: STAGE.ground - 93,
+        colour: '#ff6a7a', count: 5, power: 35, life: 0.3,
       });
       await this._wait(this._t(0.11, { keep: true }));
     }
@@ -1630,8 +1797,8 @@ export class BattleFX {
       this.pipsLit = Math.max(0, phases - (beat.phase | 0));
     }
     this.burst({
-      x: STAGE.enemyX, y: STAGE.ground - 54,
-      colour: beat.colour || '#ff6a7a', count: 22, power: 70, life: 0.55,
+      x: STAGE.enemyX, y: STAGE.ground - 72,
+      colour: beat.colour || '#ff6a7a', count: 22, power: 93, life: 0.55,
     });
 
     await this._wait(this._t(ms(beat.art_at_ms, 140), { keep: true }));
@@ -1792,7 +1959,7 @@ export class BattleFX {
 
   _pipX(i) {
     const n = Math.max(1, this.pips);
-    const w = 96, x0 = STAGE.enemyX - w / 2;
+    const w = 128, x0 = STAGE.enemyX - w / 2;
     return x0 + (w / n) * (i + 0.5);
   }
 
@@ -1815,17 +1982,17 @@ export class BattleFX {
     return { t: 0, dur, draw: (ctx, k) => {
       const x = lerp(STAGE.heroX, STAGE.enemyX, easeOut(k));
       ctx.fillStyle = withAlpha(colour, (1 - k) * 0.7);
-      ctx.fillRect(x - 2, STAGE.ground - 44, 3, 40);
+      ctx.fillRect(x - 3, STAGE.ground - 59, 4, 53);
       ctx.fillStyle = withAlpha(colour, (1 - k) * 0.25);
-      ctx.fillRect(STAGE.heroX, STAGE.ground - 34, x - STAGE.heroX, 2);
+      ctx.fillRect(STAGE.heroX, STAGE.ground - 45, x - STAGE.heroX, 3);
     } };
   }
 
   _eye(colour, dur) {
-    const cx = STAGE.enemyX, cy = STAGE.ground - 56;
+    const cx = STAGE.enemyX, cy = STAGE.ground - 75;
     return { t: 0, dur, draw: (ctx, k) => {
       const open = Math.sin(Math.PI * clamp(k * 1.15, 0, 1));
-      const w = 34, h = 18 * open;
+      const w = 45, h = 24 * open;
       ctx.strokeStyle = withAlpha(colour, 0.9);
       ctx.lineWidth = 1;
       ctx.beginPath();
@@ -1846,8 +2013,8 @@ export class BattleFX {
       const shown = Math.floor(pips * easeOut(k)) + 1;
       for (let i = 0; i < Math.min(pips, shown); i++) {
         const p = i / (pips - 1);
-        const x = lerp(STAGE.heroX + 8, STAGE.enemyX - 10, p);
-        const y = STAGE.ground - 14 - Math.sin(p * Math.PI) * 26;
+        const x = lerp(STAGE.heroX + 11, STAGE.enemyX - 13, p);
+        const y = STAGE.ground - 19 - Math.sin(p * Math.PI) * 35;
         const age = clamp((shown - i) / 4, 0, 1);
         ctx.fillStyle = withAlpha(colour, 0.35 + 0.55 * age);
         ctx.fillRect(Math.round(x) - 1, Math.round(y) - 1, 3, 3);
@@ -1861,7 +2028,7 @@ export class BattleFX {
       const a = (1 - k) * 0.5;
       ctx.save();
       ctx.beginPath();
-      ctx.arc(STAGE.enemyX, STAGE.ground - 30, r, 0, Math.PI * 2);
+      ctx.arc(STAGE.enemyX, STAGE.ground - 40, r, 0, Math.PI * 2);
       ctx.clip();
       ctx.fillStyle = withAlpha(colour, a * 0.6);
       ctx.fillRect(0, 0, STAGE.w, STAGE.h);
@@ -1873,7 +2040,7 @@ export class BattleFX {
       ctx.strokeStyle = withAlpha(colour, 1 - k);
       ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.arc(STAGE.enemyX, STAGE.ground - 30, r, 0, Math.PI * 2);
+      ctx.arc(STAGE.enemyX, STAGE.ground - 40, r, 0, Math.PI * 2);
       ctx.stroke();
     } };
   }
@@ -1912,10 +2079,10 @@ export class BattleFX {
     for (let i = 0; i < 10; i++) {
       blocks.push({
         w: 6 + Math.floor(Math.random() * 16),
-        tx: STAGE.enemyX - 30 + Math.random() * 60,
-        ty: STAGE.ground - 60 + Math.random() * 52,
-        fx: STAGE.enemyX - 90 + Math.random() * 180,
-        fy: STAGE.ground - 130 + Math.random() * 160,
+        tx: STAGE.enemyX - 40 + Math.random() * 80,
+        ty: STAGE.ground - 80 + Math.random() * 69,
+        fx: STAGE.enemyX - 120 + Math.random() * 240,
+        fy: STAGE.ground - 173 + Math.random() * 213,
       });
     }
     return { t: 0, dur, draw: (ctx, k) => {
@@ -1932,9 +2099,9 @@ export class BattleFX {
 
   _phoenix(colour, dur) {
     return { t: 0, dur, draw: (ctx, k) => {
-      const rise = lerp(0, 64, easeOut(k));
+      const rise = lerp(0, 85, easeOut(k));
       const a = Math.sin(Math.PI * clamp(k * 1.05, 0, 1));
-      const cx = STAGE.heroX, base = STAGE.ground - 4;
+      const cx = STAGE.heroX, base = STAGE.ground - 5;
       for (let i = 0; i < 26; i++) {
         const p = i / 25;
         const y = base - p * rise;
@@ -1964,7 +2131,7 @@ export class BattleFX {
       ctx.strokeStyle = withAlpha(colour, a);
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.arc(STAGE.heroX, STAGE.ground - 22, r, -Math.PI * 0.75, Math.PI * 0.75);
+      ctx.arc(STAGE.heroX, STAGE.ground - 29, r, -Math.PI * 0.75, Math.PI * 0.75);
       ctx.stroke();
     } };
   }
@@ -1982,8 +2149,16 @@ export class BattleFX {
     this.canvas.width = Math.round(cw * dpr);
     this.canvas.height = Math.round(ch * dpr);
     // Whole-number scale only. A fractional scale is what makes pixel art soft.
+    //
+    // THE SCALE IS FITTED TO THE SAFE AREA, NOT TO THE RASTER. The host box is
+    // sized by main.js fitBattleStage() to hold STAGE.safeH rows of art; asking
+    // for all STAGE.h here would find one scale step less and undo the whole
+    // reason the safe area exists. The full 224 lines are still drawn — ox/oy
+    // centre the WHOLE raster, so the 24 overscan rows top and bottom fall off
+    // the canvas exactly as they fell off the tube. See STAGE above.
+    const fitH = STAGE.safeH || STAGE.h;
     this.px = Math.max(1, Math.floor(Math.min(
-      this.canvas.width / STAGE.w, this.canvas.height / STAGE.h)));
+      this.canvas.width / STAGE.w, this.canvas.height / fitH)));
     this.ox = Math.round((this.canvas.width - STAGE.w * this.px) / 2);
     this.oy = Math.round((this.canvas.height - STAGE.h * this.px) / 2);
     this.ctx.imageSmoothingEnabled = false;
@@ -2026,6 +2201,12 @@ export class BattleFX {
     this.comboGlow = Math.max(0, this.comboGlow - dt * 1.4);
     this.heroLunge *= Math.pow(0.004, dt);
     if (this.heroLunge < 0.1) { this.heroLunge = 0; this.heroPose = 0; }
+    // The face comes back to neutral on its own. Victory and defeat set a hold
+    // of 0 and stay up, because those two ARE the state the screen is in.
+    if (this.emoteUntil && this.clock >= this.emoteUntil && this.emote !== 'neutral') {
+      this.emoteUntil = 0;
+      this.setEmote('neutral', 0);
+    }
     if (this.dissolving) this.enemyAlpha = Math.max(0, this.enemyAlpha - dt * 3);
 
     // hp bar tween
@@ -2103,8 +2284,16 @@ export class BattleFX {
     this._drawWeather(ctx);
     this._drawAffinity(ctx);
     this._drawCombo(ctx);
-    this._drawHero(ctx);
+    /* THE PARTY IS NEVER BEHIND THE MONSTER. The hero used to be drawn first
+     * and it did not matter, because nothing ever overlapped him: a 24-box mob
+     * at a figure blit of 4 stands 136..232 and a 64-box boss at 2 stands
+     * 111..239, both clear of the hero's 32..95. The wide bosses are 192 wide
+     * now (bosses.js BOSS_STAGE_SCALE), and on the frames where the wyrm's and
+     * the interpreter's coils swing furthest left they reach 88 and 74. One
+     * line decides whether those coils pass in front of the player's own
+     * character or behind him, and it has to be behind. */
     this._drawEnemy(ctx);
+    this._drawHero(ctx);
     this._drawEffects(ctx);
     this._drawParticles(ctx);
     if (this.stage3d) stagelayer.drawForeground(ctx, this.stage3d, this.clock, this.cam);
@@ -2155,10 +2344,10 @@ export class BattleFX {
     // a band the player's feet are actually in.
     if (this.hazard) {
       ctx.fillStyle = withAlpha(fx.dark, this.affinityTint * 2.2);
-      ctx.fillRect(0, STAGE.ground - 3, STAGE.w, 4);
+      ctx.fillRect(0, STAGE.ground - 4, STAGE.w, 5);
       ctx.fillStyle = withAlpha(fx.colour, this.affinityTint * 1.6);
       for (let x = (Math.floor(this.clock * 6) % 8); x < STAGE.w; x += 8) {
-        ctx.fillRect(x, STAGE.ground - 1, 3, 1);
+        ctx.fillRect(x, STAGE.ground - 1, 4, 1);
       }
     }
   }
@@ -2182,14 +2371,31 @@ export class BattleFX {
     // pass and index 3 is the opposite one. Indices 1 and 3 are the passing frames.
     const frames = this.hero.side;
     const img = frames[this.heroPose === 1 ? 1 : this.heroPose === 2 ? 3 : 0] || frames[0];
-    const S = 3;
+    const S = FIGURE_SCALE;
     const w = img.width * S, h = img.height * S;
-    // A one-source-pixel breathe. Whole pixels only, so the sprite never blurs.
+    /* A one-source-pixel breathe, taken off the SOURCE and never off the
+     * destination.
+     *
+     * It used to be `dy + breathe, dh - breathe * S`, which mixed the two
+     * spaces: the y term moved in stage pixels and the height came off in
+     * source pixels. Two things were wrong with it and both were counted.
+     * Twenty-four source rows into a 92-row destination is x3.8333, so one row
+     * in six was dropped at an irregular place — of the 400 frames sampled at
+     * the shipped clock, 119 landed on that grid. And the feet left the floor:
+     * dy 80 + dh 92 puts the bottom edge at 172 against a ground line of 175,
+     * so the hero floated three rows above his own shadow for the whole of the
+     * inhale.
+     *
+     * Cropping one source row instead keeps dest/src at exactly S and anchors
+     * the bottom edge on STAGE.ground, so the scale is whole at every px and
+     * the boots stay planted. The row that goes is the top one — the head
+     * settles into the shoulders, which is what a breath looks like. */
     const breathe = this.reducedMotion ? 0
       : (Math.sin(this.clock * 2.1) > 0.6 ? 1 : 0);
     this._shadow(ctx, x, w * 0.7, 0.32);
-    ctx.drawImage(img, Math.round(x - w / 2), Math.round(STAGE.ground - h + breathe),
-      w, h - breathe * S);
+    const sh = img.height - breathe;
+    ctx.drawImage(img, 0, breathe, img.width, sh,
+      Math.round(x - w / 2), STAGE.ground - sh * S, w, sh * S);
   }
 
   _drawEnemy(ctx) {
@@ -2214,24 +2420,38 @@ export class BattleFX {
     const img = this._sprite(frame);
     if (!img) return;
     const boss = false;
-    const S = boss ? 2 : 3;
+    const S = boss ? 2 : FIGURE_SCALE;
     const bob = this.reducedMotion ? 0 : Math.round(Math.sin(this.clock * 2.4) * 1) * S;
-    const squash = this.reducedMotion ? 0 : Math.round(Math.cos(this.clock * 2.4) * 1);
-    const w = img.width * S, h = img.height * S;
+    /* THE SQUASH IS A SOURCE CROP, NOT A DESTINATION STRETCH — same fix and
+     * same reason as the hero's breathe above.
+     *
+     * `h + squash * S` stretched a 24-row rig into 92 or 100 destination rows,
+     * x3.8333 and x4.1667. Counted on the shipped clock, 542 of 800 sampled
+     * enemy blits were on a non-integer grid against 258 clean ones, and the
+     * white hit-flash at the foot of this block repeated the same rect, so the
+     * flash was resampled off-grid from the sprite underneath it.
+     *
+     * The old squash also ran -1..+1, and a +1 STRETCH cannot be an integer
+     * scale at all: there is no 25th source row to read. So it is 0 or 1 now,
+     * a compression only, cropping the top row exactly as the hero does. */
+    const squash = this.reducedMotion ? 0
+      : (Math.cos(this.clock * 2.4) >= 0.5 ? 1 : 0);
+    const w = img.width * S;
+    const sh = img.height - squash, dh = sh * S;
     const x = Math.round(STAGE.enemyX + this.knock - w / 2);
-    const y = Math.round(STAGE.ground - h + bob - squash * S);
+    const y = STAGE.ground + bob - dh;
 
     this._shadow(ctx, STAGE.enemyX + this.knock * 0.5, w * 0.66,
       0.34 * this.enemyAlpha);
 
     ctx.save();
     ctx.globalAlpha = this.enemyAlpha;
-    ctx.drawImage(img, x, y, w, h + squash * S);
+    ctx.drawImage(img, 0, squash, img.width, sh, x, y, w, dh);
     if (this.flash > 0.01) {
       const sil = this._silhouetteOf(img, '#ffffff');
       if (sil) {
         ctx.globalAlpha = this.enemyAlpha * Math.min(1, this.flash);
-        ctx.drawImage(sil, x, y, w, h + squash * S);
+        ctx.drawImage(sil, 0, squash, sil.width, sh, x, y, w, dh);
       }
     }
     ctx.restore();
@@ -2266,19 +2486,28 @@ export class BattleFX {
     for (let i = 0; i < n; i++) {
       const p = i / n;
       const t = this.reducedMotion ? 0 : this.clock * (1.4 + heat);
-      const y = STAGE.ground - 6 - ((p * 46 + t * 18) % 46);
-      const wob = this.reducedMotion ? 0 : Math.sin(p * 9 + t * 2) * 4;
-      ctx.globalAlpha = (1 - (STAGE.ground - 6 - y) / 46) * (0.3 + heat * 0.5);
+      const y = STAGE.ground - 8 - ((p * 61 + t * 24) % 61);
+      const wob = this.reducedMotion ? 0 : Math.sin(p * 9 + t * 2) * 5;
+      ctx.globalAlpha = (1 - (STAGE.ground - 8 - y) / 61) * (0.3 + heat * 0.5);
       ctx.fillStyle = colour;
-      ctx.fillRect(Math.round(STAGE.heroX + wob - 1), Math.round(y), 2, 2);
+      ctx.fillRect(Math.round(STAGE.heroX + wob - 1), Math.round(y), 3, 3);
     }
     ctx.globalAlpha = 1;
-    this._text(ctx, `x${this.comboMult.toFixed(2)}`, 5, 12, {
-      size: 7, colour, align: 'left',
+    // SAFE_TOP, not 0. The multiplier is a readout; at y=12 it would be drawn
+    // into the overscan and the player would never see it again.
+    //
+    // AND x=24, NOT x=5. This is drawn before drawForeground, so the side
+    // occluder is painted OVER it, and the occluder's pillar reaches stage
+    // column 18 (OCC_W is 69 drawn at -PAD). Measured at 1600x1000: at x=5 the
+    // shipped readout rendered as ".35" and "CLEARS" with the "x1" and the
+    // count behind the stonework — a defect the old frame had too and that
+    // widening the pillar would only have made worse. 24 clears it.
+    this._text(ctx, `x${this.comboMult.toFixed(2)}`, 24, SAFE_TOP + 16, {
+      size: 9, colour, align: 'left',
     });
     if (this.combo > 1) {
-      this._text(ctx, `${this.combo} CLEARS`, 5, 21,
-        { size: 6, colour: '#9b96b8', align: 'left' });
+      this._text(ctx, `${this.combo} CLEARS`, 24, SAFE_TOP + 28,
+        { size: 8, colour: '#9b96b8', align: 'left' });
     }
     if (this.comboGlow > 0) {
       ctx.globalAlpha = this.comboGlow * 0.4;
@@ -2292,44 +2521,51 @@ export class BattleFX {
     // Enemy name and health, on the stage rather than only beneath it, so the
     // hit and the bar move in the same field of view. Drawing the name here is
     // what lets the stage cover its host outright instead of leaving a strip.
-    const w = 96, x0 = Math.round(STAGE.enemyX - w / 2), y0 = STAGE.ground - 70;
+    // ground - 93 keeps the bar exactly where it has always sat relative to the
+    // creature: two rows below the top of a full-height figure box, so the name
+    // clears its head. The figure went 72 -> 96, so 70 went 70 -> 93.
+    const w = 128, x0 = Math.round(STAGE.enemyX - w / 2), y0 = STAGE.ground - 93;
     if (this.enemyAlpha > 0.05 && !this.nameCard) {
       const label = String(this.scene.enemy.name || '').toUpperCase();
-      this._text(ctx, label, STAGE.enemyX, y0 - 5, {
-        size: label.length > 14 ? 5 : 7,
+      this._text(ctx, label, STAGE.enemyX, y0 - 7, {
+        size: label.length > 14 ? 7 : 9,
         colour: this.scene.boss ? '#ff6a7a' : '#e8c37d',
         outline: '#0b0a12',
       });
     }
     ctx.fillStyle = '#0d0b16';
-    ctx.fillRect(x0 - 1, y0 - 1, w + 2, 7);
+    ctx.fillRect(x0 - 1, y0 - 1, w + 2, 9);
     ctx.fillStyle = '#3a3360';
-    ctx.fillRect(x0, y0, w, 5);
+    ctx.fillRect(x0, y0, w, 7);
     if (this.pips) {
       for (let i = 0; i < this.pips; i++) {
         const pw = w / this.pips;
         ctx.fillStyle = i < this.pipsLit ? '#ff6a7a' : '#241f3a';
-        ctx.fillRect(Math.round(x0 + i * pw) + 1, y0, Math.round(pw) - 2, 5);
+        ctx.fillRect(Math.round(x0 + i * pw) + 1, y0, Math.round(pw) - 2, 7);
       }
     } else {
       const k = clamp(this.hpShown / this.hpMax, 0, 1);
       ctx.fillStyle = k > 0.5 ? '#ff8a7a' : k > 0.2 ? '#ff9d4a' : '#c43f4f';
-      ctx.fillRect(x0, y0, Math.round(w * k), 5);
+      ctx.fillRect(x0, y0, Math.round(w * k), 7);
       ctx.fillStyle = 'rgba(255,255,255,0.25)';
       ctx.fillRect(x0, y0, Math.round(w * k), 1);
     }
 
+    // SAFE_BOT, not STAGE.h. Both of these used to be measured up from the
+    // bottom of the frame; the bottom of the frame is now 24 rows below the
+    // bottom of what the player can see, and a reward the player cannot see is
+    // a reward that did not happen.
     if (this.xpTarget > 0) {
-      this._text(ctx, `+${Math.round(this.xpShown)} XP`, STAGE.w / 2, STAGE.h - 16,
-        { size: 8, colour: '#ffe8a0' });
+      this._text(ctx, `+${Math.round(this.xpShown)} XP`, STAGE.w / 2, SAFE_BOT - 22,
+        { size: 11, colour: '#ffe8a0' });
     }
     if (this.xpBar) {
-      const bw = 120, bx = Math.round((STAGE.w - bw) / 2), by = STAGE.h - 10;
+      const bw = 160, bx = Math.round((STAGE.w - bw) / 2), by = SAFE_BOT - 14;
       const k = lerp(this.xpBar.from, this.xpBar.to, easeOut(this.xpBar.t));
       ctx.fillStyle = '#0d0b16';
-      ctx.fillRect(bx - 1, by - 1, bw + 2, 5);
+      ctx.fillRect(bx - 1, by - 1, bw + 2, 7);
       ctx.fillStyle = '#ffd97a';
-      ctx.fillRect(bx, by, Math.round(bw * clamp(k, 0, 1)), 3);
+      ctx.fillRect(bx, by, Math.round(bw * clamp(k, 0, 1)), 4);
     }
   }
 
@@ -2339,7 +2575,7 @@ export class BattleFX {
       const y = n.y - n.style.rise * (this.reducedMotion ? 0.25 : easeOut(k));
       const x = n.x + n.drift * k;
       // A crit punches in from larger than life; everything else holds its size.
-      const scale = n.style.size >= 13 && !this.reducedMotion
+      const scale = n.style.size >= 17 && !this.reducedMotion
         ? lerp(1.6, 1, easeOut(clamp(k * 4, 0, 1))) : 1;
       const alpha = k > 0.7 ? 1 - (k - 0.7) / 0.3 : 1;
       this._text(ctx, n.text, x, y, {
@@ -2355,16 +2591,16 @@ export class BattleFX {
       const k = clamp(c.t / c.dur, 0, 1);
       const fly = easeOut(clamp(k * 2.2, 0, 1));
       const x = lerp(c.x, c.tx, fly);
-      const y = lerp(c.y, c.ty, fly) - Math.sin(fly * Math.PI) * 14;
+      const y = lerp(c.y, c.ty, fly) - Math.sin(fly * Math.PI) * 19;
       const alpha = k > 0.75 ? 1 - (k - 0.75) / 0.25 : 1;
-      const w = Math.max(34, c.text.length * 5 + 10);
+      const w = Math.max(45, c.text.length * 7 + 13);
       ctx.globalAlpha = alpha;
       ctx.fillStyle = '#171426';
-      ctx.fillRect(Math.round(x - w / 2), Math.round(y - 6), w, 12);
+      ctx.fillRect(Math.round(x - w / 2), Math.round(y - 8), w, 16);
       ctx.strokeStyle = c.colour;
       ctx.lineWidth = 1;
-      ctx.strokeRect(Math.round(x - w / 2) + 0.5, Math.round(y - 6) + 0.5, w - 1, 11);
-      this._text(ctx, c.text, x, y + 2, { size: 5, colour: c.colour });
+      ctx.strokeRect(Math.round(x - w / 2) + 0.5, Math.round(y - 8) + 0.5, w - 1, 15);
+      this._text(ctx, c.text, x, y + 3, { size: 7, colour: c.colour });
       ctx.globalAlpha = 1;
     }
   }
@@ -2387,26 +2623,29 @@ export class BattleFX {
     if (k > 0.75) alpha = 1 - (k - 0.75) / 0.25;
     if (this.reducedMotion) alpha *= clamp(b.t / 0.15, 0, 1);
 
-    const cy = STAGE.h / 2 - 6;
+    // The banner is centred, and the safe area is centred, so this number is
+    // the same either way — SAFE_TOP + safeH/2 - 8 is STAGE.h/2 - 8. Written
+    // against the safe area anyway, because that is the frame it belongs to.
+    const cy = SAFE_TOP + STAGE.safeH / 2 - 8;
     ctx.globalAlpha = alpha * 0.72;
     ctx.fillStyle = '#0b0a12';
-    ctx.fillRect(0, Math.round(cy - 16), STAGE.w, 34);
+    ctx.fillRect(0, Math.round(cy - 21), STAGE.w, 45);
     ctx.fillStyle = withAlpha(b.colour, 0.55);
-    ctx.fillRect(0, Math.round(cy - 16), STAGE.w, 1);
-    ctx.fillRect(0, Math.round(cy + 17), STAGE.w, 1);
+    ctx.fillRect(0, Math.round(cy - 21), STAGE.w, 1);
+    ctx.fillRect(0, Math.round(cy + 23), STAGE.w, 1);
     ctx.globalAlpha = alpha;
     if (b.sub === 'RANK') {
-      this._text(ctx, 'RANK', STAGE.w / 2 - 34, cy + 2,
-        { size: 7, colour: '#9b96b8' });
-      this._text(ctx, b.text, STAGE.w / 2 + 6, cy + 6,
-        { size: 20 * scale, colour: b.colour, outline: '#0b0a12' });
+      this._text(ctx, 'RANK', STAGE.w / 2 - 45, cy + 3,
+        { size: 9, colour: '#9b96b8' });
+      this._text(ctx, b.text, STAGE.w / 2 + 8, cy + 8,
+        { size: 27 * scale, colour: b.colour, outline: '#0b0a12' });
     } else {
       this._text(ctx, b.text, STAGE.w / 2, cy - 1,
-        { size: (b.text.length > 12 ? 9 : 13) * scale, colour: b.colour,
+        { size: (b.text.length > 12 ? 12 : 17) * scale, colour: b.colour,
           outline: '#0b0a12' });
       if (b.sub) {
-        this._text(ctx, b.sub, STAGE.w / 2, cy + 12,
-          { size: 5, colour: '#9b96b8' });
+        this._text(ctx, b.sub, STAGE.w / 2, cy + 16,
+          { size: 7, colour: '#9b96b8' });
       }
     }
     ctx.globalAlpha = 1;
@@ -2420,21 +2659,25 @@ export class BattleFX {
       const x = lerp(slideFrom, 0, overshoot(k));
       ctx.save();
       ctx.translate(Math.round(x), 0);
+      // Was `0, 24` against a 128-row frame — 18.75% down. Row 24 is now the
+      // FIRST row the player sees, so the card is placed at the same fraction
+      // of the safe area instead: SAFE_TOP + 33.
+      const cardY = SAFE_TOP + 33;
       ctx.fillStyle = 'rgba(11,10,18,0.85)';
-      ctx.fillRect(0, 24, STAGE.w, 22);
+      ctx.fillRect(0, cardY, STAGE.w, 30);
       ctx.fillStyle = '#d84a7a';
-      ctx.fillRect(0, 24, STAGE.w, 1);
-      ctx.fillRect(0, 45, STAGE.w, 1);
-      this._text(ctx, c.text, STAGE.w / 2, 39,
-        { size: c.text.length > 14 ? 8 : 11, colour: '#ffe8a0', outline: '#2a0a14' });
+      ctx.fillRect(0, cardY, STAGE.w, 1);
+      ctx.fillRect(0, cardY + 29, STAGE.w, 1);
+      this._text(ctx, c.text, STAGE.w / 2, cardY + 21,
+        { size: c.text.length > 14 ? 11 : 15, colour: '#ffe8a0', outline: '#2a0a14' });
       ctx.restore();
     }
     if (this.crawl) {
       const shown = this.crawl.text.slice(0, this.crawl.shown);
       const lines = this._wrap(shown, 30);
       lines.forEach((line, i) => {
-        this._text(ctx, line, STAGE.w / 2, 58 + i * 9,
-          { size: 6, colour: '#e8e6f5', outline: '#0b0a12' });
+        this._text(ctx, line, STAGE.w / 2, SAFE_TOP + 80 + i * 12,
+          { size: 8, colour: '#e8e6f5', outline: '#0b0a12' });
       });
     }
   }
@@ -2457,8 +2700,11 @@ export class BattleFX {
     const herald = this._wrap(c.herald, 34);
     const tell = c.tell ? this._wrap(c.tell, 40) : [];
     const lines = 1 + herald.length + tell.length;
-    const h = 10 + lines * 9;
-    const y0 = STAGE.h - h - 22;
+    const h = 13 + lines * 12;
+    // Measured up from SAFE_BOT, not from STAGE.h. This card is the only
+    // explanation the player gets of why the fight just changed shape, and at
+    // STAGE.h - h - 22 the whole thing would sit in the bottom overscan.
+    const y0 = SAFE_BOT - h - 30;
 
     ctx.globalAlpha = alpha * 0.86;
     ctx.fillStyle = '#0b0a12';
@@ -2473,19 +2719,19 @@ export class BattleFX {
     ctx.fillRect(0, y0 + h - 1, Math.round(STAGE.w * (1 - k)), 1);
     ctx.globalAlpha = alpha;
 
-    let y = y0 + 9;
+    let y = y0 + 12;
     this._text(ctx, c.label, STAGE.w / 2, y, {
-      size: c.label.length > 24 ? 5 : 6, colour: c.colour, outline: '#0b0a12' });
-    y += 10;
+      size: c.label.length > 24 ? 7 : 8, colour: c.colour, outline: '#0b0a12' });
+    y += 13;
     for (const line of herald) {
       this._text(ctx, line, STAGE.w / 2, y, {
-        size: 6, colour: '#e8e6f5', outline: '#0b0a12' });
-      y += 9;
+        size: 8, colour: '#e8e6f5', outline: '#0b0a12' });
+      y += 12;
     }
     for (const line of tell) {
       this._text(ctx, line, STAGE.w / 2, y, {
-        size: 5, colour: '#9b96b8', outline: '#0b0a12' });
-      y += 9;
+        size: 7, colour: '#9b96b8', outline: '#0b0a12' });
+      y += 12;
     }
     ctx.globalAlpha = 1;
   }

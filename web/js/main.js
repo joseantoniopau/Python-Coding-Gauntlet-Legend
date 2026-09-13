@@ -149,13 +149,42 @@ $('#modal-bg').addEventListener('click', (e) => {
   closeModal();
 });
 
-function say(who, lines, portraitKind) {
-  G.dialogueQueue = Array.isArray(lines) ? lines.slice() : [lines];
-  const box = $('#dialogue');
+/* THE SPEAKER'S FACE, AND THE EMOTE AXIS IT NEVER USED.
+ *
+ * sprites.js carries portraitEmote / portraitFrames / portraitSet / portraitAt
+ * — seven emotes, two frames each, on a 24-pixel face — and every one of them
+ * had ZERO call sites. This box drew sprites.portrait(kind), a separate 12x12
+ * head with no emote axis at all, so the whole portrait system was unreachable
+ * from the shipped game.
+ *
+ * portraitAt(kind, emote, t) is the same call with two more arguments, and the
+ * story entries already carry a `kind` per line. Anything that does not name an
+ * emote lands on neutral, which is what the old call drew.
+ *
+ * The clock advances one step per LINE rather than on a timer: a portrait that
+ * blinks while the player reads needs an interval, and an interval started here
+ * is an interval to leak. One step per line is enough to make the second frame
+ * exist. */
+const PORTRAIT_STEP_MS = 900;
+
+function paintPortrait(kind, emote, step) {
   const pc = $('#dialogue-portrait');
-  const img = sprites.portrait(portraitKind || 'scholar');
+  if (!pc) return null;
+  let img = null;
+  try { img = sprites.portraitAt(kind || 'scholar', emote || 'neutral', step * PORTRAIT_STEP_MS); }
+  catch (e) { img = null; }
+  // A face this box has never been able to draw is still better than no box.
+  if (!img) { try { img = sprites.portrait(kind || 'scholar'); } catch (e2) { return null; } }
   pc.width = img.width; pc.height = img.height;
   pc.getContext('2d').drawImage(img, 0, 0);
+  return img;
+}
+
+function say(who, lines, portraitKind, emote) {
+  G.dialogueQueue = Array.isArray(lines) ? lines.slice() : [lines];
+  const box = $('#dialogue');
+  G.dialogueFace = { kind: portraitKind || 'scholar', emote: emote || 'neutral', step: 0 };
+  paintPortrait(G.dialogueFace.kind, G.dialogueFace.emote, 0);
   $('#dialogue-who').textContent = who;
   box.classList.add('show');
   // SPACE advances the dialogue, and the global key handler stands down for a
@@ -167,6 +196,10 @@ function say(who, lines, portraitKind) {
 
 function advanceDialogue() {
   const next = G.dialogueQueue.shift();
+  if (next !== undefined && G.dialogueFace) {
+    G.dialogueFace.step++;
+    paintPortrait(G.dialogueFace.kind, G.dialogueFace.emote, G.dialogueFace.step);
+  }
   if (next === undefined) {
     $('#dialogue').classList.remove('show');
     if (G.storyQueue && G.storyQueue.length) { setTimeout(playStoryQueue, 120); return; }
@@ -394,9 +427,11 @@ function show(screen) {
  * ======================================================================
  *
  * THE CANVAS SCALES BY A WHOLE NUMBER OR NOT AT ALL. fx._resize() computes
- * `px = floor(min(canvas.width / 192, canvas.height / 128))` and draws the
- * 192x128 logical stage at that scale, centred, because a fractional scale is
- * what makes pixel art soft. Everything below follows from that one line.
+ * `px = floor(min(canvas.width / 256, canvas.height / 176))` and draws the
+ * 256x224 logical stage at that scale, centred, because a fractional scale is
+ * what makes pixel art soft. Everything below follows from that one line. The
+ * two divisors are different on purpose — 256 wide, but only the 176-line SAFE
+ * AREA of the 224-line raster is fitted; see STAGE_LOGICAL below.
  *
  * The old box was a hard-coded 480x320. It is exactly 3:2, which sounds like it
  * should fit — and it drew at 2x, because 480/192 is 2.5 and the floor throws
@@ -420,7 +455,24 @@ function show(screen) {
  * devicePixelRatio is in it throughout: on a 2x display the same CSS box holds
  * twice the scale, which is the whole point of asking the canvas rather than
  * the stylesheet. */
-const STAGE_LOGICAL = { w: 192, h: 128 };
+/* THE RASTER AND THE PART OF IT WE PROMISE TO SHOW ARE TWO DIFFERENT NUMBERS.
+ *
+ * fx.js draws 256x224 — the SNES frame, docs/08-art-direction §A-1. This box
+ * is fitted to `fitH`, the 176-line safe area, and NOT to the full 224.
+ *
+ * Why, measured (§A-3): a naive 256x224 fit drops 1280x800 from scale 2 to
+ * scale 1 — the figure halves on screen — and at 1024x640 it leaves #battle-main
+ * 167px, below the MAIN_MIN of 200 that keeps the editor from becoming a
+ * letterbox slot. Buying scale 2 back at 1280x800 with all 224 lines needs
+ * MAIN_MIN <= 159 and BAND >= 0.676: an editor about three code lines tall. The
+ * editor is the half of this screen the game is actually about, so that price
+ * is refused.
+ *
+ * Fitting 176 holds scale 2 at 1280x800 and keeps every window above the floor.
+ * The 24 rows above and below the safe area are overscan — they still get drawn,
+ * they just fall off the canvas, exactly as they fell off an NTSC tube. Nothing
+ * the player must read is allowed to live there. */
+const STAGE_LOGICAL = { w: 256, h: 224, fitH: 176 };
 
 function fitBattleStage() {
   const stage = $('#battle-stage');
@@ -446,7 +498,40 @@ function fitBattleStage() {
   // Anything past this has to come out of MAIN_MIN, and the editor is the half
   // of this screen the game is actually about.
   const BAND = 0.62;        // of the battle screen, before anything refuses
-  const MAIN_MIN = 200;     // the editor and the side tabs keep this much
+  /* 200 UNTIL THE RASTER MOVED, AND THE EIGHT PIXELS IT COST.
+   *
+   * At 1280x800 the fight screen is 753px tall and #combat-hud measures 148 —
+   * not the 116 docs/08 §A-4 measured, because at this width the belt line in
+   * the HUD wraps to a second row. That makes bandMax the binding constraint
+   * rather than BAND:
+   *   bandMax = 753 - 148 - 200 = 405
+   *   artMaxH = 405 - 47 - 6 - 8 = 344,  344 / 176 = 1.955
+   * One point nine five five. Scale 2 needs 352, so the whole stage rounded
+   * down a step and the figure halved — the exact failure the safe area exists
+   * to prevent, missed by eight pixels.
+   *
+   * 184 is the smallest move that clears it: bandMax = 421, artMaxH = 360,
+   * 360 / 176 = 2.045, and #battle-main lands on 192 — which is the outcome
+   * §A-5's own table predicts for this window (its "ed 208" is the same
+   * quantity measured one node out). Driven live at all six sizes, 184 changes
+   * exactly one of them and breaks none: 1024x640, 1440x940, 1600x1000,
+   * 1920x1080 and 2560x1440 are all still limited by BAND or by the width, and
+   * none of them comes within 20px of this floor.
+   *
+   * WHAT IT COSTS, IN CODE LINES, MEASURED. #editor-pane's shell driven live at
+   * default text scale, before the raster move and after:
+   *   1024x640    87px -> 63px    about 4 lines -> 3
+   *   1280x800   105px -> 57px    about 5 lines -> 3
+   *   1440x940   119px -> 135px   about 6 lines -> 7   (the launcher window)
+   *   1600x1000   85px -> 77px    about 4 lines -> 4
+   * The launcher window GAINS a line, because its stage dropped from scale 3 in
+   * a 398-tall box to scale 2 in a 366-tall one. The loss is concentrated at
+   * 1280x800, and it is the price §A-5 already quotes there ("ed 208"). If that
+   * price is ever judged wrong, this is the one constant that buys it back: at
+   * 200 that window returns to scale 1 — a 96-pixel figure instead of a
+   * 192-pixel one — and the editor goes to about twelve lines. It is a single
+   * number, and it is a real choice, not an oversight. */
+  const MAIN_MIN = 184;     // the editor and the side tabs keep this much
   const WIDE = 0.52;        // the stage's share of the width
   const GUTTER = 8;         // slack so the border cannot clip the last column
 
@@ -471,13 +556,17 @@ function fitBattleStage() {
 
   const bandMax = Math.max(140, sh - hudH - MAIN_MIN);
   const band = Math.min(sh * BAND, bandMax);
-  const artMaxH = Math.max(STAGE_LOGICAL.h, (band - chromeV - bh - GUTTER) * dpr);
+  // fitH, not h. See the note on STAGE_LOGICAL: the box holds the safe area and
+  // the overscan hangs off it. fx.js _resize() fits the same number, so the two
+  // agree on the scale without either importing the other's box.
+  const fitH = STAGE_LOGICAL.fitH || STAGE_LOGICAL.h;
+  const artMaxH = Math.max(fitH, (band - chromeV - bh - GUTTER) * dpr);
   const artMaxW = Math.max(STAGE_LOGICAL.w, (sw * WIDE - chromeH - bw - GUTTER) * dpr);
 
-  const px = Math.max(1, Math.floor(Math.min(artMaxH / STAGE_LOGICAL.h,
+  const px = Math.max(1, Math.floor(Math.min(artMaxH / fitH,
                                              artMaxW / STAGE_LOGICAL.w)));
   const boxW = Math.round(STAGE_LOGICAL.w * px / dpr + bw + GUTTER);
-  const boxH = Math.round(STAGE_LOGICAL.h * px / dpr + bh + GUTTER);
+  const boxH = Math.round(fitH * px / dpr + bh + GUTTER);
   stage.style.width = `${boxW}px`;
   stage.style.height = `${boxH}px`;
 
@@ -1566,19 +1655,26 @@ function placeAlarm(node) {
   const stage = $('#battle-stage');
   if (!stage) return;
   const rect = stage.getBoundingClientRect();
-  let cx = rect.width * (46 / 192);
-  let cy = rect.height * (100 / 128) - rect.height * 0.16;
+  // Fallback proportions are against the VISIBLE box, which is the safe area
+  // (rows 24..199), not the whole 224-line raster: heroX 64 of 256 across, and
+  // the ground line 175 sits (175-24)/176 down what the player can see.
+  let cx = rect.width * (64 / 256);
+  let cy = rect.height * ((175 - 24) / 176) - rect.height * 0.16;
   let size = Math.min(rect.width, rect.height) * 0.42;
   const fx = G.fx;
   if (fx && fx.canvas && fx.px) {
     const dpr = fx.canvas.width / Math.max(1, parseFloat(fx.canvas.style.width) || 1);
     const scale = fx.px / (dpr || 1);
-    // STAGE.heroX is 46 and STAGE.ground is 100, in fx.js's 192x128 stage
-    // space. The hero is sixteen by twenty-four source pixels drawn at 3x, so
-    // its body runs from y=28 to the ground; centring 36 above the ground and
-    // covering 66 puts the wash on the torso rather than on the shadow.
-    cx = ((fx.ox / (dpr || 1)) + 46 * scale);
-    cy = ((fx.oy / (dpr || 1)) + (100 - 36) * scale);
+    // STAGE.heroX is 64 and STAGE.ground is 175, in fx.js's 256x224 stage
+    // space. The hero is sixteen by twenty-four source pixels, so its body runs
+    // from ground-24 to the ground; centring 36 above the ground and covering
+    // 66 puts the wash on the torso rather than on the shadow. Those two are
+    // offsets from the ground line and the figure did not change size, so they
+    // carry across the raster move unaltered. fx.oy is now NEGATIVE — the
+    // overscan hangs off the canvas — which is exactly why this reads it rather
+    // than assuming the art starts at the top of the box.
+    cx = ((fx.ox / (dpr || 1)) + 64 * scale);
+    cy = ((fx.oy / (dpr || 1)) + (175 - 36) * scale);
     size = 66 * scale;
   }
   node.style.left = `${Math.round(cx - size / 2)}px`;
@@ -3553,7 +3649,14 @@ function playStoryQueue() {
   if (entry.objective) lines.push(`OBJECTIVE — ${entry.objective}`);
   for (const r of entry.reward_summary || []) lines.push(`REWARD — ${r}`);
   audio.sfx(entry.kind === 'milestone' ? 'unlock' : 'select');
-  say(String(speaker).toUpperCase(), lines, portraitKind);
+  /* The emote rides on the story entry when the writing supplies one, and
+   * EMOTE_ALIAS in sprites.js already translates the words writing actually
+   * uses ("happy", "grim", "shock") into the seven this game draws. A milestone
+   * with nothing to say about its own tone is PLEASED, because that is what a
+   * milestone is. */
+  const tone = entry.emote || entry.tone
+    || (entry.kind === 'milestone' ? 'pleased' : 'neutral');
+  say(String(speaker).toUpperCase(), lines, portraitKind, tone);
   return true;
 }
 
@@ -6303,6 +6406,10 @@ function showLootDrop(drop) {
   const host = document.createElement('div');
   host.className = 'loot-drop-stage';
   const canvas = document.createElement('canvas');
+  /* NOT the battle stage, and deliberately not moved with it. This is a modal
+   * of its own — lootart.drawLootDrop composes into 192x128 with the item at
+   * 96,104 — and it has never shared a pixel with fx.js's raster. Growing it to
+   * 256x224 would only put more empty room around a 16x16 icon. */
   canvas.width = 192; canvas.height = 128;
   canvas.style.cssText = 'width:288px;height:192px;image-rendering:pixelated';
   host.appendChild(canvas);

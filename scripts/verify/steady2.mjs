@@ -13,7 +13,7 @@ function bossFight(b, frames, withFlash) {
   const k = B.bossArtKey(b);
   for (let i = 0; i < frames; i++) {
     const t = i * 16;
-    B.drawBoss(ctx, k, 136, 100, { colour: b.colour, time: t,
+    B.drawBoss(ctx, k, 184, 175, { colour: b.colour, time: t,
       flash: withFlash && i % 40 < 6 ? 0.9 : 0, seed: 3 });
   }
 }

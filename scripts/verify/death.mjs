@@ -156,7 +156,7 @@ console.log('   with sound off   handle still returns the same times: ' + JSON.s
 
 /* ================== C. colour before light, hero last ==================== */
 console.log('\nC. THE BLACK IS NOT INSTANT');
-const HOST = [[192, 128], [960, 540], [1440, 810]];
+const HOST = [[D.DEATH_STAGE.w, D.DEATH_STAGE.h], [960, 540], [1440, 810]];
 const hostCanvas = newCanvas(960, 540);
 const hostCtx = ctxOf(hostCanvas);
 
@@ -186,12 +186,22 @@ function luminanceOf(canvas) {
  * the hero's own 16x24 box in stage space. */
 function litStats(canvas, scale, ox, oy) {
   const d = canvas.data, W = canvas.width;
-  const x0 = ox + (46 - 8) * scale, x1 = ox + (46 + 8) * scale;
-  const y0 = oy + (100 - 24) * scale, y1 = oy + 100 * scale;
+  // GEOMETRY COMES FROM THE MODULE, NOT FROM A COPY OF IT. These four numbers
+  // used to be written out here as 46/100/16/24, which is the 192x128 stage;
+  // when the raster moved to 256x224 this box went on pointing at empty sky and
+  // reported the hero as "neither the hero nor his shadow".
+  const G = D.DEATH_STAGE;
+  const hw = G.heroW / 2;
+  const x0 = ox + (G.heroX - hw) * scale, x1 = ox + (G.heroX + hw) * scale;
+  const y0 = oy + (G.ground - G.heroH) * scale, y1 = oy + G.ground * scale;
   // The shadow is under his feet, below the sprite box. It is part of him and
   // it leaves with him, so it is counted separately rather than quietly
   // inflating the "not the hero" number.
-  const sy0 = oy + 100 * scale, sy1 = oy + 103 * scale;
+  // ...and its depth comes from the module too. It is 3 rows of the RIG, which
+  // is 3 * FIGURE_SCALE rows of the frame; the part of it that rises above the
+  // ground line is already inside the hero box above.
+  const sy0 = oy + G.ground * scale;
+  const sy1 = oy + (G.ground + (G.shadowH - G.shadowRise)) * scale;
   let lit = 0, inHero = 0, inShadow = 0;
   for (let i = 0, p = 0; i < d.length; i += 4, p++) {
     if (!d[i + 3]) continue;
@@ -214,7 +224,9 @@ for (const t of MARKS) {
   hostCtx.fillStyle = '#000000'; hostCtx.fillRect(0, 0, 960, 540);
   const eff = D.createDeath({ look: LOOKS.plate }).begin({}).seek(t);
   eff.draw(hostCtx, 960, 540);
-  const scale = 4, ox = Math.round((960 - 192 * 4) / 2), oy = Math.round((540 - 128 * 4) / 2);
+  const scale = Math.max(1, Math.floor(Math.min(960 / D.DEATH_STAGE.w, 540 / D.DEATH_STAGE.h)));
+  const ox = Math.round((960 - D.DEATH_STAGE.w * scale) / 2);
+  const oy = Math.round((540 - D.DEATH_STAGE.h * scale) / 2);
   const colours = colourCount(hostCanvas);
   const chroma = saturationOf(hostCanvas);
   const lum = luminanceOf(hostCanvas);
@@ -336,6 +348,68 @@ ok(D.deathLines({}).lines.find(l => l.id === 'where').text === D.NO_SAVE_LINE,
 ok(!/[!]/.test(JSON.stringify(D.deathLines(REPORT))), 'there is an exclamation mark on the death screen');
 console.log('   no exclamation marks; the kept line is unconditional and carries no numbers at all');
 
+/* AND THEY HAVE TO BE ON THE SCREEN.
+ *
+ * Everything above this point checks the TEXT deathLines() returns, which is
+ * what the first version of this harness checked and all it checked — so it
+ * passed for the whole life of a screen that never drew a word. renderDeath
+ * took opts.words and ignored it; nothing in web/ consumed deathLines(),
+ * KEPT_LINE or NO_SAVE_LINE; the sequence ended on pure black and a real death
+ * at 1440x940 held there until the player pressed a key.
+ *
+ * So: render the last frame and count. The buffer is the module's own, read
+ * back through blitDeath at 1:1. */
+{
+  const cv = newCanvas(D.DEATH_STAGE.w, D.DEATH_STAGE.h);
+  const cx = ctxOf(cv);
+  const paint = (t) => {
+    const st = D.renderDeath(t, { look: LOOKS.plate, words: full, report: REPORT,
+                                  alarmColour: D.DIRE_FALLBACK });
+    D.blitDeath(cx, cv.width, cv.height, st.stage);
+    let lit = 0;
+    for (let i = 0; i < cv.data.length; i += 4) {
+      if (!cv.data[i + 3]) continue;
+      if (cv.data[i] === 0x06 && cv.data[i + 1] === 0x06 && cv.data[i + 2] === 0x0a) continue;
+      lit++;
+    }
+    return { lit, words: st.words };
+  };
+  const before = paint(D.WORDS_AT - 1);
+  const after = paint(D.WORDS_AT);
+  const later = paint(D.WORDS_AT + 6000);
+  ok(before.words === 0, `the words are on screen ${D.WORDS_AT - 1}ms in, before the silence is over`);
+  ok(after.words > 0, 'the words never reach the frame — renderDeath took opts.words and ignored them');
+  ok(later.words === after.words, 'the words change after they have landed');
+  ok(after.lit >= after.words, 'fewer lit pixels than the words painted');
+  console.log(`   painted at t=${D.WORDS_AT - 1}: ${before.words} px of text`);
+  console.log(`   painted at t=${D.WORDS_AT}: ${after.words} px of text, ${after.lit} lit pixels on the frame`);
+  console.log(`   still there at t=${D.WORDS_AT + 6000}: ${later.words} px — the screen holds until the player leaves`);
+
+  /* Every digit on the frame has to come out of the report, and the only way to
+   * be sure of that from the RASTER is to render twice with two different
+   * reports and check the frames differ exactly where the numbers do. */
+  const other = D.deathLines({ ...REPORT, cost: { ...REPORT.cost, gold: 999 } });
+  const st2 = D.renderDeath(D.WORDS_AT, { look: LOOKS.plate, words: other, alarmColour: D.DIRE_FALLBACK });
+  const cv2 = newCanvas(D.DEATH_STAGE.w, D.DEATH_STAGE.h);
+  D.blitDeath(ctxOf(cv2), cv2.width, cv2.height, st2.stage);
+  let moved = 0;
+  for (let i = 0; i < cv.data.length; i += 4) {
+    if (cv.data[i] !== cv2.data[i] || cv.data[i + 1] !== cv2.data[i + 1]
+      || cv.data[i + 2] !== cv2.data[i + 2] || cv.data[i + 3] !== cv2.data[i + 3]) moved++;
+  }
+  ok(moved > 0, 'changing a number in the report changed nothing on the frame');
+  console.log(`   changing cost.gold 340 -> 999 moved ${moved} pixels: the figures on the frame are the report's`);
+
+  /* The kept line is the point of the screen, so it is proved present in the
+   * PIXELS and not only in the string: drop it from the block and the frame
+   * must lose a measurable amount of text. */
+  const without = { ...full, lines: full.lines.filter(l => l.id !== 'kept') };
+  const st3 = D.renderDeath(D.WORDS_AT, { look: LOOKS.plate, words: without, alarmColour: D.DIRE_FALLBACK });
+  ok(st3.words < after.words,
+     'removing the kept line did not change the painted text — it was never drawn');
+  console.log(`   the kept line is worth ${after.words - st3.words} painted pixels of the ${after.words}`);
+}
+
 /* ============================== E. it must not trap ====================== */
 console.log('\nE. IT MUST NOT TRAP');
 console.log(`   skip armed at    first death ${D.skipArmedAt(0)} ms (after the third beat), thereafter ${D.skipArmedAt(1)} ms`);
@@ -427,11 +501,11 @@ ok(stats.plates <= stats.PLATE_CACHE_MAX, `plate cache ${stats.plates} over cap 
 /* The plate must use its full ramp at every kit, or the figure is a silhouette. */
 console.log('\n   THE FIGURE, at three kits');
 for (const [name, look] of Object.entries(LOOKS)) {
-  const c = newCanvas(192, 128), cx = ctxOf(c);
+  const c = newCanvas(D.DEATH_STAGE.w, D.DEATH_STAGE.h), cx = ctxOf(c);
   const e = D.createDeath({ look }).begin({});
   e.seek(D.LAST_FROM);           // the moment he is the only thing lit
   const before = D.renderDeath(D.LAST_FROM, { look });
-  e.draw(cx, 192, 128);
+  e.draw(cx, D.DEATH_STAGE.w, D.DEATH_STAGE.h);
   const { lit, inHero, his } = litStats(c, 1, 0, 0);
   ok(his === lit, `${name}: ${lit - his} lit pixels at beat three belong to neither the hero nor his shadow`);
   console.log(`   ${name.padEnd(6)} plate ${before.plate.w}x${before.plate.h}, ${String(before.plate.opaque).padStart(3)} opaque px from ${String(before.plate.tones).padStart(3)} source tones -> ${new Set(before.plate.idx.filter(v => v !== 255)).size} ramp steps; at beat three ${lit} px lit = ${inHero} figure + ${lit - inHero} shadow, nothing else`);

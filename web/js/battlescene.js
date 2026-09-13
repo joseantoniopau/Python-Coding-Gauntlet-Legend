@@ -52,11 +52,13 @@ import { PALETTES } from './pixel.js';
  * module that should import this one, and a cycle helps nobody. Pass your own
  * through createScene({stage}) if fx.STAGE ever moves. */
 export const SCENE_STAGE = Object.freeze({
-  w: 192,
-  h: 128,
-  ground: 100,   // horizon: where feet land
-  heroX: 46,
-  enemyX: 136,
+  w: 256,
+  h: 224,
+  safeTop: 24,   // rows 0..23 are overscan; nothing load-bearing goes there
+  safeH: 176,    // the 176 lines main.js actually fits (docs/08 §A-3)
+  ground: 175,   // horizon: where feet land
+  heroX: 64,
+  enemyX: 184,
 });
 
 /* Over-scan margin. Full-frame art is built this much larger on every side so
@@ -160,7 +162,7 @@ function segment(ctx, x0, y0, x1, y1, thick, colour) {
 }
 
 /* Hard-edged filled ellipse, rasterised by hand. ctx.ellipse would do it, but
- * an anti-aliased edge on a 192x128 stage is a grey fringe two screen pixels
+ * an anti-aliased edge on a 256x224 stage is a grey fringe two screen pixels
  * wide once it is scaled up, and it reads as blur rather than as art. */
 function blockEllipse(ctx, cx, cy, rx, ry, colour, alpha = 1) {
   ctx.fillStyle = colour;
@@ -999,6 +1001,18 @@ export const WEATHER_FIXTURES = FIXTURES;
  * layer.tone  lightness offset after grading; far layers sit darker and flatter
  * layer.depth parallax depth, 0 = painted on the sky, 1 = at the platform
  * layer.rate  logical pixels per second of self-motion (wind, not camera)
+ *
+ * layer.h     how many rows the band stands above the ground line. Every one of
+ *             these was authored against the 192x128 stage and has been
+ *             multiplied by 4/3 for the 256x224 one — the same factor the frame
+ *             itself grew by on the horizontal. It is NOT the vertical factor:
+ *             the ground line moved 100 -> 175, so the sky behind these bands
+ *             is 1.75x deeper than it was. That extra sky is deliberate. The
+ *             painters size their buildings as a fraction of `h`, and taking
+ *             the bands up by 1.75 instead would have left the same authored
+ *             building WIDTHS under roofs half again as tall: a skyline of
+ *             chimneys. More sky above a skyline of the right proportions is
+ *             the better trade, and it is where a 96x128 boss's head goes.
  */
 const BIOMES = {
   village: {
@@ -1006,9 +1020,9 @@ const BIOMES = {
     sky: ['#0a0912', '#1b1726', '#2c2130'], horizon: 'moon',
     occluder: 'banner', platform: 'cobble',
     layers: [
-      { paint: 'ridge',   src: 'far',  h: 42, depth: 0.10, rate: 1, tone: -34, o: { wide: true, minH: 0.2 } },
-      { paint: 'skyline', src: 'mid',  h: 50, depth: 0.30, rate: 4, tone: -20, o: { style: 'village', glow: true } },
-      { paint: 'skyline', src: 'mid',  h: 36, depth: 0.62, rate: 11, tone: -6, o: { style: 'village', glow: true } },
+      { paint: 'ridge',   src: 'far',  h: 56, depth: 0.10, rate: 1, tone: -34, o: { wide: true, minH: 0.2 } },
+      { paint: 'skyline', src: 'mid',  h: 67, depth: 0.30, rate: 4, tone: -20, o: { style: 'village', glow: true } },
+      { paint: 'skyline', src: 'mid',  h: 48, depth: 0.62, rate: 11, tone: -6, o: { style: 'village', glow: true } },
     ],
   },
   grass: {
@@ -1016,9 +1030,9 @@ const BIOMES = {
     sky: ['#080a14', '#141a2c', '#232a42'], horizon: 'storm',
     occluder: 'reed', platform: 'sod',
     layers: [
-      { paint: 'ridge',    src: 'far',    h: 38, depth: 0.10, rate: 1, tone: -36, o: { wide: true, minH: 0.18 } },
-      { paint: 'treeline', src: 'foliage', h: 34, depth: 0.32, rate: 5, tone: -22, o: { step: 9 } },
-      { paint: 'hills',    src: 'ground', h: 30, depth: 0.60, rate: 12, tone: -10, o: { wall: true, amp: 0.3 } },
+      { paint: 'ridge',    src: 'far',    h: 51, depth: 0.10, rate: 1, tone: -36, o: { wide: true, minH: 0.18 } },
+      { paint: 'treeline', src: 'foliage', h: 45, depth: 0.32, rate: 5, tone: -22, o: { step: 9 } },
+      { paint: 'hills',    src: 'ground', h: 40, depth: 0.60, rate: 12, tone: -10, o: { wall: true, amp: 0.3 } },
     ],
   },
   highland: {
@@ -1026,9 +1040,9 @@ const BIOMES = {
     sky: ['#070b12', '#131b28', '#233040'], horizon: 'moon',
     occluder: 'stone', platform: 'flag',
     layers: [
-      { paint: 'ridge', src: 'far',    h: 50, depth: 0.08, rate: 1, tone: -38, o: { wide: true, sharp: 1.4, snow: true } },
-      { paint: 'ridge', src: 'mid',    h: 38, depth: 0.30, rate: 4, tone: -22, o: { sharp: 1.9 } },
-      { paint: 'hills', src: 'ground', h: 28, depth: 0.62, rate: 11, tone: -8, o: { wall: true } },
+      { paint: 'ridge', src: 'far',    h: 67, depth: 0.08, rate: 1, tone: -38, o: { wide: true, sharp: 1.4, snow: true } },
+      { paint: 'ridge', src: 'mid',    h: 51, depth: 0.30, rate: 4, tone: -22, o: { sharp: 1.9 } },
+      { paint: 'hills', src: 'ground', h: 37, depth: 0.62, rate: 11, tone: -8, o: { wall: true } },
     ],
   },
   forest: {
@@ -1036,9 +1050,9 @@ const BIOMES = {
     sky: ['#070c0a', '#111c16', '#1b2a20'], horizon: 'fogbank',
     occluder: 'branch', platform: 'root',
     layers: [
-      { paint: 'treeline', src: 'far',     h: 46, depth: 0.10, rate: 1, tone: -38, o: { step: 5 } },
-      { paint: 'treeline', src: 'foliage', h: 40, depth: 0.32, rate: 4, tone: -22, o: { step: 8 } },
-      { paint: 'treeline', src: 'foliage', h: 34, depth: 0.64, rate: 12, tone: -8, o: { step: 13 } },
+      { paint: 'treeline', src: 'far',     h: 61, depth: 0.10, rate: 1, tone: -38, o: { step: 5 } },
+      { paint: 'treeline', src: 'foliage', h: 53, depth: 0.32, rate: 4, tone: -22, o: { step: 8 } },
+      { paint: 'treeline', src: 'foliage', h: 45, depth: 0.64, rate: 12, tone: -8, o: { step: 13 } },
     ],
   },
   cave: {
@@ -1046,9 +1060,9 @@ const BIOMES = {
     sky: ['#050608', '#0c0f15', '#141921'], horizon: 'ceiling',
     occluder: 'stalagmite', platform: 'stone',
     layers: [
-      { paint: 'wall',   src: 'far',    h: 60, depth: 0.08, rate: 0, tone: -40, o: { stains: true, brick: 9 } },
-      { paint: 'cavern', src: 'mid',    h: 44, depth: 0.30, rate: 3, tone: -26, o: { down: true, dense: true } },
-      { paint: 'cavern', src: 'ground', h: 30, depth: 0.64, rate: 10, tone: -10, o: {} },
+      { paint: 'wall',   src: 'far',    h: 80, depth: 0.08, rate: 0, tone: -40, o: { stains: true, brick: 9 } },
+      { paint: 'cavern', src: 'mid',    h: 59, depth: 0.30, rate: 3, tone: -26, o: { down: true, dense: true } },
+      { paint: 'cavern', src: 'ground', h: 40, depth: 0.64, rate: 10, tone: -10, o: {} },
     ],
   },
   swamp: {
@@ -1056,9 +1070,9 @@ const BIOMES = {
     sky: ['#070b09', '#121a14', '#1d2a1e'], horizon: 'fogbank',
     occluder: 'reed', platform: 'bog',
     layers: [
-      { paint: 'treeline', src: 'far',     h: 44, depth: 0.10, rate: 1, tone: -38, o: { dead: true, step: 8 } },
-      { paint: 'treeline', src: 'mid',     h: 36, depth: 0.32, rate: 4, tone: -24, o: { dead: true, step: 11 } },
-      { paint: 'reeds',    src: 'foliage', h: 28, depth: 0.66, rate: 13, tone: -10, o: { water: true } },
+      { paint: 'treeline', src: 'far',     h: 59, depth: 0.10, rate: 1, tone: -38, o: { dead: true, step: 8 } },
+      { paint: 'treeline', src: 'mid',     h: 48, depth: 0.32, rate: 4, tone: -24, o: { dead: true, step: 11 } },
+      { paint: 'reeds',    src: 'foliage', h: 37, depth: 0.66, rate: 13, tone: -10, o: { water: true } },
     ],
   },
   mountain: {
@@ -1066,9 +1080,9 @@ const BIOMES = {
     sky: ['#060910', '#101725', '#1e2838'], horizon: 'storm',
     occluder: 'stone', platform: 'stone',
     layers: [
-      { paint: 'ridge', src: 'far',    h: 56, depth: 0.07, rate: 1, tone: -40, o: { wide: true, sharp: 1.3, snow: true } },
-      { paint: 'ridge', src: 'mid',    h: 42, depth: 0.28, rate: 3, tone: -24, o: { sharp: 1.6, snow: true } },
-      { paint: 'ridge', src: 'ground', h: 26, depth: 0.64, rate: 10, tone: -10, o: { sharp: 2.2 } },
+      { paint: 'ridge', src: 'far',    h: 75, depth: 0.07, rate: 1, tone: -40, o: { wide: true, sharp: 1.3, snow: true } },
+      { paint: 'ridge', src: 'mid',    h: 56, depth: 0.28, rate: 3, tone: -24, o: { sharp: 1.6, snow: true } },
+      { paint: 'ridge', src: 'ground', h: 35, depth: 0.64, rate: 10, tone: -10, o: { sharp: 2.2 } },
     ],
   },
   mine: {
@@ -1076,9 +1090,9 @@ const BIOMES = {
     sky: ['#0a0605', '#160c08', '#23120b'], horizon: 'glow',
     occluder: 'chain', platform: 'plank',
     layers: [
-      { paint: 'wall',    src: 'far',    h: 58, depth: 0.08, rate: 0, tone: -40, o: { stains: true } },
-      { paint: 'crystal', src: 'accent', h: 40, depth: 0.30, rate: 3, tone: -20, o: { timber: true } },
-      { paint: 'gantry',  src: 'ground', h: 34, depth: 0.64, rate: 11, tone: -12, o: { decks: 2 } },
+      { paint: 'wall',    src: 'far',    h: 77, depth: 0.08, rate: 0, tone: -40, o: { stains: true } },
+      { paint: 'crystal', src: 'accent', h: 53, depth: 0.30, rate: 3, tone: -20, o: { timber: true } },
+      { paint: 'gantry',  src: 'ground', h: 45, depth: 0.64, rate: 11, tone: -12, o: { decks: 2 } },
     ],
   },
   citadel: {
@@ -1086,9 +1100,9 @@ const BIOMES = {
     sky: ['#08060f', '#130e20', '#1e1630'], horizon: 'glass',
     occluder: 'pillar', platform: 'marble',
     layers: [
-      { paint: 'wall',      src: 'far',    h: 62, depth: 0.08, rate: 0, tone: -42, o: { brick: 8, brickW: 18 } },
-      { paint: 'colonnade', src: 'mid',    h: 52, depth: 0.30, rate: 3, tone: -24, o: { arch: true, pillarW: 11, gap: 20 } },
-      { paint: 'colonnade', src: 'ground', h: 40, depth: 0.62, rate: 10, tone: -10, o: { pillarW: 14, gap: 34 } },
+      { paint: 'wall',      src: 'far',    h: 83, depth: 0.08, rate: 0, tone: -42, o: { brick: 8, brickW: 18 } },
+      { paint: 'colonnade', src: 'mid',    h: 69, depth: 0.30, rate: 3, tone: -24, o: { arch: true, pillarW: 11, gap: 20 } },
+      { paint: 'colonnade', src: 'ground', h: 53, depth: 0.62, rate: 10, tone: -10, o: { pillarW: 14, gap: 34 } },
     ],
   },
   deepforest: {
@@ -1096,9 +1110,9 @@ const BIOMES = {
     sky: ['#060510', '#0e0b1a', '#171128'], horizon: 'fogbank',
     occluder: 'branch', platform: 'root',
     layers: [
-      { paint: 'treeline', src: 'far', h: 50, depth: 0.09, rate: 1, tone: -42, o: { step: 4 } },
-      { paint: 'treeline', src: 'mid', h: 44, depth: 0.30, rate: 3, tone: -28, o: { step: 7, dead: true } },
-      { paint: 'canopy',   src: 'foliage', h: 44, depth: 0.66, rate: 9, tone: -14, o: { vines: true, depth: 0.8 }, top: true },
+      { paint: 'treeline', src: 'far', h: 67, depth: 0.09, rate: 1, tone: -42, o: { step: 4 } },
+      { paint: 'treeline', src: 'mid', h: 59, depth: 0.30, rate: 3, tone: -28, o: { step: 7, dead: true } },
+      { paint: 'canopy',   src: 'foliage', h: 59, depth: 0.66, rate: 9, tone: -14, o: { vines: true, depth: 0.8 }, top: true },
     ],
   },
   canopy: {
@@ -1106,9 +1120,9 @@ const BIOMES = {
     sky: ['#060c10', '#0f1a22', '#1a2a32'], horizon: 'moon',
     occluder: 'branch', platform: 'branch',
     layers: [
-      { paint: 'treeline', src: 'far',     h: 44, depth: 0.09, rate: 1, tone: -40, o: { step: 6 } },
-      { paint: 'canopy',   src: 'foliage', h: 40, depth: 0.30, rate: 3, tone: -24, o: { depth: 0.7 }, top: true },
-      { paint: 'canopy',   src: 'foliage', h: 46, depth: 0.64, rate: 10, tone: -10, o: { vines: true, depth: 0.9 }, top: true },
+      { paint: 'treeline', src: 'far',     h: 59, depth: 0.09, rate: 1, tone: -40, o: { step: 6 } },
+      { paint: 'canopy',   src: 'foliage', h: 53, depth: 0.30, rate: 3, tone: -24, o: { depth: 0.7 }, top: true },
+      { paint: 'canopy',   src: 'foliage', h: 61, depth: 0.64, rate: 10, tone: -10, o: { vines: true, depth: 0.9 }, top: true },
     ],
   },
   wastes: {
@@ -1116,9 +1130,9 @@ const BIOMES = {
     sky: ['#0a0708', '#170f10', '#241618'], horizon: 'sun',
     occluder: 'bone', platform: 'ash',
     layers: [
-      { paint: 'ridge',  src: 'far',    h: 40, depth: 0.09, rate: 1, tone: -38, o: { wide: true, minH: 0.16 } },
-      { paint: 'debris', src: 'mid',    h: 40, depth: 0.30, rate: 3, tone: -24, o: { snapped: true } },
-      { paint: 'debris', src: 'ground', h: 32, depth: 0.64, rate: 10, tone: -10, o: { bones: true } },
+      { paint: 'ridge',  src: 'far',    h: 53, depth: 0.09, rate: 1, tone: -38, o: { wide: true, minH: 0.16 } },
+      { paint: 'debris', src: 'mid',    h: 53, depth: 0.30, rate: 3, tone: -24, o: { snapped: true } },
+      { paint: 'debris', src: 'ground', h: 43, depth: 0.64, rate: 10, tone: -10, o: { bones: true } },
     ],
   },
   ruins: {
@@ -1126,9 +1140,9 @@ const BIOMES = {
     sky: ['#08070c', '#141218', '#201c24'], horizon: 'moon',
     occluder: 'pillar', platform: 'flag',
     layers: [
-      { paint: 'skyline',   src: 'far',    h: 48, depth: 0.09, rate: 1, tone: -40, o: { style: 'ruin' } },
-      { paint: 'colonnade', src: 'mid',    h: 46, depth: 0.30, rate: 3, tone: -24, o: { broken: true, pillarW: 9, gap: 18 } },
-      { paint: 'debris',    src: 'ground', h: 30, depth: 0.64, rate: 10, tone: -10, o: { snapped: true } },
+      { paint: 'skyline',   src: 'far',    h: 64, depth: 0.09, rate: 1, tone: -40, o: { style: 'ruin' } },
+      { paint: 'colonnade', src: 'mid',    h: 61, depth: 0.30, rate: 3, tone: -24, o: { broken: true, pillarW: 9, gap: 18 } },
+      { paint: 'debris',    src: 'ground', h: 40, depth: 0.64, rate: 10, tone: -10, o: { snapped: true } },
     ],
   },
   dungeon: {
@@ -1136,9 +1150,9 @@ const BIOMES = {
     sky: ['#050508', '#0c0c11', '#13131a'], horizon: 'ceiling',
     occluder: 'chain', platform: 'stone',
     layers: [
-      { paint: 'wall',      src: 'far',    h: 62, depth: 0.07, rate: 0, tone: -42, o: { stains: true } },
-      { paint: 'colonnade', src: 'mid',    h: 50, depth: 0.28, rate: 2, tone: -26, o: { arch: true, pillarW: 12, gap: 22 } },
-      { paint: 'colonnade', src: 'ground', h: 38, depth: 0.62, rate: 9, tone: -12, o: { pillarW: 16, gap: 40 } },
+      { paint: 'wall',      src: 'far',    h: 83, depth: 0.07, rate: 0, tone: -42, o: { stains: true } },
+      { paint: 'colonnade', src: 'mid',    h: 67, depth: 0.28, rate: 2, tone: -26, o: { arch: true, pillarW: 12, gap: 22 } },
+      { paint: 'colonnade', src: 'ground', h: 51, depth: 0.62, rate: 9, tone: -12, o: { pillarW: 16, gap: 40 } },
     ],
   },
   tower: {
@@ -1146,9 +1160,9 @@ const BIOMES = {
     sky: ['#05070f', '#0d1322', '#172034'], horizon: 'storm',
     occluder: 'chain', platform: 'iron',
     layers: [
-      { paint: 'skyline', src: 'far',    h: 44, depth: 0.06, rate: 1, tone: -42, o: { style: 'castle' } },
-      { paint: 'gantry',  src: 'mid',    h: 54, depth: 0.28, rate: 3, tone: -26, o: { decks: 3, gears: true } },
-      { paint: 'gantry',  src: 'ground', h: 40, depth: 0.62, rate: 10, tone: -12, o: { decks: 2, gears: true } },
+      { paint: 'skyline', src: 'far',    h: 59, depth: 0.06, rate: 1, tone: -42, o: { style: 'castle' } },
+      { paint: 'gantry',  src: 'mid',    h: 72, depth: 0.28, rate: 3, tone: -26, o: { decks: 3, gears: true } },
+      { paint: 'gantry',  src: 'ground', h: 53, depth: 0.62, rate: 10, tone: -12, o: { decks: 2, gears: true } },
     ],
   },
   arena: {
@@ -1156,9 +1170,9 @@ const BIOMES = {
     sky: ['#0a0806', '#171009', '#241a0e'], horizon: 'moon',
     occluder: 'banner', platform: 'sand',
     layers: [
-      { paint: 'crowd',     src: 'far',    h: 46, depth: 0.08, rate: 0, tone: -40, o: { tiers: 3 } },
-      { paint: 'crowd',     src: 'mid',    h: 40, depth: 0.26, rate: 0, tone: -24, o: { tiers: 2, banners: true } },
-      { paint: 'colonnade', src: 'ground', h: 30, depth: 0.60, rate: 0, tone: -12, o: { pillarW: 8, gap: 26, top: 6 } },
+      { paint: 'crowd',     src: 'far',    h: 61, depth: 0.08, rate: 0, tone: -40, o: { tiers: 3 } },
+      { paint: 'crowd',     src: 'mid',    h: 53, depth: 0.26, rate: 0, tone: -24, o: { tiers: 2, banners: true } },
+      { paint: 'colonnade', src: 'ground', h: 40, depth: 0.60, rate: 0, tone: -12, o: { pillarW: 8, gap: 26, top: 6 } },
     ],
   },
   castle: {
@@ -1166,9 +1180,9 @@ const BIOMES = {
     sky: ['#070509', '#110a10', '#1b0f18'], horizon: 'glass',
     occluder: 'banner', platform: 'marble',
     layers: [
-      { paint: 'wall',      src: 'far',    h: 62, depth: 0.07, rate: 0, tone: -44, o: { brick: 7, brickW: 20, stains: true } },
-      { paint: 'colonnade', src: 'mid',    h: 54, depth: 0.28, rate: 2, tone: -28, o: { arch: true, pillarW: 12, gap: 24 } },
-      { paint: 'skyline',   src: 'ground', h: 34, depth: 0.62, rate: 8, tone: -14, o: { style: 'castle', glow: true } },
+      { paint: 'wall',      src: 'far',    h: 83, depth: 0.07, rate: 0, tone: -44, o: { brick: 7, brickW: 20, stains: true } },
+      { paint: 'colonnade', src: 'mid',    h: 72, depth: 0.28, rate: 2, tone: -28, o: { arch: true, pillarW: 12, gap: 24 } },
+      { paint: 'skyline',   src: 'ground', h: 45, depth: 0.62, rate: 8, tone: -14, o: { style: 'castle', glow: true } },
     ],
   },
 };
@@ -1414,11 +1428,11 @@ function buildLightRig(spec, stage, accent, isBoss) {
   const sx = Math.round(stage.w * ux);
   // The apparent source can sit anywhere, but the beam has to start far enough
   // above the deck to read as a beam rather than as a stain on the floor.
-  const sy = Math.min(Math.round(stage.ground * L.uy) - 6, stage.ground - 56);
+  const sy = Math.min(Math.round(stage.ground * L.uy) - 8, stage.ground - 75);
   // Where the light lands. Pulled back toward the middle of the fight, because
   // a key that lands outside the frame lights nothing the player is looking at.
-  const x = Math.round(lerp(stage.w / 2, sx, 0.66)) + (isBoss ? dir * 6 : 0);
-  const y = stage.ground - (isBoss ? 40 : 32);
+  const x = Math.round(lerp(stage.w / 2, sx, 0.66)) + (isBoss ? dir * 8 : 0);
+  const y = stage.ground - (isBoss ? 53 : 43);
   const colour = mix(accent, L.warm > 0.5 ? METAL.ember : METAL.chrome,
                      Math.abs(L.warm - 0.5) * 0.46);
   return {
@@ -1443,7 +1457,7 @@ function buildShaft(light, stage, seed) {
   const ctx = s.ctx;
   const rand = rng((seed ^ 0x5417f00d) >>> 0);
   const oy = PAD + light.sy;
-  const ty = PAD + stage.ground + 2;
+  const ty = PAD + stage.ground + 3;
   const span = Math.max(8, ty - oy);
   for (let b = 0; b < 4; b++) {
     const ap = 2 + rand() * 4;                     // half-width at the aperture
@@ -1519,7 +1533,11 @@ function buildSky(spec, tint, seed, W, H, boss) {
  * what makes the fight read as staged and elevated rather than as two sprites
  * standing in a field.
  */
-const PLATFORM_TOP = 12;   // rows of the canvas above the standing line
+/* 12 on the old 128-row frame, x4/3 with everything else the raster move
+ * touched. It is the visible thickness of the deck's top plane above the line
+ * the figures stand on, so it has to grow with the figures or the slab reads
+ * as a painted stripe. */
+const PLATFORM_TOP = 16;   // rows of the canvas above the standing line
 
 function bow(x, W, amount) {
   const u = (x / (W - 1)) * 2 - 1;
@@ -1537,8 +1555,8 @@ function buildPlatform(kind, c, seed, stage, boss) {
 
   for (let x = 0; x < W; x++) {
     const xs = x - PAD;
-    const backY = stand - 7 - bow(xs, stage.w, 3);
-    const lipY = stand + 3 + bow(xs, stage.w, 3);
+    const backY = stand - 9 - bow(xs, stage.w, 4);
+    const lipY = stand + 4 + bow(xs, stage.w, 4);
     // Top plane: darkest at the back, so the figures' feet sit on a lit strip.
     for (let y = backY; y <= lipY; y++) {
       const k = (y - backY) / Math.max(1, lipY - backY);
@@ -1566,7 +1584,7 @@ function buildPlatform(kind, c, seed, stage, boss) {
   // as a fence rather than as cut stone.
   for (let x = 2; x < W; x += 5 + Math.round(rand() * 7)) {
     const xs = x - PAD;
-    const lipY = stand + 3 + bow(xs, stage.w, 3);
+    const lipY = stand + 4 + bow(xs, stage.w, 4);
     const gh = 6 + Math.round(rand() * 8);
     ctx.globalAlpha = 0.5;
     ctx.fillStyle = METAL.black;
@@ -1581,8 +1599,8 @@ function buildPlatform(kind, c, seed, stage, boss) {
   if (kind === 'flag' || kind === 'stone' || kind === 'marble') {
     for (let x = 4; x < W; x += 17 + Math.round(rand() * 7)) {
       const xs = x - PAD;
-      const backY = stand - 7 - bow(xs, stage.w, 3);
-      const lipY = stand + 3 + bow(xs, stage.w, 3);
+      const backY = stand - 9 - bow(xs, stage.w, 4);
+      const lipY = stand + 4 + bow(xs, stage.w, 4);
       ctx.globalAlpha = 0.55;
       ctx.fillStyle = c.joint;
       ctx.fillRect(x, backY + 2, 1, lipY - backY - 1);
@@ -1606,12 +1624,12 @@ function buildPlatform(kind, c, seed, stage, boss) {
     }
   } else if (kind === 'cobble') {
     for (let i = 0; i < 260; i++) {
-      const x = Math.round(rand() * W), y = stand - 7 + Math.round(rand() * 10);
+      const x = Math.round(rand() * W), y = stand - 9 + Math.round(rand() * 13);
       blockEllipse(ctx, x, y, 1 + Math.round(rand() * 1), 1, rand() < 0.5 ? c.lip : c.joint, 0.6);
     }
   } else if (kind === 'sand' || kind === 'ash') {
     for (let i = 0; i < 420; i++) {
-      const x = Math.round(rand() * W), y = stand - 7 + Math.round(rand() * 11);
+      const x = Math.round(rand() * W), y = stand - 9 + Math.round(rand() * 15);
       ctx.globalAlpha = 0.35 + rand() * 0.4;
       ctx.fillStyle = rand() < 0.5 ? c.lip : c.joint;
       ctx.fillRect(x, y, 1, 1);
@@ -1629,7 +1647,7 @@ function buildPlatform(kind, c, seed, stage, boss) {
     for (let x = 0; x < W; x += kind === 'iron' ? 24 : 13) {
       ctx.globalAlpha = 0.5;
       ctx.fillStyle = c.joint;
-      ctx.fillRect(x, stand - 7, 1, 11);
+      ctx.fillRect(x, stand - 9, 1, 15);
       ctx.globalAlpha = 1;
       if (kind === 'iron') {                     // rivets
         for (let y = stand - 5; y < stand + 4; y += 4) {
@@ -1652,7 +1670,7 @@ function buildPlatform(kind, c, seed, stage, boss) {
   } else if (kind === 'sod') {
     for (let x = 0; x < W; x += 2) {             // blades along the lip
       const xs = x - PAD;
-      const lipY = stand + 3 + bow(xs, stage.w, 3);
+      const lipY = stand + 4 + bow(xs, stage.w, 4);
       const bh = 1 + Math.round(rand() * 3);
       ctx.fillStyle = rand() < 0.4 ? c.lip : c.joint;
       ctx.fillRect(x, lipY - bh, 1, bh + 1);
@@ -1688,7 +1706,7 @@ function buildPlatform(kind, c, seed, stage, boss) {
   }
   ctx.globalAlpha = 0.18;
   ctx.fillStyle = c.lip;
-  ctx.fillRect(PAD, stand + 6, stage.w, 1);
+  ctx.fillRect(PAD, stand + 8, stage.w, 1);
   ctx.globalAlpha = 1;
   return s.canvas;
 }
@@ -1774,7 +1792,7 @@ function buildBrazier(c) {
  * depth cue on the stage: the fight is happening *inside* a place, past the
  * pillar the camera is standing behind.
  */
-const OCC_W = PAD + 40;
+const OCC_W = PAD + 53;   // 40 was 20.8% of a 192 stage; 53 is 20.7% of 256
 
 function buildOccluder(kind, c, seed, stage) {
   const H = stage.h + PAD * 2;
@@ -1978,8 +1996,8 @@ function addTorchBracket(canvas, c, x, y) {
  * Its tall elements are kept to the outer thirty pixels of the frame. A tuft of
  * grass through the middle of a sword swing is not staging, it is an obstacle.
  */
-const APRON_OFF = 20;      // slack either side, so parallax cannot show an edge
-const APRON_LIFT = 2;      // rows above the standing line the crest may reach
+const APRON_OFF = 27;      // slack either side, so parallax cannot show an edge
+const APRON_LIFT = 3;      // rows above the standing line the crest may reach
 
 function buildApron(kind, c, seed, stage) {
   const W = stage.w + PAD * 2 + APRON_OFF * 2;
@@ -1989,7 +2007,7 @@ function buildApron(kind, c, seed, stage) {
   const rand = rng((seed ^ 0x4a27b19d) >>> 0);
   const edgeOf = (x) => {
     const xs = x - PAD - APRON_OFF;
-    return xs < 34 || xs > stage.w - 28;
+    return xs < 45 || xs > stage.w - 37;
   };
 
   // The crest: two sines and a hash jitter, so the near edge is a ragged line
@@ -2341,7 +2359,7 @@ function drawDrips(ctx, a, t, colour, stage) {
   for (let i = 0; i < a.length; i += 4) {
     const x = a[i], y0 = a[i + 1], period = a[i + 2];
     const k = (((t + a[i + 3]) % period) + period) % period / period;
-    const fall = stage.ground - 6 - y0;
+    const fall = stage.ground - 8 - y0;
     const y = y0 + fall * Math.min(1, k * k * 1.25);
     ctx.globalAlpha = 0.75;
     ctx.fillStyle = colour;
@@ -2353,8 +2371,8 @@ function drawDrips(ctx, a, t, colour, stage) {
       const s = (k - 0.92) / 0.08;
       ctx.globalAlpha = 0.6 * (1 - s);
       const r = Math.round(1 + s * 4);
-      ctx.fillRect(Math.round(x - r), stage.ground - 6, r * 2, 1);
-      ctx.fillRect(Math.round(x - 1), stage.ground - 7, 2, 1);
+      ctx.fillRect(Math.round(x - r), stage.ground - 8, r * 2, 1);
+      ctx.fillRect(Math.round(x - 1), stage.ground - 9, 2, 1);
     }
     ctx.globalAlpha = 1;
   }
@@ -2394,7 +2412,7 @@ const FB_BURST = 0.16;         // and bursting; the rest is dark sky
 
 function drawFireballs(ctx, a, t, stage, tint) {
   const top = -PAD;
-  const land = stage.ground - 6;
+  const land = stage.ground - 8;
   for (let i = 0; i < a.length; i += 6) {
     const period = a[i + 2];
     const k = (((t + a[i + 3]) % period) + period) % period / period;
@@ -2454,7 +2472,7 @@ function buildBolts(seed, count, stage) {
     const pts = [];
     let x = 24 + rand() * (stage.w - 48);
     let y = -8;
-    while (y < stage.ground - 20) {
+    while (y < stage.ground - 27) {
       pts.push(x, y);
       y += 5 + rand() * 9;
       x += (rand() - 0.5) * 18;
@@ -2505,7 +2523,7 @@ function drawBolt(ctx, pts, env, colour) {
  *
  * baseZoom is 1.03 rather than 1 so the frame is always slightly over-scanned.
  * That is what lets drift, lean and shake move the whole world without any
- * caller having to clamp them, and it costs 3% of a 192x128 stage.
+ * caller having to clamp them, and it costs 3% of a 256x224 stage.
  *
  * MOTION SICKNESS IS A FAILURE, so every term is small and the sum is clamped
  * hard at the end: seven logical pixels across, five down, and a fifth of a
@@ -2723,7 +2741,7 @@ export const camera = createCamera();
 export function applyCamera(ctx, cam, stage = SCENE_STAGE) {
   if (!cam) return;
   const cx = stage.w / 2;
-  const cy = stage.ground - 14;
+  const cy = stage.ground - 19;
   ctx.translate(cx + cam.ox, cy + cam.oy);
   ctx.scale(cam.zoom, cam.zoom);
   ctx.translate(-cx, -cy);
@@ -2743,7 +2761,7 @@ export function sceneAnchors(scene) {
     // Added alongside, never in place of: the one light, so a caller that
     // wants to lean a sprite's own shading the right way can ask.
     lightX: rig ? rig.x : stage.enemyX,
-    lightY: rig ? rig.y : stage.ground - 32,
+    lightY: rig ? rig.y : stage.ground - 43,
     lightDir: rig ? rig.dir : 1,
   };
 }
@@ -2757,7 +2775,7 @@ export function sceneLight(scene) {
   const rig = scene && scene.light;
   if (!rig) {
     return {
-      x: SCENE_STAGE.enemyX, y: SCENE_STAGE.ground - 32, sx: SCENE_STAGE.enemyX,
+      x: SCENE_STAGE.enemyX, y: SCENE_STAGE.ground - 43, sx: SCENE_STAGE.enemyX,
       sy: 20, dir: 1, warm: 0.2, spread: 1,
       colour: METAL.chrome, rim: METAL.bone, bounce: METAL.steel,
     };
@@ -2823,6 +2841,24 @@ export function createScene(opts = {}) {
    * a drizzle is a drizzle in the field and in the fight. */
   const dens = clamp(typeof wx.density === 'number' ? wx.density : 0.22,
                      0.08, 1);
+  /* HOW MUCH FRAME THERE IS TO FILL, relative to the frame every field count in
+   * this builder was authored against.
+   *
+   * The counts below — 46 raindrops in a storm, 34 flakes in a blizzard, 18
+   * dust motes — are DENSITIES written as absolute numbers, and they were
+   * written for a 192x128 stage. The raster moved to 256x224 and they did not,
+   * so the same number of drops was spread over 2.33 times the area: measured,
+   * storm coverage fell from 10.2% of the frame to 5.9% and snow from 13.8% to
+   * 10.1%, while scripts/verify/weather.mjs went on printing an unchanged
+   * "raindrops built: storm=46" before and after. A rendered storm was a
+   * handful of thin streaks.
+   *
+   * A FIELD is scaled by this. A discrete EVENT is not: the nine drips, the six
+   * lightning bolts and the five fireballs are things that happen rather than
+   * textures that cover, and the fireballs already compensate by falling
+   * further — their travel grew from 91 rows to 163 and their painted pixels
+   * from 22,356 to 25,699. */
+  const FIELD = (stage.w * stage.h) / (192 * 128);
 
   // A boss drags the whole room toward its own colour. That is most of why a
   // boss arena reads as a different place rather than as the same place louder.
@@ -2891,11 +2927,11 @@ export function createScene(opts = {}) {
   const light = buildLightRig(spec, stage, accent, isBoss);
   const keyX = light.x;
   const keyY = light.y;
-  const keyGlow = radialGlow(Math.round((isBoss ? 78 : 62) * light.spread), light.colour, 9, 1);
-  const floorPool = ovalGlow(Math.round((isBoss ? 62 : 46) * light.spread),
-                             isBoss ? 15 : 11, light.colour, 8, 0.9);
+  const keyGlow = radialGlow(Math.round((isBoss ? 104 : 83) * light.spread), light.colour, 9, 1);
+  const floorPool = ovalGlow(Math.round((isBoss ? 83 : 61) * light.spread),
+                             isBoss ? 20 : 15, light.colour, 8, 0.9);
   // Not a second key: the key coming back off the deck. Dimmer, cooler, low.
-  const fillGlow = radialGlow(44, light.bounce, 7, 1);
+  const fillGlow = radialGlow(59, light.bounce, 7, 1);
   const shaft = light.shaft > 0.1 ? buildShaft(light, stage, seed) : null;
   // The corners fall to the region's own darkness rather than to pure black,
   // which is a quarter of the per-realm mood on its own.
@@ -2913,8 +2949,14 @@ export function createScene(opts = {}) {
   const occRightSrc = buildOccluder(spec.occluder, occC, seed ^ 0x22, stage);
   const torches = [];
   if (has('torch')) {
-    const a = addTorchBracket(occLeft, occC, 34, 46);
-    addTorchBracket(occRightSrc, occC, 34, 46);
+    // 34,46 on the old stage. The x is a fraction of OCC_W and moves with it
+    // (34/56 = 0.607, 42/69 = 0.609); the y is NOT a fraction of the canvas —
+    // the occluder canvas grew 160 -> 256 rows and a proportional y would have
+    // slid the flame up to the ceiling. It is measured from the ground line,
+    // where a wall bracket actually lives: 75 rows above it before, 100 after,
+    // and the canvas is drawn at -PAD, so 175 - 100 + 16 = 91.
+    const a = addTorchBracket(occLeft, occC, 42, 91);
+    addTorchBracket(occRightSrc, occC, 42, 91);
     torches.push({ x: -PAD + a.x, y: -PAD + a.y, seed: 1.7 });
     // The right bracket is mirrored with its canvas, so its anchor mirrors too.
     torches.push({
@@ -2940,9 +2982,9 @@ export function createScene(opts = {}) {
   // depth ramp has nothing to hang on.
   const fogK = (has('fog') || has('godray')) ? (0.62 + 0.38 * dens) : 0.34;
   const fog = [];
-  fog.push({ canvas: buildFogBand(spec.fog, seed + 3, W2, 34), y: stage.ground - 44, rate: 3, depth: 0.25, alpha: 0.55 * fogK });
-  fog.push({ canvas: buildFogBand(spec.fog, seed + 7, W2, 26), y: stage.ground - 22, rate: 7, depth: 0.5, alpha: 0.42 * fogK });
-  fog.push({ canvas: buildFogBand(mix(spec.fog, METAL.black, 0.3), seed + 11, W2, 30), y: stage.ground + 2, rate: 13, depth: 0.9, alpha: 0.5 * fogK });
+  fog.push({ canvas: buildFogBand(spec.fog, seed + 3, W2, 45), y: stage.ground - 59, rate: 3, depth: 0.25, alpha: 0.55 * fogK });
+  fog.push({ canvas: buildFogBand(spec.fog, seed + 7, W2, 35), y: stage.ground - 29, rate: 7, depth: 0.5, alpha: 0.42 * fogK });
+  fog.push({ canvas: buildFogBand(mix(spec.fog, METAL.black, 0.3), seed + 11, W2, 40), y: stage.ground + 3, rate: 13, depth: 0.9, alpha: 0.5 * fogK });
   const godrays = has('godray')
     ? buildGodrays(mix(accent, METAL.bone, 0.35), seed, stage.w + PAD * 2, stage.ground + PAD)
     : null;
@@ -2951,12 +2993,13 @@ export function createScene(opts = {}) {
   const weather = has('ash') ? 'ash' : has('snow') ? 'snow' : has('leaves') ? 'leaves'
     : has('ember') ? 'ember' : null;
   if (weather) {
-    // The count is the condition's own weight. A flurry is fourteen flakes and
-    // a blizzard is thirty-four, and that difference is the whole reason a
-    // condition carries a density at all.
-    motes = buildMotes(seed + 17, Math.max(6, Math.round(34 * dens)),
+    // The count is the condition's own weight, and the weight is a DENSITY: a
+    // flurry is 14 flakes per 192x128 of frame and a blizzard is 34, which is
+    // the whole reason a condition carries a density at all. Multiplied by
+    // FIELD so that the next raster move cannot silently thin it out again.
+    motes = buildMotes(seed + 17, Math.max(6, Math.round(34 * dens * FIELD)),
                        stage.w, stage.ground);
-    foreMotes = buildMotes(seed + 23, Math.max(3, Math.round(14 * dens)),
+    foreMotes = buildMotes(seed + 23, Math.max(3, Math.round(14 * dens * FIELD)),
                            stage.w, stage.h);
     moteStyle = {
       ash:    { colour: mix(METAL.bone, METAL.steel, 0.55), dir: 1, speed: 5, sway: 4, alpha: 0.4, size: 1 },
@@ -2972,7 +3015,7 @@ export function createScene(opts = {}) {
       ? { colour: METAL.ember, dir: -1, speed: 11, sway: 3, alpha: 0.75, size: 1 }
       : moteStyle;
   }
-  const wisps = has('flies') ? buildMotes(seed + 31, 18, stage.w, stage.ground - 12) : null;
+  const wisps = has('flies') ? buildMotes(seed + 31, Math.round(18 * FIELD), stage.w, stage.ground - 16) : null;
   const drips = has('drip') ? buildDrips(seed, 9, stage) : null;
   /* REDUCED MOTION FREEZES THE WEATHER. IT DOES NOT DELETE IT.
    *
@@ -2994,17 +3037,17 @@ export function createScene(opts = {}) {
   // Rain is two sheets at two depths. The depth cue is entirely the speed and
   // the length of the streak; the near sheet is what puts the camera outside.
   const rain = has('rain')
-    ? buildRain(seed + 41, Math.max(10, Math.round(46 * dens)), stage.w, stage.ground + 4)
+    ? buildRain(seed + 41, Math.max(10, Math.round(46 * dens * FIELD)), stage.w, stage.ground + 5)
     : null;
   const foreRain = rain
-    ? buildRain(seed + 43, Math.max(5, Math.round(22 * dens)), stage.w, stage.h)
+    ? buildRain(seed + 43, Math.max(5, Math.round(22 * dens * FIELD)), stage.w, stage.h)
     : null;
   /* Fireballs. The volcano, by the player's own word for it. */
   const fireballs = has('fireball')
     ? buildFireballs(seed + 59, Math.max(2, Math.round(5 * dens)), stage)
     : null;
   // Dust in the beam. Every room gets it, because every room has a key light.
-  const dust = buildMotes(seed + 53, 18, stage.w, stage.ground - 6);
+  const dust = buildMotes(seed + 53, Math.round(18 * FIELD), stage.w, stage.ground - 8);
 
   /* ---- boss furniture ---- */
   const sigil = isBoss ? buildSigil(bossColour, seed, stage) : null;
@@ -3013,8 +3056,8 @@ export function createScene(opts = {}) {
     lit: mix(bossColour, METAL.ember, 0.4),
   }) : null;
   const braziers = isBoss ? [
-    { x: 24, y: stage.ground + 4, seed: 0.4 },
-    { x: stage.w - 24, y: stage.ground + 4, seed: 3.1 },
+    { x: 32, y: stage.ground + 5, seed: 0.4 },
+    { x: stage.w - 32, y: stage.ground + 5, seed: 3.1 },
   ] : null;
 
   /* ---- rim-light scratch pool ----
@@ -3143,7 +3186,7 @@ export function drawScene(ctx, scene, time = 0, cam = null) {
     ctx.globalAlpha = clamp(pulse, 0, 1) * 0.5;
     ctx.drawImage(scene.floorPool,
                   Math.round(stage.w / 2 - scene.floorPool.width / 2),
-                  Math.round(stage.ground - 16));
+                  Math.round(stage.ground - 21));
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
   }
@@ -3181,7 +3224,7 @@ export function drawScene(ctx, scene, time = 0, cam = null) {
   if (scene.drips) drawDrips(ctx, scene.drips, t, mix(scene.accent, '#ffffff', 0.5), stage);
   if (scene.rain) {
     drawRain(ctx, scene.rain, t, {
-      w: stage.w, h: stage.ground + 4, x0: 0, y0: 0,
+      w: stage.w, h: stage.ground + 5, x0: 0, y0: 0,
       colour: mix(scene.light.rim, '#ffffff', 0.3),
       // A drizzle is thinner AND fainter than a downpour. The count carries
       // most of it; this carries the rest.
@@ -3202,7 +3245,7 @@ export function drawScene(ctx, scene, time = 0, cam = null) {
     const pulse = 0.42 + 0.2 * Math.sin(t * 1.6) + 0.08 * noise(t * 5);
     ctx.globalCompositeOperation = 'lighter';
     ctx.globalAlpha = clamp(pulse, 0, 1);
-    ctx.drawImage(scene.sigil, 0, Math.round(stage.ground - 19));
+    ctx.drawImage(scene.sigil, 0, Math.round(stage.ground - 25));
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
   }
@@ -3244,9 +3287,9 @@ export function drawScene(ctx, scene, time = 0, cam = null) {
   }
   if (scene.dust) {
     drawDust(ctx, scene.dust, t, {
-      w: stage.w, h: stage.ground - 6, x0: 0, y0: 0,
+      w: stage.w, h: stage.ground - 8, x0: 0, y0: 0,
       colour: rig.rim, alpha: 0.5, speed: 3.2,
-      lightX: lerp(rig.sx, rig.x, 0.5), reach: 44 * rig.spread,
+      lightX: lerp(rig.sx, rig.x, 0.5), reach: 59 * rig.spread,
     });
   }
   ctx.globalAlpha = clamp(((scene.boss ? 0.24 : 0.16) + 0.04 * noise(t * 2.7 + 4)) * flick, 0, 1);
@@ -3258,8 +3301,8 @@ export function drawScene(ctx, scene, time = 0, cam = null) {
   // the shadow side from going to a dead black, which is all it is for.
   ctx.globalAlpha = 0.09;
   ctx.drawImage(scene.fillGlow,
-                Math.round(stage.w / 2 - rig.dir * 42 - scene.fillGlow.width / 2),
-                Math.round(stage.ground - 6 - scene.fillGlow.height / 2));
+                Math.round(stage.w / 2 - rig.dir * 56 - scene.fillGlow.width / 2),
+                Math.round(stage.ground - 8 - scene.fillGlow.height / 2));
   ctx.globalAlpha = 1;
   ctx.globalCompositeOperation = 'source-over';
 }

@@ -15,7 +15,7 @@ const allKinds = [...V.spells, ...Object.values(FX.DAMAGE_KIND)];
 let frames = 0;
 for (const kind of allKinds) {
   for (const reduced of [false, true]) {
-    const e = S.createEffect(kind, { x: 136, y: 100, reducedMotion: reduced, seed: 9 });
+    const e = S.createEffect(kind, { x: 184, y: 175, reducedMotion: reduced, seed: 9 });
     if (!e) { probs.push('null effect ' + kind); continue; }
     const dur = e.duration;
     if (!Number.isFinite(dur) || dur <= 0) probs.push(`${kind} bad duration ${dur}`);
@@ -26,7 +26,7 @@ for (const kind of allKinds) {
     exitLoop();
     e.cancel();
     // and through the fx.js adapter
-    const a = S.toFxEffect(S.createEffect(kind, { x: 136, y: 100, reducedMotion: reduced }));
+    const a = S.toFxEffect(S.createEffect(kind, { x: 184, y: 175, reducedMotion: reduced }));
     setWhere(`adapter ${kind}`);
     enterLoop(`adapter ${kind}`);
     for (let t = 0; t <= a.dur + 0.5; t += 0.016) { a.t = t; a.draw(ctx); frames++; }

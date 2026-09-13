@@ -30,10 +30,13 @@
  *
  * Faces are the fifth thing and they get their own vocabulary: seven emotes —
  * neutral, pleased, strained, alarmed, stubborn, delighted, defeated — two
- * authored frames each, on the hero at six pixels wide and on the portraits at
- * fourteen. The brow does most of the work in both, which is the one technique
- * worth stealing from the 16-bit era wholesale: a mouth at this resolution has
- * about two shapes in it, and a brow can move a whole row.
+ * authored frames each, on the hero at EIGHT pixels wide (§C-2 widened the skin
+ * box from six and this line said six for a whole art pass afterwards; see the
+ * note above HERO_FACE_FRONT for the columns that actually render, which are
+ * narrower still) and on the portraits at fourteen. The brow does most of the
+ * work in both, which is the one technique worth stealing from the 16-bit era
+ * wholesale: a mouth at this resolution has about two shapes in it, and a brow
+ * can move a whole row.
  */
 
 /* ---------- colour ---------- */
@@ -476,86 +479,86 @@ export function silhouetteAt(grid, box = 16) {
 export const HERO_W = 16;
 export const HERO_H = 24;
 
-const HERO_BODY = {
+export const HERO_BODY = {
   down: [
     '................',
-    '.....oooooo.....',
-    '....oHhhhhho....',
-    '...oHhhhhhhho...',
-    '...ohsssssSho...',
-    '...ohsssssSho...',
-    '...ohsssssSho...',
-    '...ohNssssSho...',
-    '....oNssssSo....',
-    '..occcccccccco..',
-    '.occcccccccccco.',
-    '.occttttttttcco.',
-    '.octttTTTTtttco.',
-    '..octtttttttco..',
-    '..ocggggggggco..',
-    '...octtttttco...',
-    '...occttttcco...',
-    '...occcccccco...',
+    '....oooooooo....',
+    '...oHHhhhhhho...',
+    '..oHHhhhhhhhho..',
+    '..ohssssssssho..',
+    '..ohssssssssho..',
+    '..ohssssssssho..',
+    '..ohNssssssSho..',
+    '...oNssssssSo...',
+    '..oCCccccccvvo..',
+    '.oCCccccccccvvo.',
+    '.oCcttttttttcvo.',
+    '.occttTTTTttvvo.',
+    '..octtttttttvo..',
+    '..ocggggggggvo..',
+    '...octtttttvo...',
+    '...occttttvvo...',
+    '...occccvvvvo...',
   ],
   up: [
     '................',
-    '.....oooooo.....',
-    '....oHhhhhho....',
-    '...oHhhhhhhho...',
-    '...oHhhhhhhho...',
+    '....oooooooo....',
+    '...oHHhhhhhho...',
+    '..oHHhhhhhhhho..',
+    '..oHhhhhhhhhho..',
+    '..ohhhhhhhhhho..',
+    '..ohhhHHHHhhho..',
+    '..ohhhhhhhhhho..',
     '...ohhhhhhhho...',
-    '...ohhHHHHhho...',
-    '...ohhhhhhhho...',
-    '....ohhhhhho....',
-    '..occcccccccco..',
-    '.occcccccccccco.',
-    '.occccCCCCcccco.',
-    '.occcCCCCCCccco.',
-    '..occcccccccco..',
-    '..occggggggcco..',
-    '...occcccccco...',
-    '...occcccccco...',
-    '...occcccccco...',
+    '..oCCccccccvvo..',
+    '.oCCccccccccvvo.',
+    '.oCcccCCCCcccvo.',
+    '.occCCCCCCccvvo.',
+    '..occccccccvvo..',
+    '..ocggggggggvo..',
+    '...occcccccvo...',
+    '...occccvvvvo...',
+    '...occcvvvvvo...',
   ],
   left: [
     '................',
-    '....oooooo......',
-    '...oshhhhho.....',
-    '..oNssshhhho....',
-    '..oNssshhhho....',
-    '..oNssshhhho....',
-    '..oNssshhhho....',
-    '..oNssshhhSo....',
-    '...oNssshho.....',
-    '..occcccccccco..',
-    '.ottttcccccccco.',
-    '.otTTtcccccccco.',
-    '.ottttcccccccco.',
-    '..oggggcccccco..',
-    '..ottttcccccco..',
-    '..otttccccccco..',
-    '...occccccccco..',
-    '...occcccccco...',
+    '...oooooooo.....',
+    '..oHHhhhhhhho...',
+    '..ossHHhhhhhho..',
+    '..ossssshhhhho..',
+    '..ossssshhhhho..',
+    '..ossssshhhhho..',
+    '..ossssshhhho...',
+    '..osssssShho....',
+    '..oCcccccccvvo..',
+    '.ottttCcccccvvo.',
+    '.otTTtCccccvcvo.',
+    '.ottttcccccvcvo.',
+    '..oggggcccvcvo..',
+    '..ottttcccvcvo..',
+    '..otttccccvcvo..',
+    '...occcccvccvo..',
+    '...occcvvvvco...',
   ],
   right: [
     '................',
-    '......oooooo....',
-    '.....oHhhhhho...',
-    '....oHhhhsssso..',
-    '....oHhhhsssso..',
-    '....oHhhhsssso..',
-    '....oHhhhsssso..',
-    '....oHhhhsssSo..',
-    '.....ohhsssSo...',
-    '..occcccccccco..',
-    '.occcccccctttto.',
-    '.occcccccctTTto.',
-    '.occcccccctttto.',
-    '..occccccggggo..',
-    '..occcccctttto..',
-    '..occcccccttto..',
-    '..occccccccco...',
-    '...occcccccco...',
+    '.....oooooooo...',
+    '...ohhhhhhhHHo..',
+    '..ohhhhhhHHsso..',
+    '..ohhhhhssssso..',
+    '..ohhhhhssssso..',
+    '..ohhhhhssssso..',
+    '...ohhhhssssso..',
+    '....ohhSssssso..',
+    '..ovvcccccccCo..',
+    '.ovvcccccCtttto.',
+    '.ovcvccccCtTTto.',
+    '.ovcvccccctttto.',
+    '..ovcvcccggggo..',
+    '..ovcvccctttto..',
+    '..ovcvccccttto..',
+    '..ovccvccccco...',
+    '...ocvvvvccco...',
   ],
 };
 
@@ -611,51 +614,51 @@ const HERO_LEGS = {
  * right hand is forward. */
 const HERO_ARMS = {
   down: [
-    ['occ..........cc.', 'occ..........cco', 'oss..........cco', '.oo..........sso', '..............oo', '................'],
-    ['occ..........cco', 'occ..........cco', 'oss..........sso', '.oo..........oo.', '................', '................'],
-    ['.cc..........cco', 'occ..........cco', 'occ..........sso', 'oss..........oo.', '.oo.............', '................'],
-    ['occ..........cco', 'occ..........cco', 'oss..........sso', '.oo..........oo.', '................', '................'],
+    ['oCco........ocC.', 'oCco........ocCo', 'oss.........ocCo', '.oo..........sso', '..............oo', '................'],
+    ['oCco........ocCo', 'oCco........ocCo', 'oss..........sso', '.oo..........oo.', '................', '................'],
+    ['.Cco........ocCo', 'oCco........ocCo', 'oCco.........sso', 'oss..........oo.', '.oo.............', '................'],
+    ['oCco........ocCo', 'oCco........ocCo', 'oss..........sso', '.oo..........oo.', '................', '................'],
   ],
   up: [
-    ['occ..........cc.', 'occ..........cco', 'ovv..........cco', '.oo..........vvo', '..............oo', '................'],
-    ['occ..........cco', 'occ..........cco', 'ovv..........vvo', '.oo..........oo.', '................', '................'],
-    ['.cc..........cco', 'occ..........cco', 'occ..........vvo', 'ovv..........oo.', '.oo.............', '................'],
-    ['occ..........cco', 'occ..........cco', 'ovv..........vvo', '.oo..........oo.', '................', '................'],
+    ['oCco........ocC.', 'oCco........ocCo', 'ovv.........ocCo', '.oo..........vvo', '..............oo', '................'],
+    ['oCco........ocCo', 'oCco........ocCo', 'ovv..........vvo', '.oo..........oo.', '................', '................'],
+    ['.Cco........ocCo', 'oCco........ocCo', 'oCco.........vvo', 'ovv..........oo.', '.oo.............', '................'],
+    ['oCco........ocCo', 'oCco........ocCo', 'ovv..........vvo', '.oo..........oo.', '................', '................'],
   ],
   left: [
-    ['occ.............', 'occ.............', 'oss.............', '.oo.............', '................', '................'],
-    ['................', 'occ.............', 'occ.............', 'oss.............', '.oo.............', '................'],
-    ['.............cco', '.............cco', '.............sso', '.............oo.', '................', '................'],
-    ['................', 'occ.............', 'occ.............', 'oss.............', '.oo.............', '................'],
+    ['oCco............', 'oCco............', 'oss.............', '.oo.............', '................', '................'],
+    ['................', 'oCco............', 'oCco............', 'oss.............', '.oo.............', '................'],
+    ['............ocCo', '............ocCo', '.............sso', '.............oo.', '................', '................'],
+    ['................', 'oCco............', 'oCco............', 'oss.............', '.oo.............', '................'],
   ],
   right: [
-    ['.............cco', '.............cco', '.............sso', '.............oo.', '................', '................'],
-    ['................', '.............cco', '.............cco', '.............sso', '.............oo.', '................'],
-    ['occ.............', 'occ.............', 'oss.............', '.oo.............', '................', '................'],
-    ['................', '.............cco', '.............cco', '.............sso', '.............oo.', '................'],
+    ['............ocCo', '............ocCo', '.............sso', '.............oo.', '................', '................'],
+    ['................', '............ocCo', '............ocCo', '.............sso', '.............oo.', '................'],
+    ['oCco............', 'oCco............', 'oss.............', '.oo.............', '................', '................'],
+    ['................', '............ocCo', '............ocCo', '.............sso', '.............oo.', '................'],
   ],
 };
 
 /* Three rows at y=17, drawn behind the legs and swayed a pixel per frame. */
-const HERO_HEM = {
+export const HERO_HEM = {
   down: [
-    '..occcccccccco..',
-    '.occcccccccccco.',
+    '..oCccvcccvcco..',
+    '.oCccvcccvcccco.',
     '..ovvvvvvvvvvo..',
   ],
   up: [
-    '..occcccccccco..',
-    '.occcccccccccco.',
+    '..oCccvcccvcco..',
+    '.oCccvcccvcccco.',
     '.ovvvvvvvvvvvvo.',
   ],
   left: [
-    '..occcccccccco..',
-    '.occccccccccco..',
+    '..oCccvcccvcco..',
+    '.oCccvcccvccco..',
     '..ovvvvvvvvo....',
   ],
   right: [
-    '..occcccccccco..',
-    '..occccccccccco.',
+    '..occvcccvccCo..',
+    '..occcvcccvccCo.',
     '....ovvvvvvvvo..',
   ],
 };
@@ -664,7 +667,7 @@ const HERO_HEM = {
  * battle panel, so the silhouette breaks the body box on both sides. */
 const HERO_CAST_ARMS = {
   down: [
-    'occ..........cco',
+    'oCco........ocCo',
     'oss..........sso',
     '.oo..........oo.',
     '................',
@@ -672,7 +675,7 @@ const HERO_CAST_ARMS = {
     '................',
   ],
   up: [
-    'occ..........cco',
+    'oCco........ocCo',
     'ovv..........vvo',
     '.oo..........oo.',
     '................',
@@ -680,7 +683,7 @@ const HERO_CAST_ARMS = {
     '................',
   ],
   left: [
-    'occ.............',
+    'oCco............',
     'oss.............',
     '.oo.............',
     '................',
@@ -688,7 +691,7 @@ const HERO_CAST_ARMS = {
     '................',
   ],
   right: [
-    '.............cco',
+    '............ocCo',
     '.............sso',
     '.............oo.',
     '................',
@@ -699,78 +702,155 @@ const HERO_CAST_ARMS = {
 
 /* ---------- the face ----------
  *
- * Five rows stamped over the skull at y=4. The hero's face is six pixels wide;
- * there is no room to be subtle, which is exactly why the BROW has to do the
- * work. Look down these tables in a column: the mouth barely changes between
- * strained and stubborn, and the two poses still read as different states,
- * because one has the brow driven down into the eye and the other has it flat
- * and heavy. That is the whole principle, applied at six pixels.
+ * Five rows stamped over the skull at y=4. The hero's face is EIGHT pixels wide
+ * — §C-2 widened the skin box from six and this comment went on saying six,
+ * which is how a new emote gets authored into a box two columns narrower than
+ * the one that exists. HERO_BODY.down rows 4..8 put skin at cols 4..11; the
+ * profile bodies put it at cols 3..7.
+ *
+ * THE BOX THAT RENDERS IS SMALLER THAN THE BOX THAT IS AUTHORED, and the
+ * difference was measured by flipping one cell at a time, re-rendering in a
+ * fresh module instance and counting changed pixels:
+ *
+ *   front    rows 0..2  cols 4..11   (col 3 is eaten by the low-left rim)
+ *            rows 3..4  cols 4..10   (the weapon crosses cols 11..13 there)
+ *   profile  row  0     cols 4..7    (col 3 is rim on the left facing)
+ *            rows 1..2  cols 3..7
+ *            rows 3..4  cols 4..7    (col 3 is rim on the RIGHT facing, whose
+ *                                     table is a frozen mirror built below)
+ *
+ * A cell outside those windows is paid for in the authored strip, counted by
+ * the harness, and never seen. Two of them were doing real damage: alarmed's
+ * outer lower sclera sat at front col 11 under the blade, and the delighted
+ * profile spent one of its four blink cells on the head's own outline column,
+ * so the blink rendered three pixels against a law that asks for four. Both
+ * moved inward; neither costs a colour.
+ *
+ * Brows are hair-coloured, so a brow cell that lands on the hair rather than on
+ * the skin is invisible even where the probe calls it live: front cols 3 and 12
+ * and profile col 8 are hair on rows 0..1. Keep brows inside the skin.
+ *
+ * The BROW still does the work. Look down these tables in a column: the mouth
+ * barely changes between strained and stubborn, and the two poses still read as
+ * different states, because one has the brow driven down into the eye and the
+ * other has it flat and heavy.
  *
  * Two frames each, so every emote can breathe: frame 1 is a blink, a squeeze or
  * a jaw-set rather than the same face two pixels brighter. */
-const HERO_FACE_FRONT = {
+export const HERO_FACE_FRONT = {
   neutral: [
-    ['................', '.....hh..hh.....', '.....wo..ow.....', '................', '.......oo.......'],
-    ['................', '.....hh..hh.....', '.....oo..oo.....', '................', '.......oo.......'],
+    ['................', '....hhh..hhh....', '....wwo..oww....', '................', '.......oo.......'],
+    ['................', '....hhh..hhh....', '....ooo..ooo....', '................', '.......oo.......'],
   ],
+  // ARCHED. The brow lifts toward the middle: the outer end stays on row 1 and
+  // the inner half steps up to row 0. It used to put that outer end on cols 3
+  // and 12, which are hair, so half of this brow was never drawn.
   pleased: [
-    ['.....hh..hh.....', '.....o....o.....', '.....wo..ow.....', '................', '......oooo......'],
-    ['.....hh..hh.....', '.....o....o.....', '......o..o......', '................', '......oooo......'],
+    ['.....hh..hh.....', '....h......h....', '....wwo..oww....', '................', '.....owwwwo.....'],
+    ['.....hh..hh.....', '....h......h....', '.....oo..oo.....', '.....o....o.....', '.....owwwwo.....'],
   ],
   strained: [
-    ['................', '.....ho..oh.....', '.....oo..oo.....', '......oooo......', '......wwww......'],
-    ['................', '.....oh..ho.....', '.....oo..oo.....', '......oooo......', '......oooo......'],
+    ['................', '....hho..ohh....', '....ooo..ooo....', '.....w....w.....', '......oooo......'],
+    ['................', '....hoo..ooh....', '....ooo..ooo....', '.....w....w.....', '......wwww......'],
   ],
+  // RAISED, the whole brow one row up and off the eye. The lower sclera pulls in
+  // to cols 5..10: col 11 on row 3 is under the blade and never reached the
+  // screen, so the eye that faces.mjs counted as ten cells was rendering nine.
   alarmed: [
-    ['.....hh..hh.....', '................', '.....ww..ww.....', '.....wo..ow.....', '.......oo.......'],
-    ['.....hh..hh.....', '................', '.....wo..ow.....', '.....ww..ww.....', '.......oo.......'],
+    ['....hhh..hhh....', '................', '....www..www....', '.....ow..wo.....', '.......oo.......'],
+    ['....hhh..hhh....', '................', '....wow..wow....', '.....ww..ww.....', '.......oo.......'],
   ],
   stubborn: [
-    ['................', '.....hhhhhh.....', '.....wo..ow.....', '................', '.....oooooo.....'],
-    ['................', '.....hhhhhh.....', '.....oo..oo.....', '................', '.....oooooo.....'],
+    ['................', '....hhhhhhhh....', '....oww..wwo....', '................', '.....oooooo.....'],
+    ['................', '....hhhhhhhh....', '....ooo..ooo....', '................', '.....oooooo.....'],
   ],
   delighted: [
-    ['.....hh..hh.....', '......o..o......', '.....o....o.....', '.....oooooo.....', '......wwww......'],
-    ['.....hh..hh.....', '......o..o......', '.....oo..oo.....', '.....oooooo.....', '......wwww......'],
+    ['....h.h..h.h....', '....o.o..o.o....', '.....oo..oo.....', '................', '....owwwwwo.....'],
+    ['....h.h..h.h....', '....o.o..o.o....', '....ooo..ooo....', '.....o....o.....', '....owwwwwo.....'],
   ],
+  /* THE ONE FACE THAT HAD NO EYE IN IT.
+   *
+   * Frame 0 used to be a solid dark lid over a bare sclera row — '....ooo..ooo'
+   * above '.....ww..ww' — with no dark cell anywhere inside the white, so there
+   * was nothing on the sprite that read as an eyeball. faces.mjs printed
+   * "defeated sclera 4 pupil 6" and the six were the LID.
+   *
+   * It gets a real sclera-pupil-sclera pair, low in the socket so the head still
+   * reads as downcast. That does not fit at cols 4..6 / 9..11, because col 11 on
+   * row 3 is under the blade, so the eyes move one column closer together — a
+   * narrower eye-set, which is the right face for this emote anyway, and it
+   * buys separation from every other emote in the table at the same time. */
   defeated: [
-    ['......h..h......', '.....h....h.....', '.....oo..oo.....', '................', '......o..o......'],
-    ['......h..h......', '.....h....h.....', '................', '.......oo.......', '......o..o......'],
+    ['......h..h......', '....hh....hh....', '....ooo.ooo.....', '....wow.wow.....', '......o..o......'],
+    ['......h..h......', '....hh....hh....', '....ooo.ooo.....', '................', '......o..o......'],
   ],
 };
 
 /* The profile face: one eye and a four-pixel jaw, authored for `left` and
  * mirrored for `right`. The head is the one part of the hero that IS a true
  * mirror between the two side views — the torso is not, which is why the bodies
- * stay authored separately. */
-const HERO_FACE_PROFILE = {
+ * stay authored separately.
+ *
+ * THIS IS THE FACE A FIGHT SHOWS. fx.js draws the battle hero from
+ * heroSprites().side, and heroSprites sets side = right, so the profile is the
+ * only face on the battle stage and the front face is reachable only on the
+ * overworld. That made the weakest of the three views the one the player looks
+ * at most: measured in PIXELS off the raster rather than in authored cells, the
+ * old table separated its closest pair by 7 on the left facing and 6 on the
+ * right, against 9 for the front, and three of its seven emotes carried no
+ * pupil at all.
+ *
+ * So it is re-authored rather than abandoned. Drawing the battle hero
+ * front-on was the other option and it is refused: he would face the camera
+ * while fighting something to his right, which is a bigger lie than a face two
+ * pixels short.
+ *
+ * THE BOX IS FIVE COLUMNS AND NOT ALL OF THEM RENDER. HERO_BODY puts profile
+ * skin at cols 3..7; the low-left rim eats col 3 on row 0 of the LEFT facing
+ * and on rows 3..4 of the RIGHT one, because the mirror table below is built
+ * from this one and the right body is authored separately. Measured cell by
+ * cell, what survives on BOTH facings is:
+ *      row 0  cols 4..7      row 1  cols 3..7     row 2  cols 3..7
+ *      row 3  cols 4..7      row 4  cols 4..8  (col 8 is the jaw shadow)
+ * Every cell below is inside that. The eye is two rows now — sclera across row
+ * 2, pupil low in row 3 — which is what buys both the pupil and the separation
+ * in a box this small. */
+export const HERO_FACE_PROFILE = {
   neutral: [
-    ['................', '...hhh..........', '....wo..........', '................', '...oo...........'],
-    ['................', '...hhh..........', '....oo..........', '................', '...oo...........'],
+    ['................', '....hhh.........', '...www..........', '....ow..........', '.....oo.........'],
+    ['................', '....hhh.........', '...ooo..........', '................', '.....oo.........'],
   ],
+  // ARCHED, and looking away rather than through you: the pupil sits at the
+  // BACK of the eye, which is the one thing a profile can say that a front view
+  // cannot.
   pleased: [
-    ['...hhh..........', '...o............', '....wo..........', '................', '...ooo..........'],
-    ['...hhh..........', '...o............', '.....o..........', '................', '...ooo..........'],
+    ['.....hh.........', '...hh..h........', '...wwo..........', '....ww..........', '....owwo........'],
+    ['.....hh.........', '...hh..h........', '...ooo..........', '................', '....owwo........'],
   ],
+  // The brow driven down INTO the eye, and teeth bared on the effort. Frame 1
+  // clamps the jaw shut on them.
   strained: [
-    ['................', '...hho..........', '....oo..........', '...oooo.........', '...www..........'],
-    ['................', '...ohh..........', '....oo..........', '...oooo.........', '...ooo..........'],
+    ['................', '...hhoo.........', '...ooo..........', '....w...........', '....wwwo........'],
+    ['................', '...hooo.........', '...ooo..........', '....w...........', '....oooo........'],
   ],
   alarmed: [
-    ['...hhh..........', '................', '....ww..........', '....wo..........', '....oo..........'],
-    ['...hhh..........', '................', '....wo..........', '....ww..........', '....oo..........'],
+    ['....hhhh........', '................', '...wow..........', '....ww..........', '.....ww.........'],
+    ['....hhhh........', '................', '...ooo..........', '................', '.....ww.........'],
   ],
+  // Half-lidded, and the lid comes from the FRONT: two dark cells with the
+  // sclera behind them is a glare, where the same two cells behind the sclera
+  // would be a squint.
   stubborn: [
-    ['................', '...hhhh.........', '....wo..........', '................', '...oooo.........'],
-    ['................', '...hhhh.........', '....oo..........', '................', '...oooo.........'],
+    ['......hh........', '...hhhhh........', '...oow..........', '.....w..........', '....ooooo.......'],
+    ['......hh........', '...hhhhh........', '...ooo..........', '................', '.....oo.........'],
   ],
   delighted: [
-    ['...hhh..........', '.....o..........', '....o...........', '...oooo.........', '...www..........'],
-    ['...hhh..........', '.....o..........', '....oo..........', '...oooo.........', '...www..........'],
+    ['....h.h.........', '....o.o.........', '...ooo..........', '................', '....owwwo.......'],
+    ['....h.h.........', '....ooo.........', '...oooo.........', '....oo..........', '....owwwo.......'],
   ],
   defeated: [
-    ['....hh..........', '...h............', '....oo..........', '................', '...oo...........'],
-    ['....hh..........', '...h............', '................', '....oo..........', '...oo...........'],
+    ['.....h..........', '...h............', '...ooo..........', '....wow.........', '....o..o........'],
+    ['.....h..........', '...h............', '...oooo.........', '................', '....o..o........'],
   ],
 };
 
@@ -1449,52 +1529,75 @@ function dulled(grid, tier) {
  */
 const HELM = {
   down: {
-    shell: { 2: '....oMmmmmAo....', 3: '...oMmmmmmmAo...', 4: '...oAmmmmmmAo...' },
-    split: { 1: '.......x........', 2: '.......A........', 3: '.......A........', 4: '.......A........' },
-    // Wire-bound over the break: the crown is CLOSED again, which is the whole
-    // difference between Split and Bound, and the binding's ends stand proud of
-    // the skull so the repair reads from the OUTLINE and not only from the
-    // colour. A tier-up nobody can see is a number in a menu.
-    wire:  { 2: '..og.g....g.go..', 3: '......g..g......' },
-    seam:  { 2: '........A.......', 3: '........A.......', 4: '........A.......' },
-    // The guard flares PAST the skull at cols 2 and 13. That is the whole
-    // point of a cheek piece at this size: it is the one part of a helm that
-    // can make the head a different shape rather than a different colour.
-    cheek: { 5: '....m......m....', 6: '..omm......mmo..', 7: '..omm......mmo..' },
-    crest: { 1: '....oggggggo....' },
-    plume: { 0: '......oggo......', 1: '...ooggggggoo...' },
+    shell: { 2: '..oMmmmmmmmmAo..', 3: '..oMmmmmmmmmAo..', 4: '..oAmmmmmmmmAo..' },
+    split: {
+      1: '.......x........',
+      2: '.......A........',
+      3: '.......A........',
+      4: '.......A........',
+    },
+    wire : { 2: '.og..g....g..go.', 3: '.....g....g.....' },
+    seam : { 2: '........A.......', 3: '........A.......', 4: '........A.......' },
+    cheek: { 5: '...m........m...', 6: '.omm........mmo.', 7: '.omm........mmo.' },
+    crest: { 1: '...oggggggggo...' },
+    plume: { 0: '......oggo......', 1: '..ooggggggggoo..' },
     nasal: { 5: '.......M........', 6: '.......m........', 7: '.......m........' },
-    jaw:   { 8: '.....m....m.....' },
+    jaw  : { 8: '....m......m....' },
   },
   up: {
-    shell: { 2: '....oMmmmmAo....', 3: '...oMmmmmmmAo...', 4: '...oMmmmmmmAo...',
-             5: '...ommmmmmmAo...', 6: '...oAmmmmmmAo...', 7: '...oAAmmmmAAo...' },
-    split: { 1: '.......x........', 2: '.......A........', 3: '.......A........', 4: '.......A........' },
-    wire:  { 2: '..og.g....g.go..', 3: '......g..g......' },
-    seam:  { 2: '........A.......', 3: '........A.......', 4: '........A.......' },
-    cheek: { 6: '..omm......mmo..', 7: '..omm......mmo..', 8: '.....m....m.....' },
-    crest: { 1: '....oggggggo....', 2: '.......gg.......', 3: '.......gg.......',
-             4: '.......gg.......', 5: '.......gg.......' },
-    plume: { 0: '......oggo......', 1: '...ooggggggoo...', 2: '.......gg.......',
-             3: '.......gg.......', 4: '.......gg.......', 5: '.......gg.......',
-             6: '.......gg.......' },
-    nasal: { 8: '....ommmmmmo....' },
-    jaw:   {},
+    shell: {
+      2: '..oMmmmmmmmmAo..',
+      3: '..oMmmmmmmmmAo..',
+      4: '..oMmmmmmmmmAo..',
+      5: '..ommmmmmmmmmo..',
+      6: '..oAmmmmmmmmAo..',
+      7: '..oAAmmmmmmAAo..',
+    },
+    split: {
+      1: '.......x........',
+      2: '.......A........',
+      3: '.......A........',
+      4: '.......A........',
+    },
+    wire : { 2: '.og..g....g..go.', 3: '.....g....g.....' },
+    seam : { 2: '........A.......', 3: '........A.......', 4: '........A.......' },
+    cheek: { 6: '.omm........mmo.', 7: '.omm........mmo.', 8: '....m......m....' },
+    crest: {
+      1: '...oggggggggo...',
+      2: '.......gg.......',
+      3: '.......gg.......',
+      4: '.......gg.......',
+      5: '.......gg.......',
+    },
+    plume: {
+      0: '......oggo......',
+      1: '..ooggggggggoo..',
+      2: '.......gg.......',
+      3: '.......gg.......',
+      4: '.......gg.......',
+      5: '.......gg.......',
+      6: '.......gg.......',
+    },
+    nasal: { 8: '...ommmmmmmmo...' },
+    jaw  : {},
   },
-  // Authored for `left`; `right` is this table mirrored. The skull IS a true
-  // mirror between the two side views even though the torso is not, which is
-  // the same reason HERO_FACE_PROFILE gets mirrored and HERO_BODY does not.
   left: {
-    shell: { 2: '...oMmmmmAo.....', 3: '..oMmmmmmmAo....', 4: '..oAmmmmmmAo....',
-             5: '.......mmmAo....', 6: '.......mmmAo....', 7: '.......mmAo.....' },
-    split: { 1: '......x.........', 2: '.....A..........', 3: '.....A..........' },
-    wire:  { 2: '.og..g...g.go...', 3: '......g.g.......' },
-    seam:  { 2: '........A.......', 3: '........A.......', 4: '........A.......' },
-    cheek: { 5: '.om...m.....mo..', 6: '.om...m.....mo..' },
-    crest: { 1: '...oogggggo.....' },
-    plume: { 0: '.......oggo.....', 1: '...oogggggoo....' },
-    nasal: { 4: '.om.............' },
-    jaw:   { 5: '.om.............', 7: '...m............' },
+    shell: {
+      2: '..oMmmmmmmmmAo..',
+      3: '..oMmmmmmmmmAo..',
+      4: '..oAmmmmmmmmAo..',
+      5: '........mmmmAo..',
+      6: '........mmmmAo..',
+      7: '........mmmAo...',
+    },
+    split: { 1: '.......x........', 2: '.......A........', 3: '.......A........' },
+    wire : { 2: '.og..g....g..go.', 3: '.....g....g.....' },
+    seam : { 2: '.........A......', 3: '.........A......', 4: '.........A......' },
+    cheek: { 5: '.om.........mmo.', 6: '.om.........mmo.' },
+    crest: { 1: '...oggggggo.....' },
+    plume: { 0: '.....oggo.......', 1: '..ooggggggoo....' },
+    nasal: { 4: '..om............' },
+    jaw  : { 5: '..om............', 7: '...m............' },
   },
 };
 
@@ -2030,6 +2133,10 @@ const DEFAULT_HERO = {
   cloak: '#3f6fa8', tunic: '#5a4a6a', skin: '#e8b88a', hair: '#4a3050',
   boot: '#40312c', trim: '#d8b04a', metal: '#c3cbd8', weapon: 'sword',
   emote: 'neutral',
+  // §E. `class_id` takes the server's `sprite` field (classes.py:359, exposed by
+  // class_view()). Absent, the generic hero renders exactly as before, which is
+  // what every non-class screen in the game still wants.
+  class_id: null, body: 'a',
 };
 
 /* Equipment tints the hero rather than replacing him: a region palette can be
@@ -2162,9 +2269,210 @@ export function heroPalette(opts) {
     pal.m = metal.base;
     pal.b = ramp(o.boot).base;
   } else {
-    pal.A = pal.K; pal.m = pal.w; pal.b = pal.v;
+    // An unarmoured boot still has to be a BOOT and not the shin above it. `v`
+    // is a half-step off the trouser's `K` and vanishes at 1x, so bare leather
+    // borrows the tunic's entry — already bought, still fifteen.
+    pal.A = pal.K; pal.m = pal.w; pal.b = pal.t;
   }
   return pal;
+}
+
+/* ================================================================
+ * §E. THE CLASS CONTRACT — six silhouettes, two bodies, twelve sprites
+ * ================================================================
+ * gauntlet/classes.py has carried a `sprite` field since the classes landed and
+ * nothing in here ever read it: all six classes rendered the identical hero.
+ * These strips are stamped onto the MERGED figure, after the arms and before the
+ * erase pass, so a class can cut the silhouette as well as add to it — which is
+ * the only way "tell a Berserker from a Seer with the colour off" is winnable.
+ *
+ * Six shape families, no repeats, because that is what makes the greyscale test
+ * pass: rectangle, inverted triangle, bell, slab, asymmetric, point.
+ *
+ * One strip set serves all four facings. The class tell is a SILHOUETTE event at
+ * the edge of the box — a hood peak, a blade tip, a shield edge — and none of
+ * those turn with the body the way a torso does.
+ */
+export const HERO_CLASSES = ['analyst', 'berserker', 'archivist', 'warden', 'artificer', 'seer'];
+export const HERO_BODY_TYPES = ['a', 'b'];
+
+const CLASS_RIG = {
+  /* RECTANGLE. Straight vertical sides: the arms' break-out is erased, so this
+   * is the one class where nothing projects sideways. A thin rod stands over
+   * the head — and it stands OFF CENTRE, because the helmet crest at tier 4
+   * paints row 0 cols 6..9 and every player wears a helmet at integrity 100
+   * from the first frame (engine.py's new-game armour block), so a rod centred
+   * on the skull was a tell that one hundred percent of players never saw.
+   *
+   * It also occupies row 1. The idle-0 pose sinks the head one row
+   * (sinkRows(body, 0, 9, 1) in heroFrame) and classShape stamps in UNSUNK
+   * grid space, so a rod that lived only on row 0 came away from the skull on
+   * four of the twenty-eight views — an 8-connected component count found a
+   * 4px bar floating in mid-air on every idle-0 of the bare rig. Row 1 bridges
+   * the sink. */
+  analyst: {
+    0:  '..........oggo..', 1:  '..........oggo..',
+    10: 'xo............ox', 11: 'xo............ox',
+    12: 'xo.wwwwwwwwww.ox',                      // calipers, held open across the chest
+    13: 'xo............ox', 14: 'xo............ox', 15: 'xo............ox',
+  },
+  // INVERTED TRIANGLE. Widest shoulders in the set, and two blade tips standing
+  // above the shoulder line — the only upward double-break in the cast.
+  berserker: {
+    3:  'ow............wo', 4:  'ow............wo', 5:  'ow............wo',
+    6:  'ow............wo', 7:  'ow............wo', 8:  'ow............wo',
+    9:  'oCccccccccccccCo', 10: 'oCccccccccccccCo',
+  },
+  // BELL. Floor-length hem widening below the knee, with a chain off the belt
+  // crossing it. Bottom-heavy, and the shoulders are pulled in to say so.
+  archivist: {
+    10: 'x..............x', 11: 'x..............x', 12: 'x..............x',
+    15: '....g...........', 16: '....g...........', 17: '....g...........',
+    18: '....g...........',
+    19: '..ocgcccccccco..', 20: '.occgccccccccco.',
+    21: '.occgccccccccco.', 22: 'occcgcccccccccco', 23: 'occcgcccccccccco',
+  },
+  /* SLAB. A tower shield fills the off side shoulder to knee: half figure, half
+   * wall, and the only class with one straight vertical edge down a whole side.
+   *
+   * IT USED TO BE THE SHIELD THE PLAYER WAS ALREADY WEARING. The slab sat on
+   * rows 9..20 of cols 0..4, which is exactly the box shieldGrid() fills at
+   * SHIELD_SIDE[dir].ox — and armour starts at integrity 100, so the tower and
+   * the aegis were the same rectangle from the first frame of a new save.
+   * Measured on the live /api/state payload, warden against the classless hero
+   * came to ZERO alpha cells of 384 in four of the twenty-eight views.
+   *
+   * So the tower now goes where the aegis does not: up past the shoulder to
+   * head height (narrow there, cols 0..2, so it never crosses the face box —
+   * front cols 4..11, profile cols 3..7) and down past the shield's bottom edge
+   * to the ground line. The rows that buy the silhouette are the ones outside
+   * the shield's own 11..21: 3..8 at the top and 22..23 at the foot. */
+  warden: {
+    3:  'oMo.............', 4:  'oMo.............', 5:  'oMo.............',
+    6:  'oMo.............', 7:  'oMo.............', 8:  'oMmo............',
+    9:  'oMmmo...........', 10: 'oMmmo...........', 11: 'oMmmo...........',
+    12: 'oMmmo...........', 13: 'oMmmo...........', 14: 'oMmmo...........',
+    15: 'oMmmo...........', 16: 'oMmmo...........', 17: 'oMmmo...........',
+    18: 'oMmmo...........', 19: 'oMmmo...........', 20: 'oMmmo...........',
+    21: 'oMmmo...........', 22: 'oMmmo...........', 23: 'oMmmo...........',
+  },
+  // ASYMMETRIC. A tool rack projects off one shoulder and the other is bare, so
+  // the two sides of the outline disagree by three pixels. Nothing else does.
+  artificer: {
+    6:  '.............oAo', 7:  '.............oAo', 8:  '............oAmo',
+    9:  'xxxo........oAmo', 10: 'xxxo........oAmo', 11: 'xxxo........oAmo',
+    12: 'xxxo........oAmo', 13: 'xxxo........oAmo',
+    14: 'xx..............', 15: 'xx..............',
+  },
+  /* POINT. The only head in the cast that comes to a point — and the point has
+   * to be WIDER than the helm crest rather than taller than it, because row 0
+   * is the ceiling of the rig and the crest already owns cols 6..9 of it. The
+   * old strip claimed to "clear the skull by two rows" and did not: rows 1..3
+   * landed inside the dome the body grid already draws, so only row 0 was above
+   * it, and that row was under the crest. Seer against the classless hero
+   * measured 1 to 9 alpha cells of 384 across all 28 views.
+   *
+   * The tell is now the whole GARMENT rather than the peak alone, and it is
+   * built out of the three places the dressed rig actually has air: an
+   * eight-cell crown standing two columns proud of the crest on each side, a
+   * brim at cols 0..1 and 14..15 beside the temple, and a robe hem across rows
+   * 19..20 that closes the gap between the legs. Measured against the DEFAULT
+   * kit rather than a bare hero, that takes seer-vs-classless from 1 alpha cell
+   * of 384 in its worst view to 10, and seer-vs-warden from 4 to 22.
+   *
+   * The brim stops at row 3 on purpose: rows 4..8 of cols 0..1 and 14..15 are
+   * where the berserker's blade tips stand, and two classes spending the same
+   * air pocket is how berserker-vs-seer got down to 1 cell the first time this
+   * was tried. */
+  seer: {
+    0:  '....cccccccc....', 1:  '...cccccccccc...',
+    2:  'cc............cc', 3:  'cc............cc',
+    19: '.occcccccccccco.', 20: '.occcccccccccco.',
+  },
+};
+
+/* §E-3. The two bodies differ ONLY in the torso and hem grids — shoulder line,
+ * waist, hem flare. The head, the face table and every gear anchor are shared,
+ * which is the point: twelve sprites that each re-author a face would be twelve
+ * chances to break §C. */
+const BODY_RIG = {
+  a: null,
+  b: {
+    /* THE SHOULDER, AND THE PIXEL IT USED TO LEAVE BEHIND.
+     *
+     * This narrowing was authored as '.xo..........ox.' — ERASE at cols 1 and
+     * 14 with the new outline at 2 and 13 — which cuts the MIDDLE of the arm
+     * and leaves its outermost column standing. Counted on the dressed rig,
+     * down/walk0 row 10 came out '#.############.#': a one-pixel vertical
+     * sliver at col 0 and another at col 15, each separated from the torso by a
+     * one-pixel hole, hanging off the body from row 9 to row 13 and joined to
+     * it only where row 13 runs full width. It survived the island check for
+     * that reason alone.
+     *
+     * The erase goes on the OUTER columns now, so the arm loses its outside
+     * edge rather than its second one, and row 9 loses both of its own orphan
+     * pairs the same way. */
+    9:  'xxx..........xxx',
+    10: 'xxo..........oxx', 11: 'xxo..........oxx', 12: 'xxo..........oxx',
+  },
+  /* THE HEM FLARE IS CONDITIONAL, AND IT HAS TO BE.
+   *
+   * It was three unconditional rows — '.oc..........co.' on 21, 22 and 23 —
+   * which is right on a facing whose legs stand under cols 1..14 and wrong on a
+   * side-facing stride, where the leg grid is somewhere else entirely and the
+   * flare lands on air. An 8-connected component count over 28 views found a
+   * detached 2x3 block beside the foot on SIX of them for every body-b rig,
+   * the classless hero included: left/walk1, left/walk3, left/cast0,
+   * right/walk1, right/walk3 and right/cast0.
+   *
+   * MANTLE and CLOAK solve the same problem by being authored per facing. This
+   * one is solved by asking the grid instead: each flare cell is painted only
+   * if the cell one step toward the centre is already filled, worked from the
+   * inside out, so the hem can only ever widen a leg that is actually there.
+   * `x` cuts air and there has never been a glyph that means "only if
+   * touching", which is why this is a rule rather than a row. */
+  bFlare: { rows: [21, 22, 23], left: [[2, 'c'], [1, 'o']], right: [[13, 'c'], [14, 'o']] },
+};
+
+function classKey(o) {
+  const k = String(o.class_id || o.sprite || '');
+  return HERO_CLASSES.indexOf(k) >= 0 ? k : '';
+}
+function bodyKey(o) {
+  const b = String(o.body || 'a');
+  return HERO_BODY_TYPES.indexOf(b) >= 0 ? b : 'a';
+}
+/* Stamped on the merged grid, before stripErase, so 'x' cuts real air and the
+ * shading pass lights the edge the cut made. */
+function classShape(grid, cls, body) {
+  let g = grid;
+  if (cls && CLASS_RIG[cls]) g = overlay(g, CLASS_RIG[cls]);
+  if (BODY_RIG[body]) {
+    g = overlay(g, BODY_RIG[body]);
+    if (body === 'b') g = hemFlare(g, BODY_RIG.bFlare);
+  }
+  return g;
+}
+
+/* Widen a hem only where there is already a hem to widen. See BODY_RIG.bFlare:
+ * the pairs are worked from the inside out, so the outer cell can only land
+ * once the inner one has, and a facing whose leg is not under this column gets
+ * no flare at all rather than a block of cloak standing in mid-air. */
+function hemFlare(grid, spec) {
+  if (!spec) return grid;
+  let g = grid;
+  for (const y of spec.rows) {
+    if (y < 0 || y >= g.length) continue;
+    for (const side of [spec.left, spec.right]) {
+      for (const [x, glyph] of side) {
+        const inward = side === spec.left ? x + 1 : x - 1;
+        const under = g[y][inward];
+        if (under === undefined || under === '.' || under === ' ' || under === ERASE) break;
+        g = setCell(g, y, x, glyph);
+      }
+    }
+  }
+  return g;
 }
 
 /* ---------- frames ---------- */
@@ -2185,7 +2493,7 @@ for (const k of Object.keys(HERO_FACE_PROFILE)) {
 function heroKey(o, facing, frame, pose, emote, gear, rung, line, band, half) {
   return `${facing}:${frame}:${pose}:${emote}:${o.cloak}:${o.tunic}:${o.skin}`
        + `:${o.hair}:${o.boot}:${o.trim}:${o.metal}:${o.weapon}:${gear.key}:${rung}`
-       + `:${line}:${band}:${half}`;
+       + `:${line}:${band}:${half}:${classKey(o)}:${bodyKey(o)}`;
 }
 
 /* pose: 'walk' | 'idle' | 'cast'. `opts.emote` picks the face, and the face's
@@ -2300,7 +2608,8 @@ export function heroFrame(facing = 'down', frame = 0, opts, pose = 'walk') {
   // boundary and the hero comes apart into the pieces he was built from. The
   // erase pass runs in between, so a notched crest is real air by the time the
   // shading sees it and the new edge gets lit like any other edge.
-  const grid = rimLowLeft(applyRim(stripErase(mergeGrids(HERO_W, HERO_H, layers))), 'R', 'wWMe');
+  const shaped = classShape(mergeGrids(HERO_W, HERO_H, layers), classKey(o), bodyKey(o));
+  const grid = rimLowLeft(applyRim(stripErase(shaped)), 'R', 'wWMe');
   const canvas = gridSprite(grid, pal, HERO_W, HERO_H);
   heroCache.set(key, canvas);
   capCache(heroCache, HERO_CACHE_MAX);
@@ -2335,7 +2644,7 @@ export function heroSilhouette(facing = 'down', frame = 0, opts, pose = 'walk') 
     : weaponGrid(o.weapon, weaponRung(o), weaponLine(o), weaponBand(o), weaponHalf(o));
   const anchor = WEAPON_ANCHOR[dir];
   const side = SHIELD_SIDE[dir];
-  return silhouetteAt(stripErase(mergeGrids(HERO_W, HERO_H, [
+  return silhouetteAt(stripErase(classShape(mergeGrids(HERO_W, HERO_H, [
     gear.shield >= 0 ? { grid: shieldGrid(dir, gear.shield), ox: side.ox, oy: 11 } : null,
     { grid: hem, oy: 17 },
     { grid: legs, oy: 18 },
@@ -2343,7 +2652,7 @@ export function heroSilhouette(facing = 'down', frame = 0, opts, pose = 'walk') 
     { grid: arms, oy: 10 },
     over ? { grid: over, oy: 9 } : null,
     weapon ? { grid: weapon, ox: anchor[0], oy: anchor[1] } : null,
-  ].filter(Boolean))), 16);
+  ].filter(Boolean)), classKey(o), bodyKey(o))), 16);
 }
 
 /* Four-frame contact/pass/contact/pass cycle. Drive it from distance travelled,

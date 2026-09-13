@@ -2616,7 +2616,7 @@ const ART = {
     name: 'Lich', wide: false, colour: '#8f3f6f', accent: '#c7a6ff', anim: 'float',
     body: { half: LICH_BODY, oy: 1, drift: { x: 0, y: 1, rate: 1, phase: 0.25 } }, wear: 0.05,
     motion: { bob: 3, sway: 2, phase: 0.50, period: 2600, telegraph: 900 },
-    stage: { scale: 1.75, sink: 11, bias: -8 },
+    stage: { scale: 2, sink: 11, bias: -9 },
     core: null,                                       // the reliquary is authored in the ribs
     faults: [[26, 8, 12], [38, 8, 12], [19, 26, 7], [45, 26, 7]],
     shed: 'soul',                                // shorn: the soul in its orbit goes out
@@ -2637,7 +2637,7 @@ const ART = {
     name: 'Dragon', wide: true, colour: '#3f9c5a', accent: '#d8c07a', anim: 'flap',
     body: { grid: DRAGON_BODY, ox: 40, oy: 28, drift: { x: 0, y: 1, rate: 1, phase: 0.20 } }, wear: 0.04,
     motion: { bob: 3, sway: 1, phase: 0.30, period: 1500, telegraph: 520 },
-    stage: { scale: 1.5, sink: 4, bias: 0 },
+    stage: { scale: 2, sink: 3, bias: -12 },
     core: [55, 40],                                   // furnace behind the sternum
     faults: [[30, 26, 12], [52, 34, 14], [60, 46, 10]],
     shed: 'wing',                                // shorn: a wing is torn off at the shoulder
@@ -2666,7 +2666,7 @@ const ART = {
     name: 'Knight', wide: false, colour: '#d8d8e0', accent: '#8e1d28', anim: 'heavy',
     body: { half: KNIGHT_BODY, oy: 4, drift: { x: 0, y: 1, rate: 1, phase: 0 } }, wear: 0.06,
     motion: { bob: 1, sway: 0, phase: 0.90, period: 3000, telegraph: 760 },
-    stage: { scale: 1.75, sink: 9, bias: -8 },
+    stage: { scale: 2, sink: 9, bias: -9 },
     core: [32, 29],                                   // the reactor under the breastplate
     faults: [[24, 23, 14], [40, 23, 14], [32, 44, 12]],
     shed: 'shield',                                // shorn: the rubric-shield is struck out of its hand
@@ -2684,7 +2684,7 @@ const ART = {
     name: 'Titan', wide: false, colour: '#e8a33d', accent: '#f0d79a', anim: 'heavy',
     body: { half: TITAN_BODY, oy: 6, drift: { x: 0, y: 1, rate: 1, phase: 0.5 } }, wear: 0.07,
     motion: { bob: 2, sway: 0, phase: 0.00, period: 2800, telegraph: 820 },
-    stage: { scale: 1.75, sink: 10, bias: -8 },
+    stage: { scale: 2, sink: 10, bias: -9 },
     core: null,
     faults: [[22, 28, 14], [43, 28, 14]],
     shed: 'keys',                                // shorn: the ring of keys snaps off the belt
@@ -2699,7 +2699,7 @@ const ART = {
     name: 'Colossus', wide: false, colour: '#3f7f9c', accent: '#a8c8d8', anim: 'heavy',
     body: { half: COLOSSUS_BODY, oy: 13, drift: { x: 0, y: 1, rate: 1, phase: 0.1 } }, wear: 0.09,
     motion: { bob: 2, sway: 1, phase: 0.62, period: 2200, telegraph: 700 },
-    stage: { scale: 1.75, sink: 10, bias: -8 },
+    stage: { scale: 2, sink: 10, bias: -9 },
     core: null,
     faults: [[20, 30, 14], [45, 32, 12]],
     shed: 'maul',                                // shorn: it drops the maul
@@ -2713,7 +2713,7 @@ const ART = {
     name: 'Hydra', wide: true, colour: '#4fb783', accent: '#d8e87a', anim: 'coil',
     body: { grid: HYDRA_BODY, ox: 28, oy: 35, drift: { x: 0, y: 1, rate: 1, phase: 0.4 } }, wear: 0.04,
     motion: { bob: 2, sway: 2, phase: 0.20, period: 1700, telegraph: 480 },
-    stage: { scale: 1.5, sink: 4, bias: 0 },
+    stage: { scale: 2, sink: 3, bias: 0 },
     core: [48, 46],
     faults: [[36, 44, 12], [60, 44, 12]],
     /* The only creature here that GAINS mass where everything else loses it —
@@ -2749,7 +2749,7 @@ const ART = {
     name: 'Wraith', wide: false, colour: '#7f6ad6', accent: '#d8d0ff', anim: 'float',
     body: { half: WRAITH_BODY, oy: 8, drift: { x: 1, y: 1, rate: 1, phase: 0.3 } }, wear: 0.03,
     motion: { bob: 4, sway: 3, phase: 0.40, period: 2300, telegraph: 560 },
-    stage: { scale: 1.75, sink: 12, bias: -8 },
+    stage: { scale: 2, sink: 12, bias: -9 },
     core: null,
     faults: [[16, 30, 10], [46, 30, 10]],
     shed: 'ragR',                                // shorn: half the shroud is torn away
@@ -2766,7 +2766,7 @@ const ART = {
     name: 'Behemoth', wide: false, colour: '#c4553f', accent: '#f0a86a', anim: 'heavy',
     body: { half: BEHEMOTH_BODY, oy: 14, drift: { x: 0, y: 1, rate: 1, phase: 0.15 } }, wear: 0.08,
     motion: { bob: 2, sway: 1, phase: 0.60, period: 2000, telegraph: 600 },
-    stage: { scale: 1.75, sink: 10, bias: -8 },
+    stage: { scale: 2, sink: 10, bias: -9 },
     core: [32, 30],
     faults: [[14, 24, 14], [50, 24, 14]],
     shed: 'tail',                                // shorn: the tail is severed
@@ -2781,7 +2781,7 @@ const ART = {
     name: 'Golem', wide: false, colour: '#8a8f9c', accent: '#5a9ec4', anim: 'heavy',
     body: { half: GOLEM_BODY, oy: 14, drift: { x: 0, y: 1, rate: 1, phase: 0.5 } }, wear: 0.14,
     motion: { bob: 1, sway: 0, phase: 0.10, period: 3200, telegraph: 980 },
-    stage: { scale: 1.75, sink: 9, bias: -8 },
+    stage: { scale: 2, sink: 9, bias: -9 },
     core: null,
     faults: [[14, 32, 14], [48, 32, 14]],
     shed: 'runeB',                                // shorn: the second rune goes dark
@@ -2798,7 +2798,7 @@ const ART = {
     name: 'Ent', wide: false, colour: '#6b8f3f', accent: '#9fd05a', anim: 'root',
     body: { half: ENT_BODY, oy: 8, drift: { x: 1, y: 0, rate: 1, phase: 0.25 } }, wear: 0.10,
     motion: { bob: 1, sway: 2, phase: 0.70, period: 3400, telegraph: 880 },
-    stage: { scale: 1.75, sink: 9, bias: -8 },
+    stage: { scale: 2, sink: 9, bias: -9 },
     core: [32, 36],
     faults: [[22, 44, 14], [42, 44, 14]],
     shed: 'branch',                                // shorn: a limb comes off — the literal kind
@@ -2813,7 +2813,7 @@ const ART = {
     name: 'Necromancer', wide: false, colour: '#6a4f8f', accent: '#b0e0c0', anim: 'float',
     body: { half: NECRO_BODY, oy: 14, drift: { x: 0, y: 1, rate: 1, phase: 0.2 } }, wear: 0.04,
     motion: { bob: 2, sway: 1, phase: 0.50, period: 2500, telegraph: 700 },
-    stage: { scale: 1.75, sink: 10, bias: -8 },
+    stage: { scale: 2, sink: 10, bias: -9 },
     core: null,
     faults: [[10, 25, 8], [50, 25, 8]],
     shed: 'skullB',                                // shorn: one of the bound skulls breaks up
@@ -2830,7 +2830,7 @@ const ART = {
     name: 'Automaton', wide: false, colour: '#b0763f', accent: '#7fe6ff', anim: 'tick',
     body: { half: AUTOMATON_BODY, oy: 11, drift: { x: 0, y: 1, rate: 0.5, phase: 0.25 } }, wear: 0.11,
     motion: { bob: 1, sway: 0, phase: 0.80, period: 1800, telegraph: 400 },
-    stage: { scale: 1.75, sink: 9, bias: -8 },
+    stage: { scale: 2, sink: 9, bias: -9 },
     core: [32, 30],
     faults: [[16, 32, 14], [48, 32, 14]],
     shed: 'piston',                                // shorn: the piston blows out of its housing
@@ -2852,7 +2852,7 @@ const ART = {
     name: 'Demon', wide: false, colour: '#c43f4f', accent: '#ff9d4a', anim: 'flap',
     body: { half: DEMON_BODY, oy: 11, drift: { x: 0, y: 1, rate: 1, phase: 0.35 } }, wear: 0.05,
     motion: { bob: 2, sway: 1, phase: 0.15, period: 1500, telegraph: 320 },
-    stage: { scale: 1.75, sink: 10, bias: -8 },
+    stage: { scale: 2, sink: 10, bias: -9 },
     core: [32, 33],
     faults: [[18, 40, 12], [46, 40, 12]],
     shed: 'wingR',                                // shorn: the right wing is taken off
@@ -2877,7 +2877,7 @@ const ART = {
     name: 'Wyrm', wide: true, colour: '#3f6f9c', accent: '#7fe6ff', anim: 'coil',
     body: { grid: WYRM_COIL, ox: 54, oy: 47 }, wear: 0.04,
     motion: { bob: 2, sway: 3, phase: 0.35, period: 1900, telegraph: 540 },
-    stage: { scale: 1.5, sink: 4, bias: 0 },
+    stage: { scale: 2, sink: 3, bias: 0 },
     core: [62, 44],
     faults: [[50, 38, 12], [64, 52, 12]],
     shed: 'fin',                                // shorn: the dorsal fin shears away
@@ -2917,7 +2917,7 @@ const ART = {
     // longest in the file on purpose: it gives you time, which is the one thing
     // the room it stands in does not.
     motion: { bob: 2, sway: 2, phase: 0.2, period: 2400, telegraph: 720 },
-    stage: { scale: 1.5, sink: 4, bias: 0 },
+    stage: { scale: 2, sink: 3, bias: -14 },
     core: [66, 43],
     faults: [[54, 37, 12], [68, 51, 12]],
     shed: 'hat',                                // shorn: the hat comes off. It does not pick it up.
@@ -3388,10 +3388,12 @@ export const BOSS_MOTION = Object.freeze(Object.fromEntries(
       wide: !!art.wide,
       floats,
       /* What the battle stage should draw it at, and how far its feet go under
-       * the floor. A 64-box boss at 1.75 stands 112 tall against a 72-tall
-       * hero and fills the stage from just under its ceiling down through the
-       * ground line — which is the whole point, and is why `sink` exists: the
-       * feet are meant to be under the floor, not standing on a shelf. */
+       * the floor. A 64-box boss at 2 stands 128 tall against a 96-tall hero
+       * and fills the stage from well down the sky through the ground line —
+       * which is the whole point, and is why `sink` exists: the feet are meant
+       * to be under the floor, not standing on a shelf. 128 is also §B's
+       * tallest rung, so the biggest thing in the game and the biggest box the
+       * ladder allows are now the same height. */
       scale: (art.stage && art.stage.scale) || 1.5,
       sink: (art.stage && art.stage.sink) || 0,
       bias: (art.stage && art.stage.bias) || 0,
@@ -3423,16 +3425,82 @@ export function bossMotion(key) {
 /* The stage default, and the value fx.js passes. It is deliberately still 1.5:
  * a caller that asks for "the stage scale" gets a number that is safe for any
  * box, and drawBoss then refines it per archetype (BOSS_MOTION[key].scale) so
- * a 64-box creature is drawn at 1.75 and a 96-box one stays at 1.5. Passing a
+ * a 64-box creature is drawn at 2 and a 96-box one stays at 1.5. Passing a
  * scale that is NOT this constant means the caller has its own opinion — the
  * overworld draws bosses at 1 on a 16px tile map — and is honoured verbatim.
  *
- * Why 1.75 for the 64-box: 64 * 1.75 = 112, which against STAGE.enemyX = 136
- * on a 192-wide stage is exactly the width available, and against the hero's
- * 72 makes the boss half again as tall as the thing fighting it. Destination
- * coordinates must be rounded or the half-pixel lands between two source rows.
+ * WHY 2 FOR THE 64-BOX, RE-DERIVED AGAINST THE 256x224 RASTER. The old 1.75
+ * came from one measurement: 64 * 1.75 = 112, and 112 is exactly twice the
+ * 192 - 136 = 56 the creature had to the right of STAGE.enemyX, so it filled
+ * the frame to its edge. On the new stage that same sum gives 2 * (256 - 184)
+ * / 64 = 2.25 — and 2.25 is refused for two reasons. It is not a whole number,
+ * which puts a half source pixel across every row of a 144-tall creature; and
+ * 64 * 2.25 = 144 plus a 12-pixel sink lands the feet on row 199, the last row
+ * of the safe area, with nothing in hand.
+ *
+ * 2 is the whole number under it. 64 * 2 = 128, which is §B's tallest rung —
+ * the same 96x128 the final boss is authored at — so the largest creature the
+ * ladder allows and the largest one the stage draws are one height. Standing
+ * on the ground line at 175 with a sink of 9..12 it spans roughly rows 65..195,
+ * inside the 24..199 safe area at both ends, and 128 wide centred on 184 it
+ * runs 120..248 with 8 columns to spare at the frame edge. Against the hero's
+ * 96 it is a third again as tall, which is what a boss has to be.
+ *
+ * THE 96-BOX WIDE RIGS USED TO KEEP 1.5, AND 1.5 IS NOT A WHOLE NUMBER EITHER.
+ *
+ * The comment above rejects 1.75 because it "is not a whole number"; 1.5 fails
+ * the same test and shipped anyway. The stage is drawn under
+ * ctx.setTransform(px, ...), so a grid cell lands on `scale * px` device
+ * pixels, and that product has to be an integer at EVERY px the fit produces.
+ * Driven live and counted, px is not always even:
+ *   1280x800  dpr1  px 2  -> 1.5 * 2 = 3      whole
+ *   1440x940  dpr1  px 2  -> 3                whole
+ *   1600x1000 dpr1  px 3  -> 4.5              HALF A PIXEL
+ *   1920x1080 dpr1  px 3  -> 4.5              HALF A PIXEL
+ *   1440x940  dpr2  px 5  -> 7.5              HALF A PIXEL
+ *   1600x1000 dpr2  px 6  -> 9                whole
+ * Rendered at 4.5 and counted: 48 of the dragon's 96 source columns come out 4
+ * device columns wide and 48 come out 5, and 32 of its 64 rows come out 4 rows
+ * tall against 32 at 5. Put beside a whole x4 render of the same head the
+ * teeth are uneven, one horn is a pixel fatter than the other and the two
+ * pupils are different sizes. Three of the six configurations this game opens
+ * at are on that grid.
+ *
+ * THE ARITHMETIC ALLOWS EXACTLY TWO ANSWERS AND ONLY ONE OF THEM IS A BOSS.
+ * A cell must land on a whole number of logical pixels, so a 96-cell rig can be
+ * 96 logical wide (scale 1) or 192 (scale 2) and nothing in between. 144 is not
+ * reachable from 96 cells: rasterising the rig "at its final stage size" of
+ * 144x96 would need cells 1.5 canvas pixels wide, which is the same half pixel
+ * moved one step earlier in the pipeline, and re-authoring the four rigs into a
+ * 72x64 box to reach 144 at scale 2 would cost real drawing — measured across
+ * every frame and phase, the painted content spans 81 columns for the dragon,
+ * 84 for the wyrm and 91 for the interpreter, so 72 clips wing, staff and coil.
+ *
+ * So 2, and the wide rigs are 192x128 on the stage. That is §B's 96x128 rung in
+ * logical pixels, which is precisely what the old note here asked for ("the rung
+ * wants... promoting to §B's 96x128 final-boss box"), and it costs no art: every
+ * authored pixel survives, drawn twice as big.
+ *
+ * WHAT 192 COSTS, MEASURED, AND WHY IT IS PAID. 192 centred on enemyX 184 runs
+ * 88..280, so each wide archetype carries a `bias` that pulls its PAINTED box
+ * back inside the frame — computed from the painted bounding box, not guessed:
+ *   dragon       paints cols  9..89  ->  bias -12, on screen  94..255
+ *   hydra        paints cols 28..68  ->  bias   0, on screen 144..225
+ *   wyrm         paints cols  0..83  ->  bias   0, on screen  88..255
+ *   interpreter  paints cols  0..90  ->  bias -14, on screen  74..255
+ * The hero stands 32..95. So on the frames where the wyrm's and the
+ * interpreter's coils swing furthest left they reach BEHIND him — which is why
+ * fx.js now draws the hero after the enemy rather than before it. A creature
+ * this size cannot both clear the party and keep its own tail, and of the two
+ * the party is the one that must never be hidden.
+ *
+ * `sink` drops from 4 to 3 so the feet keep the same 6 logical rows under the
+ * ground line they had at 1.5.
+ *
+ * Destination coordinates must be rounded or the half-pixel lands between two
+ * source rows.
  */
-export const BOSS_STAGE_SCALE = 1.5;
+export const BOSS_STAGE_SCALE = 2;
 
 /* The scale a given archetype actually wants on the battle stage. */
 export function bossStageScale(key) {
@@ -4054,8 +4122,9 @@ export function drawBoss(ctx, key, x, y, opts = {}) {
   // continuous, the frames are not, and a boss that only moved on frame change
   // would step rather than drift. The horizontal half is capped: something
   // this heavy does not slide five pixels sideways, and the cap is also what
-  // keeps a 112-wide creature inside a 192-wide stage at every phase of it.
-  const dx = Math.max(-3, Math.min(3, Math.round(pose.dx * scale)));
+  // keeps a 128-wide creature inside a 256-wide stage at every phase of it —
+  // 184 + 64 + 4 = 252, four columns short of the edge at full sway.
+  const dx = Math.max(-4, Math.min(4, Math.round(pose.dx * scale)));
   const dy = Math.round(pose.dy * scale);
   const foot = Math.round(y + sink * scale);
   const left = Math.round(x + bias - w / 2) + dx;

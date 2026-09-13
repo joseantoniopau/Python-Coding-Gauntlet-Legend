@@ -1735,6 +1735,24 @@ class Game:
             # equippedHeroSprites(gear) draws the real rung in the hand; this is
             # the one slot that has anything to say.
             look["_gear"] = {"weapon": _forge_item_dict(weapon_id)}
+        # THE CLASS THE PLAYER CHOSE, ON THE SPRITE THEY WALK AROUND IN.
+        #
+        # sprites.js has carried CLASS_RIG since §E landed and classKey() reads
+        # `class_id || sprite`. This dict is the ONLY sprite-options payload the
+        # client ever renders the hero from — dashboard() ships it as
+        # `hero`, main.js hands it to Overworld.setEquipment and overworld.js
+        # hands it to sprites.heroSprites — and it carried neither field, so
+        # classKey() returned '' and all six classes drew one body. Proved on
+        # the live app: after POST /api/class/choose the rendered frame was
+        # byte-identical to the classless hero.
+        #
+        # No translation table: the six CharacterClass.sprite values in
+        # classes.py are byte-identical to the six ids, and to HERO_CLASSES in
+        # sprites.js. An unchosen class leaves the key off and falls back to the
+        # generic hero, which is what it did before.
+        cls = (self.state.get("class") or {}).get("class", "")
+        if cls:
+            look["sprite"] = cls
         return look
 
     def forge_card(self) -> dict:

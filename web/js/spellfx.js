@@ -18,7 +18,7 @@
  * Contract, per effect:
  *   e.start(state)   bind to a stage/caster/target, reset the clock
  *   e.step(dt)       advance; returns e.done
- *   e.draw(ctx)      paint in logical stage units (192x128, ground at 100)
+ *   e.draw(ctx)      paint in logical stage units (256x224, ground at 175)
  *   e.done           true once the effect has fully dissipated
  *   e.duration       seconds, already adjusted for reduced motion
  *   e.impactAt       0..1 — the beat the caller should sync a hit or sfx to
@@ -43,9 +43,12 @@ import { rng, hash, shade, mix } from './sprites.js';
 
 export const SPELLFX_VERSION = '1.2.0';
 
-/* Logical stage units. Same numbers as fx.js STAGE; overridable per effect. */
+/* Logical stage units. Same numbers as fx.js STAGE; overridable per effect.
+ * Moved with the raster to 256x224 (docs/08-art-direction §A). safeTop/safeH
+ * are carried so an effect that wants to know where the player can actually see
+ * does not have to guess: rows 24..199 are the promise, the rest is overscan. */
 export const STAGE_GEOM = Object.freeze({
-  w: 192, h: 128, ground: 100, heroX: 46, enemyX: 136,
+  w: 256, h: 224, safeTop: 24, safeH: 176, ground: 175, heroX: 64, enemyX: 184,
 });
 
 /* Mirrored from fx.js DAMAGE_KIND so ATTACK_ANIMATIONS can be keyed by it
@@ -909,6 +912,8 @@ class Effect {
       ground: st.ground === undefined ? STAGE_GEOM.ground : st.ground,
       heroX: st.heroX === undefined ? STAGE_GEOM.heroX : st.heroX,
       enemyX: st.enemyX === undefined ? STAGE_GEOM.enemyX : st.enemyX,
+      safeTop: st.safeTop === undefined ? STAGE_GEOM.safeTop : st.safeTop,
+      safeH: st.safeH === undefined ? STAGE_GEOM.safeH : st.safeH,
     };
     const S = this.stage;
     if (o.reducedMotion !== undefined) this.reducedMotion = !!o.reducedMotion;
@@ -921,11 +926,11 @@ class Effect {
     this.colour = resolveColour(this.def.colour, o.colour);
     this.from = {
       x: o.from && o.from.x !== undefined ? o.from.x : S.heroX,
-      y: o.from && o.from.y !== undefined ? o.from.y : S.ground - 20,
+      y: o.from && o.from.y !== undefined ? o.from.y : S.ground - 27,
     };
     this.to = {
       x: o.to && o.to.x !== undefined ? o.to.x : S.enemyX,
-      y: o.to && o.to.y !== undefined ? o.to.y : S.ground - 30,
+      y: o.to && o.to.y !== undefined ? o.to.y : S.ground - 40,
     };
     /* Bounding box of the thing being hit. Bosses are 48 logical units and mobs
      * 24 at their draw scale, so the caller passes the real one when it knows. */
@@ -1245,7 +1250,7 @@ function resolveColour(base, override) {
 class OracleEffect extends Effect {
   build() {
     const S = this.stage;
-    this.eye = { x: lerp(this.from.x, this.to.x, 0.2), y: S.ground - 78 };
+    this.eye = { x: lerp(this.from.x, this.to.x, 0.2), y: S.ground - 104 };
     this.aim = { x: this.to.x, y: this.box.y + this.box.h * 0.42 };
   }
 
@@ -1576,7 +1581,7 @@ class PseudosightEffect extends Effect {
     const S = this.stage;
     this.page = {
       x: lerp(this.from.x, this.to.x, 0.34) - 26,
-      y: S.ground - 84,
+      y: S.ground - 112,
       w: 52, h: 58,
     };
     this.rows = [];
@@ -1696,7 +1701,7 @@ class PseudosightEffect extends Effect {
 class CodeFragmentEffect extends Effect {
   build() {
     const S = this.stage;
-    this.anchor = { x: lerp(this.from.x, this.to.x, 0.42), y: S.ground - 62 };
+    this.anchor = { x: lerp(this.from.x, this.to.x, 0.42), y: S.ground - 83 };
     this.lines = [];
     const n = 5;
     for (let i = 0; i < n; i++) {
@@ -1707,8 +1712,8 @@ class CodeFragmentEffect extends Effect {
         cells: 5 + ((this.rand() * 6) | 0),
         seed: (this.seed + i * 7919) >>> 0,
         y: i * 7,
-        fx: side < 0 ? -40 - this.rand() * 40 : S.w + 20 + this.rand() * 40,
-        fy: S.ground - 110 + this.rand() * 90,
+        fx: side < 0 ? -53 - this.rand() * 53 : S.w + 27 + this.rand() * 53,
+        fy: S.ground - 147 + this.rand() * 120,
         at: 0.14 + i * 0.055,
       });
     }
@@ -1824,8 +1829,8 @@ class CodeFragmentEffect extends Effect {
 class PhoenixEffect extends Effect {
   build() {
     const S = this.stage;
-    this.nest = { x: this.from.x, y: S.ground - 2 };
-    this.apex = { x: lerp(this.from.x, this.to.x, 0.42), y: S.ground - 84 };
+    this.nest = { x: this.from.x, y: S.ground - 3 };
+    this.apex = { x: lerp(this.from.x, this.to.x, 0.42), y: S.ground - 112 };
     this.gathers = [];
     for (let i = 0; i < 22; i++) {
       this.gathers.push({
@@ -1944,7 +1949,7 @@ class PhoenixEffect extends Effect {
       // The ground under the caster heats before anything else happens.
       const heat = easeOut(gather);
       ctx.fillStyle = rgba(col.key, live * heat * 0.4);
-      ctx.fillRect(px(this.nest.x - 14 * heat), px(S.ground - 2), px(28 * heat), 2);
+      ctx.fillRect(px(this.nest.x - 19 * heat), px(S.ground - 3), px(37 * heat), 3);
     }
 
     // Ignition column.
@@ -1988,7 +1993,7 @@ class PhoenixEffect extends Effect {
       // Feathers fall out of the impact and settle.
       for (const f of this.feathers) {
         const fx = this.to.x + (f.x - 0.5) * 70;
-        const fy = lerp(this.to.y - 30, S.ground - 2, easeIn(imp)) + f.y * 12;
+        const fy = lerp(this.to.y - 40, S.ground - 3, easeIn(imp)) + f.y * 16;
         stamp(ctx, `ph:feather:${col.key}`, 7, 4, (c) => {
           c.fillStyle = col.ink; c.fillRect(0, 1, 7, 2);
           c.fillStyle = col.key; c.fillRect(1, 1, 5, 1);
@@ -2171,7 +2176,7 @@ class CritEffect extends Effect {
         this.hover.x, y, this.osc(2) * 0.05, easeOut(form), scale);
       // The shadow the sigil casts on the target: the tell that it is coming.
       ctx.fillStyle = rgba(col.ink, easeOut(form) * 0.35);
-      ctx.fillRect(px(this.to.x - 12), px(this.stage.ground - 2), 24, 2);
+      ctx.fillRect(px(this.to.x - 16), px(this.stage.ground - 3), 32, 3);
     }
 
     // Shatter: cracks, two rings, and the plate blowing apart into shards.
@@ -2284,7 +2289,7 @@ class ResistEffect extends Effect {
  * closes in, which is what stops it reading as another kind of hit. --- */
 class HealEffect extends Effect {
   build() {
-    this.circle = { x: this.from.x, y: this.stage.ground - 1, rx: 16, ry: 5 };
+    this.circle = { x: this.from.x, y: this.stage.ground - 1, rx: 21, ry: 7 };
   }
 
   _step(dt) {

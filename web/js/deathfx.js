@@ -68,7 +68,7 @@
  */
 import { heroFrame, HERO_W, HERO_H } from './sprites.js';
 import { THEME, OUTLINE, MAX_COLOURS, mix, parseHex, toHex } from './palette.js';
-import { STAGE } from './fx.js';
+import { STAGE, FIGURE_SCALE } from './fx.js';
 import {
   DEATH_BEAT_BPM, DEATH_BEAT_MS, DEATH_BEAT_AT, DEATH_SILENCE_MS,
 } from './audio.js';
@@ -171,8 +171,8 @@ const FALL_STAGES = 6;     // 256ms a step across the second
 const LAST_STAGES = 3;     // 171ms a step
 const STAGE_COUNT = DRAIN_STAGES + FALL_STAGES + LAST_STAGES + 1;   // 14
 
-/* The iris, in STAGE space (192x128), centred on the HERO rather than on the
- * screen — he is at x=46 of 192, well left of centre, and a circle of light
+/* The iris, in STAGE space (256x224), centred on the HERO rather than on the
+ * screen — he is at x=64 of 256, well left of centre, and a circle of light
  * that closed on the middle of the frame and then slid sideways to find him
  * would be the one moment in this sequence that looked like an effect.
  *
@@ -183,8 +183,30 @@ const STAGE_COUNT = DRAIN_STAGES + FALL_STAGES + LAST_STAGES + 1;   // 14
  *
  * R_SHUT is the hero's own half-diagonal, so the circle stops exactly when it
  * is him and nothing else. */
-const R_OPEN = Math.ceil(Math.hypot(STAGE.w, STAGE.h) / 2) + 8;     // 124
-const R_SHUT = Math.ceil(Math.hypot(HERO_W, HERO_H) / 2);           // 15
+const R_OPEN = Math.ceil(Math.hypot(STAGE.w, STAGE.h) / 2) + 8;     // 178 at 256x224
+
+/* THE SIZE HE IS ACTUALLY DRAWN AT, and every number below is derived from it.
+ *
+ * They used to be derived from HERO_W and HERO_H — the RIG box, 16x24 — while
+ * fx.js blitted the same rig at FIGURE_SCALE into 64x96 of the same 256x224
+ * frame. drawPlate emitted fillRect(ox + x, oy + y, run, 1), so the figure the
+ * death screen drew was ONE QUARTER the size of the one the fight had been
+ * showing a frame earlier, on the exact cut this file's header promises will
+ * be seamless ("the hero lands on the exact pixel he was already standing
+ * on"). Counted: 24 rows of 224 = 10.7% of the frame against the fight's 96 of
+ * 224 = 42.9%, a 4.0x discontinuity. Confirmed in a live death at 1440x940 — a
+ * 64x96 device-pixel speck inside a 1024x896 blit.
+ *
+ * scripts/verify/death.mjs could not see it because litStats built its hero box
+ * out of the same HERO_W/HERO_H, so the harness and the drawing shared the
+ * error. That is why DRAWN_W/DRAWN_H are PUBLISHED on DEATH_STAGE below. */
+const DRAWN_W = HERO_W * FIGURE_SCALE;                              // 64
+const DRAWN_H = HERO_H * FIGURE_SCALE;                              // 96
+
+/* R_SHUT is the hero's own half-diagonal AS DRAWN, so the circle stops exactly
+ * when it is him and nothing else. At the rig size it closed to radius 15
+ * around a point 36 rows below the figure's true centre. */
+const R_SHUT = Math.ceil(Math.hypot(DRAWN_W, DRAWN_H) / 2);         // 58
 const RING = 0.62;         // the inner ring, as a fraction of the outer
 
 /* The hero stands where fx.js already had him, so nothing jumps when the
@@ -193,7 +215,38 @@ const RING = 0.62;         // the inner ring, as a fraction of the outer
 const HERO_X = STAGE.heroX;
 const HERO_FOOT = STAGE.ground;
 const HERO_CX = HERO_X;
-const HERO_CY = HERO_FOOT - Math.round(HERO_H / 2);
+const HERO_CY = HERO_FOOT - Math.round(DRAWN_H / 2);
+
+/* THE GEOMETRY THIS SCREEN IS COMPOSED IN, PUBLISHED.
+ *
+ * scripts/verify/death.mjs used to carry its own copy of these four numbers —
+ * `46`, `100`, `192`, `128` — to work out where on the host canvas the hero's
+ * box lands, which meant the harness went on measuring the OLD stage for one
+ * whole raster migration and reported 1216 lit pixels that were "neither the
+ * hero nor his shadow" when in fact it was looking at the wrong part of the
+ * frame. A second copy of a geometry is a second opinion about it. There is
+ * exactly one here, and anything that needs to know asks. */
+export const DEATH_STAGE = Object.freeze({
+  w: STAGE.w,
+  h: STAGE.h,
+  heroX: HERO_X,
+  ground: HERO_FOOT,
+  // The RIG box, which is what the sprite is authored in...
+  rigW: HERO_W,
+  rigH: HERO_H,
+  scale: FIGURE_SCALE,
+  // ...and the box it occupies on the frame, which is what a harness measuring
+  // this screen has to draw its window from. Publishing only the first pair is
+  // what let death.mjs share this file's own bug for a whole raster migration.
+  heroW: DRAWN_W,
+  heroH: DRAWN_H,
+  // The shadow he stands in, published for the same reason: it is three rows of
+  // the rig, so it is 3 * FIGURE_SCALE of the frame, and it starts one rig row
+  // above the ground line. A harness that assumed three raw rows would report
+  // two thirds of it as "neither the hero nor his shadow".
+  shadowH: 3 * FIGURE_SCALE,
+  shadowRise: FIGURE_SCALE,
+});
 
 /* ---------------------------------------------------------------- utilities */
 function num(v, fallback = 0) {
@@ -436,7 +489,7 @@ function lookKey(look) {
 
 /* ------------------------------------------------------------------ drawing
  *
- * Into a 192x128 buffer — fx.js's own stage space — and then blitted to the
+ * Into a 256x224 buffer — fx.js's own stage space — and then blitted to the
  * host canvas at a whole-number scale. Two reasons, and neither is nostalgia:
  * the hero lands on the exact pixel he was already standing on, and the colour
  * count is a property of the buffer rather than of whatever size the player's
@@ -489,8 +542,9 @@ function disc(ctx, cx, cy, r, colour) {
 /** The figure, painted through the stage's five-step ramp. Runs of equal index
  *  on a row are one fillRect, which turns a 16x24 sprite into a few dozen
  *  rects instead of 384. */
-function drawPlate(ctx, plate, ramp, ox, oy) {
+function drawPlate(ctx, plate, ramp, ox, oy, scale = FIGURE_SCALE) {
   if (!plate || !plate.opaque) return 0;
+  const S = Math.max(1, scale | 0);
   let rects = 0;
   for (let y = 0; y < plate.h; y++) {
     let x = 0;
@@ -500,7 +554,9 @@ function drawPlate(ctx, plate, ramp, ox, oy) {
       let run = 1;
       while (x + run < plate.w && plate.idx[y * plate.w + x + run] === v) run++;
       ctx.fillStyle = ramp[v];
-      ctx.fillRect(ox + x, oy + y, run, 1);
+      // One source pixel is an S x S square of the buffer, the same whole
+      // number fx.js blits the rig at. A run is one rect however long it is.
+      ctx.fillRect(ox + x * S, oy + y * S, run * S, S);
       rects++;
       x += run;
     }
@@ -510,18 +566,152 @@ function drawPlate(ctx, plate, ramp, ox, oy) {
 
 /** The shadow he is standing in. Three rows, painted in the plate's own darkest
  *  step so it costs nothing from the budget, and it leaves with him. */
-const SHADOW_ROWS = Object.freeze([11, 15, 11]);
+const SHADOW_ROWS = Object.freeze([11, 15, 11].map(n => n * FIGURE_SCALE));
 
 function drawShadow(ctx, ramp) {
   ctx.fillStyle = ramp[0];
   for (let i = 0; i < SHADOW_ROWS.length; i++) {
     const half = SHADOW_ROWS[i] >> 1;
-    ctx.fillRect(HERO_CX - half, HERO_FOOT - 1 + i, half * 2 + 1, 1);
+    ctx.fillRect(HERO_CX - half, HERO_FOOT - FIGURE_SCALE + i * FIGURE_SCALE,
+                 half * 2 + 1, FIGURE_SCALE);
   }
 }
 
-/** Paint one frame of the sequence into the 192x128 buffer. */
+/* ------------------------------------------------------------- the letters
+ *
+ * A 3x5 uppercase face, authored here because there is no shared one and
+ * because this file draws with fillRect and nothing else. That is not a
+ * stylistic tic: raster.mjs accepts fillText and paints nothing, so a death
+ * screen whose words went through ctx.fillText would be words no harness in
+ * this project can count — and the words are the point of the screen.
+ *
+ * 3x5 on a 256-wide frame is 4 pixels of advance and 56 characters to a line
+ * inside a 16-pixel margin, which is what the wrap below is built on. At the
+ * shipped stage scales that is 8 to 12 device pixels per capital.
+ */
+const GLYPH_W = 3, GLYPH_H = 5, ADVANCE = 4, LINE_H = 8;
+const FONT = {
+  A: ['###', '#.#', '###', '#.#', '#.#'], B: ['##.', '#.#', '##.', '#.#', '##.'],
+  C: ['###', '#..', '#..', '#..', '###'], D: ['##.', '#.#', '#.#', '#.#', '##.'],
+  E: ['###', '#..', '##.', '#..', '###'], F: ['###', '#..', '##.', '#..', '#..'],
+  G: ['###', '#..', '#.#', '#.#', '###'], H: ['#.#', '#.#', '###', '#.#', '#.#'],
+  I: ['###', '.#.', '.#.', '.#.', '###'], J: ['..#', '..#', '..#', '#.#', '###'],
+  K: ['#.#', '#.#', '##.', '#.#', '#.#'], L: ['#..', '#..', '#..', '#..', '###'],
+  M: ['#.#', '###', '###', '#.#', '#.#'], N: ['##.', '#.#', '#.#', '#.#', '#.#'],
+  O: ['###', '#.#', '#.#', '#.#', '###'], P: ['###', '#.#', '###', '#..', '#..'],
+  Q: ['###', '#.#', '#.#', '###', '..#'], R: ['###', '#.#', '##.', '#.#', '#.#'],
+  S: ['###', '#..', '###', '..#', '###'], T: ['###', '.#.', '.#.', '.#.', '.#.'],
+  U: ['#.#', '#.#', '#.#', '#.#', '###'], V: ['#.#', '#.#', '#.#', '#.#', '.#.'],
+  W: ['#.#', '#.#', '###', '###', '#.#'], X: ['#.#', '#.#', '.#.', '#.#', '#.#'],
+  Y: ['#.#', '#.#', '.#.', '.#.', '.#.'], Z: ['###', '..#', '.#.', '#..', '###'],
+  0: ['###', '#.#', '#.#', '#.#', '###'], 1: ['.#.', '##.', '.#.', '.#.', '###'],
+  2: ['###', '..#', '###', '#..', '###'], 3: ['###', '..#', '###', '..#', '###'],
+  4: ['#.#', '#.#', '###', '..#', '..#'], 5: ['###', '#..', '###', '..#', '###'],
+  6: ['###', '#..', '###', '#.#', '###'], 7: ['###', '..#', '..#', '..#', '..#'],
+  8: ['###', '#.#', '###', '#.#', '###'], 9: ['###', '#.#', '###', '..#', '###'],
+  ' ': ['...', '...', '...', '...', '...'],
+  '.': ['...', '...', '...', '...', '.#.'], ',': ['...', '...', '...', '.#.', '#..'],
+  "'": ['.#.', '.#.', '...', '...', '...'], '-': ['...', '...', '###', '...', '...'],
+  '%': ['#.#', '..#', '.#.', '#..', '#.#'], ':': ['...', '.#.', '...', '.#.', '...'],
+  '?': ['###', '..#', '.#.', '...', '.#.'], '!': ['.#.', '.#.', '.#.', '...', '.#.'],
+  '(': ['.#.', '#..', '#..', '#..', '.#.'], ')': ['.#.', '..#', '..#', '..#', '.#.'],
+  '/': ['..#', '..#', '.#.', '#..', '#..'], '+': ['...', '.#.', '###', '.#.', '...'],
+};
+const MISSING = FONT['?'];
+
+/** One line of text, left edge at x, top at y. Runs of set cells on a row
+ *  become one fillRect, the same way drawPlate works. */
+function drawText(ctx, text, x, y, colour) {
+  ctx.fillStyle = colour;
+  const s = String(text).toUpperCase();
+  let painted = 0;
+  for (let i = 0; i < s.length; i++) {
+    const g = FONT[s[i]] || MISSING;
+    const gx = x + i * ADVANCE;
+    for (let r = 0; r < GLYPH_H; r++) {
+      const row = g[r];
+      let c = 0;
+      while (c < GLYPH_W) {
+        if (row[c] !== '#') { c++; continue; }
+        let run = 1;
+        while (c + run < GLYPH_W && row[c + run] === '#') run++;
+        ctx.fillRect(gx + c, y + r, run, 1);
+        painted += run;
+        c += run;
+      }
+    }
+  }
+  return painted;
+}
+
+const textWidth = (s) => String(s).length * ADVANCE - 1;
+
+/** Greedy word wrap to `cols` characters. */
+function wrap(text, cols) {
+  const words = String(text).split(/\s+/).filter(Boolean);
+  const out = [];
+  let line = '';
+  for (const w of words) {
+    if (!line) { line = w; continue; }
+    if (line.length + 1 + w.length <= cols) line += ' ' + w;
+    else { out.push(line); line = w; }
+  }
+  if (line) out.push(line);
+  return out.length ? out : [''];
+}
+
+/* THE WORDS, PAINTED.
+ *
+ * renderDeath has always TAKEN opts.words — main.js has been passing seq.words
+ * on every frame since the screen was written — and never read them. Nothing in
+ * web/ consumed deathLines(), KEPT_LINE or NO_SAVE_LINE either, so the sequence
+ * ended on an empty frame: 0 non-void pixels at t = 3000, 3910, 5000 and 9000,
+ * and a real death at 1440x940 held on pure black until the player pressed a
+ * key. The KEPT_LINE — which the note above calls the point of the screen, and
+ * the one honest reassurance it can offer — never reached anybody.
+ *
+ * Painted into the 256x224 buffer rather than onto the host canvas, so the text
+ * inherits the colour budget and the whole-number blit like everything else.
+ * MARGIN keeps it inside the safe area at both ends. */
+const WORD_MARGIN = 16;
+const WORD_COLS = Math.floor((STAGE.w - WORD_MARGIN * 2 + 1) / ADVANCE);   // 56
+
+function drawWords(ctx, words) {
+  if (!words || typeof words !== 'object') return 0;
+  const title = str(words.title);
+  const lines = Array.isArray(words.lines) ? words.lines : [];
+  /* Lay the whole block out first so it can be centred vertically inside the
+   * safe area rather than starting at a number somebody liked. */
+  const block = [];
+  if (title) block.push({ text: title, colour: GREY[4], gap: LINE_H });
+  for (const entry of lines) {
+    const text = str(entry && entry.text);
+    if (!text) continue;
+    for (const row of wrap(text, WORD_COLS)) block.push({ text: row, colour: GREY[3], gap: 0 });
+    block.push({ text: '', colour: GREY[3], gap: 0 });      // one blank between entries
+  }
+  if (str(words.skipHint)) block.push({ text: str(words.skipHint), colour: GREY[2], gap: LINE_H });
+  if (!block.length) return 0;
+
+  let h = 0;
+  for (const row of block) h += LINE_H + row.gap;
+  const top = Math.max(STAGE.safeTop + 4,
+                       Math.round(STAGE.safeTop + (STAGE.safeH - h) / 2));
+  let y = top, painted = 0;
+  for (const row of block) {
+    y += row.gap;
+    if (row.text) {
+      const x = Math.round((STAGE.w - textWidth(row.text)) / 2);
+      painted += drawText(ctx, row.text, x, y, row.colour);
+    }
+    y += LINE_H;
+  }
+  return painted;
+}
+
+/** Paint one frame of the sequence into the STAGE-sized (256x224) buffer. */
 export function renderDeath(t, opts = {}) {
+  const ms = clamp(num(t, 0), 0, Infinity);
   const reduced = !!opts.reduced;
   const rows = stagesFor(opts.alarmColour);
   const st = rows[stageAt(t, reduced)];
@@ -548,10 +738,15 @@ export function renderDeath(t, opts = {}) {
     if (plate && plate.opaque) {
       drawShadow(ctx, st.plateRamp);
       drawPlate(ctx, plate, st.plateRamp,
-                HERO_CX - Math.round(plate.w / 2), HERO_FOOT - plate.h);
+                HERO_CX - Math.round(plate.w * FIGURE_SCALE / 2),
+                HERO_FOOT - plate.h * FIGURE_SCALE);
     }
   }
-  return { stage: st, plate, reduced };
+
+  // And then the words, which is what the whole three beats were for.
+  let words = 0;
+  if (ms >= WORDS_AT && opts.words) words = drawWords(ctx, opts.words);
+  return { stage: st, plate, reduced, words };
 }
 
 /** Blit the buffer to the host canvas at a whole-number scale, letterboxed in
