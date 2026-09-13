@@ -85,17 +85,41 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if os.environ.get("GAUNTLET_VERBOSE"):
             super().log_message(fmt, *args)
 
-    def _send(self, status: int, body: bytes, ctype: str, *, cache: bool = False):
+    def _send(self, status: int, body: bytes, ctype: str, *, cache: bool = False,
+              etag: str = ""):
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
-        self.send_header("Cache-Control",
-                         "public, max-age=3600" if cache else "no-store")
+        # `no-cache` MEANS "STORE IT, BUT ASK ME BEFORE YOU USE IT", which is
+        # not `no-store`. Paired with an ETag the browser keeps the file and
+        # spends one loopback round trip per load to hear 304.
+        #
+        # WHY THIS IS NOT `max-age`, and it cost a player an evening: the old
+        # header was `public, max-age=3600` with NO ETag and NO Last-Modified.
+        # With no validator a browser does not revalidate at all — it serves
+        # its copy outright for the hour. So a rebuilt game kept running the
+        # OLD JavaScript, force-quitting the app did not help (the cache is on
+        # disk in the app's own profile), and a fix that was verified on this
+        # machine was invisible to the person who asked for it. An hour of
+        # stale code is not a cache, it is a liar.
+        if etag:
+            self.send_header("ETag", etag)
+            self.send_header("Cache-Control", "no-cache")
+        else:
+            self.send_header("Cache-Control",
+                             "public, max-age=3600" if cache else "no-store")
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
+
+    def _not_modified(self, etag: str):
+        self.send_response(304)
+        self.send_header("ETag", etag)
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def _json(self, payload, status: int = 200):
         self._send(status, json.dumps(payload).encode("utf-8"), "application/json")
@@ -317,7 +341,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
         ctype = ctype or "application/octet-stream"
         if ctype.startswith(("audio/", "video/")):
             return self._send_range(target, ctype)
-        return self._send(200, target.read_bytes(), ctype, cache=True)
+        # Off the file's own size and mtime rather than a hash of the bytes:
+        # this runs on every asset of every load and a rebuilt file always
+        # moves both.
+        try:
+            st = target.stat()
+            etag = '"%x-%x"' % (st.st_size, st.st_mtime_ns)
+        except OSError:
+            etag = ""
+        if etag and self.headers.get("If-None-Match") == etag:
+            return self._not_modified(etag)
+        return self._send(200, target.read_bytes(), ctype, etag=etag)
 
     def _send_range(self, target, ctype: str):
         """Serve media with Range support.
