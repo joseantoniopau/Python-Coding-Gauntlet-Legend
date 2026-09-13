@@ -156,6 +156,19 @@ PY_ALLOWED = {
     # run.py imports it inside main(), which is a call this AST walk of
     # gauntlet/ deliberately does not follow.
     "cli",
+    # KNOWN ORPHAN, TRACKED ON PURPOSE — the schoolteacher's curriculum.
+    #
+    # Thessaly Brun's lessons: the editor, RUN versus CAST, the trials, the
+    # belt, the Mender's free healing, Ferro's armour repair, the vendor, Orin
+    # Tallow, the forge. It is data with no reader yet because the reader is
+    # main.js and townui.js, and those were owned by another pass on the day it
+    # was written.
+    #
+    # It is NOT dangerous to leave unwired the way ending.py was — nothing is
+    # silently deleted by its absence; the player simply gets no lessons. But it
+    # is the same failure mode this file exists to catch, so it is written down
+    # rather than quietly excused. Wire it and delete this entry.
+    "tutorial",
 }
 
 
@@ -208,6 +221,12 @@ class TestEveryServerModuleIsReachable(unittest.TestCase):
         self.assertNotIn("ending", PY_ALLOWED,
                          "ending.py is wired; it does not belong on the "
                          "orphan allowlist")
+        # And the same rule for the newest entry: the moment anything imports
+        # it, it stops being an allowed orphan and this test says so.
+        if "tutorial" in PY_ALLOWED:
+            self.assertNotIn("tutorial", seen,
+                             "tutorial.py IS imported now — the curriculum is "
+                             "reachable, so remove it from PY_ALLOWED")
 
 
 # ------------------------------------------------- the first encounter

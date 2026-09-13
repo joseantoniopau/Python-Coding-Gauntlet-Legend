@@ -63,6 +63,82 @@ const T = tiles.TILE_SIZE;
 const MAP_W = 48;
 const MAP_H = 34;
 
+/* ------------------------------------------------------- FF6's pixel scale
+ *
+ * Final Fantasy VI's field is 256x224 world pixels at TILE 16 — SIXTEEN tiles
+ * across and FOURTEEN down — and that number, not the canvas size, is what
+ * decides how big a person feels standing in a place. T is already FF6's own
+ * terrain tile; what was wrong was the multiplier in front of it.
+ *
+ * THE SCALE IS DRIVEN OFF HEIGHT, and it is worth saying why, because the
+ * obvious rule is worse. This game's field canvas is between 1.26:1 and 1.54:1;
+ * FF6's screen is 8:7, which is 1.14:1. There is no integer scale that lands on
+ * 16x14 in BOTH axes on a widescreen canvas, so a rule has to say which axis it
+ * is honouring:
+ *
+ *   fit the WIDTH to 256  -> at 1920x1080 the canvas is 1590 wide, so s = 7,
+ *                            and the player sees 9.2 rows. Less than two thirds
+ *                            of FF6's vertical field. The frame closes over
+ *                            your head.
+ *   fit the HEIGHT to 224 -> the rows stay at FF6's fourteen at every window
+ *                            size this game opens at, and the extra monitor
+ *                            width buys extra COLUMNS, which is exactly what a
+ *                            widescreen version of a 4:3 game should spend it
+ *                            on.
+ *
+ * So: s = round(viewH / 224). Round, not floor and not ceil — floor is what was
+ * there and it is what let the view drift to twenty-three tiles across, and ceil
+ * over-zooms a canvas that is a hair short. Rounding keeps the visible rows
+ * inside 12.9..15.7 across every size measured, against FF6's 14.
+ *
+ * MIN_COLS is the guard for the shape this rule cannot see: a window that is
+ * tall and narrow would take a scale off its height that its width cannot pay
+ * for, and the player would be looking down a corridor. It never binds at any
+ * size this game actually opens at — it allows 4, 5, 6 and 8 where the height
+ * rule asks for 3, 4, 4 and 5 — it is there for the dragged window.
+ *
+ * SCALE_MIN IS 2 AND THAT IS NOT A RETREAT. Two is the scale a 1280x800 window
+ * was shipping at and it is the thing being fixed — but it is fixed by the
+ * height rule, which asks for 3 there, not by a floor. A floor of 3 would win
+ * against MIN_COLS on a 480-wide frame and hand back ten columns, quietly
+ * breaking the one promise the guard exists to make; measured, before it was
+ * lowered. The floor is a backstop for a window dragged to nothing, it is not
+ * the mechanism, and scripts/verify/field.mjs holds every real window to 3 or
+ * better so it can never become the mechanism by accident.
+ *
+ * SCALE_MAX is 12 for the same reason it is not 8: a cap low enough to bite is
+ * a cap that reintroduces the bug on a bigger monitor. At 8 a 5120x2880 canvas
+ * goes back to forty tiles across. Twelve carries FF6 framing to a 2688-pixel
+ * canvas, and a 192-pixel tile costs nothing to draw — the source images are
+ * 16x16 either way, and the scaling is the GPU's nearest-neighbour blit. */
+const FF6_FIELD_H = 224;     // FF6's field height in world pixels — 14 tiles
+const FF6_FIELD_W = 256;     // and its width — 16 tiles. Reported, not fitted.
+const MIN_COLS = 12;         // never fewer than this many tiles across
+const SCALE_MIN = 2;
+const SCALE_MAX = 12;
+
+/* One function so the harness can ask the same question the renderer answers,
+ * without a canvas and without a window. */
+export function fieldScale(viewW, viewH) {
+  /* A NaN here is a black screen, not a wrong zoom: it reaches ctx.scale() and
+   * every subsequent coordinate in the frame is NaN. The old expression had the
+   * same hazard and got away with it because only resize() could reach it; this
+   * one is exported, so it is guarded rather than trusted. A canvas that has not
+   * been laid out yet reports width 0, and 0 is the commonest way in. */
+  if (!(viewW > 0) || !(viewH > 0)) return SCALE_MIN;
+  const byHeight = Math.round(viewH / FF6_FIELD_H);
+  const byWidth = Math.floor(viewW / (MIN_COLS * T));
+  return Math.max(SCALE_MIN, Math.min(SCALE_MAX, Math.min(byHeight, byWidth)));
+}
+
+/** What that scale shows, in tiles. For the report and for the harness. */
+export function fieldView(viewW, viewH) {
+  const s = fieldScale(viewW, viewH);
+  return { scale: s, cols: viewW / (T * s), rows: viewH / (T * s),
+           ff6Cols: FF6_FIELD_W / T, ff6Rows: FF6_FIELD_H / T,
+           heroPx: sprites.HERO_H * s };
+}
+
 export const TILES = tiles.TERRAIN;
 
 function hash(str) {
@@ -230,11 +306,22 @@ async function fallbackArt(animal, colour) {
 /* An unknown animal must never throw. pets.py is being rewritten underneath
  * this, so a roster entry whose species nobody has drawn yet has to degrade to
  * *something* rather than take the region down. */
-async function companionArt(animal, colour, tier) {
+async function companionArt(animal, colour, tier, regalia) {
   const art = await petArtModule();
   if (art) {
     try {
-      const set = art.petSprites(animal, { colour, tier });
+      /* THE WORN PIECE GOES THROUGH. petart.js has a whole regalia system —
+       * PET_REGALIA, petRegaliaFor(), wear(), REGALIA_SHAPES, thirty-one
+       * pieces — and this was its only call site in the app, passing
+       * {colour, tier} and nothing else, so no companion in the field has ever
+       * worn anything a player earned.
+       *
+       * It is given the ROW, {id, colour}, not the bare id. petRegaliaFor()
+       * reads `worn.colour` when it is handed an object and falls back to the
+       * rarity accent when it is not, so passing the string would make a jade
+       * collar whatever colour the animal's rank happened to be — which is the
+       * one thing regalia.py's authored colours exist to prevent. */
+      const set = art.petSprites(animal, { colour, tier, regalia });
       if (set && set.down && set.down.length) {
         // petart.js knows how wide each animal's feet are, and a shadow guessed
         // off a bounding box makes a long animal look pasted onto the ground.
@@ -284,9 +371,31 @@ function walkable(row) {
   if (!row || typeof row !== 'object') return false;
   if (row.found === false) return false;
   if (!row.active) return false;
+  /* `fainted` IS the field, and it was the one spelling not being tested.
+   * pets.py's to_dict emits none of `dead`, `lost` or `gone` — the flag for a
+   * knocked-out companion is `fainted` (pets.py:3319, "Down, and therefore
+   * silent"). So a fainted companion went on trotting behind the player in its
+   * standing sprite, which is the one state the whole fainted rig exists to
+   * show. `fallen` is kept because pets.py does emit it, and the three
+   * speculative spellings are kept because they cost nothing and a roster being
+   * rewritten underneath this may yet pick one. */
+  if (row.fainted) return false;
   if (row.dead || row.lost || row.fallen || row.gone) return false;
   if (row.alive === false) return false;
   return true;
+}
+
+/* The piece this companion has on, as the OBJECT petRegaliaFor() wants —
+ * {id, colour} — or null. engine.py merges both rosters onto the row:
+ * regalia.py's twenty-four carry an authored colour, quests.py's seven do not
+ * and are left to petart's rarity fallback. */
+function regaliaOf(row) {
+  if (!row || typeof row !== 'object') return null;
+  const id = typeof row.regalia === 'string' ? row.regalia.trim() : '';
+  if (!id) return null;
+  const colour = (typeof row.regalia_colour === 'string'
+                  && row.regalia_colour.charAt(0) === '#') ? row.regalia_colour : '';
+  return { id, colour };
 }
 
 /* ---------------------------------------------------------------- layout
@@ -412,7 +521,22 @@ function placeMarkers(region, grid, tier) {
     if (m.kind === 'chest') grid[m.y][m.x] = tiles.TERRAIN.CHEST;
   }
 
-  markers.push({ kind: 'boss', x: MAP_W - 7, y: midY, id: `${region.id}-boss` });
+  /* THE MARKER CARRIES ITS CREATURE. Without these two fields the draw below
+   * falls through to `m.boss || 'titan'`, and every region in the game — all
+   * seventeen — put a Hash Titan on its boss tile. The Interviewer's 72x96 map
+   * form, 4,859 painted pixels and the largest piece of map art in the boss
+   * work, could not be drawn by any route at all. Blank for the six regions
+   * with no boss row, which keeps the old fallback for exactly those. */
+  /* AND A REGION WITH NO BOSS GETS NO BOSS TILE. Six of the seventeen have no
+   * boss row at all — python_village, fields_of_syntax, stringwood_labyrinth,
+   * stack_queue_mines, dp_ruins and coding_coliseum — and the marker was placed
+   * unconditionally, so each of them drew the `titan` fallback on a tile where
+   * nothing lives. A boss on the map is a promise about where the chapter ends;
+   * six false ones is worse than the titan that made it visible. */
+  if (region.boss_sprite) {
+    markers.push({ kind: 'boss', x: MAP_W - 7, y: midY, id: `${region.id}-boss`,
+                   boss: region.boss_sprite, colour: region.boss_colour || '' });
+  }
   markers.push({ kind: 'exit', x: MAP_W - 3, y: midY, id: `${region.id}-exit-e` });
   markers.push({ kind: 'exit', x: 2, y: midY, id: `${region.id}-exit-w` });
   return markers;
@@ -432,7 +556,39 @@ function placeMarkers(region, grid, tier) {
  * which is the same call the battle stage makes at the same moment — so the two
  * are the same weather by construction rather than by coincidence.
  */
-const PARTICLES_AT_FULL = 70;   // at density 1; a drizzle gets a fraction
+/* THE WEATHER IS COUNTED ON SCREEN, NOT ON THE MAP.
+ *
+ * This was `PARTICLES_AT_FULL = 70` spread over the WHOLE 768x544 map, and the
+ * player has never seen the whole map: he sees viewW*viewH/s^2 of it. So the
+ * zoom silently divided the storm by s^2. Measured, same window, pre-zoom scale
+ * against the shipped one, at density 1: 1280x800 31.6 -> 17.4 particles inside
+ * the frame, 1440x940 21.7 -> 13.7, 1600x1000 25.9 -> 16.7, 1920x1080 20.3 ->
+ * 14.8. At a clear sky it is worse in the way that reads: 4.3 -> 1.9 motes at
+ * 1280x800, 3.0 -> 1.7 at 1920x1080. One mote is not weather, it is a renderer
+ * that stopped, and weather.py's authored `density` was buying about half the
+ * drops it used to buy for the same number.
+ *
+ * (What the previous harness measured — ink COVERAGE — really is unchanged, and
+ * that half of the claim is sound: each particle is a world-space rect, so its
+ * painted area rises as s^2 by exactly the factor that removes it. The frame
+ * keeps the same amount of wet. It just arrives as a third as many, three times
+ * fatter, which is a different storm.)
+ *
+ * So the number is stated as what it always meant: how many are IN THE FRAME at
+ * full density. The list over the map is then whatever that costs, which makes
+ * the count independent of the zoom AND of the window — before this, a 1280x800
+ * window got half again as much rain as a 1920x1080 one for the same sky.
+ *
+ * NINETEEN IS NOT A TASTE, IT IS THE OLD NUMBER RESTATED. weather.py's
+ * densities were authored against seventy over the map at the scale this game
+ * was shipping — 3x on the launcher's own 1110x893 canvas, which sees
+ * (1110/3 x 893/3) of 768x544, or 26.4% of it. Seventy times 26.4% is 18.5.
+ * The floor is the same sum on the same page: a clear sky's fifteen over the
+ * map is 3.96 in frame. Both are the shipped weather, held still while the
+ * camera moved, rather than a new storm chosen by whoever fixed the bug. */
+const ON_SCREEN_AT_FULL = 19;   // particles inside the frame at density 1
+const ON_SCREEN_FLOOR = 4;      // a clear sky still has air in it
+const PARTICLE_CEILING = 300;   // and a dragged window never buys a swarm
 const SKY_POLL_SECONDS = 2;     // how often the field notices the sky changed
 
 export class Overworld {
@@ -451,6 +607,13 @@ export class Overworld {
     this.player = { x: 4, y: 17, px: 4 * T, py: 17 * T, facing: 'down',
                     frame: 0, moving: false };
     this.keys = new Set();
+    /* The overlay guard's state, declared here so the shape of this object is
+     * fixed by the constructor rather than grown by the first frame.
+     * `_overlayEl` stays undefined on purpose: that is the sentinel for "never
+     * looked", and an empty array is the answer "looked, they are not there". */
+    this._overlayEl = undefined;
+    this._overlayBox = null;
+    this._overlayBoxAt = -1;
     /* The wall-clock hour, sampled in update() and read by draw(). See both. */
     this._hour = new Date().getHours();
     this._clockAcc = 0;
@@ -713,7 +876,24 @@ export class Overworld {
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     this.ctx.imageSmoothingEnabled = false;
     this.viewW = w; this.viewH = h;
-    this.scale = Math.max(2, Math.min(4, Math.floor(Math.min(w / 340, h / 230))));
+    this.scale = fieldScale(w, h);
+    this._overlayBoxAt = -1;   // the row _overlayGuard measures just moved
+    /* THE STORM IS REBUILT HERE OR IT IS NEVER REBUILT. resize() is the only
+     * thing in this file that changes `scale`, and the particle count is a
+     * function of scale — see _particleCount. load() runs _applySky() before
+     * this line has ever executed, so without this the field would spend its
+     * whole life with the count the constructor's 3x/640x480 guess bought.
+     *
+     * Only when the number actually MOVES. makeParticles draws from one seeded
+     * stream — hash(key + mapWidth) — so the first N are the same N whatever
+     * the count is, and changing it adds or drops drops off the TAIL rather
+     * than teleporting the storm; but a window dragged a pixel at a time should
+     * still not be allocating a list sixty times a second. */
+    if (this.particles) {
+      const dens = this.sky && typeof this.sky.density === 'number'
+        ? this.sky.density : 0.22;
+      if (this._particleCount(dens) !== this.particles.length) this._applySky(this.sky);
+    }
   }
 
   start() {
@@ -835,8 +1015,27 @@ export class Overworld {
       ((sky && sky.region) || (this.region && this.region.id) || 'map')
         + ':' + ((sky && sky.condition) || 'clear'),
       MAP_W * T, MAP_H * T,
-      Math.max(12, Math.round(PARTICLES_AT_FULL * dens)));
+      this._particleCount(dens));
     return this;
+  }
+
+  /* How many to make over the map so that the authored number lands inside the
+   * frame. `share` is the fraction of the map the camera can see, and it is the
+   * whole of the zoom's effect on the weather: at scale 4 on a 1110x893 canvas
+   * it is 14.8%, so twenty-six on screen costs 176 over the map.
+   *
+   * Guarded rather than trusted, because load() calls _applySky() BEFORE
+   * resize() has measured anything — the scale is still the constructor's 3 and
+   * the view is still 640x480 at that moment — and resize() rebuilds the list
+   * the instant it knows better. A zero here would divide by zero and hand
+   * makeParticles a NaN count, which is an empty sky forever. */
+  _particleCount(dens) {
+    const s = this.scale > 0 ? this.scale : 1;
+    const vw = this.viewW > 0 ? this.viewW : 640;
+    const vh = this.viewH > 0 ? this.viewH : 480;
+    const share = Math.min(1, (vw / s) * (vh / s) / (MAP_W * T * MAP_H * T));
+    const want = Math.max(ON_SCREEN_FLOOR, ON_SCREEN_AT_FULL * dens);
+    return Math.min(PARTICLE_CEILING, Math.max(12, Math.round(want / share)));
   }
 
   /* Has the sky turned since the last look? Cheap: one index into a strip the
@@ -969,7 +1168,15 @@ export class Overworld {
     // comes back is the same id, the same animal and the same colour at a new
     // rank, so a stamp without the tier would decide nothing had changed and
     // keep drawing the old frames forever.
-    const stamp = row ? `${row.id || animal}|${animal}|${colour}|${tier}` : '';
+    /* The worn piece is in the stamp for exactly the reason the tier is, one
+     * comment up: _syncCompanion() returns early when the stamp has not moved,
+     * so a player who puts a collar on an animal whose id, species, colour and
+     * rank are all unchanged would keep the old cached frames for the rest of
+     * the session. */
+    const worn = regaliaOf(row);
+    const stamp = row
+      ? `${row.id || animal}|${animal}|${colour}|${tier}|${worn ? worn.id + (worn.colour || '') : ''}`
+      : '';
     if (stamp === this._companionStamp) return;
     this._companionStamp = stamp;
     if (!row) { this.companion = null; return; }
@@ -991,7 +1198,7 @@ export class Overworld {
     this.companion = c;
     this._pickSettleSide();
     this._resetCompanion();
-    companionArt(animal, colour, tier).then((built) => {
+    companionArt(animal, colour, tier, worn).then((built) => {
       if (this.companion !== c || !built) return;   // swapped out mid-import
       c.art = built.set;
       const sh = built.shadow;
@@ -1901,8 +2108,15 @@ export class Overworld {
     const t = this.time * 1000;
 
     for (const m of this.markers) {
+      /* The y margin is sized for the TALLEST marker, not the commonest one.
+       * A marker's sprite is drawn upward from the bottom of its tile, so a
+       * marker below the viewport still paints into it while its top row is
+       * on screen. At 3 that covered a 48px boss (3 tiles); the Interviewer's
+       * map form is 96px — 6 tiles — so a boss at view.y1 + 4 or + 5 painted
+       * into the viewport and was culled before it could. 6 restores the same
+       * one tile of slack the 48px marker had. */
       if (m.x < view.x0 - 2 || m.x > view.x1 + 2
-          || m.y < view.y0 - 3 || m.y > view.y1 + 3) continue;
+          || m.y < view.y0 - 3 || m.y > view.y1 + 6) continue;
 
       if (m.kind === 'encounter' || m.kind === 'elite') {
         if (this.solvedNodes.has(m.id)) {
@@ -1927,7 +2141,18 @@ export class Overworld {
          * tint they always had — it is the only thing distinguishing them at
          * a glance, and the species colour is not load-bearing for that. */
         const regionId = (this.region && this.region.id) || null;
-        const key = monsterart.pickFor(regionId, sprites.hash(m.id));
+        /* An elite gets the ELITE BODY, not a mob in a pink coat. The 32px
+         * rung — ELITE_SIZE, eight authored bodies, BIOME_ELITE — existed and
+         * nothing in web/js called it: both marker kinds resolved through
+         * pickFor(), which returns MOB_KEYS only, so the one thing separating
+         * an elite from an ordinary encounter was a tint doing a silhouette's
+         * job. eliteKeyFor() returns '' for a biome it does not know, so the
+         * || keeps the old behaviour as the fallback, and monsterSize /
+         * monsterShadow below already read the box off the resolved key, so a
+         * 32px body places and shadows itself. */
+        const key = m.kind === 'elite'
+          ? (monsterart.eliteKeyFor(regionId) || monsterart.pickFor(regionId, sprites.hash(m.id)))
+          : monsterart.pickFor(regionId, sprites.hash(m.id));
         const pose = monsterart.monsterFrameAt(key, t * 1000, 'idle',
                                                m.x + m.y, { region: regionId });
         const img = monsterart.monsterFrame(key, pose.frame, {
@@ -2032,12 +2257,27 @@ export class Overworld {
         } catch (e) { this._unmakingArcPx = 0; }
       }
       if (!p.moving) {
-        // a soft chevron above the head when standing still: enough to find
-        // yourself in a village, not enough to be noise while walking
-        const bob = Math.sin(this.time * 3) * 1.5;
+        /* A soft chevron above the head when standing still: enough to find
+         * yourself in a village, not enough to be noise while walking.
+         *
+         * EVERY NUMBER HERE IS A WHOLE WORLD PIXEL, and it is the zoom that
+         * made that matter. `p.px` is a float while a step is in flight and
+         * the bob was a float always, so this was the one thing in the world
+         * layer landing on fractional coordinates — the sprite beside it is
+         * drawn at Math.round(p.px), the shadows round inside drawGroundShadow,
+         * every marker is at m.x * T. A fillRect is not a drawImage and
+         * imageSmoothingEnabled does not reach it: the canvas antialiases the
+         * edges, and a 4x2 rectangle with soft sides is 4x2 fuzzy pixels at
+         * scale 2 and 20x10 fuzzy pixels at scale 5. The zoom did not create
+         * the blur, it magnified it by the same factor it magnified everything
+         * else, which is the whole point of raising the scale and also its
+         * whole liability. Rounding the bob to a whole pixel keeps the two-step
+         * bounce it always had — the sine spends most of its time past +/-0.5. */
+        const bx = Math.round(p.px), by = Math.round(p.py);
+        const bob = Math.round(Math.sin(this.time * 3) * 1.5);
         ctx.fillStyle = 'rgba(232,195,125,0.85)';
-        ctx.fillRect(p.px + 6, p.py - 10 + bob, 4, 2);
-        ctx.fillRect(p.px + 7, p.py - 8 + bob, 2, 2);
+        ctx.fillRect(bx + 6, by - 10 + bob, 4, 2);
+        ctx.fillRect(bx + 7, by - 8 + bob, 2, 2);
       }
       /* The Green Index, landing on the player. Four corner brackets and one
        * slow read across the sprite, in the colour that has been turning up in
@@ -2228,16 +2468,166 @@ export class Overworld {
 
   }
 
+  /* THE REGION CARD AND THE CONTROL HINTS ARE NOT ALLOWED TO STAND ON HIM.
+   *
+   * #world-overlay is `bottom: 14px` on the canvas wrap, so it is pinned to the
+   * bottom of the FRAME while the hero is pinned to the middle of it — until he
+   * walks to the map's south edge, where the camera clamps and he keeps going
+   * down the screen. Measured in Chrome in the south-east corner: 53% of his
+   * 16x24 sprite box behind #world-overlay at 1440x940 and the same at
+   * 1600x1000, with the same again behind #world-hint, which sits in that row.
+   * This is OLDER than the zoom and the zoom improved it — at the pre-zoom
+   * scale the same corner buried more of him — but a hero you cannot see is a
+   * hero you cannot see.
+   *
+   * The test is a rectangle against a rectangle and the hero's rectangle is
+   * taken from the EXPRESSION HE IS DRAWN AT, four lines below in this same
+   * method, rather than from a second guess at where he might be. Nothing is
+   * moved: the row fades, so the words stay in the place the player has learnt
+   * to look for them, and the part of this screen that is an actual warning —
+   * apex.js's rim marks and the way-out chevron — is on the canvas and is not
+   * in this element at all.
+   *
+   * THE DOM IS READ FOUR TIMES A SECOND, NOT SIXTY. getBoundingClientRect
+   * forces a layout, and this is a draw loop. The box only moves when the
+   * window resizes or when something changes the card's height — huntui.js
+   * appends the apex telegraph into #region-card while a hunt is live — so a
+   * quarter-second cache is both fresh enough to be right and cheap enough to
+   * be free. resize() drops it immediately rather than waiting.
+   *
+   * Guarded end to end because this is the one thing in the file that touches
+   * the page: the verify harnesses run it against a document stub with no
+   * querySelector at all, and a throw here would take the whole frame. */
+  _overlayGuard(camX, camY) {
+    let boxes = this._overlayBox;
+    /* Written as "not still fresh" rather than "is stale" so that a NaN clock
+     * re-measures instead of freezing, and so that an EMPTY measurement — the
+     * world screen is not the screen on display, so the row has no box — is
+     * cached for the same quarter second as a real one. Without that, every
+     * frame of every fight would take a layout to be told the same thing. */
+    if (!(this.time < this._overlayBoxAt + 0.25)) {
+      this._overlayBoxAt = this.time;
+      boxes = this._overlayBox = this._measureOverlay();
+    }
+    if (!boxes || !boxes.length) return;
+    const s = this.scale, p = this.player;
+    /* His rect, in canvas pixels. overworld draws the sprite at
+     *   drawImage(shown, round(px), round(py + T - HERO_H))
+     * inside a layer scaled by s and translated by -round(cam), so this IS
+     * where he is — not an estimate of it. */
+    const hx = s * (Math.round(p.px) - Math.round(camX));
+    const hy = s * (Math.round(p.py + T - sprites.HERO_H) - Math.round(camY));
+    const hw = sprites.HERO_W * s, hh = sprites.HERO_H * s;
+    for (let i = 0; i < boxes.length; i++) {
+      const b = boxes[i];
+      const hit = hx < b.x + b.w && hx + hw > b.x && hy < b.y + b.h && hy + hh > b.y;
+      if (hit === b.hidden) continue;             // one class write per crossing
+      b.hidden = hit;
+      try { b.el.classList.toggle('behind-hero', hit); } catch (e) { /* no DOM */ }
+    }
+  }
+
+  /* The overlay's children, each in the canvas's own pixel space. Every
+   * rectangle is read in one call so a scrolled or inset canvas cannot put them
+   * in different coordinate systems — the subtraction is the whole point of
+   * measuring the canvas at all. */
+  _measureOverlay() {
+    let els = this._overlayEl;
+    if (els === undefined) {
+      try {
+        els = [document.querySelector('#region-card'),
+               document.querySelector('#world-hint')].filter(Boolean);
+      } catch (e) { els = []; }
+      this._overlayEl = els;
+    }
+    if (!els.length) return null;
+    let c;
+    try { c = this.canvas.getBoundingClientRect(); } catch (e) { return null; }
+    if (!c || !(c.width > 0)) return null;
+    /* The canvas is laid out in CSS pixels and drawn in backing pixels; at
+     * devicePixelRatio 1 they are the same, and above 1 they are not. The draw
+     * loop works in the CSS box — resize() sets the transform to dpr — so the
+     * ratio the hero's rect is in is viewW / cssWidth, which is 1 by
+     * construction. Stated rather than assumed, because the day it is not 1 is
+     * the day this silently tests the wrong rectangle. */
+    const k = this.viewW / c.width;
+    const out = [];
+    for (const el of els) {
+      let a;
+      try { a = el.getBoundingClientRect(); } catch (e) { continue; }
+      if (!a || !(a.width > 0) || !(a.height > 0)) continue;
+      /* The hidden state is carried on the box, not on the overworld, because
+       * there are two of them and they cross him at different moments. */
+      out.push({ el, hidden: el.classList.contains('behind-hero'),
+                 x: (a.left - c.left) * k, y: (a.top - c.top) * k,
+                 w: a.width * k, h: a.height * k });
+    }
+    return out;
+  }
+
   /* Where the frame is, clamped to the map. One copy of this arithmetic:
    * draw() paints with it, _companionHit turns a pointer back into world space
    * with it, and the King asks it whether a place he is thinking of standing is
    * actually on screen. Two copies would drift the first time either moved. */
   _camera() {
     const s = this.scale;
-    this._camX = Math.max(0, Math.min(MAP_W * T - this.viewW / s,
-                                      this.player.px - this.viewW / (2 * s) + T / 2));
-    this._camY = Math.max(0, Math.min(MAP_H * T - this.viewH / s,
-                                      this.player.py - this.viewH / (2 * s) + T / 2));
+    const worldW = MAP_W * T, worldH = MAP_H * T;
+    const spanX = this.viewW / s, spanY = this.viewH / s;
+    /* THE MAP SMALLER THAN THE FRAME. The old line was
+     *   max(0, min(worldW - spanX, wanted))
+     * and when the view is wider than the world that inner limit goes NEGATIVE,
+     * max() throws it away, the camera pins to 0 and the right-hand strip of
+     * the frame is off the edge of the map. It cannot happen at the sizes this
+     * game opens at — the widest span measured is 318 world pixels against a
+     * 768-wide map — but it is one drag of a window corner away at SCALE_MIN,
+     * and "clamps at the map edges without showing void" is not a promise you
+     * keep by arithmetic that only holds for the window sizes you tested.
+     * Centre the world instead: a margin on both sides is a framing, a margin
+     * on one side is a bug. */
+    /* BOTH LIMITS ARE WHOLE WORLD PIXELS, BECAUSE draw() ROUNDS.
+     *
+     * The camera used to clamp at `worldW - spanX`, which is fractional the
+     * moment viewW is not a multiple of the scale — 768 - 1110/4 = 490.5 at the
+     * launcher's own window. draw() then translates by -Math.round(camX), and
+     * Math.round(490.5) is 491: the clamp was rounded OUTWARD, past the edge it
+     * exists to hold, and the map's right edge landed at screen x 1108 of 1110.
+     * Two columns of raw sky down the whole right side, and one row along the
+     * bottom from the same arithmetic on Y — measured in Chrome by swapping the
+     * sky-clear colour and counting which pixels changed: 757 of 893 in each of
+     * columns 1108 and 1109, against 1 in column 1107. The same at 1600x1000.
+     *
+     * Math.floor is the whole fix. Flooring can only ever UNDER-run the edge —
+     * the camera stops a fraction of a pixel early — so the map always covers
+     * the frame, and "clamps at the map edges without showing void" becomes
+     * true at every window size rather than at the ones that happen to divide.
+     *
+     * THE CENTRE IS ROUNDED FOR THE SAME REASON, AND IT IS THE HERO'S JUDDER.
+     * The sprite is drawn at Math.round(p.px) inside a world translated by
+     * -Math.round(camX), so his screen column is
+     *     round(px) - round(px - (spanX/2 - T/2))
+     * and when that offset is not a whole world pixel the two roundings step at
+     * different moments: over part of every walk cycle the difference flips
+     * between 130 and 131 and the hero slides one world pixel BACKWARDS against
+     * the frame while the key is still held forward — `scale` screen pixels of
+     * it, so the zoom made a 2px wobble a 4px one. Measured in Chrome off the
+     * hero's real screen column while the key was held: 13 backward 4-pixel
+     * steps in 131 frames walking east at 1440x940 and the same at 1600x1000,
+     * 11 walking south at both. Headless over the same module: ZERO at
+     * 1920x1080 walking east — where 1590/5/2 - 8 = 151 is already an integer.
+     * That zero is the control; it is the offset, not the walk.
+     *
+     * Rounding the offset once, here, makes round(camX) equal round(px) - halfX
+     * exactly, so the hero is pinned to one screen column and the world scrolls
+     * under him in whole world pixels. That is FF6's own behaviour. */
+    const maxX = Math.floor(worldW - spanX), maxY = Math.floor(worldH - spanY);
+    const halfX = Math.round(spanX / 2 - T / 2);
+    const halfY = Math.round(spanY / 2 - T / 2);
+    this._camX = worldW <= spanX
+      ? (worldW - spanX) / 2
+      : Math.max(0, Math.min(maxX, Math.round(this.player.px) - halfX));
+    this._camY = worldH <= spanY
+      ? (worldH - spanY) / 2
+      : Math.max(0, Math.min(maxY, Math.round(this.player.py) - halfY));
   }
 
   draw() {
@@ -2246,6 +2636,21 @@ export class Overworld {
     const s = this.scale;
     this._camera();
     const camX = this._camX, camY = this._camY;
+
+    /* THE KING'S VIEW OF THE FRAME, KEPT FRESH. _syncKing() filled these in
+     * once, on the frame he arrived, and then the player walked and they were a
+     * memory. kingui.drawKingPanel() now reads the camera off this object to
+     * work out where the hero's head actually is — see heroTopOnScreen — and a
+     * remembered camera is exactly the wrong answer to that question, because
+     * the case it exists for is the player standing at a map edge, which is a
+     * place he had to WALK to. Six writes to a persistent object; nothing is
+     * allocated and nothing else in this file reads them per frame. */
+    const kw = this._kingWorld;
+    kw.viewW = this.viewW; kw.viewH = this.viewH; kw.scale = s;
+    kw.camX = camX; kw.camY = camY; kw.player = this.player;
+
+    /* AND THE DOM LAYER GETS OUT OF HIS WAY. See _overlayGuard. */
+    this._overlayGuard(camX, camY);
 
     const pal = this.scene.set.palette;
     ctx.fillStyle = pal.sky;
