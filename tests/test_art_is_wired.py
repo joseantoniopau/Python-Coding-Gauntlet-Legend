@@ -253,5 +253,77 @@ class TestTheFirstEncounterIsAnswerable(unittest.TestCase):
                       "the only way to answer it")
 
 
+# --------------------------------------------------------------- the music
+#
+# THE BUG THIS EXISTS TO CATCH, reported by a player as "the music keeps
+# looping the first couple of seconds":
+#
+# `_fadeOutRecording` retired a track with `el.src = ''`. An <audio> element
+# treats an empty source as a LOAD FAILURE and fires `error` — and the error
+# listener existed to recover from a real 404 or codec problem by calling
+# play() again. So every crossfade ended with the outgoing track asking to be
+# restarted, which restarted it, which crossfaded out the incoming one, which
+# fired ITS error. Two tracks traded the same two seconds forever.
+#
+# Measured before the fix: 15 <audio> elements built in 10 seconds, two tracks
+# playing at once, currentTime advancing 0.06s per 2.5s of wall clock. After:
+# 2 elements, one playing, currentTime advancing in real time.
+#
+# The second test below is the cheap one that would have caught a separate bug
+# in the same area: `audio.play('world')` — 'world' is not a track and not an
+# alias, so it silently fell through to the synthesised rig and fought the
+# recording.
+
+AUDIO = JS / "audio.js"
+
+
+def _music_names() -> set:
+    src = AUDIO.read_text()
+    keys = set(re.findall(r"^\s{2}(\w+): \{\n\s+file:", src, re.M))
+    block = src[src.index("const MUSIC_ALIAS"):src.index("const MUSIC_BASE")]
+    return keys | set(dict(re.findall(r"(\w+):\s*'(\w+)'", block)))
+
+
+class TestTheMusicPlays(unittest.TestCase):
+    def test_a_teardown_is_not_mistaken_for_a_load_failure(self):
+        src = AUDIO.read_text()
+        i = src.index("el.addEventListener('error'")
+        handler = src[i:i + 320]
+        self.assertIn("__retired", handler,
+                      "the error listener will retry a track we retired on "
+                      "purpose, which is an infinite crossfade loop")
+
+    def test_nothing_retires_a_track_by_blanking_src(self):
+        # Comments are skipped: the paragraph explaining this bug quotes the
+        # very line it is warning about, and a test that cannot tell prose from
+        # code would punish the explanation.
+        offenders = []
+        for n, line in enumerate(AUDIO.read_text().splitlines(), 1):
+            bare = line.strip()
+            if bare.startswith(("*", "//", "/*")):
+                continue
+            if ".src = ''" in bare or '.src = ""' in bare:
+                offenders.append(f"{n}: {bare}")
+        self.assertEqual([], offenders,
+                         "setting src to '' fires an `error` event and the "
+                         "listener will restart the track; use "
+                         f"removeAttribute('src') + load(): {offenders}")
+
+    def test_every_track_the_client_asks_for_exists(self):
+        known = _music_names()
+        self.assertIn("overworld", known, "the music table did not parse")
+        bad = []
+        for name in ("main.js", "finaleui.js", "overworld.js", "partyui.js"):
+            f = JS / name
+            if not f.is_file():
+                continue
+            for m in re.finditer(r"audio\.play\('([a-z_]+)'\)", f.read_text()):
+                if m.group(1) not in known:
+                    bad.append(f"{name}: '{m.group(1)}'")
+        self.assertEqual([], bad,
+                         "these fall through to the synthesised rig and fight "
+                         f"whatever recording is playing: {bad}")
+
+
 if __name__ == "__main__":
     unittest.main()

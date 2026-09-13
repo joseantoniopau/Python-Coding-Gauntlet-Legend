@@ -838,7 +838,18 @@ class MetalRig {
 
     // If it cannot actually play — codec, autoplay policy, a 404 — undo the
     // whole thing and let the synth rig have the track.
+    //
+    // RETIRED ELEMENTS DO NOT GET TO RETRY, and this guard is the difference
+    // between music and a stutter. Tearing a track down sets `el.src = ''`,
+    // and an <audio> element treats an empty source as a LOAD FAILURE: it
+    // fires `error`. Without the flag below, every crossfade ended with the
+    // outgoing track begging to be restarted, which restarted it, which
+    // crossfaded out the incoming one, which fired ITS error — two tracks
+    // trading the same two seconds between them forever. Measured before the
+    // fix: fifteen <audio> elements built in ten seconds and `currentTime`
+    // advancing 0.06s per 2.5s of wall clock.
     el.addEventListener('error', () => {
+      if (el.__retired) return;        // we did this to it, on purpose
       if (this.musicEl === el) this._dropRecording();
       this.play(name);
     }, { once: true });
@@ -875,8 +886,10 @@ class MetalRig {
     gain.gain.setValueAtTime(gain.gain.value, now);
     gain.gain.linearRampToValueAtTime(0, now + CROSSFADE_SECONDS);
     // Let the ramp finish before tearing the element down, or the fade is a cut.
+    el.__retired = true;               // see the error listener in _playRecorded
     setTimeout(() => {
-      try { el.pause(); el.src = ''; } catch (e) { /* already gone */ }
+      try { el.pause(); el.removeAttribute('src'); el.load(); }
+      catch (e) { /* already gone */ }
       try { gain.disconnect(); } catch (e) { /* already gone */ }
     }, CROSSFADE_SECONDS * 1000 + 120);
     this.musicEl = null;
@@ -885,7 +898,14 @@ class MetalRig {
   }
 
   _dropRecording() {
-    try { if (this.musicEl) { this.musicEl.pause(); this.musicEl.src = ''; } } catch (e) { /* */ }
+    try {
+      if (this.musicEl) {
+        this.musicEl.__retired = true;
+        this.musicEl.pause();
+        this.musicEl.removeAttribute('src');
+        this.musicEl.load();
+      }
+    } catch (e) { /* */ }
     try { if (this.musicGain) this.musicGain.disconnect(); } catch (e) { /* */ }
     this.musicEl = null;
     this.musicGain = null;

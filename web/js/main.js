@@ -1663,7 +1663,7 @@ function playDeath(payload) {
       ? `${where.label || 'Last waking point'} — ${where.region}.`
       : 'Where you fell.', 'violet');
     show('world');
-    if (G.overworld) audio.play('world');
+    if (G.overworld) audio.play(currentRegion().music || 'overworld');
   });
 }
 
