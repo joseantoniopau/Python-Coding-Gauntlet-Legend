@@ -1908,12 +1908,30 @@ def chapters_graduated(skills: dict) -> int:
     return done
 
 
-def new_state(class_id: str) -> dict:
+# The two authored bodies, as web/js/sprites.js BODY_RIG names them. The axis is
+# stored as 'a'/'b' rather than as a gender word because the RIG is a build — a
+# silhouette and a hem — and the sprite it produces is the same either way at
+# every other layer. The player picks it as male/female in the UI; what the save
+# keeps is which body was drawn.
+BODIES = ("a", "b")
+BODY_LABEL = {"a": "male", "b": "female"}
+DEFAULT_BODY = "a"
+
+
+def body_of(state: dict) -> str:
+    """The chosen body, or the default. Never raises on an old save."""
+    body = str(((state or {}).get("class") or {}).get("body") or "")
+    return body if body in BODIES else DEFAULT_BODY
+
+
+def new_state(class_id: str, body: str = DEFAULT_BODY) -> dict:
     """The flat dict a save persists. Nothing derived is stored."""
     if class_id not in CLASS_BY_ID:
         raise ValueError(f"unknown class {class_id!r}")
-    return {"class": class_id, "spent": {}, "points": 0, "respecs": 0,
-            "dual": "", "grip": 0}
+    if body not in BODIES:
+        body = DEFAULT_BODY
+    return {"class": class_id, "body": body, "spent": {}, "points": 0,
+            "respecs": 0, "dual": "", "grip": 0}
 
 
 def _rank(state: dict, node_id: str) -> int:

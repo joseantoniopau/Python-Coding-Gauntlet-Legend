@@ -185,7 +185,10 @@ export const api = {
   /* -- classes and the skill tree -- */
   classes: () => soft('/api/classes'),
   classTree: () => soft('/api/class/tree'),
-  chooseClass: (classId) => softPost('/api/class/choose', { class_id: classId }),
+  // `body` is the authored rig — 'a' or 'b', shown to the player as male or
+  // female. Optional: the server defaults it rather than refusing.
+  chooseClass: (classId, body) =>
+    softPost('/api/class/choose', { class_id: classId, body: body || '' }),
   spendNode: (nodeId) => softPost('/api/class/spend', { node_id: nodeId }),
   respecTree: (scope, branchId) =>
     softPost('/api/class/respec', { scope: scope || 'all', branch_id: branchId || '' }),

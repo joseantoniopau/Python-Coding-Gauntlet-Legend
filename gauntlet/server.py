@@ -1053,7 +1053,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return True
             if class_id not in classes.CLASS_BY_ID:
                 return self._fail(f"no class called {class_id!r}.", 404)
-            return self._reply(g.choose_class(class_id))
+            # Optional, and deliberately not a refusal when absent or unknown:
+            # an older client that does not send one still gets a character.
+            body_id = self._opt_str(body, "body", "", limit=4) or ""
+            return self._reply(g.choose_class(class_id, body_id))
         if path == "/api/class/spend":
             if self._sealed(g):
                 return True

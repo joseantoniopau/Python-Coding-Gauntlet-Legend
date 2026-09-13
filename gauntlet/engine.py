@@ -1750,6 +1750,13 @@ class Game:
         # classes.py are byte-identical to the six ids, and to HERO_CLASSES in
         # sprites.js. An unchosen class leaves the key off and falls back to the
         # generic hero, which is what it did before.
+        #
+        # THE BODY RIDES WITH IT. sprites.js BODY_RIG has carried two bodies
+        # since §E and bodyKey() reads `body`, but nothing ever set it, so six
+        # of the twelve authored sprites were unreachable from the game. It is
+        # sent unconditionally, including for an unchosen class, because the
+        # generic hero has a body too.
+        look["body"] = classes.body_of(self.state)
         cls = (self.state.get("class") or {}).get("class", "")
         if cls:
             look["sprite"] = cls
@@ -2280,7 +2287,7 @@ class Game:
         return {"selection": classes.selection_screen(),
                 "chosen": (self.state.get("class") or {}).get("class", "")}
 
-    def choose_class(self, class_id: str) -> dict:
+    def choose_class(self, class_id: str, body: str = "") -> dict:
         # The seal is asked FIRST. A refusal that names the player's build
         # state before it names the seal is a second answer to the same
         # question, and the answer in a measured run is always the seal.
@@ -2291,7 +2298,12 @@ class Game:
             return {"error": "a class is already chosen; respec at the Armorer"}
         if classes.get(class_id) is None:
             return {"error": "unknown class"}
-        self.state["class"] = classes.new_state(class_id)
+        # The body is picked at the same door as the class, because the two
+        # together are the sprite and there is no later screen that owns it.
+        # An omitted or unknown value takes the default rather than refusing:
+        # a client that has not been updated still gets a playable character.
+        self.state["class"] = classes.new_state(
+            class_id, body if body in classes.BODIES else classes.DEFAULT_BODY)
         # The movebook is stamped with the class it belongs to. It is a
         # DIFFERENT book from state["moveset"]: `moveset` rations LINES (four
         # slots at level one, eight at the ceiling) and the movebook rations

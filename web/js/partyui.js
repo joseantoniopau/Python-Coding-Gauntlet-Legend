@@ -1003,18 +1003,44 @@ function showClassPage(spec, { chosen, tree }) {
         <span class="t">${esc(b.name.toUpperCase())}</span>
         <span class="d">${esc(b.blurb)}</span></div>`).join('')}
     </div>
+    <div class="frame" style="padding:12px;margin-top:12px">
+      <div class="section-title">THE BODY YOU WEAR IT IN</div>
+      <p class="small muted">Two authored builds. The discipline, the gear and
+        every number are identical; what changes is the silhouette you walk
+        around in.</p>
+      <div class="actions" id="pt-body">
+        <button class="btn active" data-pt-body="a">MALE</button>
+        <button class="btn" data-pt-body="b">FEMALE</button>
+      </div>
+    </div>
     <div class="actions">
       ${action}
       <button class="btn" data-pt-close>LOOK AGAIN</button>
     </div>`, { wide: true });
   if (!m) return;
 
+  // The body row is a plain radio: lighting one unlights the other. Wired
+  // directly rather than through modalActions, which closes over one action per
+  // selector and cannot see which element was clicked.
+  for (const b of m.querySelectorAll('[data-pt-body]')) {
+    b.onclick = () => {
+      for (const o of m.querySelectorAll('[data-pt-body]')) o.classList.remove('active');
+      b.classList.add('active');
+    };
+  }
+
   modalActions(m, {
     '[data-pt-close]': () => dismiss(),
     '[data-pt-tree]': () => { dismiss(); paintSkillTree(); },
     '[data-pt-take]': async () => {
       let r;
-      try { r = await api.chooseClass(spec.id); } catch (e) { broke('NOT TAKEN', e); return; }
+      // Whatever is lit in the body row, defaulting to the first. The server
+      // takes an unknown value as the default rather than refusing, so a stale
+      // client still produces a playable character.
+      const lit = m.querySelector('#pt-body .btn.active');
+      const body = (lit && lit.dataset.ptBody) || 'a';
+      try { r = await api.chooseClass(spec.id, body); }
+      catch (e) { broke('NOT TAKEN', e); return; }
       if (refuse(r, 'NOT TAKEN')) return;
       HOST.sfx('levelup');
       HOST.toast('SWORN', `${spec.name}. ${spec.habit}`, '');
