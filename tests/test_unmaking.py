@@ -289,10 +289,26 @@ class ItChangesNothingMechanical(GameTest):
                              if "=" in code and "==" not in code else "",
                              f"the spell assigns into finalexam: {line!r}")
 
-    def test_nothing_in_the_game_imports_the_spell(self):
-        """The blast radius is the exam preamble and nothing else. If a future
-        pass wires it in, that is fine — but it should be a deliberate edit to
-        this test rather than a surprise."""
+    # THE DELIBERATE EDIT THIS TEST ASKED FOR.
+    #
+    # It used to assert that NOTHING imports the spell, and said in its own
+    # docstring: "If a future pass wires it in, that is fine — but it should be
+    # a deliberate edit to this test rather than a surprise." engine.py imports
+    # it now, for Game.unmaking_view() — the route that lets the client draw the
+    # cinematic at the exam door. That is the wiring the module was written for,
+    # and leaving the assertion as it stood would have meant deleting the seam
+    # to keep a test green.
+    #
+    # WHAT THE TEST WAS REALLY PROTECTING is not the import count: it is that
+    # the spell cannot change the exam. That property is proved far better a few
+    # lines up by test_the_exam_is_the_same_exam, which fingerprints a composed
+    # exam in three worlds — the module deleted, present-but-unimported, and
+    # imported first — and requires all three to be byte-identical. This test
+    # keeps the weaker half: the blast radius stays ONE file.
+    ALLOWED_IMPORTERS = {"engine.py"}
+
+    def test_only_the_engine_imports_the_spell(self):
+        """One seam, named. Anything else is a surprise and should fail here."""
         importers = []
         for path in sorted((REPO / "gauntlet").glob("*.py")):
             if path.name == "unmaking.py":
@@ -301,7 +317,19 @@ class ItChangesNothingMechanical(GameTest):
                 code = line.split("#", 1)[0]
                 if "import unmaking" in code or "from .unmaking" in code:
                     importers.append(path.name)
-        self.assertEqual(importers, [])
+        unexpected = sorted(set(importers) - self.ALLOWED_IMPORTERS)
+        self.assertEqual(
+            unexpected, [],
+            "the spell has grown a second caller. It holds no state and cannot "
+            "reach finalexam.sealed(), but every new importer is another place "
+            "that could start asking it questions about the exam: "
+            f"{unexpected}")
+        # And the seam it IS allowed must still be there: a silent removal would
+        # take the cinematic off the exam door without failing anything else.
+        self.assertIn("engine.py", importers,
+                      "engine.py has stopped importing unmaking.py — "
+                      "Game.unmaking_view() is how the spell reaches the "
+                      "player, and without it the exam has no preamble")
 
 
 # ===========================================================================
