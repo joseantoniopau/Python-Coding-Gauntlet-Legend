@@ -109,13 +109,20 @@ export class Editor {
     this.onRun = onRun;
     this.onSubmit = onSubmit;
     this.assist = assist;
+    // The status line under the editor carries the caret position and the one
+    // keyboard hint, and it was never on screen: .editor-shell is height:100%
+    // of its host and the status bar flowed off the bottom of it, clipped by
+    // #battle-main. The host is a column, the shell takes what is left and the
+    // status line keeps its own row.
+    this.root.classList.add('editor-root');
     this.root.innerHTML = `
       <div class="editor-shell">
         <div class="editor-gutter" aria-hidden="true"></div>
         <div class="editor-stack">
           <pre class="editor-highlight" aria-hidden="true"><code></code></pre>
           <textarea class="editor-input" spellcheck="false" autocomplete="off"
-            autocapitalize="off" autocorrect="off" aria-label="Python editor"></textarea>
+            autocapitalize="off" autocorrect="off" aria-label="Write your Python here"
+            placeholder="Write your Python here…"></textarea>
         </div>
       </div>
       <div class="editor-status">
@@ -143,6 +150,23 @@ export class Editor {
   }
 
   focus() { this.input.focus(); }
+
+  /* Drop a selection and leave the caret where it started.
+   *
+   * reset() SELECTS the __BLANK__ slot so the first keystroke replaces it, and
+   * that is right while the player is typing on purpose. It is wrong when the
+   * caret is being handed BACK — after a modal or a boss taunt — because the
+   * first keystroke to arrive is then usually the tail of the SPACE taps that
+   * dismissed the thing, and a space landing on a selected slot DELETES it,
+   * silently, with no message and nothing left to say what used to be there.
+   * main.js:focusEditor() collapses on the way back in for exactly that. The
+   * marker survives, the caret is still sitting on it, and a stray key can at
+   * worst insert next to it. */
+  collapseSelection() {
+    const at = this.input.selectionStart;
+    this.input.setSelectionRange(at, at);
+    return this;
+  }
 
   setAssist(on) {
     this.assist = on;
@@ -191,6 +215,15 @@ export class Editor {
     const upto = this.input.value.slice(0, this.input.selectionStart);
     const lines = upto.split('\n');
     this.posEl.textContent = `Ln ${lines.length}, Col ${lines[lines.length - 1].length + 1}`;
+    // An empty buffer is the moment a player is most likely to be looking for
+    // the place to start, and it is the one moment the syntax reminders have
+    // nothing to say. Say the two keys instead — Interview Mode included,
+    // because where the keyboard is is not a hint about the answer.
+    if (!this.input.value) {
+      this.hintEl.textContent = 'This is the spell. Ctrl/⌘+Enter runs it against '
+        + 'the visible trials; Shift+Ctrl/⌘+Enter casts it.';
+      return;
+    }
     if (this.assist) this.showContextualReminder(lines[lines.length - 1]);
   }
 
@@ -224,6 +257,23 @@ export class Editor {
 
   onKey(e) {
     const ta = this.input;
+
+    /* THE WAY OUT. Tab and Shift+Tab are indent and dedent here, which means
+     * this textarea swallows the one key the web gives a keyboard for leaving a
+     * control — and main.js's window handler returns early for a TEXTAREA
+     * target, so Escape never reached it either. Since a code fight now opens
+     * with the caret in the editor, that left a keyboard-only player sealed in:
+     * measured, ten Tab presses put forty spaces in the buffer and moved focus
+     * nowhere, and RUN, CAST, RESET, RETREAT, the side tabs and the top nav
+     * were mouse-only for the rest of the fight.
+     *
+     * Escape blurs. Tab still indents, which is what it is for, and the NEXT
+     * Escape reaches the window handler with a non-TEXTAREA target and closes
+     * whatever is open. The caption's key hints say so. */
+    if (e.key === 'Escape') {
+      ta.blur();
+      return;
+    }
 
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();

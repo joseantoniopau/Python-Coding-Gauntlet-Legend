@@ -121,6 +121,9 @@ function sealedTitle(res) {
 }
 
 function modal(html, { wide = false } = {}) {
+  // A modal owns the screen. Anything typed at it while the editor still holds
+  // the caret goes into the player's code instead, unseen.
+  releaseEditor();
   const m = $('#modal');
   // There is exactly one #modal node and every modal reuses it, so anything the
   // previous occupant left ticking is now writing into elements that are gone.
@@ -136,6 +139,7 @@ function closeModal() {
   clearInterval(G.modalTimer);
   G.modalTimer = null;
   $('#modal-bg').classList.remove('show');
+  focusEditor();
 }
 
 $('#modal-bg').addEventListener('click', (e) => {
@@ -154,6 +158,10 @@ function say(who, lines, portraitKind) {
   pc.getContext('2d').drawImage(img, 0, 0);
   $('#dialogue-who').textContent = who;
   box.classList.add('show');
+  // SPACE advances the dialogue, and the global key handler stands down for a
+  // focused textarea. With the caret still in the editor a boss taunt is
+  // unadvanceable by keyboard and every attempt lands in the player's code.
+  releaseEditor();
   advanceDialogue();
 }
 
@@ -162,6 +170,10 @@ function advanceDialogue() {
   if (next === undefined) {
     $('#dialogue').classList.remove('show');
     if (G.storyQueue && G.storyQueue.length) { setTimeout(playStoryQueue, 120); return; }
+    // Nobody is talking any more: the caret goes back to the editor, which is
+    // where the player was about to need it. focusEditor waits out the tail of
+    // the player's SPACE taps before it does.
+    focusEditor();
     // The queue is spent: hand control back to whoever was waiting on it.
     const after = G.afterStory;
     G.afterStory = null;
@@ -173,6 +185,160 @@ function advanceDialogue() {
 }
 
 $('#dialogue').addEventListener('click', advanceDialogue);
+
+/* ======================================================================
+ * WHERE TO TYPE, AND WHO HOLDS THE CARET
+ * ======================================================================
+ *
+ * Two reports, one cause. "I can't tell where to type" is what an unlabelled
+ * black rectangle in the bottom-left corner looks like, and the caret was gold
+ * on gold. The caption above the editor, the ring the editor grows when it has
+ * the caret and the placeholder inside an empty one are the answer, and this
+ * is the switch that puts them up — and, on an encounter that has no editor,
+ * takes them down and says where the answer goes instead. A "TYPE HERE"
+ * pointing at nothing is worse than no label at all.
+ *
+ *   code    the editor, its caption and the CAST button
+ *   puzzle  #puzzle-host; CAST still submits, so no caption and no pointer
+ *   mcq     nothing to type: the answers are the TRIALS list, so say so
+ *   incant  IncantationUI owns the pane and carries its own cast control
+ */
+function setEditorMode(mode, verb = 'CAST ✦') {
+  const caption = $('#editor-caption');
+  const answer = $('#answer-here');
+  /* ONE STRING, TWO PLACES. The caption used to hard-code "CAST ✦" while
+   * enterBattle relabelled the primary button to "FORGE ✦" on a TEST_FORGE
+   * encounter — measured live on tf-sum-list: the caption read THEN PRESS
+   * CAST ✦ while the toolbar read ["RUN ▶","FORGE ✦","RESET","RETREAT"]. The
+   * one sentence that tells a new player what to press named a button that was
+   * not on the screen. It is driven from the same string now. */
+  const castName = caption && caption.querySelector('.ec-cast b');
+  if (castName) castName.textContent = verb;
+  if (caption) caption.style.display = mode === 'code' ? '' : 'none';
+  if (answer) answer.style.display = mode === 'mcq' ? '' : 'none';
+  const pane = $('#editor-pane');
+  if (pane && mode !== 'code') pane.classList.remove('typing');
+}
+
+/* The caret belongs to the editor only when nothing is talking over it. A
+ * modal and the dialogue box both own the screen while they are up, and the
+ * global key handler stands down for a focused textarea — so a boss taunt with
+ * the caret in the editor ate every SPACE the player pressed to advance it,
+ * and typed spaces into their code instead. Hand the caret back when the thing
+ * that took it is gone. */
+function editorIsLive() {
+  const host = $('#editor-host');
+  return G.screen === 'battle' && !!G.editor && !!host && host.style.display !== 'none'
+    && !$('#modal-bg').classList.contains('show')
+    && !$('#dialogue').classList.contains('show');
+}
+
+/* Handing the caret back is DEBOUNCED against the keys the player is still
+ * firing at the game chrome, and this is not fussiness. SPACE advances the
+ * dialogue and people over-tap it; the taps that arrive after the last line is
+ * gone would land in the editor, and because Editor.reset() leaves the
+ * `__BLANK__` slot SELECTED, the first of them replaces the slot with a space.
+ * So: hand it back once the player has stopped pressing, not on a fixed timer
+ * that a fast hand outruns. */
+const FOCUS_QUIET_MS = 280;
+
+/* AND THE DEBOUNCE IS NOT ENOUGH ON ITS OWN, which is what measuring it showed:
+ * it only protects against taps FASTER than its own window. At a normal human
+ * cadence the caret is handed back BETWEEN taps and every tap after that one is
+ * typed into the player's code. Measured on a boss taunt, eight SPACE presses:
+ * at 55, 150 and 250 ms the buffer came out byte-identical; at 300, 400, 700
+ * and 1500 ms seven stray spaces were appended, every run. On a starter with a
+ * `__BLANK__` slot it was worse than untidy — the slot is SELECTED by
+ * Editor.reset(), so `return prices[__BLANK__]` became `return prices[       ]`
+ * and the marker was gone with no message.
+ *
+ * So two things that do not depend on timing at all:
+ *
+ *   (a) the selection is COLLAPSED on the way in, so a stray key can never
+ *       delete what was selected — the destructive half, gone outright;
+ *   (b) a capture-phase guard on the textarea swallows a BARE space or Enter
+ *       for FOCUS_GUARD_MS, and every swallowed key pushes that window out
+ *       again, because a key arriving in the window is evidence the player is
+ *       still tapping at the chrome rather than typing. Anything else — a real
+ *       character, a click, Ctrl+Enter — disarms it immediately, so the guard
+ *       costs a deliberate typist nothing.
+ *
+ * The debounce stays as the first line of defence: it keeps the common case
+ * from ever reaching the guard. */
+/* 1200ms, and the number is measured rather than guessed. Eight SPACE presses
+ * through a boss taunt, buffer diffed each time: 55, 150, 250, 300, 400 and
+ * 700ms cadences all leak at 500ms and none of them leak at 1200. It is
+ * refreshed by every key it swallows, because a key arriving inside the window
+ * says the player is still tapping — so a burst of any length is covered, not
+ * just the first two. A player who pauses longer than this and then presses
+ * SPACE gets a space, and should: by then the caption is gold, the editor has
+ * its ring and the caret is blinking in it. The two caps below are the other
+ * side of that bargain — a guard is a thing that eats keys, so it is not
+ * allowed to eat them forever if something goes wrong. */
+const FOCUS_GUARD_MS = 1200;
+const FOCUS_GUARD_LIFE_MS = 6000;   // never armed longer than this
+const FOCUS_GUARD_MAX = 16;         // never eats more keys than this
+
+function disarmFocusGuard() {
+  if (!G.focusGuard) return;
+  const { node, handler, click } = G.focusGuard;
+  node.removeEventListener('keydown', handler, true);
+  node.removeEventListener('mousedown', click, true);
+  clearTimeout(G.focusGuardTimer);
+  G.focusGuardTimer = null;
+  G.focusGuard = null;
+}
+
+function armFocusGuard() {
+  disarmFocusGuard();
+  const node = G.editor && G.editor.input;
+  if (!node) return;
+  const armed = Date.now();
+  let until = armed + FOCUS_GUARD_MS;
+  let eaten = 0;
+  const click = () => disarmFocusGuard();        // a click in the box is intent
+  const handler = (e) => {
+    const now = Date.now();
+    if (now > until || now - armed > FOCUS_GUARD_LIFE_MS) { disarmFocusGuard(); return; }
+    // Ctrl/⌘+Enter is RUN and CAST. It is not a stray tap and must get through.
+    if (e.ctrlKey || e.metaKey || e.altKey) { disarmFocusGuard(); return; }
+    // Anything the player actually typed is intent: stand down and let it land.
+    if (e.key !== ' ' && e.key !== 'Enter') { disarmFocusGuard(); return; }
+    e.preventDefault();
+    e.stopPropagation();
+    if (++eaten >= FOCUS_GUARD_MAX) { disarmFocusGuard(); return; }
+    until = now + FOCUS_GUARD_MS;                 // still tapping: hold the door
+    clearTimeout(G.focusGuardTimer);
+    G.focusGuardTimer = setTimeout(disarmFocusGuard, FOCUS_GUARD_MS);
+  };
+  G.focusGuard = { node, handler, click };
+  node.addEventListener('keydown', handler, true);
+  node.addEventListener('mousedown', click, true);
+  G.focusGuardTimer = setTimeout(disarmFocusGuard, FOCUS_GUARD_MS);
+}
+
+/* `keepSelection` is for the one focus that is not a hand-back: the first one
+ * of a fresh encounter, where Editor.reset() has just selected the __BLANK__
+ * slot on purpose so the first keystroke replaces it. Everything else — a
+ * closing modal, a spent dialogue queue — is a hand-back and collapses.
+ * `guard` is off for the RUN button, which hands the caret back mid-typing. */
+function focusEditor({ keepSelection = false, guard = true } = {}) {
+  clearTimeout(G.focusTimer);
+  if (!editorIsLive()) return;
+  if (Date.now() - (G.lastChromeKey || 0) < FOCUS_QUIET_MS) {
+    G.focusTimer = setTimeout(() => focusEditor({ keepSelection, guard }), FOCUS_QUIET_MS);
+    return;
+  }
+  G.editor.focus();
+  if (!keepSelection && G.editor.collapseSelection) G.editor.collapseSelection();
+  if (guard) armFocusGuard(); else disarmFocusGuard();
+}
+
+function releaseEditor() {
+  disarmFocusGuard();
+  const node = document.activeElement;
+  if (node && node.classList && node.classList.contains('editor-input')) node.blur();
+}
 
 function fmtTime(seconds) {
   const s = Math.max(0, Math.floor(seconds));
@@ -213,8 +379,142 @@ function show(screen) {
   // question one line too early. Deferred once as well: the stage has no
   // geometry until the browser has laid the newly-shown screen out, and an
   // overlay positioned against a zero-size box is an overlay nobody sees.
+  // The stage cannot be measured while the screen it lives on is display:none,
+  // so the fit happens here rather than in enterBattle — and twice, because the
+  // combat strip's own height is part of the budget and it has not been laid
+  // out on the first pass. Before paintAlarm both times: the wash is positioned
+  // in pixels against the stage, so it has to be told after the stage moves.
+  if (screen === 'battle') fitBattleStage();
   paintAlarm();
-  if (screen === 'battle') setTimeout(paintAlarm, 60);
+  if (screen === 'battle') setTimeout(() => { fitBattleStage(); paintAlarm(); }, 60);
+}
+
+/* ======================================================================
+ * HOW BIG THE FIGHT IS
+ * ======================================================================
+ *
+ * THE CANVAS SCALES BY A WHOLE NUMBER OR NOT AT ALL. fx._resize() computes
+ * `px = floor(min(canvas.width / 192, canvas.height / 128))` and draws the
+ * 192x128 logical stage at that scale, centred, because a fractional scale is
+ * what makes pixel art soft. Everything below follows from that one line.
+ *
+ * The old box was a hard-coded 480x320. It is exactly 3:2, which sounds like it
+ * should fit — and it drew at 2x, because 480/192 is 2.5 and the floor throws
+ * the remainder away. Ninety-six by sixty-four device pixels of that frame were
+ * letterbox: a fifth of the width and a fifth of the height, spent on nothing.
+ * Aspect ratio is not the thing to aim at. The SCALE is.
+ *
+ * So: work out how much room the top band can have, ask what the largest whole
+ * scale that fits is, and then size the box to THAT — art plus a gutter of a
+ * few pixels, never a fifth of the frame. The gutter is deliberate: fx sizes
+ * the canvas from the host's border box but the browser lays it out inside the
+ * border, so a canvas sized to the art exactly would have its last column
+ * clipped. GUTTER covers the border on both axes with a pixel to spare.
+ *
+ * The budget, in order of who gets to refuse:
+ *   - the combat strip is measured, not guessed; it grows with statuses
+ *   - #battle-main keeps MAIN_MIN so the editor never becomes a letterbox slot
+ *   - the band asks for BAND of the screen and settles for what is left
+ *   - the stage never takes more than WIDE of the width, so the brief has a
+ *     column to be read in
+ * devicePixelRatio is in it throughout: on a 2x display the same CSS box holds
+ * twice the scale, which is the whole point of asking the canvas rather than
+ * the stylesheet. */
+const STAGE_LOGICAL = { w: 192, h: 128 };
+
+function fitBattleStage() {
+  const stage = $('#battle-stage');
+  const screen = $('#screen-battle');
+  if (!stage || !screen) return;
+  const sh = screen.clientHeight;
+  const sw = screen.clientWidth;
+  if (sh < 80 || sw < 80) return;   // not laid out yet
+
+  // 0.62, and the exact number is load-bearing because THE SCALE IS AN
+  // INTEGER. Measured at 1600x1000 with BAND 0.60: the height allowance came
+  // to 510.8px against the 512 that scale 4 needs — short by ONE POINT TWO
+  // PIXELS, so the whole stage rounded down a step and gave back 190px of
+  // width it had room for. (The stage border is 6px, not the 4 I first
+  // assumed, which is where the missing pixels went.)
+  //
+  // Measured across the sizes this actually opens at, 0.62 changes exactly
+  // one of them and breaks none:
+  //   1280x800   scale 2, editor 305px   (bandMax binds; unchanged)
+  //   1440x940   scale 3, editor 297px   (bandMax binds; unchanged)
+  //   1600x1000  scale 3 -> 4, editor 229px
+  //   1920x1080  scale 4, editor 309px   (unchanged)
+  // Anything past this has to come out of MAIN_MIN, and the editor is the half
+  // of this screen the game is actually about.
+  const BAND = 0.62;        // of the battle screen, before anything refuses
+  const MAIN_MIN = 200;     // the editor and the side tabs keep this much
+  const WIDE = 0.52;        // the stage's share of the width
+  const GUTTER = 8;         // slack so the border cannot clip the last column
+
+  const dpr = Math.min(3, window.devicePixelRatio || 1);
+  const cs = getComputedStyle(stage);
+  const bw = (parseFloat(cs.borderLeftWidth) || 0) + (parseFloat(cs.borderRightWidth) || 0);
+  const bh = (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0);
+
+  // Everything in #battle-top that is not the stage: the strip under it, the
+  // gap above the strip, the band's own padding and its bottom rule.
+  const top = $('#battle-top');
+  const strip = $('#enemy-strip');
+  const tcs = top ? getComputedStyle(top) : null;
+  const chromeV = (strip ? strip.offsetHeight + 6 : 24)
+    + (tcs ? (parseFloat(tcs.paddingTop) || 0) + (parseFloat(tcs.paddingBottom) || 0)
+           + (parseFloat(tcs.borderBottomWidth) || 0) : 23);
+  const chromeH = tcs ? (parseFloat(tcs.paddingLeft) || 0) + (parseFloat(tcs.paddingRight) || 0)
+                      : 28;
+
+  const hudNode = $('#combat-hud');
+  const hudH = hudNode && hudNode.classList.contains('on') ? hudNode.offsetHeight : 0;
+
+  const bandMax = Math.max(140, sh - hudH - MAIN_MIN);
+  const band = Math.min(sh * BAND, bandMax);
+  const artMaxH = Math.max(STAGE_LOGICAL.h, (band - chromeV - bh - GUTTER) * dpr);
+  const artMaxW = Math.max(STAGE_LOGICAL.w, (sw * WIDE - chromeH - bw - GUTTER) * dpr);
+
+  const px = Math.max(1, Math.floor(Math.min(artMaxH / STAGE_LOGICAL.h,
+                                             artMaxW / STAGE_LOGICAL.w)));
+  const boxW = Math.round(STAGE_LOGICAL.w * px / dpr + bw + GUTTER);
+  const boxH = Math.round(STAGE_LOGICAL.h * px / dpr + bh + GUTTER);
+  stage.style.width = `${boxW}px`;
+  stage.style.height = `${boxH}px`;
+
+  // THE BAND IS THE STAGE PLUS ITS CHROME, AND NOTHING ELSE DECIDES IT.
+  // #battle-top is a stretch row, so its height is the tallest item's content
+  // height — and #battle-brief is a wall of problem statement. A long statement
+  // on a narrow window therefore grew the band past the stage and took the
+  // difference out of the editor, which is how `max-height: 332px` came to be
+  // nailed to the brief in the first place. Pin the row instead: the brief
+  // stretches into whatever the fight leaves and scrolls inside it.
+  if (top) top.style.height = `${boxH + chromeV}px`;
+
+  /* THE LABEL GOES BEFORE THE BOX IT NAMES.
+   *
+   * #editor-caption and .editor-status are both `flex: 0 0 auto`, so
+   * .editor-shell — the only `1 1 auto` in the column — absorbs every pixel of
+   * shrink and the box disappears while the sentence pointing at it stays put.
+   * Measured at 1024x640 with the shipped text_scale range: 1.0 gave 6 code
+   * lines, 1.15 gave 3, 1.25 gave 2, and 1.5 gave ZERO — .editor-shell 2px tall
+   * under a 66px caption, with body{overflow:hidden} leaving no scroll room to
+   * reach it and 26 typed characters landing invisibly in a textarea that was
+   * still the activeElement.
+   *
+   * So: measure the shell WITH the caption up, and if it cannot hold two lines
+   * of code, take the caption down. A label pointing at nothing is worse than
+   * no label — this file's own rule, game.css:314-317. Re-showing first makes
+   * the decision fresh on every call, so growing the window brings it back. The
+   * default text scale never reaches this: 6 lines at 1024x640, 11 at
+   * 1600x1000. */
+  const cap = $('#editor-caption');
+  const shell = document.querySelector('#editor-pane .editor-shell');
+  const host = $('#editor-host');
+  if (cap && shell && host && host.style.display !== 'none') {
+    cap.style.display = '';
+    const lh = parseFloat(getComputedStyle(shell).lineHeight) || 18;
+    if (shell.getBoundingClientRect().height < lh * 2) cap.style.display = 'none';
+  }
 }
 
 /* ---------------- vitals ---------------- */
@@ -244,6 +544,32 @@ async function refresh() {
     return G.state;
   }
   G.state = next;
+  /* THE SKY RIDES ON THE REGION RECORD, AND THE RECORD IS BEING REPLACED HERE.
+   *
+   * Every payload carries a fresh 24-slot weather strip — two hours of sky —
+   * but the overworld holds the region OBJECT it was handed at the last
+   * loadRegion(), and publishWeather() is called from nowhere else. Replacing
+   * G.state without rebinding therefore leaves both renderers indexing the
+   * strip that was fetched when the player last TRAVELLED: after two hours in
+   * one region readSky() clamps to strip[23] and the sky is frozen there for
+   * good. Measured live in graph_wastes: +115 min slot 23 and still honest;
+   * +125, +150, +180 and +1440 min all clamped to slot 23 with the condition
+   * stuck on `clear` while gauntlet/weather.py ran through storm, ashfall and
+   * mist — 212 of the next 288 slots wrong, across every fight fought in them.
+   *
+   * Rebinding is the whole fix, and it fixes the BATTLE too: _pollSky() calls
+   * resolveSky(record), whose rule 1 re-runs publishWeather(record), which
+   * re-registers the new strip under both the region id and its palette — and
+   * the palette is all main.js hands the stage. One assignment, two renderers.
+   * loadRegion() is left alone: it is the only thing allowed to decide WHICH
+   * region the overworld is in, and this only ever refreshes the one it holds. */
+  if (G.overworld && G.overworld.region) {
+    const fresh = next.regions.find(r => r.id === G.overworld.region.id);
+    if (fresh) {
+      G.overworld.region = fresh;
+      G.overworld._pollSky();
+    }
+  }
   // Equipment changes the sprite. hero_look() has been computed and shipped on
   // every state payload since the armour system landed and nothing ever read it,
   // so the player's gear was invisible on the character they were playing.
@@ -274,6 +600,13 @@ function applySettings() {
   if (s.vol_music !== undefined) audio.setMusic(s.vol_music);
   if (s.vol_sfx !== undefined) audio.setSfx(s.vol_sfx);
   if (G.overworld) G.overworld.reducedMotion = !!s.reduced_motion;
+  /* AND THE STAGE, on the same line as the field. ensureStage() read this
+   * setting once, when the first fight of the session built the stage, and
+   * nothing ever told it again — so toggling Reduced Motion updated the
+   * overworld and left the battle on whatever the setting had been at boot.
+   * That is the same disagreement between the two renderers that the weather
+   * had: one of them stops and the other does not. */
+  if (G.fx) G.fx.setReducedMotion(!!s.reduced_motion);
 }
 
 /* ---------------- world ---------------- */
@@ -841,8 +1174,11 @@ function enterBattle(payload) {
     G.editor.reset(p.starter_code || '');
     $('#editor-host').style.display = '';
     $('#puzzle-host').style.display = 'none';
+    // One verb, set on the button and on the sentence that points at it.
+    const verb = p.entry.kind === 'test_forge' ? 'FORGE ✦' : 'CAST ✦';
+    setEditorMode('code', verb);
     $('#btn-run').style.display = '';
-    $('#btn-submit').textContent = p.entry.kind === 'test_forge' ? 'FORGE ✦' : 'CAST ✦';
+    $('#btn-submit').textContent = verb;
   }
 
   // Which region's apex this fight's casts count against. Read off the
@@ -862,6 +1198,20 @@ function enterBattle(payload) {
   // only way to answer, and the seal is about help, not about the question.
   setTab(G.mcq ? 'trials' : visibleTab(interview ? 'approach' : 'trials'));
   show('battle');
+  // AFTER show(), and this is the whole reason the caret was never in the
+  // editor: Editor.reset() focuses the textarea, but it runs while
+  // #screen-battle is still display:none and focusing a node in a hidden
+  // subtree does nothing at all. So the fight opened with the caret on <body>,
+  // no ring, no clue, and every report of "I can't tell where to type" was
+  // literally true. A boss taunt takes it straight back — say() releases it and
+  // advanceDialogue hands it over when the talking stops.
+  //
+  // keepSelection: this is the ONE focus that is not a hand-back. Editor.reset()
+  // has just selected the __BLANK__ slot on purpose so the first keystroke
+  // replaces it, and collapsing that here would delete the feature rather than
+  // protect it. The guard still swallows the tail of the SPACE tap that walked
+  // the player into this fight.
+  focusEditor({ keepSelection: true });
   audio.play(enemy.boss ? 'boss' : 'battle');
 
   if (enemy.boss && enemy.taunt) {
@@ -1021,10 +1371,16 @@ function ensureCombatStyle() {
   const node = document.createElement('style');
   node.id = 'combat-style';
   node.textContent = `
+/* max-height, because this strip's height is otherwise UNBOUNDED: it grows with
+   the enemy's statuses, the belt and the turn rule, and every pixel of it comes
+   straight off the editor below. Measured at 1024x640 it ran 153px at text
+   scale 1 and 210px at 1.5, on a fight with nothing much in it. 22vh is a fifth
+   of the screen and the rest scrolls inside itself. */
 #combat-hud {
-  flex: 0 0 auto; display: none; gap: 10px;
-  padding: 8px 14px; background: var(--panel-2);
+  flex: 0 0 auto; display: none; gap: 8px;
+  padding: 6px 14px; background: var(--panel-2);
   border-bottom: 3px solid var(--line); flex-direction: column;
+  max-height: 22vh; overflow-y: auto;
 }
 #combat-hud.on { display: flex; }
 .chud-top { display: flex; gap: 12px; align-items: stretch; }
@@ -1103,6 +1459,12 @@ function ensureCombatStyle() {
 .potion .pv { font-size: calc(10px * var(--scale)); }
 .potion .ph { color: var(--gold-hi); font-variant-numeric: tabular-nums; }
 .potion.off { opacity: .42; cursor: not-allowed; }
+/* The belt and the turn rule used to be two stacked rows in a strip that was
+ * already taking two hundred pixels off the top of the editor. They are short
+ * and the screen is wide: one row, potions left, rule right. */
+.chud-foot { display: flex; gap: 16px; align-items: flex-start; }
+.chud-foot .chud-belt { flex: 0 1 auto; }
+.chud-foot .chud-rule { flex: 1 1 0; min-width: 0; align-self: center; }
 .chud-rule {
   font-size: calc(10px * var(--scale)); color: var(--ink-faint);
   font-style: italic; line-height: 1.6;
@@ -1151,8 +1513,10 @@ function ensureCombatHud() {
       </div>
     </div>
     <div class="chud-said" id="chud-said" style="display:none"></div>
-    <div class="chud-belt" id="chud-belt"></div>
-    <div class="chud-rule" id="chud-rule"></div>`;
+    <div class="chud-foot">
+      <div class="chud-belt" id="chud-belt"></div>
+      <div class="chud-rule" id="chud-rule"></div>
+    </div>`;
   const main = $('#battle-main');
   main.parentNode.insertBefore(node, main);
   return node;
@@ -2142,6 +2506,7 @@ async function playElementalExchange(result, fb) {
 
 function renderPuzzle(p) {
   $('#editor-host').style.display = 'none';
+  setEditorMode('puzzle');
   $('#btn-run').style.display = 'none';
   const host = $('#puzzle-host');
   host.style.display = '';
@@ -2165,6 +2530,9 @@ function renderPuzzle(p) {
  * and repainting is now what restores them rather than what destroys them. */
 function renderMcq(p) {
   $('#editor-host').style.display = 'none';
+  // No editor and no CAST: the pane says where the answers are instead of
+  // sitting there as an empty black rectangle.
+  setEditorMode('mcq');
   $('#btn-run').style.display = 'none';
   // The answers ARE the choices. Leaving a primary submit button on screen
   // just offers a way to fail an encounter without answering it.
@@ -2715,6 +3083,15 @@ async function doRun() {
   } catch (e) { toast('RUN FAILED', e.message, 'red'); }
   btn.disabled = false;
   btn.textContent = 'RUN ▶';
+  /* AND GIVE THE CARET BACK. Disabling a button that holds focus drops focus to
+   * <body>, and re-enabling it does not bring it back: measured, a mouse-click
+   * RUN left activeElement BODY, #editor-host outline `none`, #editor-pane
+   * without its `typing` class, and the next seventeen typed characters grew
+   * the buffer by zero. write → RUN → keep writing is the most common loop in a
+   * code fight. closeModal() already does this, which is the only reason CAST
+   * recovers. No guard: nothing was talking over the screen, the player is
+   * mid-sentence, and a space here is a space they meant. */
+  focusEditor({ keepSelection: true, guard: false });
 }
 
 async function doSubmit() {
@@ -3374,6 +3751,7 @@ function enterIncantation(payload) {
   // The editor and both primary buttons belong to the other kind of fight.
   // IncantationUI carries its own cast control.
   $('#editor-host').style.display = 'none';
+  setEditorMode('incant');
   $('#btn-run').style.display = 'none';
   $('#btn-submit').style.display = 'none';
   $('#btn-reset').style.display = 'none';
@@ -7227,6 +7605,12 @@ function buildNav() {
 buildNav();
 
 window.addEventListener('keydown', (e) => {
+  // A key aimed at the chrome rather than at a field. focusEditor() waits these
+  // out before it takes the caret, so the tail of a SPACE-tap through a mentor
+  // speech never lands in the player's code.
+  if (e.target.tagName !== 'TEXTAREA' && e.target.tagName !== 'INPUT') {
+    G.lastChromeKey = Date.now();
+  }
   if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
   if (e.key === 'n' && G.screen === 'world') startNext();
   if (e.key === 'f' && G.screen === 'world') searchHere();
@@ -7239,9 +7623,42 @@ window.addEventListener('keydown', (e) => {
   }
 });
 
+/* The ring and the lit caption are one signal with the caret, so they are
+ * driven by focus rather than by a click: tabbing in counts, and so does the
+ * automatic focus an encounter does when it opens. */
+(() => {
+  const host = $('#editor-host');
+  const pane = $('#editor-pane');
+  if (!host || !pane) return;
+  host.addEventListener('focusin', () => pane.classList.add('typing'));
+  host.addEventListener('focusout', () => pane.classList.remove('typing'));
+  // The caption names the box below it, so clicking the caption should put the
+  // caret in the box. A label that says "write here" and does nothing when
+  // pressed is a label a player stops believing.
+  const caption = $('#editor-caption');
+  /* GATED THE SAME WAY THE AUTOMATIC HANDOFF IS GATED. The caption is visible
+   * and clickable while a dialogue is up — at 1600x1000 it sits at y=690 and
+   * the dialogue box at y=868 — so an unconditional focus() here put the caret
+   * in the textarea mid-taunt, and the global key handler stands down for a
+   * focused TEXTAREA: the dialogue could no longer be advanced with SPACE, and
+   * both spaces were typed into the player's code. editorIsLive() already knows
+   * that an open modal and an open dialogue own the screen. */
+  if (caption) {
+    /* A deliberate "put the caret there": nothing is talking over the screen
+     * (editorIsLive says so), so there is no tail of chrome keys to guard
+     * against and no reason to disturb what was selected. */
+    caption.addEventListener('click', () => {
+      if (editorIsLive()) focusEditor({ keepSelection: true, guard: false });
+    });
+  }
+})();
+
 window.addEventListener('resize', () => {
   if (G.title) G.title.resize();
   if (G.overworld) G.overworld.resize();
+  // The whole-number scale the stage can afford is a function of the viewport,
+  // so it is re-decided here rather than once at the start of the fight.
+  if (G.screen === 'battle') fitBattleStage();
   // The wash is positioned in pixels against the stage, so it moves when the
   // stage does.
   if (G.alarmNode) paintAlarm();
@@ -7541,6 +7958,19 @@ async function boot() {
     audio.resume();
     const spoke = audio.petSound(c.animal, { tier: c.tier, dead: c.dead });
     if (spoke && c.line) toast(String(c.name || c.animal).toUpperCase(), c.line, 'violet');
+  };
+  /* The field has run off the end of the strip it holds and is asking for a
+   * fresher one. refresh() rebinds the overworld to the new record and
+   * republishes it — see the block at `G.state = next` — so this is only the
+   * trigger; the id guard is belt and braces against a refresh that arrives
+   * after the player has already walked through a door. Overworld._pollSky()
+   * asks once per exhausted strip and not once every two seconds. */
+  G.overworld.onSkyStale = async () => {
+    await refresh();
+    const here = currentRegion();
+    if (here && G.overworld.region && here.id === G.overworld.region.id) {
+      G.overworld.region = here;
+    }
   };
   G.overworld.onMove = (x, y) => {
     clearTimeout(G._moveSave);

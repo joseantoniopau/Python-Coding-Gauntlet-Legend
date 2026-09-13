@@ -18,6 +18,7 @@ from . import unmaking
 from . import skills as skillmod
 from . import srs as srsmod
 from . import world
+from . import weather as weathermod
 from . import bestiary, classes, dungeons, elements, finalexam, forge
 from . import incantation, legendaries, potions
 from . import minirepo
@@ -1985,6 +1986,18 @@ class Game:
                 return plan.region
         return self.state["player"].get("region", "")
 
+    def _region_view(self, region_id: str) -> dict:
+        """A region record with its sky on it.
+
+        A COPY, always. `world.REGION_BY_ID` is module-level shared state and
+        writing a `weather` key into it in place would hand every later caller
+        in the process whatever the first caller's clock said.
+        """
+        base = world.REGION_BY_ID.get(region_id) or world.REGIONS[0]
+        return {**base, "weather": weathermod.forecast(base["id"],
+                                                       self.world.seed,
+                                                       time.time())}
+
     def dashboard(self) -> dict:
         skills = self.skills
         now = time.time()
@@ -2043,10 +2056,18 @@ class Game:
             "achievements": self.state["achievements"],
             "cleared_bosses": self.state["cleared_bosses"],
             "readiness": ready,
+            # THE SKY RIDES HERE. gauntlet/weather.py is the only thing in
+            # the game that decides what the weather is, and this is the only
+            # wire it travels down: both renderers already receive a region
+            # record, so a `weather` key on it needs no new route, no new
+            # fetch and no new client plumbing. It carries the condition now
+            # AND the next two hours of it, so the client stays right as time
+            # passes without asking again — see weather.strip().
             "regions": [
                 {**r, "unlocked": r["id"] in open_regions,
                  "tier": world.town_tier(skills.get(r["skill"],
-                                                    skillmod.SkillState(name="x")).mastery)}
+                                                    skillmod.SkillState(name="x")).mastery),
+                 "weather": weathermod.forecast(r["id"], self.world.seed, now)}
                 for r in world.REGIONS
             ],
             "bosses": [
@@ -4072,7 +4093,7 @@ class Game:
                         else tactics.tactical_brief(enemy_obj, enc.exposed)),
             "probe_charges": self.probes_remaining(),
             "loadout": {} if seal.blocks("BUILD") else self.loadout(),
-            "region": world.REGION_BY_ID.get(problem.realm, world.REGIONS[0]),
+            "region": self._region_view(problem.realm),
             "mentor": (None if seal.blocks("MENTOR") else world.MENTORS.get(
                 world.REGION_BY_ID.get(problem.realm, {}).get("mentor", "byte"))),
             "skill": "" if seal.blocks("SKILL_STATE") else skill_name,
@@ -4629,7 +4650,7 @@ class Game:
             "clock_seconds": finalexam.clock_for(problem, seal),
             "target_seconds": repo.clock,
             "elapsed_seconds": max(0.0, time.time() - enc.started_at),
-            "region": world.REGION_BY_ID.get(repo.realm, world.REGIONS[0]),
+            "region": self._region_view(repo.realm),
             "mentor": (None if seal.blocks("MENTOR") else world.MENTORS.get(
                 world.REGION_BY_ID.get(repo.realm, {}).get("mentor", "byte"))),
             "skill": "" if seal.blocks("SKILL_STATE") else skill_name,

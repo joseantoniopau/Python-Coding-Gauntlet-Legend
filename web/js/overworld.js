@@ -53,6 +53,10 @@ import * as apexmod from './apex.js';
 import * as kingui from './kingui.js';
 import * as unmakingfx from './unmakingfx.js';
 import * as monsterart from './monsterart.js';
+/* For the sky, and for nothing else. battlescene.js holds the registry the
+ * battle stage reads back out, so publishing the region here is what makes
+ * walking into a fight continuous: same region, same moment, same weather. */
+import * as stagelayer from './battlescene.js';
 import { audio } from './audio.js';
 
 const T = tiles.TILE_SIZE;
@@ -414,12 +418,22 @@ function placeMarkers(region, grid, tier) {
   return markers;
 }
 
-const PARTICLE_FOR = {
-  village: 'motes', grass: 'leaves', forest: 'leaves', deepforest: 'motes',
-  canopy: 'leaves', swamp: 'motes', cave: 'ash', mine: 'ember',
-  mountain: 'snow', highland: 'leaves', citadel: 'motes', wastes: 'ash',
-  ruins: 'motes', dungeon: 'ash', tower: 'motes', arena: 'ember', castle: 'ember',
-};
+/* THE WEATHER USED TO BE A TABLE HERE, AND IT WAS THE WRONG ONE.
+ *
+ * A biome mapped to one particle style, on forever: this file said a grass
+ * region drifted leaves, fx.js said a grass region drifted leaves too but the
+ * battle stage said grass was ['lightning','rain','fog'] and rained in every
+ * fight. Three tables, three answers, no way for the field the player walked
+ * across and the fight they walked into to agree about the sky.
+ *
+ * Now there is one answer and it comes from gauntlet/weather.py, riding on the
+ * region record this module is already handed. load() publishes that record to
+ * battlescene.js's registry and _pollSky() reads the condition back out of it,
+ * which is the same call the battle stage makes at the same moment — so the two
+ * are the same weather by construction rather than by coincidence.
+ */
+const PARTICLES_AT_FULL = 70;   // at density 1; a drizzle gets a fraction
+const SKY_POLL_SECONDS = 2;     // how often the field notices the sky changed
 
 export class Overworld {
   constructor(canvas) {
@@ -442,6 +456,23 @@ export class Overworld {
     this._clockAcc = 0;
     this.particles = [];
     this.particleStyle = pixel.PARTICLE_STYLE.motes;
+    /* The sky over this map: the resolved condition, not a biome default.
+     * _applySky() writes it, _pollSky() compares against it, and it is null
+     * until the first region is loaded. */
+    this.sky = null;
+    this._skyAcc = 0;
+    /* THE STRIP RUNS OUT. The server ships STRIP_SLOTS (24) five-minute slots
+     * — two hours of sky — and nothing refetches it on its own. A player who
+     * stands in one region longer than that runs off the end, readSky() clamps
+     * to the last slot and says so with `stale`, and the sky is frozen there
+     * for as long as they stay. `onSkyStale` is how the field asks its host for
+     * a fresher one; `_skyBusy` stops a stale strip firing a request every
+     * SKY_POLL_SECONDS while that answer is in flight, and `_skyAsked` — the
+     * region plus the epoch of the strip that ran out — stops it asking twice
+     * for the same exhausted strip when the answer does not carry a newer one. */
+    this.onSkyStale = null;
+    this._skyBusy = false;
+    this._skyAsked = null;
     this.onEnter = null;
     this.onMove = null;
     this.solvedNodes = new Set();
@@ -630,8 +661,11 @@ export class Overworld {
     const start = spawn || { x: 4, y: midY };
     this.player.x = start.x; this.player.y = start.y;
     this.player.px = start.x * T; this.player.py = start.y * T;
-    this.particleStyle = pixel.PARTICLE_STYLE[PARTICLE_FOR[region.biome] || 'motes'];
-    this.particles = pixel.makeParticles(region.id, MAP_W * T, MAP_H * T, 70);
+    /* Publish the place, then draw its sky. Publishing is what the battle reads
+     * back when the fight starts — one registry, one record, so the fight and
+     * the field cannot be in different weather. */
+    stagelayer.publishWeather(region);
+    this._applySky(stagelayer.resolveSky(region));
     // E: a region change is a discontinuity. The ground the companion was
     // retracing is in another map now, so the buffer goes with it and the
     // animal arrives already standing next to you.
@@ -761,7 +795,96 @@ export class Overworld {
      * clock — see the tint block there. */
     this._clockAcc += dt;
     if (this._clockAcc >= 1) { this._clockAcc = 0; this._hour = new Date().getHours(); }
-    pixel.stepParticles(this.particles, this.particleStyle, MAP_W * T, MAP_H * T, dt);
+    /* And the sky, on the same principle: the weather changes on a five-minute
+     * grid, so asking twice a second would be three hundred times more often
+     * than it can possibly matter. This is the line that makes it come and go
+     * while the player is standing still — without it the field would only ever
+     * change weather at a doorway. */
+    this._skyAcc += dt;
+    if (this._skyAcc >= SKY_POLL_SECONDS) {
+      this._skyAcc = 0;
+      this._pollSky();
+    }
+    /* REDUCED MOTION STOPS THE WEATHER IN BOTH RENDERERS OR IN NEITHER.
+     * The battle backdrop freezes its rain, snow and fireballs by drawing them
+     * at a constant t (see drawScene), and a field that kept stepping while the
+     * fight it leads into stood still would be the same disagreement this whole
+     * feature exists to close — walking through seventy moving raindrops into a
+     * bone-dry room. The particles are still BUILT and still drawn: what stops
+     * is the motion, which is the only thing the setting is about. */
+    if (!this.reducedMotion) {
+      pixel.stepParticles(this.particles, this.particleStyle, MAP_W * T, MAP_H * T, dt);
+    }
+  }
+
+  /* Fall the condition's particles over the map.
+   *
+   * `density` is the same 0..1 the battle backdrop scales its rain off, so a
+   * drizzle is thin in both places. A clear sky keeps a few motes: air with
+   * nothing whatever in it reads as a renderer that stopped, not as a fine day.
+   */
+  _applySky(sky) {
+    this.sky = sky || null;
+    const style = (sky && pixel.PARTICLE_STYLE[sky.particle])
+      || pixel.PARTICLE_STYLE.motes;
+    const dens = sky && typeof sky.density === 'number' ? sky.density : 0.22;
+    this.particleStyle = style;
+    /* Keyed by region AND condition, so the field visibly re-seeds when the
+     * weather turns rather than sliding one set of pixels into another. */
+    this.particles = pixel.makeParticles(
+      ((sky && sky.region) || (this.region && this.region.id) || 'map')
+        + ':' + ((sky && sky.condition) || 'clear'),
+      MAP_W * T, MAP_H * T,
+      Math.max(12, Math.round(PARTICLES_AT_FULL * dens)));
+    return this;
+  }
+
+  /* Has the sky turned since the last look? Cheap: one index into a strip the
+   * server already sent. Nothing is rebuilt unless the condition's NAME
+   * changed, so standing in one spell of rain for half an hour allocates
+   * nothing at all. */
+  _pollSky() {
+    if (!this.region) return;
+    let next = stagelayer.resolveSky(this.region);
+    if (!next) return;
+    /* THE FLAG IS ACTED ON, NOT MERELY RETURNED. `stale` means the strip we
+     * hold does not cover this moment any more — the player has been standing
+     * here for over two hours without anything fetching the game state — and
+     * indexing its clamped end every two seconds forever is how a sky stops
+     * being weather. Ask the host for a fresher record, once per exhausted
+     * strip, then READ AGAIN: a host that already holds a newer one answers
+     * synchronously, and applying the stale answer we came in with would undo
+     * the refresh on the very frame it arrived.
+     *
+     * "Once per exhausted strip" is keyed by REGION AND EPOCH, not by epoch
+     * alone: every region's strip is anchored to the same five-minute grid, so
+     * two records fetched in the same moment carry the same `epoch`, and an
+     * epoch-only key would let a strip that ran out in one region silence the
+     * ask in the next one the player walked into. */
+    const asked = this.region.id + '|'
+      + ((this.region.weather && this.region.weather.epoch) || 0);
+    if (next.stale && this.onSkyStale && !this._skyBusy && this._skyAsked !== asked) {
+      this._skyAsked = asked;
+      this._skyBusy = true;
+      /* A host that already holds a fresher record answers on the spot and
+       * returns nothing; a host that has to fetch returns a promise. Only the
+       * second kind has anything in flight, and only the second kind should
+       * hold `_skyBusy` — clearing it on a microtask after a synchronous answer
+       * would leave the flag stuck for the rest of any caller that does not
+       * yield, and a field that can never ask again is the bug this is here to
+       * repay. */
+      let answer = null;
+      try { answer = this.onSkyStale(); } catch (e) { answer = null; }
+      if (answer && typeof answer.then === 'function') {
+        answer.then(() => { this._skyBusy = false; },
+                    () => { this._skyBusy = false; });
+      } else {
+        this._skyBusy = false;
+      }
+      next = stagelayer.resolveSky(this.region) || next;
+    }
+    if (this.sky && next.condition === this.sky.condition) return;
+    this._applySky(next);
   }
 
   checkTile() {

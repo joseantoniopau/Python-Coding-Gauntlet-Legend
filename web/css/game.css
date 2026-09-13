@@ -208,39 +208,143 @@ h1, h2, h3, .pixel { font-family: 'Press Start 2P', 'Courier New', monospace; }
 }
 
 /* battle */
-#screen-battle { flex-direction: column; }
+#screen-battle { flex-direction: column; overflow: hidden; }
+/* THE FIGHT OWNS THE TOP OF THE SCREEN.
+ *
+ * This band used to be a hard-coded 480x320 stage beside a brief that had
+ * nothing to put in its other eleven hundred pixels, and the whole thing came
+ * to about a tenth of the screen. It is now sized off the viewport: the band
+ * takes roughly the top half and the brief takes whatever width the stage
+ * leaves.
+ *
+ * The stage's own box is set in pixels by `fitBattleStage()` in main.js rather
+ * than here, and the reason is the canvas. fx._resize() scales the 192x128
+ * logical stage by a WHOLE NUMBER — `floor(min(w/192, h/128))` — because a
+ * fractional scale is what makes pixel art soft. A box that is merely 3:2 still
+ * rounds down: 480x320 is exactly 3:2 and still drew at 2x, wasting 96x64
+ * device pixels on letterbox. So main.js picks the largest whole-number scale
+ * the band can hold and sizes the box to it, and what is left over is a gutter
+ * of a few pixels instead of a fifth of the frame. The declarations below are
+ * the fallback for the frame before that first measurement lands. */
 #battle-top {
-  display: flex; gap: 12px; padding: 10px 14px; align-items: stretch;
+  display: flex; gap: 14px; padding: 10px 14px; align-items: stretch;
   border-bottom: 3px solid var(--line); background: var(--panel);
-  flex: 0 0 auto;
+  flex: 0 0 auto; min-height: 0; overflow: hidden;
 }
-/* The stage is the centrepiece: authored 64x64 bosses on a three-layer parallax
-   set. At 288px they were postage stamps. */
 #enemy-stage {
-  width: 480px; flex: 0 0 480px; display: flex; flex-direction: column;
-  align-items: center; justify-content: flex-start; gap: 6px; position: relative;
+  flex: 0 0 auto; display: flex; flex-direction: column;
+  align-items: stretch; justify-content: flex-start; gap: 6px; position: relative;
+  min-width: 0;
 }
 #battle-stage {
-  width: 480px; height: 320px; position: relative;
+  height: clamp(214px, 44vh, 560px); aspect-ratio: 3 / 2; width: auto;
+  align-self: flex-start;
+  flex: 0 0 auto; position: relative;
   border: 2px solid var(--line); background: #0a0812; overflow: hidden;
   image-rendering: pixelated;
 }
 #battle-stage canvas { image-rendering: pixelated; }
-#enemy-name { font-family: 'Press Start 2P', monospace; font-size: calc(9px * var(--scale)); color: var(--gold); text-align: center; }
-#enemy-hp { width: 420px; }
-#battle-brief { flex: 1; overflow-y: auto; max-height: 332px; padding: 10px 14px;
-  scrollbar-gutter: stable; }
+/* Name, bar and numbers on ONE line under the stage. The canvas already paints
+ * the enemy's name and health across the top of the art and the combat strip
+ * repeats both underneath, so three stacked rows of it here was sixty pixels
+ * spent saying a thing twice. */
+#enemy-strip { display: flex; align-items: center; gap: 9px; height: 18px; }
+#enemy-name {
+  font-family: 'Press Start 2P', monospace; font-size: calc(8px * var(--scale));
+  color: var(--gold); text-align: left; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; max-width: 45%;
+}
+#enemy-hp { flex: 1 1 auto; min-width: 0; height: 10px; }
+#enemy-hp-label { flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+#battle-brief { flex: 1 1 0; min-width: 0; overflow-y: auto; padding: 10px 18px;
+  border-left: 2px solid var(--line); scrollbar-gutter: stable; }
 #battle-brief h2 { margin: 0 0 4px; font-size: calc(13px * var(--scale)); color: var(--gold-hi); }
 #battle-brief .statement { font-size: calc(13px * var(--scale)); line-height: 1.65; color: var(--ink); white-space: pre-wrap; }
 #battle-brief .statement code { background: #0d0b16; padding: 1px 4px; color: var(--blue); }
 #battle-brief .meta { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
-#battle-main { flex: 1; display: flex; overflow: hidden; }
-#editor-pane { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+#battle-main { flex: 1 1 auto; display: flex; overflow: hidden; min-height: 0; }
+#editor-pane { flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 #editor-toolbar {
   display: flex; gap: 8px; align-items: center; padding: 8px 12px;
   background: var(--panel-2); border-bottom: 2px solid var(--line); flex-wrap: wrap;
 }
-#editor-host { flex: 1; min-height: 0; position: relative; }
+#editor-host { flex: 1 1 auto; min-height: 0; position: relative; }
+
+/* ---------- "I can't tell where to type" ----------
+ *
+ * The editor used to be an unlabelled black rectangle in the bottom-left
+ * corner with no heading, no placeholder and a caret the same colour as the
+ * gold it sat on. Three things fix that and they are meant to be read as one:
+ * this caption naming the box below it, the ring the box grows when it holds
+ * the caret, and the placeholder inside an empty one. The caption points DOWN
+ * at the editor and UP at the two buttons that act on it, because "type here"
+ * and "press that" are one instruction and the player was being given neither
+ * half. It is hidden on every encounter that has no editor. */
+#editor-caption {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 7px 12px 7px 9px; background: var(--panel);
+  border-bottom: 2px solid var(--line);
+  border-left: 5px solid var(--gold);
+  font-family: 'Press Start 2P', monospace; font-size: calc(9px * var(--scale));
+  letter-spacing: 1px; line-height: 1.5; flex: 0 0 auto; cursor: text;
+}
+#editor-caption .ec-here { color: var(--gold); white-space: nowrap; }
+/* The other half of the instruction, kept beside the first half rather than
+ * flung to the far end of a 1900px row: the buttons it points at are directly
+ * above this end of the strip. */
+/* NO ARROW HERE, DELIBERATELY. The '▾' on .ec-here can point, because the box
+ * it names is directly below it. This half cannot: the caption is a flex row
+ * and the toolbar above it is a different flex row with a spacer in it, so a
+ * '▴' at the end of this sentence landed at x346-353 at 1280x800, 1600x1000 and
+ * 1920x1080 alike — over the empty gap between RESET (ends x179) and the timer,
+ * with the button it claimed to indicate at x69-122. An arrow that points at
+ * nothing is a worse label than no arrow; the gold button name is unambiguous
+ * on its own, and main.js:setEditorMode keeps it spelled the same as the
+ * button. */
+#editor-caption .ec-cast { color: var(--ink-dim); white-space: nowrap; }
+#editor-caption .ec-cast b { color: var(--gold-hi); font-weight: normal; }
+#editor-caption .ec-keys {
+  margin-left: auto; color: var(--ink-dim); font-size: calc(8px * var(--scale));
+  letter-spacing: .5px; text-align: right;
+}
+/* The caret is in the box: say so loudly enough to see from across the room. */
+#editor-pane.typing #editor-caption {
+  background: var(--panel-3); border-bottom-color: var(--gold);
+  border-left-color: var(--gold-hi);
+}
+#editor-pane.typing #editor-caption .ec-here { color: var(--gold-hi); }
+#editor-pane.typing #editor-caption .ec-cast { color: var(--ink); }
+#editor-pane.typing #editor-host { outline: 2px solid var(--gold); outline-offset: -2px; }
+/* Fallback for a click that lands on the textarea before the class does. */
+#editor-host:focus-within { outline: 2px solid var(--gold); outline-offset: -2px; }
+#editor-caption .ec-blink { animation: ec-blink 1.1s steps(1) infinite; }
+@keyframes ec-blink { 0%, 49% { opacity: 1 } 50%, 100% { opacity: .15 } }
+
+/* A question has no editor and no CAST button on purpose — the answers are the
+ * buttons, and they live in the TRIALS tab. That used to leave this entire
+ * pane an empty black rectangle, which reads exactly like a broken screen.
+ * Never leave a "type here" pointing at nothing; say where the answer goes. */
+#answer-here {
+  flex: 1 1 auto; min-height: 0; display: flex; align-items: center;
+  justify-content: flex-end; padding: 20px 26px; overflow-y: auto;
+}
+#answer-here .ah-box {
+  border: 3px solid var(--line-hi); background: var(--panel-2);
+  box-shadow: 0 3px 0 var(--shadow), inset 0 0 0 1px #000;
+  padding: 18px 22px; max-width: 620px; text-align: center;
+}
+#answer-here h3 {
+  margin: 0 0 10px; font-size: calc(11px * var(--scale)); color: var(--gold-hi);
+  letter-spacing: 1px;
+}
+#answer-here p { margin: 0 0 12px; font-size: calc(13px * var(--scale)); line-height: 1.7; color: var(--ink-dim); }
+#answer-here p b { color: var(--gold); }
+#answer-here .ah-arrow {
+  font-family: 'Press Start 2P', monospace; font-size: calc(9px * var(--scale));
+  color: var(--violet); letter-spacing: 1px;
+}
+#answer-here .ah-arrow i { font-style: normal; animation: ah-nudge 1.3s ease-in-out infinite; display: inline-block; }
+@keyframes ah-nudge { 0%, 100% { transform: translateX(0) } 50% { transform: translateX(7px) } }
 #battle-side {
   width: 360px; flex: 0 0 360px; border-left: 3px solid var(--line);
   background: var(--panel); display: flex; flex-direction: column; overflow: hidden;
@@ -255,6 +359,13 @@ h1, h2, h3, .pixel { font-family: 'Press Start 2P', 'Courier New', monospace; }
 #battle-side-body { flex: 1; overflow-y: auto; padding: 12px; }
 
 /* editor */
+/* The Editor's own root: shell on top taking the slack, status line under it
+ * keeping its row. Without this the shell's height:100% pushed the status line
+ * — caret position and the keyboard hint — off the bottom of every host it was
+ * ever mounted in, where #battle-main clipped it away. */
+.editor-root { display: flex; flex-direction: column; min-height: 0; }
+.editor-root > .editor-shell { flex: 1 1 auto; min-height: 0; height: auto; }
+.editor-root > .editor-status { flex: 0 0 auto; }
 .editor-shell {
   display: flex; height: 100%; background: #0d0b16;
   font-family: 'Courier New', ui-monospace, monospace;
@@ -276,6 +387,17 @@ h1, h2, h3, .pixel { font-family: 'Press Start 2P', 'Courier New', monospace; }
   background: transparent; color: transparent; caret-color: var(--gold-hi);
   resize: none; outline: none;
 }
+/* The buffer is empty and the player is looking for the place to start. The
+ * highlight layer behind has nothing in it, so this is the only text in the
+ * box — make it legible rather than a ghost.
+ *
+ * --ink-dim, not --ink-faint, and the difference is measured rather than felt:
+ * on the editor ground (#05060a, set in metal.css) --ink-faint computes to
+ * rgb(99,99,111) for 3.42:1, under the 4.5:1 floor for body text, and this is
+ * the ONLY text in an emptied editor. --ink-dim computes to rgb(154,154,168)
+ * for 6.00:1 on the same ground. The comment above was already right; the
+ * colour was not. */
+.editor-input::placeholder { color: var(--ink-dim); opacity: 1; }
 .editor-status {
   display: flex; gap: 14px; padding: 6px 12px; background: var(--panel-2);
   border-top: 2px solid var(--line); font-size: calc(11px * var(--scale));

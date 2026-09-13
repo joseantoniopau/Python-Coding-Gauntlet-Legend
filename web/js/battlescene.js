@@ -722,11 +722,276 @@ const PAINTERS = {
 };
 
 /* ================================================================
+ * THE SKY
+ * ================================================================
+ * IT USED TO RAIN IN EVERY FIGHT, FOREVER.
+ *
+ * Each biome below carried an `anim` list — grass was ['lightning','rain','fog']
+ * — and that list was always fully on. Fields of Syntax is a grass region, so
+ * every fight ever fought there had lightning in it from the first frame to the
+ * last. There was no clear state anywhere in the table and nothing varied,
+ * while the overworld drew a completely unrelated thing out of its own private
+ * table. Two systems, no shared truth, so they could not agree even by luck.
+ *
+ * The lists are gone. gauntlet/weather.py is now the only thing in the game
+ * that decides what the weather is, and this module does not hold a copy of
+ * that model — not one weight, not one probability. What arrives on the region
+ * payload is:
+ *
+ *   weather.strip    the next two hours of sky as condition names, one per
+ *                    five-minute slot, indexed from weather.epoch
+ *   weather.legend   what those names mean HERE: which of the vocabulary each
+ *                    one runs, which particle the overworld falls, how much
+ *   weather.now      when the server built it. Diagnostic only — see skyNow()
+ *                    for why correcting to it would make things worse
+ *
+ * So the renderer's whole job is: work out which slot it is, read a name,
+ * look it up, draw that. A condition nobody sent a legend entry for renders
+ * CLEAR rather than being guessed at — an honest nothing beats a second
+ * opinion, because a second opinion is the bug this replaced.
+ */
+
+/* Furniture, not weather. A wall torch does not go out because the sky cleared
+ * and a lava seam is geology, so these are on in their rooms always and are
+ * never part of a condition. Mirrors gauntlet/weather.py's FIXTURES, and
+ * scripts/verify/weather.mjs fails if the two ever stop matching. */
+const FIXTURES = {
+  village: ['torch'], mine: ['lava'], dungeon: ['torch'],
+  arena: ['torch'], castle: ['torch'],
+};
+
+/* The palette column of gauntlet/world.py, and the only reason it is here:
+ * main.js calls fx.setScene({ region: payload.region.palette }) — it holds the
+ * whole region record and forwards one string out of it. Without this table a
+ * battle cannot tell which region it is being fought in, which is the OTHER
+ * half of why it always rained: with no region, the stage fell back to the
+ * default biome, and the default was `grass`.
+ *
+ * DO NOT PASS `payload.region` INSTEAD, and do not delete this table on the
+ * strength of that idea. An encounter payload's `region` is THE PROBLEM'S
+ * REALM — where the exercise sits in the curriculum — and not where the player
+ * is standing. Handing that record to resolveSky() fires rule 1, which
+ * PUBLISHES it, ahead of rule 3, which is the rule that has to win (see the
+ * header on resolveSky 150 lines below). Measured, with the village published
+ * and clear: resolveSky(stack_queue_mines_record, 'ember') answers condition
+ * `firestorm`, anim ["ash","ember","fireball"], biome `mine` — a firestorm in
+ * a fight being fought in a clear village — and it repoints SKY.last at the
+ * mines, so the very next palette-only lookup answers `firestorm` for the
+ * village too, until the overworld's two-second poll republishes.
+ *
+ * If the table is ever to go, main.js must pass the region the PLAYER is in
+ * (`currentRegion()`), or resolveSky needs a non-publishing hint argument for a
+ * caller-supplied record. A palette string is the safe thing to forward
+ * precisely because it cannot overwrite the registry.
+ *
+ * `verdant` is the one palette two regions share; the live registry below
+ * resolves it exactly whenever the overworld has published a region, which in
+ * a running game is always. */
+const PALETTE_REGION = {
+  dawn: ['python_village', 'village'],
+  spring: ['fields_of_syntax', 'grass'],
+  amber: ['hashmap_highlands', 'highland'],
+  verdant: ['stringwood_labyrinth', 'forest'],
+  stone: ['array_caverns', 'cave'],
+  moss: ['sliding_window_marsh', 'swamp'],
+  slate: ['twin_pointer_pass', 'mountain'],
+  ember: ['stack_queue_mines', 'mine'],
+  royal: ['matrix_citadel', 'citadel'],
+  dusk: ['recursive_forest', 'deepforest'],
+  ash: ['graph_wastes', 'wastes'],
+  gold: ['dp_ruins', 'ruins'],
+  iron: ['debugging_dungeon', 'dungeon'],
+  azure: ['complexity_tower', 'tower'],
+  sun: ['coding_coliseum', 'arena'],
+  void: ['null_kings_castle', 'castle'],
+};
+
+/* CLEAR. The state that did not exist before this file was changed, and the
+ * one every fallback path lands on: when nothing is known about the sky,
+ * nothing falls out of it. */
+const CLEAR = Object.freeze({
+  condition: 'clear', label: 'clear', anim: Object.freeze([]),
+  particle: 'motes', density: 0.22,
+});
+
+/* The registry. Module-level on purpose: it is how the overworld and the battle
+ * end up standing in the same weather without either of them asking the other
+ * anything. overworld.load() publishes the region the player is walking in;
+ * createScene() reads it back when the fight starts. One place, one record. */
+const SKY = {
+  last: null,
+  byId: new Map(),
+  byPalette: new Map(),
+  /* Kept for diagnostics only: how far the last payload's `now` was from this
+   * browser's clock when it was read. See skyNow() for why it is not applied. */
+  lag: 0,
+  haveLag: false,
+};
+
+/* Seconds since the Unix epoch. Both renderers index the same strip with this
+ * one function, which is the whole of why they cannot disagree.
+ *
+ * THE BROWSER'S OWN CLOCK, DELIBERATELY. The payload carries the server's
+ * `now`, and correcting to it looks like the careful thing to do until you
+ * notice what the difference actually measures: gauntlet/server.py binds
+ * 127.0.0.1 and nothing else, so the server and the browser are the same
+ * machine and the same clock, and `now - Date.now()` is therefore not clock
+ * skew at all — it is HOW OLD THE PAYLOAD IS. Applying it would drag the client
+ * backwards by however long the dashboard had been sitting in memory, which on
+ * a slot boundary is exactly the wrong answer. Measured at twenty seconds in a
+ * live session, which is twenty seconds of wrongness bought for nothing. */
+export function skyNow() {
+  return Date.now() / 1000;
+}
+
+/* Tell the module where the player is and what the server said the sky is
+ * doing there. Called by overworld.load(); safe to call every frame. */
+export function publishWeather(region) {
+  if (!region || typeof region !== 'object' || !region.id) return null;
+  const held = SKY.byId.get(region.id) || null;
+  /* A record already in the registry may be handed back in — anything that
+   * round-trips one through resolveSky does exactly that — and such a record
+   * carries its forecast as `w`, not as `weather`. Reading only `weather` would
+   * quietly wipe the sky and leave the caller with a permanent clear day, which
+   * is a nicer bug than the old permanent rain and still a bug. */
+  const w = (region.weather && typeof region.weather === 'object') ? region.weather
+    : (region.w && typeof region.w === 'object') ? region.w
+      : (held ? held.w : null);
+  const rec = {
+    id: region.id,
+    biome: region.biome || (w && w.biome) || (held && held.biome) || '',
+    palette: typeof region.palette === 'string' ? region.palette
+      : (held && held.palette) || '',
+    w,
+  };
+  SKY.byId.set(rec.id, rec);
+  if (rec.palette) SKY.byPalette.set(rec.palette, rec);
+  SKY.last = rec;
+  /* Recorded, not applied. See skyNow(). A large negative number here means
+   * the state payload is old, which is a thing worth being able to see and not
+   * a thing worth correcting for. */
+  if (w && typeof w.now === 'number' && isFinite(w.now)) {
+    SKY.lag = w.now - Date.now() / 1000;
+    SKY.haveLag = true;
+  }
+  return rec;
+}
+
+/* Read a record's strip at a moment. Returns one fixed shape — condition,
+ * label, anim, fixtures, particle, density — so both renderers hold the same
+ * fields and neither can invent one of its own. */
+function readSky(rec, when) {
+  const biome = (rec && rec.biome) || '';
+  const fixtures = FIXTURES[biome] || [];
+  const w = rec && rec.w;
+  if (!w) {
+    return { region: (rec && rec.id) || '', biome, condition: CLEAR.condition,
+             label: CLEAR.label, anim: CLEAR.anim.slice(), fixtures,
+             particle: CLEAR.particle, density: CLEAR.density,
+             slot: 0, stale: true };
+  }
+  const span = w.slot_seconds > 0 ? w.slot_seconds : 300;
+  const strip = Array.isArray(w.strip) ? w.strip : [];
+  const t = typeof when === 'number' ? when : skyNow();
+  let i = Math.floor((t - (w.epoch || 0)) / span);
+  let stale = false;
+  if (!strip.length) {
+    i = 0;
+  } else if (i < 0) {
+    i = 0; stale = true;                 // clock behind the payload
+  } else if (i >= strip.length) {
+    i = strip.length - 1; stale = true;  // two hours without a refresh
+  }
+  const name = strip.length ? strip[i] : (w.condition || CLEAR.condition);
+  const leg = (w.legend && w.legend[name]) || null;
+  /* No legend entry means nobody told us what this name draws. Draw nothing:
+   * an invented anim list is a second source of truth, and that is the defect
+   * this whole file is repaying. */
+  const src = leg || (name === w.condition ? w : CLEAR);
+  return {
+    region: rec.id || '', biome, condition: name,
+    label: src.label || name,
+    anim: Array.isArray(src.anim) ? src.anim.slice() : [],
+    fixtures,
+    particle: src.particle || CLEAR.particle,
+    density: typeof src.density === 'number' ? src.density : CLEAR.density,
+    slot: i, stale,
+  };
+}
+
+/* Work out which place we are in, then what its sky is doing.
+ *
+ *   region   a region record (exact), a region id, a palette name, a resolved
+ *            sky object, or nothing at all
+ *   palette  the palette name, when that is all the caller was given
+ *
+ * THE FIGHT IS WHERE THE PLAYER IS STANDING, and that is the third rule below
+ * rather than the last one. It has to be, because of what the server actually
+ * sends: an encounter payload's `region` is the PROBLEM'S realm — where the
+ * exercise belongs in the curriculum — and that is frequently not the region
+ * the player is walking in. Observed live: standing in Python Village, handed
+ * an ARRAY problem whose realm is Array Caverns. Taking the sky from the
+ * problem's realm would mean walking out of rain into a fight in a place it is
+ * not raining, which is precisely the discontinuity this work exists to close.
+ * So when the overworld has told us where the player is, that wins.
+ *
+ * The order is otherwise most-certain-first, and the last resort is CLEAR
+ * rather than a guess. */
+export function resolveSky(region, palette, when) {
+  // Already resolved: a caller that did this itself (fx.js does) hands it on.
+  if (region && typeof region === 'object' && Array.isArray(region.anim)
+      && typeof region.condition === 'string') {
+    return region;
+  }
+  let rec = null;
+  // 1. A caller holding the real record. Exact, and it refreshes the registry.
+  if (region && typeof region === 'object' && (region.id || region.biome)) {
+    rec = region.id ? publishWeather(region)
+      : { id: '', biome: region.biome, palette: '',
+          w: region.weather || region.w || null };
+  } else if (typeof region === 'string' && region && SKY.byId.has(region)) {
+    // 2. A region id we already hold a forecast for.
+    rec = SKY.byId.get(region);
+  }
+  // 3. Where the player is standing, as published by overworld.load().
+  if (!rec && SKY.last && SKY.last.w) rec = SKY.last;
+  // 4. Failing that, the palette names a region — which is all main.js passes.
+  if (!rec) {
+    for (const name of [region, palette]) {
+      if (typeof name !== 'string' || !name) continue;
+      rec = SKY.byPalette.get(name) || null;
+      if (!rec && PALETTE_REGION[name]) {
+        const m = PALETTE_REGION[name];
+        rec = SKY.byId.get(m[0]) || { id: m[0], biome: m[1], palette: name, w: null };
+      }
+      if (rec) break;
+    }
+  }
+  if (!rec) rec = SKY.last;
+  if (!rec) {
+    return { region: '', biome: '', condition: CLEAR.condition, label: CLEAR.label,
+             anim: [], fixtures: [], particle: CLEAR.particle,
+             density: CLEAR.density, slot: 0, stale: true };
+  }
+  return readSky(rec, when);
+}
+
+/* For tests and for the overworld's "has it changed yet" check. */
+export function skyRegistry() {
+  return { last: SKY.last, lag: SKY.lag, haveLag: SKY.haveLag,
+           regions: SKY.byId.size };
+}
+
+export const WEATHER_FIXTURES = FIXTURES;
+
+/* ================================================================
  * BIOMES
  * ================================================================
  * One entry per biome in gauntlet/world.py. Seventeen rooms, each with three
- * depth layers, a horizon treatment, an animated element and its own frame
- * furniture. The region palette still tints everything — `hue` is how much of
+ * depth layers, a horizon treatment and its own frame furniture. What FALLS
+ * through a room is not listed here any more and never will be again — that is
+ * the sky's business, and the sky is decided in gauntlet/weather.py. A biome is
+ * the ROOM. The region palette still tints everything — `hue` is how much of
  * the region's own colour survives the grade — so Hashmap Highlands and Twin
  * Pointer Pass share a painter and still do not look alike.
  *
@@ -739,7 +1004,7 @@ const BIOMES = {
   village: {
     accent: METAL.fire, hue: 0.66, fog: '#2a2733',
     sky: ['#0a0912', '#1b1726', '#2c2130'], horizon: 'moon',
-    anim: ['torch', 'fog'], occluder: 'banner', platform: 'cobble',
+    occluder: 'banner', platform: 'cobble',
     layers: [
       { paint: 'ridge',   src: 'far',  h: 42, depth: 0.10, rate: 1, tone: -34, o: { wide: true, minH: 0.2 } },
       { paint: 'skyline', src: 'mid',  h: 50, depth: 0.30, rate: 4, tone: -20, o: { style: 'village', glow: true } },
@@ -749,7 +1014,7 @@ const BIOMES = {
   grass: {
     accent: METAL.violet, hue: 0.58, fog: '#26283a',
     sky: ['#080a14', '#141a2c', '#232a42'], horizon: 'storm',
-    anim: ['lightning', 'rain', 'fog'], occluder: 'reed', platform: 'sod',
+    occluder: 'reed', platform: 'sod',
     layers: [
       { paint: 'ridge',    src: 'far',    h: 38, depth: 0.10, rate: 1, tone: -36, o: { wide: true, minH: 0.18 } },
       { paint: 'treeline', src: 'foliage', h: 34, depth: 0.32, rate: 5, tone: -22, o: { step: 9 } },
@@ -759,7 +1024,7 @@ const BIOMES = {
   highland: {
     accent: METAL.cyan, hue: 0.58, fog: '#2b3040',
     sky: ['#070b12', '#131b28', '#233040'], horizon: 'moon',
-    anim: ['fog', 'snow'], occluder: 'stone', platform: 'flag',
+    occluder: 'stone', platform: 'flag',
     layers: [
       { paint: 'ridge', src: 'far',    h: 50, depth: 0.08, rate: 1, tone: -38, o: { wide: true, sharp: 1.4, snow: true } },
       { paint: 'ridge', src: 'mid',    h: 38, depth: 0.30, rate: 4, tone: -22, o: { sharp: 1.9 } },
@@ -769,7 +1034,7 @@ const BIOMES = {
   forest: {
     accent: METAL.bile, hue: 0.68, fog: '#1e2a24',
     sky: ['#070c0a', '#111c16', '#1b2a20'], horizon: 'fogbank',
-    anim: ['fog', 'flies'], occluder: 'branch', platform: 'root',
+    occluder: 'branch', platform: 'root',
     layers: [
       { paint: 'treeline', src: 'far',     h: 46, depth: 0.10, rate: 1, tone: -38, o: { step: 5 } },
       { paint: 'treeline', src: 'foliage', h: 40, depth: 0.32, rate: 4, tone: -22, o: { step: 8 } },
@@ -779,7 +1044,7 @@ const BIOMES = {
   cave: {
     accent: METAL.cyan, hue: 0.7, fog: '#1c202a',
     sky: ['#050608', '#0c0f15', '#141921'], horizon: 'ceiling',
-    anim: ['drip', 'fog'], occluder: 'stalagmite', platform: 'stone',
+    occluder: 'stalagmite', platform: 'stone',
     layers: [
       { paint: 'wall',   src: 'far',    h: 60, depth: 0.08, rate: 0, tone: -40, o: { stains: true, brick: 9 } },
       { paint: 'cavern', src: 'mid',    h: 44, depth: 0.30, rate: 3, tone: -26, o: { down: true, dense: true } },
@@ -789,7 +1054,7 @@ const BIOMES = {
   swamp: {
     accent: METAL.bile, hue: 0.6, fog: '#243026',
     sky: ['#070b09', '#121a14', '#1d2a1e'], horizon: 'fogbank',
-    anim: ['fog', 'rain', 'flies'], occluder: 'reed', platform: 'bog',
+    occluder: 'reed', platform: 'bog',
     layers: [
       { paint: 'treeline', src: 'far',     h: 44, depth: 0.10, rate: 1, tone: -38, o: { dead: true, step: 8 } },
       { paint: 'treeline', src: 'mid',     h: 36, depth: 0.32, rate: 4, tone: -24, o: { dead: true, step: 11 } },
@@ -799,7 +1064,7 @@ const BIOMES = {
   mountain: {
     accent: METAL.chrome, hue: 0.62, fog: '#2d3340',
     sky: ['#060910', '#101725', '#1e2838'], horizon: 'storm',
-    anim: ['snow', 'lightning'], occluder: 'stone', platform: 'stone',
+    occluder: 'stone', platform: 'stone',
     layers: [
       { paint: 'ridge', src: 'far',    h: 56, depth: 0.07, rate: 1, tone: -40, o: { wide: true, sharp: 1.3, snow: true } },
       { paint: 'ridge', src: 'mid',    h: 42, depth: 0.28, rate: 3, tone: -24, o: { sharp: 1.6, snow: true } },
@@ -809,7 +1074,7 @@ const BIOMES = {
   mine: {
     accent: METAL.fire, hue: 0.55, fog: '#2a1d18',
     sky: ['#0a0605', '#160c08', '#23120b'], horizon: 'glow',
-    anim: ['ember', 'lava'], occluder: 'chain', platform: 'plank',
+    occluder: 'chain', platform: 'plank',
     layers: [
       { paint: 'wall',    src: 'far',    h: 58, depth: 0.08, rate: 0, tone: -40, o: { stains: true } },
       { paint: 'crystal', src: 'accent', h: 40, depth: 0.30, rate: 3, tone: -20, o: { timber: true } },
@@ -819,7 +1084,7 @@ const BIOMES = {
   citadel: {
     accent: METAL.violet, hue: 0.6, fog: '#262038',
     sky: ['#08060f', '#130e20', '#1e1630'], horizon: 'glass',
-    anim: ['godray', 'fog'], occluder: 'pillar', platform: 'marble',
+    occluder: 'pillar', platform: 'marble',
     layers: [
       { paint: 'wall',      src: 'far',    h: 62, depth: 0.08, rate: 0, tone: -42, o: { brick: 8, brickW: 18 } },
       { paint: 'colonnade', src: 'mid',    h: 52, depth: 0.30, rate: 3, tone: -24, o: { arch: true, pillarW: 11, gap: 20 } },
@@ -829,7 +1094,7 @@ const BIOMES = {
   deepforest: {
     accent: METAL.violet, hue: 0.56, fog: '#20182e',
     sky: ['#060510', '#0e0b1a', '#171128'], horizon: 'fogbank',
-    anim: ['fog', 'flies'], occluder: 'branch', platform: 'root',
+    occluder: 'branch', platform: 'root',
     layers: [
       { paint: 'treeline', src: 'far', h: 50, depth: 0.09, rate: 1, tone: -42, o: { step: 4 } },
       { paint: 'treeline', src: 'mid', h: 44, depth: 0.30, rate: 3, tone: -28, o: { step: 7, dead: true } },
@@ -839,7 +1104,7 @@ const BIOMES = {
   canopy: {
     accent: METAL.cyan, hue: 0.58, fog: '#1c2a2c',
     sky: ['#060c10', '#0f1a22', '#1a2a32'], horizon: 'moon',
-    anim: ['leaves', 'fog'], occluder: 'branch', platform: 'branch',
+    occluder: 'branch', platform: 'branch',
     layers: [
       { paint: 'treeline', src: 'far',     h: 44, depth: 0.09, rate: 1, tone: -40, o: { step: 6 } },
       { paint: 'canopy',   src: 'foliage', h: 40, depth: 0.30, rate: 3, tone: -24, o: { depth: 0.7 }, top: true },
@@ -849,7 +1114,7 @@ const BIOMES = {
   wastes: {
     accent: METAL.blood, hue: 0.7, fog: '#302a2c',
     sky: ['#0a0708', '#170f10', '#241618'], horizon: 'sun',
-    anim: ['ash', 'fog'], occluder: 'bone', platform: 'ash',
+    occluder: 'bone', platform: 'ash',
     layers: [
       { paint: 'ridge',  src: 'far',    h: 40, depth: 0.09, rate: 1, tone: -38, o: { wide: true, minH: 0.16 } },
       { paint: 'debris', src: 'mid',    h: 40, depth: 0.30, rate: 3, tone: -24, o: { snapped: true } },
@@ -859,7 +1124,7 @@ const BIOMES = {
   ruins: {
     accent: METAL.bone, hue: 0.66, fog: '#2c2a30',
     sky: ['#08070c', '#141218', '#201c24'], horizon: 'moon',
-    anim: ['ash', 'fog'], occluder: 'pillar', platform: 'flag',
+    occluder: 'pillar', platform: 'flag',
     layers: [
       { paint: 'skyline',   src: 'far',    h: 48, depth: 0.09, rate: 1, tone: -40, o: { style: 'ruin' } },
       { paint: 'colonnade', src: 'mid',    h: 46, depth: 0.30, rate: 3, tone: -24, o: { broken: true, pillarW: 9, gap: 18 } },
@@ -869,7 +1134,7 @@ const BIOMES = {
   dungeon: {
     accent: METAL.fire, hue: 0.72, fog: '#232430',
     sky: ['#050508', '#0c0c11', '#13131a'], horizon: 'ceiling',
-    anim: ['torch', 'drip'], occluder: 'chain', platform: 'stone',
+    occluder: 'chain', platform: 'stone',
     layers: [
       { paint: 'wall',      src: 'far',    h: 62, depth: 0.07, rate: 0, tone: -42, o: { stains: true } },
       { paint: 'colonnade', src: 'mid',    h: 50, depth: 0.28, rate: 2, tone: -26, o: { arch: true, pillarW: 12, gap: 22 } },
@@ -879,7 +1144,7 @@ const BIOMES = {
   tower: {
     accent: METAL.cyan, hue: 0.6, fog: '#20283a',
     sky: ['#05070f', '#0d1322', '#172034'], horizon: 'storm',
-    anim: ['lightning', 'rain', 'fog'], occluder: 'chain', platform: 'iron',
+    occluder: 'chain', platform: 'iron',
     layers: [
       { paint: 'skyline', src: 'far',    h: 44, depth: 0.06, rate: 1, tone: -42, o: { style: 'castle' } },
       { paint: 'gantry',  src: 'mid',    h: 54, depth: 0.28, rate: 3, tone: -26, o: { decks: 3, gears: true } },
@@ -889,7 +1154,7 @@ const BIOMES = {
   arena: {
     accent: METAL.fire, hue: 0.64, fog: '#2e2620',
     sky: ['#0a0806', '#171009', '#241a0e'], horizon: 'moon',
-    anim: ['torch', 'ember'], occluder: 'banner', platform: 'sand',
+    occluder: 'banner', platform: 'sand',
     layers: [
       { paint: 'crowd',     src: 'far',    h: 46, depth: 0.08, rate: 0, tone: -40, o: { tiers: 3 } },
       { paint: 'crowd',     src: 'mid',    h: 40, depth: 0.26, rate: 0, tone: -24, o: { tiers: 2, banners: true } },
@@ -899,7 +1164,7 @@ const BIOMES = {
   castle: {
     accent: METAL.blood, hue: 0.68, fog: '#2a2026',
     sky: ['#070509', '#110a10', '#1b0f18'], horizon: 'glass',
-    anim: ['torch', 'godray'], occluder: 'banner', platform: 'marble',
+    occluder: 'banner', platform: 'marble',
     layers: [
       { paint: 'wall',      src: 'far',    h: 62, depth: 0.07, rate: 0, tone: -44, o: { brick: 7, brickW: 20, stains: true } },
       { paint: 'colonnade', src: 'mid',    h: 54, depth: 0.28, rate: 2, tone: -28, o: { arch: true, pillarW: 12, gap: 24 } },
@@ -2095,6 +2360,93 @@ function drawDrips(ctx, a, t, colour, stage) {
   }
 }
 
+/* FIREBALLS.
+ *
+ * The player named this one: "ash and fireballs in the volcano". Nothing in the
+ * existing vocabulary reads as a fireball — an ember is a spark that drifts up
+ * and lava is a seam breathing at the horizon — so the fire regions get a third
+ * thing: something burning falls out of the dark on a ballistic arc, trails
+ * fire behind it, and bursts on the deck.
+ *
+ * Analytic, like every other effect in this file. A fireball's position is its
+ * phase through one fall, so there is no simulation, no stored state between
+ * frames and no random() anywhere near the draw path. Each one is dark for most
+ * of its cycle, which is what makes them events rather than a barrage.
+ *
+ *   x, dir, period, phase, size, span — six floats, one flat array.
+ */
+function buildFireballs(seed, count, stage) {
+  const rand = rng((seed ^ 0x1f2eba11) >>> 0);
+  const a = new Float32Array(count * 6);
+  for (let i = 0; i < count; i++) {
+    a[i * 6 + 0] = 10 + rand() * (stage.w - 20);   // where it comes down
+    a[i * 6 + 1] = rand() < 0.5 ? -1 : 1;          // which way it is travelling
+    a[i * 6 + 2] = 3.4 + rand() * 5.6;             // seconds between falls
+    a[i * 6 + 3] = rand() * 11;                    // offset, so they do not rhyme
+    a[i * 6 + 4] = 2 + Math.round(rand() * 2);     // 2..4 px core
+    a[i * 6 + 5] = 22 + rand() * 58;               // horizontal span of the arc
+  }
+  return a;
+}
+
+const FB_FLIGHT = 0.62;        // fraction of the cycle spent falling
+const FB_BURST = 0.16;         // and bursting; the rest is dark sky
+
+function drawFireballs(ctx, a, t, stage, tint) {
+  const top = -PAD;
+  const land = stage.ground - 6;
+  for (let i = 0; i < a.length; i += 6) {
+    const period = a[i + 2];
+    const k = (((t + a[i + 3]) % period) + period) % period / period;
+    if (k > FB_FLIGHT + FB_BURST) continue;          // dark sky, most of the time
+    const core = a[i + 4];
+    const span = a[i + 5] * a[i + 1];
+    if (k <= FB_FLIGHT) {
+      const f = k / FB_FLIGHT;
+      // Gravity: the vertical is f squared, so it leaves the top slowly and
+      // arrives fast. A linear fall reads as a lift, not as a fall.
+      const x = a[i] + span * (f - 1);
+      const y = top + (land - top) * f * f;
+      // The trail, sampled back along the arc it actually took. Six steps is
+      // enough to read as a streak and few enough to stay a pixel effect.
+      for (let s = 6; s >= 1; s--) {
+        const fs = Math.max(0, f - s * 0.035);
+        const tx = a[i] + span * (fs - 1);
+        const ty = top + (land - top) * fs * fs;
+        const w = Math.max(1, Math.round(core * (1 - s / 7)));
+        ctx.globalAlpha = 0.5 * (1 - s / 7);
+        ctx.fillStyle = s > 3 ? METAL.rust : tint;
+        ctx.fillRect(Math.round(tx - w / 2), Math.round(ty - w / 2), w, w);
+      }
+      ctx.globalAlpha = 0.55;
+      blockEllipse(ctx, x, y, core + 3, core + 2, METAL.fire, 0.5);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = METAL.ember;
+      ctx.fillRect(Math.round(x - core / 2) - 1, Math.round(y - core / 2) - 1,
+                   core + 2, core + 2);
+      ctx.fillStyle = '#fff3c4';
+      ctx.fillRect(Math.round(x - core / 2), Math.round(y - core / 2), core, core);
+    } else {
+      // The burst. A ring that opens and fades, plus two sparks off the top,
+      // and it is drawn ON the deck line so the eye is told where the floor is.
+      const b = (k - FB_FLIGHT) / FB_BURST;
+      const x = a[i] + span * 0;
+      const r = 2 + b * (6 + core * 2);
+      ctx.globalAlpha = (1 - b) * 0.85;
+      blockEllipse(ctx, x, land, r, Math.max(1, r * 0.38), METAL.fire, 1);
+      ctx.globalAlpha = (1 - b) * 0.95;
+      blockEllipse(ctx, x, land, r * 0.5, Math.max(1, r * 0.22), '#fff3c4', 1);
+      ctx.fillStyle = METAL.ember;
+      const lift = Math.round(b * 9);
+      ctx.globalAlpha = (1 - b) * 0.7;
+      ctx.fillRect(Math.round(x - r * 0.7), land - lift, 1, 1);
+      ctx.fillRect(Math.round(x + r * 0.6), land - lift - 2, 1, 1);
+      ctx.globalAlpha = 1;
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
 function buildBolts(seed, count, stage) {
   const out = [];
   for (let b = 0; b < count; b++) {
@@ -2434,11 +2786,24 @@ export function sceneLight(scene) {
  */
 export function createScene(opts = {}) {
   const stage = opts.stage || SCENE_STAGE;
-  const biome = BIOMES[opts.biome] ? opts.biome : 'grass';
+  const palName = typeof opts.palette === 'string' ? opts.palette : null;
+  /* WHAT THE SKY IS DOING — asked once, here, and never decided here. See THE
+   * SKY above. `opts.weather` is an already-resolved sky (fx.js resolves it
+   * because it needs the same answer for its own particle layer); `opts.region`
+   * is a region record, a region id or a palette name. Everything else lands on
+   * CLEAR, which is the honest answer when nobody said. */
+  const wx = resolveSky(
+    opts.weather !== undefined && opts.weather !== null ? opts.weather
+      : (opts.region !== undefined && opts.region !== null ? opts.region : palName),
+    palName, opts.when);
+  /* A biome is the ROOM. An explicit one wins; otherwise the room is the one
+   * belonging to the region we just resolved, and only a total failure to
+   * resolve anything falls back to grass. */
+  const biome = BIOMES[opts.biome] ? opts.biome
+    : (BIOMES[wx.biome] ? wx.biome : 'grass');
   const spec = BIOMES[biome];
   const bossObj = (opts.boss && typeof opts.boss === 'object') ? opts.boss : null;
   const isBoss = !!opts.boss;
-  const palName = typeof opts.palette === 'string' ? opts.palette : null;
   const pal = (palName && PALETTES[palName])
     || (opts.palette && opts.palette.ground ? opts.palette : PALETTES.iron);
   const bossColour = (bossObj && bossObj.colour) || opts.colour || spec.accent;
@@ -2448,7 +2813,16 @@ export function createScene(opts = {}) {
   ].join('|');
   const seed = (opts.seed === undefined ? hash(key) : (opts.seed >>> 0)) || 1;
   const reducedMotion = !!opts.reducedMotion;
-  const has = k => spec.anim.indexOf(k) >= 0;
+  /* The room's permanent furniture, plus whatever the weather is doing. The
+   * condition is NOT in `key` and must never be: the key is the room's
+   * identity, so a room keeps its own stones when the rain stops. */
+  const running = new Set(FIXTURES[biome] || []);
+  for (let i = 0; i < wx.anim.length; i++) running.add(wx.anim[i]);
+  const has = k => running.has(k);
+  /* How much of it. One number, and both renderers scale off the same one, so
+   * a drizzle is a drizzle in the field and in the fight. */
+  const dens = clamp(typeof wx.density === 'number' ? wx.density : 0.22,
+                     0.08, 1);
 
   // A boss drags the whole room toward its own colour. That is most of why a
   // boss arena reads as a different place rather than as the same place louder.
@@ -2564,7 +2938,7 @@ export function createScene(opts = {}) {
   // three bands, at a third of the weight: the point is not weather, it is that
   // there is something between the camera and the far layer, and without it the
   // depth ramp has nothing to hang on.
-  const fogK = (has('fog') || has('godray')) ? 1 : 0.34;
+  const fogK = (has('fog') || has('godray')) ? (0.62 + 0.38 * dens) : 0.34;
   const fog = [];
   fog.push({ canvas: buildFogBand(spec.fog, seed + 3, W2, 34), y: stage.ground - 44, rate: 3, depth: 0.25, alpha: 0.55 * fogK });
   fog.push({ canvas: buildFogBand(spec.fog, seed + 7, W2, 26), y: stage.ground - 22, rate: 7, depth: 0.5, alpha: 0.42 * fogK });
@@ -2573,26 +2947,62 @@ export function createScene(opts = {}) {
     ? buildGodrays(mix(accent, METAL.bone, 0.35), seed, stage.w + PAD * 2, stage.ground + PAD)
     : null;
 
-  let motes = null, moteStyle = null, foreMotes = null;
+  let motes = null, moteStyle = null, foreMotes = null, foreStyle = null;
   const weather = has('ash') ? 'ash' : has('snow') ? 'snow' : has('leaves') ? 'leaves'
     : has('ember') ? 'ember' : null;
   if (weather) {
-    motes = buildMotes(seed + 17, 34, stage.w, stage.ground);
-    foreMotes = buildMotes(seed + 23, 14, stage.w, stage.h);
+    // The count is the condition's own weight. A flurry is fourteen flakes and
+    // a blizzard is thirty-four, and that difference is the whole reason a
+    // condition carries a density at all.
+    motes = buildMotes(seed + 17, Math.max(6, Math.round(34 * dens)),
+                       stage.w, stage.ground);
+    foreMotes = buildMotes(seed + 23, Math.max(3, Math.round(14 * dens)),
+                           stage.w, stage.h);
     moteStyle = {
       ash:    { colour: mix(METAL.bone, METAL.steel, 0.55), dir: 1, speed: 5, sway: 4, alpha: 0.4, size: 1 },
       snow:   { colour: '#e6eefc', dir: 1, speed: 7, sway: 5, alpha: 0.55, size: 1 },
       leaves: { colour: mix(METAL.bile, METAL.rust, 0.5), dir: 1, speed: 9, sway: 7, alpha: 0.5, size: 1 },
       ember:  { colour: METAL.ember, dir: -1, speed: 11, sway: 3, alpha: 0.75, size: 1 },
     }[weather];
+    /* A firestorm is ash AND sparks, which is two fields going opposite ways.
+     * The near sheet takes the embers so they rise past the camera while the
+     * ash comes down behind the fight; every other condition runs one style at
+     * both depths, exactly as before. */
+    foreStyle = (weather === 'ash' && has('ember'))
+      ? { colour: METAL.ember, dir: -1, speed: 11, sway: 3, alpha: 0.75, size: 1 }
+      : moteStyle;
   }
   const wisps = has('flies') ? buildMotes(seed + 31, 18, stage.w, stage.ground - 12) : null;
   const drips = has('drip') ? buildDrips(seed, 9, stage) : null;
+  /* REDUCED MOTION FREEZES THE WEATHER. IT DOES NOT DELETE IT.
+   *
+   * These three used to be skipped outright when the setting was on, and that
+   * broke the one promise this whole feature makes: the overworld went on
+   * falling — seventy raindrops, measured, still stepping every frame — and the
+   * fight it led into rendered a bone-dry sky, 0.0 px of weather per frame,
+   * which is exactly what a clear day paints. The condition NAME still agreed;
+   * the picture did not, which is worse than either half being wrong.
+   *
+   * So they are BUILT, and drawScene/drawForeground hold them at t = 0 under
+   * the setting, the same way the fog and the parallax drift are already held.
+   * Rain that does not fall is still rain. The one thing that stays suppressed
+   * is the LIGHTNING, because a bolt is a flash rather than a texture: there is
+   * no still frame of it that reads as weather, and a strobe is the thing the
+   * setting exists to remove. web/js/overworld.js stops stepping its particles
+   * under the same setting, so the two renderers make the same decision. */
   const bolts = has('lightning') && !reducedMotion ? buildBolts(seed, 6, stage) : null;
   // Rain is two sheets at two depths. The depth cue is entirely the speed and
   // the length of the streak; the near sheet is what puts the camera outside.
-  const rain = (has('rain') && !reducedMotion) ? buildRain(seed + 41, 46, stage.w, stage.ground + 4) : null;
-  const foreRain = rain ? buildRain(seed + 43, 22, stage.w, stage.h) : null;
+  const rain = has('rain')
+    ? buildRain(seed + 41, Math.max(10, Math.round(46 * dens)), stage.w, stage.ground + 4)
+    : null;
+  const foreRain = rain
+    ? buildRain(seed + 43, Math.max(5, Math.round(22 * dens)), stage.w, stage.h)
+    : null;
+  /* Fireballs. The volcano, by the player's own word for it. */
+  const fireballs = has('fireball')
+    ? buildFireballs(seed + 59, Math.max(2, Math.round(5 * dens)), stage)
+    : null;
   // Dust in the beam. Every room gets it, because every room has a key light.
   const dust = buildMotes(seed + 53, 18, stage.w, stage.ground - 6);
 
@@ -2624,8 +3034,19 @@ export function createScene(opts = {}) {
     occLeft, occRight, occX: { left: -PAD, right: stage.w + PAD - OCC_W },
     apron, apronY, apronX: -PAD - APRON_OFF,
     torches,
-    motes, moteStyle, foreMotes, wisps, drips, bolts, weather,
-    rain, foreRain, dust,
+    motes, moteStyle, foreMotes, foreStyle, wisps, drips, bolts, weather,
+    rain, foreRain, dust, fireballs,
+    /* Published so the caller can ask what it is standing in without going
+     * back to the registry, and so a harness can read it off a built scene.
+     *
+     * `skyState`, not `sky`: `sky` on this object is the painted sky CANVAS and
+     * has been since the file was written. Shadowing it replaces an image with
+     * a plain object, drawScene's very first line hands that object to
+     * drawImage, and every frame of every fight throws. The raster harness
+     * cannot see that — its drawImage ignores anything without pixel data —
+     * so the guard for it lives in scripts/verify/weather.mjs instead. */
+    skyState: wx, condition: wx.condition, density: dens,
+    anim: Array.from(running).sort(),
     sigil, brazier, braziers,
     keyGlow, floorPool, fillGlow, shaft, vignette,
     keyX, keyY, light,
@@ -2660,7 +3081,7 @@ export function destroyScene(scene) {
   scene.occLeft = scene.occRight = scene.vignette = scene.apron = null;
   scene.keyGlow = scene.floorPool = scene.fillGlow = scene.godrays = null;
   scene.shaft = null;
-  scene.rain = scene.foreRain = scene.dust = null;
+  scene.rain = scene.foreRain = scene.dust = scene.fireballs = null;
 }
 
 /* ================================================================
@@ -2762,8 +3183,14 @@ export function drawScene(ctx, scene, time = 0, cam = null) {
     drawRain(ctx, scene.rain, t, {
       w: stage.w, h: stage.ground + 4, x0: 0, y0: 0,
       colour: mix(scene.light.rim, '#ffffff', 0.3),
-      speed: 96, alpha: 0.28, stretch: 1, splash: true,
+      // A drizzle is thinner AND fainter than a downpour. The count carries
+      // most of it; this carries the rest.
+      speed: 96, alpha: 0.14 + 0.18 * scene.density, stretch: 1, splash: true,
     });
+  }
+  if (scene.fireballs) {
+    drawFireballs(ctx, scene.fireballs, t, stage,
+                  mix(METAL.ember, '#ffffff', 0.35));
   }
 
   /* --- the platform, and the light pooled on it --- */
@@ -2850,11 +3277,12 @@ export function drawForeground(ctx, scene, time = 0, cam = null) {
 
   /* --- weather in front, larger and faster: the depth cue is the speed --- */
   if (scene.foreMotes) {
+    const fs = scene.foreStyle || scene.moteStyle;
     drawMotes(ctx, scene.foreMotes, t, {
       w: stage.w, h: stage.h, x0: 0, y0: -PAD,
-      colour: scene.moteStyle.colour, dir: scene.moteStyle.dir,
-      speed: scene.moteStyle.speed * 2.6, sway: scene.moteStyle.sway * 1.4,
-      alpha: scene.moteStyle.alpha, size: scene.moteStyle.size + 1,
+      colour: fs.colour, dir: fs.dir,
+      speed: fs.speed * 2.6, sway: fs.sway * 1.4,
+      alpha: fs.alpha, size: fs.size + 1,
     });
   }
   if (scene.fog[2]) blitFog(ctx, scene.fog[2], t, cx, 4.4);
@@ -2866,7 +3294,7 @@ export function drawForeground(ctx, scene, time = 0, cam = null) {
     drawRain(ctx, scene.foreRain, t, {
       w: stage.w, h: stage.h, x0: 0, y0: -PAD,
       colour: mix(scene.light.rim, '#ffffff', 0.45),
-      speed: 210, alpha: 0.2, stretch: 2.1, splash: false,
+      speed: 210, alpha: 0.1 + 0.13 * scene.density, stretch: 2.1, splash: false,
     });
   }
 
@@ -3011,8 +3439,14 @@ export function drawFigureShadow(ctx, scene, x, width, opts = {}) {
 }
 
 /* 1.2.0 adds camera.hold(): the impact freeze a forged technique scales by
- * its rung. Nothing else in the camera changed. */
-export const SCENE_VERSION = '1.2.0';
+ * its rung. Nothing else in the camera changed.
+ *
+ * 1.3.0 takes the weather off the biome. BIOMES no longer carries an `anim`
+ * list; a room runs its permanent fixtures plus whatever gauntlet/weather.py
+ * says the sky is doing in the region this fight is in, and `fireball` joins
+ * the vocabulary. A scene now publishes `condition`, `density` and `anim`, and
+ * createScene accepts `weather` (a resolved sky) or `region`. */
+export const SCENE_VERSION = '1.3.0';
 
 /* ================================================================
  * WIRING (for whoever integrates this; nothing below runs)

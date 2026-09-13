@@ -136,15 +136,20 @@ const BIOME_FORM = {
   castle: 'spires',
 };
 
-/* Ambient weather per biome, reusing the particle system pixel.js already has
- * so the overworld and the battle stage share one look. */
-const BIOME_WEATHER = {
-  village: 'motes', grass: 'leaves', highland: 'leaves', forest: 'leaves',
-  cave: 'ash', swamp: 'motes', mountain: 'snow', mine: 'ember',
-  citadel: 'motes', deepforest: 'leaves', canopy: 'leaves', wastes: 'ash',
-  ruins: 'ash', dungeon: 'ash', tower: 'motes', arena: 'ember',
-  castle: 'ash',
-};
+/* THE BIOME NO LONGER DECIDES THE WEATHER.
+ *
+ * There used to be a table here mapping each biome to one particle style, on
+ * forever: a mountain snowed in every fight, a mine threw embers in every
+ * fight, and a grass region rained in every fight. It agreed with nothing —
+ * the overworld had its own private table saying something different, and the
+ * battle backdrop in battlescene.js had a third — so the three of them could
+ * not have matched even by accident.
+ *
+ * What replaces it is one question asked of gauntlet/weather.py, through
+ * battlescene.js's registry: what is the sky doing in this region, right now.
+ * The answer names a pixel.PARTICLE_STYLE and how much of it, and the same
+ * answer is what the overworld is drawing at that moment. */
+const WEATHER_COUNT = 34;      // at density 1. A drizzle gets a fraction of it.
 
 /* ---------------- small deterministic helpers ---------------- */
 
@@ -323,6 +328,9 @@ export class BattleFX {
     this.effects = [];
     this.weather = null;
     this.weatherStyle = null;
+    /* The resolved sky for the encounter on the stage. Set in setScene, read by
+     * setAffinity, and null until the first one. */
+    this.sky = null;
     // The region's own element, and the faint wash that says so. Separate from
     // `tint`, which is a transient an outcome owns: the affinity is the room and
     // does not fade.
@@ -470,10 +478,21 @@ export class BattleFX {
    *   heroPalette optional palette override for the player sprite            */
   setScene({ region, enemy, pattern, heroPalette, heroLook, gear } = {}) {
     if (this.stage3d) { stagelayer.destroyScene(this.stage3d); this.stage3d = null; }
-    const palName = (region && region.palette) || 'spring';
+    /* `region` is documented above as a record and main.js passes a PALETTE
+     * NAME — `payload.region.palette` — which is why `region.biome` has been
+     * undefined at this line for the whole life of the file and every fight in
+     * the game has been staged in the fallback biome. Both shapes are accepted
+     * now and resolveSky() untangles them: a record wins, a palette name is
+     * matched against the region the overworld last published, and only a total
+     * failure to resolve anything falls through to the old defaults. */
+    const palName = (typeof region === 'string' ? region
+      : (region && region.palette)) || 'spring';
     const pal = pixel.PALETTES[palName] || pixel.PALETTES.spring;
-    const biome = (region && region.biome) || 'grass';
-    const seed = hash((region && region.id) || palName);
+    /* THE SKY. One lookup, used for the stage, for the 2D fallback backdrop and
+     * for the particle layer below, so those three cannot disagree either. */
+    const sky = stagelayer.resolveSky(region, palName);
+    const biome = (region && region.biome) || sky.biome || 'grass';
+    const seed = hash((region && region.id) || sky.region || palName);
 
     this.clearEffects();
     this.sprites.clear();
@@ -497,6 +516,9 @@ export class BattleFX {
     try {
       this.stage3d = stagelayer.createScene({
         biome,
+        // Resolved once, above. The stage does not go and ask again, so the
+        // backdrop and the particles in front of it are the same weather.
+        weather: sky,
         boss: enemy && enemy.boss ? enemy : false,
         palette: palName,
         reducedMotion: this.reducedMotion,
@@ -528,8 +550,11 @@ export class BattleFX {
     this.phaseCard = null;
     if (this.scene.boss) this._warmPhase(this.bossPhase);
 
-    this.weatherStyle = pixel.PARTICLE_STYLE[BIOME_WEATHER[biome] || 'motes'];
-    this.weather = pixel.makeParticles(biome, STAGE.w, STAGE.ground, 26);
+    /* The condition names the style and carries how much of it. A clear day is
+     * a handful of motes in the air and nothing else — which is the state this
+     * stage did not have until now, and the whole of the complaint. */
+    this.sky = sky;
+    this._setSkyParticles(sky);
     // Cleared rather than carried. A fight in the Coliseum straight after one in
     // the marsh must read as the Coliseum, and setAffinity is called after this
     // by whoever knows what region this is.
@@ -873,37 +898,62 @@ export class BattleFX {
    * player learns it from a tooltip instead of from the fight.
    */
 
-  /* The area's own weather. Called once per encounter, straight after setScene,
-   * with the region's affinity — which is the region's BIOME pushed through
-   * elements.BIOME_AFFINITY, so a cold place is cold because of what it is.
+  /* Fall the condition's particles in front of the stage.
+   *
+   * `density` is the same 0..1 the backdrop scales its rain and its motes off,
+   * so the 2D layer and the 3D stage are the same weather at the same strength
+   * rather than two effects that happen to be on at once. A clear sky still
+   * gets a few motes: air with nothing in it at all reads as a broken renderer,
+   * not as a fine day. */
+  _setSkyParticles(sky) {
+    const s = sky || null;
+    const style = (s && pixel.PARTICLE_STYLE[s.particle])
+      || pixel.PARTICLE_STYLE.motes;
+    const dens = s && typeof s.density === 'number' ? s.density : 0.22;
+    const count = Math.max(5, Math.round(WEATHER_COUNT * dens));
+    this.weatherStyle = style;
+    /* Keyed by the condition, not by the biome: a region that has cleared up
+     * gets a different particle field from the same region in a storm, which is
+     * what makes the change visible when a fight opens. */
+    this.weather = pixel.makeParticles(
+      ((s && s.region) || '') + ':' + ((s && s.condition) || 'clear'),
+      STAGE.w, STAGE.ground, count);
+    return this;
+  }
+
+  /* The ground's own element. Called once per encounter, straight after
+   * setScene, with the region's affinity — the region's BIOME pushed through
+   * elements.BIOME_AFFINITY, so a cold place reads cold because of what it is.
    *
    * A neutral region gets nothing added, and that is the point: five of the
    * seventeen are neutral, and they are the control group the other twelve are
    * felt against. Tinting everything would leave nothing to notice.
+   *
+   * It is a TINT and a hazard now, and nothing else. What falls out of the sky
+   * is the sky's business — see the block inside.
    */
   setAffinity(element, { hazard = '' } = {}) {
     const id = String(element || '').toUpperCase();
     this.affinity = (id && id !== 'NEUTRAL' && ELEMENT_FX[id]) ? id : '';
     this.hazard = this.affinity ? String(hazard || '') : '';
     if (!this.affinity) {
-      // Back to the biome's own weather. setScene already chose it; re-deriving
-      // it here would be a second opinion about what a swamp looks like.
-      if (this.scene) {
-        this.weatherStyle =
-          pixel.PARTICLE_STYLE[BIOME_WEATHER[this.scene.biome] || 'motes'];
-      }
+      /* Back to whatever the sky is doing. It was resolved in setScene and it
+       * is not re-derived here: a second opinion about the weather is the exact
+       * defect this pass exists to delete. */
+      this._setSkyParticles(this.sky);
       this.affinityTint = 0;
       return this;
     }
-    const fx = elementFx(this.affinity);
-    if (fx.weather && pixel.PARTICLE_STYLE[fx.weather]) {
-      this.weatherStyle = pixel.PARTICLE_STYLE[fx.weather];
-      // The particles themselves are rebuilt so the count and the fall speed
-      // belong to the weather rather than to whatever the biome had.
-      this.weather = pixel.makeParticles(
-        this.affinity, STAGE.w, STAGE.ground,
-        fx.weather === 'rain' ? 40 : fx.weather === 'snow' ? 34 : 26);
-    }
+    /* THE ELEMENT TINTS. IT NO LONGER DECIDES WHETHER IT IS RAINING.
+     *
+     * This used to overwrite the particle layer outright: a COLD region snowed
+     * here whatever the sky said, a FIRE region threw embers whatever the sky
+     * said, and twelve of the seventeen regions therefore had exactly one
+     * weather each, permanently. The affinity of a place is a real thing and it
+     * still colours the room — but it is a property of the GROUND, and the
+     * ground does not get a vote on the sky. weather.py already puts snow in
+     * cold places and fire in fire places, by climate, which is where that
+     * belongs. */
     // Deliberately faint. This is the room, not an effect — at the strength a
     // cast uses it would read as something happening rather than as somewhere
     // being somewhere.
