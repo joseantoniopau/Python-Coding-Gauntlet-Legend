@@ -109,7 +109,7 @@ export const BOSS_H = 64;
 export const BOSS_W = 64;
 export const BOSS_WIDE_W = 96;
 
-/* The final rung of docs/08 §B — 12x16 tiles, FFVI's own big-summon box — and
+/* The final-boss source raster is 96x128, as documented in docs/08, and
  * exactly one creature is authored at it. It is not a bigger box for its own
  * sake: at BOSS_STAGE_SCALE the 64-box rigs already reach §B's tallest 128
  * logical rows, so the only thing left to buy is GRAIN. A 96x128 rig drawn at
@@ -2795,8 +2795,8 @@ const INTERP_STAFF = [
 /* ================================================================
  * THE INTERVIEWER  —  the Null King, and the only 96x128 in the game
  * ================================================================
- * THE FINAL RUNG. docs/08 §B names a 96x128 final-boss box — FFVI's own
- * big-summon size — and for a whole migration nothing in this tree drew one.
+ * THE FINAL RUNG. docs/08 names a 96x128 final-boss box, and for a whole
+ * migration nothing in this tree drew one.
  * The Interviewer is what it is for. It is authored as a 48-column half at 128
  * rows and drawn at scale 1, so ONE authored cell is ONE stage pixel: the hero
  * spends four stage pixels per authored cell and an ordinary boss two, and this

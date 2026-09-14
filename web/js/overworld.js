@@ -63,24 +63,24 @@ const T = tiles.TILE_SIZE;
 const MAP_W = 48;
 const MAP_H = 34;
 
-/* ------------------------------------------------------- FF6's pixel scale
+/* --------------------------------------------------- reference pixel scale
  *
- * Final Fantasy VI's field is 256x224 world pixels at TILE 16 — SIXTEEN tiles
+ * The reference field is 256x224 world pixels at TILE 16 — SIXTEEN tiles
  * across and FOURTEEN down — and that number, not the canvas size, is what
- * decides how big a person feels standing in a place. T is already FF6's own
- * terrain tile; what was wrong was the multiplier in front of it.
+ * decides how big a person feels standing in a place. T already matches the
+ * reference terrain tile; the multiplier controls the apparent size.
  *
  * THE SCALE IS DRIVEN OFF HEIGHT, and it is worth saying why, because the
  * obvious rule is worse. This game's field canvas is between 1.26:1 and 1.54:1;
- * FF6's screen is 8:7, which is 1.14:1. There is no integer scale that lands on
+ * the reference is 8:7, or 1.14:1. There is no integer scale that lands on
  * 16x14 in BOTH axes on a widescreen canvas, so a rule has to say which axis it
  * is honouring:
  *
  *   fit the WIDTH to 256  -> at 1920x1080 the canvas is 1590 wide, so s = 7,
  *                            and the player sees 9.2 rows. Less than two thirds
- *                            of FF6's vertical field. The frame closes over
+ *                            of the reference height. The frame closes over
  *                            your head.
- *   fit the HEIGHT to 224 -> the rows stay at FF6's fourteen at every window
+ *   fit the HEIGHT to 224 -> the rows stay near fourteen at every window
  *                            size this game opens at, and the extra monitor
  *                            width buys extra COLUMNS, which is exactly what a
  *                            widescreen version of a 4:3 game should spend it
@@ -89,7 +89,7 @@ const MAP_H = 34;
  * So: s = round(viewH / 224). Round, not floor and not ceil — floor is what was
  * there and it is what let the view drift to twenty-three tiles across, and ceil
  * over-zooms a canvas that is a hair short. Rounding keeps the visible rows
- * inside 12.9..15.7 across every size measured, against FF6's 14.
+ * inside 12.9..15.7 across every size measured, against the reference 14.
  *
  * MIN_COLS is the guard for the shape this rule cannot see: a window that is
  * tall and narrow would take a scale off its height that its width cannot pay
@@ -108,11 +108,12 @@ const MAP_H = 34;
  *
  * SCALE_MAX is 12 for the same reason it is not 8: a cap low enough to bite is
  * a cap that reintroduces the bug on a bigger monitor. At 8 a 5120x2880 canvas
- * goes back to forty tiles across. Twelve carries FF6 framing to a 2688-pixel
- * canvas, and a 192-pixel tile costs nothing to draw — the source images are
+ * goes back to forty tiles across. Twelve preserves the framing on a
+ * 2688-pixel canvas, with each 16-pixel source tile displayed at 192 pixels.
+ * The source images are
  * 16x16 either way, and the scaling is the GPU's nearest-neighbour blit. */
-const FF6_FIELD_H = 224;     // FF6's field height in world pixels — 14 tiles
-const FF6_FIELD_W = 256;     // and its width — 16 tiles. Reported, not fitted.
+const REFERENCE_FIELD_H = 224;  // 14 tiles high in world pixels
+const REFERENCE_FIELD_W = 256;  // 16 tiles wide; reported, not fitted
 const MIN_COLS = 12;         // never fewer than this many tiles across
 const SCALE_MIN = 2;
 const SCALE_MAX = 12;
@@ -126,7 +127,7 @@ export function fieldScale(viewW, viewH) {
    * one is exported, so it is guarded rather than trusted. A canvas that has not
    * been laid out yet reports width 0, and 0 is the commonest way in. */
   if (!(viewW > 0) || !(viewH > 0)) return SCALE_MIN;
-  const byHeight = Math.round(viewH / FF6_FIELD_H);
+  const byHeight = Math.round(viewH / REFERENCE_FIELD_H);
   const byWidth = Math.floor(viewW / (MIN_COLS * T));
   return Math.max(SCALE_MIN, Math.min(SCALE_MAX, Math.min(byHeight, byWidth)));
 }
@@ -135,7 +136,7 @@ export function fieldScale(viewW, viewH) {
 export function fieldView(viewW, viewH) {
   const s = fieldScale(viewW, viewH);
   return { scale: s, cols: viewW / (T * s), rows: viewH / (T * s),
-           ff6Cols: FF6_FIELD_W / T, ff6Rows: FF6_FIELD_H / T,
+           referenceCols: REFERENCE_FIELD_W / T, referenceRows: REFERENCE_FIELD_H / T,
            heroPx: sprites.HERO_H * s };
 }
 
@@ -2700,7 +2701,7 @@ export class Overworld {
      *
      * Rounding the offset once, here, makes round(camX) equal round(px) - halfX
      * exactly, so the hero is pinned to one screen column and the world scrolls
-     * under him in whole world pixels. That is FF6's own behaviour. */
+     * under him in whole world pixels. This keeps movement aligned with the pixel grid. */
     const maxX = Math.floor(worldW - spanX), maxY = Math.floor(worldH - spanY);
     const halfX = Math.round(spanX / 2 - T / 2);
     const halfY = Math.round(spanY / 2 - T / 2);

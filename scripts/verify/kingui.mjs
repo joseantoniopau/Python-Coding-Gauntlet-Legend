@@ -56,7 +56,7 @@ const SPR = await import('../../web/js/sprites.js');
 
 /* A window the size of a real one, WITH THE SCALE PINNED. resize() takes the
  * world scale off the CSS box — see fieldScale() in overworld.js, which puts
- * the field on FF6's 224-pixel field height — and this harness is not about
+ * the field on the reference 224-pixel field height — and this harness is not about
  * that, so it stubs the whole thing and fixes 3, the scale a 1280x800 window
  * gets. scripts/verify/field.mjs is where the panel is held to the hero's head
  * at every scale the rule actually produces, 3 through 5, and at the map edges
@@ -590,7 +590,7 @@ for (const [k, v] of Object.entries(out.tablesMatchAntagonistPy)) {
    * saying because it is the obvious repair. The baseline the claim names is
    * the overworld that shipped before him, 5a95796 — but that module renders
    * through today's tiles.js, sprites.js and pixel.js, and the field has since
-   * been put on FF6's pixel scale, given weather that comes and goes and given
+   * been put on the reference pixel scale, given weather that comes and goes and given
    * an elite silhouette. A whole-frame diff across any of that is a number made
    * of four unrelated changes, and none of them is the King.
    *

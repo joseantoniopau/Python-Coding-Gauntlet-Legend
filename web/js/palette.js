@@ -490,9 +490,9 @@ export function creaturePalette(rampName, rimColour) {
 
 /* ---------------------------------------------------------------- theme */
 
-/* The dark 80s metal ground the whole game sits on. FFVI's construction rules,
- * deliberately not FFVI's palette: the soundtrack here is a distorted guitar and
- * a pastel world underneath it would read as a mistake.
+/* The dark 80s metal ground the whole game sits on. Shared material ramps
+ * establish the game's palette identity, with cool shadows and warm accents
+ * supporting the guitar-led soundtrack.
  *
  * The material entries are READ OFF the ramps rather than written out again. A
  * UI painted in colours that are merely near the sprites' colours is the same

@@ -313,8 +313,8 @@ makes to a thing that already exists.
 
 ### 2.2 Two placements, and the keyline that makes the CAST button work
 
-**Placement EDGE** — the default, and the Final Fantasy menu cursor the player
-was describing. The cue sits on the host's left edge pointing right, into the
+**Placement EDGE** — the default, using a classic RPG menu cursor. The cue sits
+on the host's left edge pointing right, into the
 thing you press. Used for `.btn`, `.btn.small`, `.list-item`, `.rune`,
 `.inc-cast`.
 

@@ -1,20 +1,20 @@
-/* THE FIELD, ON FINAL FANTASY VI's PIXEL SCALE — measured.
+/* THE FIELD, ON THE REFERENCE PIXEL SCALE — measured.
  *
- * tiles.js has always used FF6's own terrain tile, TILE 16. What was wrong was
- * the multiplier in front of it: resize() took
+ * tiles.js uses the 16-pixel terrain tile. The old resize() rule selected
+ * the scale using
  *
  *     floor(min(w / 340, h / 230))  clamped to 2..4
  *
  * off the CSS box, which put a 1280x800 window on scale 2 and showed 29.7 x
- * 23.5 tiles against FF6's 16 x 14 — better than twice the field of view in
- * each axis, with a hero 48 screen pixels tall in a 753-pixel frame.
+ * 23.5 tiles against the reference 16 x 14, with a hero 48 screen pixels tall
+ * in a 753-pixel frame.
  *
  * WHAT THIS HARNESS IS FOR. The zoom itself is four lines and it either
  * multiplies or it does not. The part that needs measuring is everything the
  * zoom MOVES:
  *
  *   A  THE SCALE      an integer at every window size the game opens at, and
- *                     the visible rows inside a stated band of FF6's fourteen
+ *                     the visible rows within two of the fourteen-row reference
  *   B  THE CAMERA     centres the player, clamps at the map edge, shows no
  *                     void, and steps in whole world pixels so nothing judders
  *   C  THE PANEL      the King's words never reach the hero — and the ceiling
@@ -68,7 +68,7 @@ const SPR = await import('../../web/js/sprites.js');
 
 const T = 16, MAP_W = 48, MAP_H = 34, DT = 1 / 60;
 const WORLD_W = MAP_W * T, WORLD_H = MAP_H * T;
-const FF6_COLS = 16, FF6_ROWS = 14;
+const REFERENCE_COLS = 16, REFERENCE_ROWS = 14;
 const fail = [];
 const note = (m) => fail.push(m);
 const out = {};
@@ -128,19 +128,19 @@ for (const { win, css } of WINDOWS) {
    * somebody ever changes that rule in a way that lands a real window back on
    * 2, this line is what says so — a clamp would have hidden it. */
   if (v.scale < 3) note(`${row.window}: scale ${v.scale} — the height rule gave back the old zoom`);
-  /* The band. FF6 shows fourteen rows; an integer scale on a canvas that is not
+  /* The reference is fourteen rows. An integer scale on a canvas that is not
    * a multiple of 224 cannot land on fourteen exactly, so the claim is that it
    * lands within two rows of it at every size — which is the difference between
-   * "FF6's field" and "a strategy map". */
-  if (Math.abs(v.rows - FF6_ROWS) > 2) {
-    note(`${row.window}: ${v.rows.toFixed(2)} rows is more than two off FF6's ${FF6_ROWS}`);
+   * "the reference field" and "a strategy map". */
+  if (Math.abs(v.rows - REFERENCE_ROWS) > 2) {
+    note(`${row.window}: ${v.rows.toFixed(2)} rows is more than two off the reference ${REFERENCE_ROWS}`);
   }
   /* Width is NOT held to sixteen and must not be: every one of these canvases
-   * is wider than FF6's 8:7 and the extra monitor buys columns. What it IS held
+   * is wider than 8:7 and the extra monitor buys columns. What it IS held
    * to is the aspect ratio being the only thing paying for them — cols/rows is
    * the canvas's own shape, so anything past it is the zoom slipping. These
    * four canvases run 1.26:1 to 1.54:1, so 16 x 1.55 is the honest ceiling. */
-  if (v.cols > FF6_COLS * 1.55) {
+  if (v.cols > REFERENCE_COLS * 1.55) {
     note(`${row.window}: ${v.cols.toFixed(2)} columns is still a map, not a field`);
   }
   if (v.heroPx < 64) note(`${row.window}: hero is ${v.heroPx}px tall — still a speck`);
@@ -166,7 +166,7 @@ if (480 / (T * out.guards.tallNarrow) < 12) {
 }
 /* The ceiling has to be high enough not to reintroduce the bug on a bigger
  * monitor. At SCALE_MAX 8 this frame went back to forty tiles across. */
-if (2880 / (T * out.guards.huge) > FF6_ROWS + 2) {
+if (2880 / (T * out.guards.huge) > REFERENCE_ROWS + 2) {
   note(`a 5120x2880 frame shows ${(2880 / (T * out.guards.huge)).toFixed(1)} rows — `
        + `the ceiling is biting and it has put the strategy map back`);
 }
@@ -553,14 +553,14 @@ for (const { win, css } of WINDOWS) {
 /* ------------------------------------------------------------- the report */
 
 const pad = (v, n) => String(v).padEnd(n);
-console.log('\nA. THE SCALE — integer only, against FF6\'s 16 x 14\n');
+console.log('\nA. THE SCALE — integer only, against the reference 16 x 14\n');
 console.log('  ' + pad('window', 12) + pad('canvas', 12) + pad('scale', 7)
             + pad('tile px', 9) + pad('cols', 8) + pad('rows', 8) + 'hero px');
 for (const r of out.table) {
   console.log('  ' + pad(r.window, 12) + pad(r.canvas, 12) + pad(r.scale + 'x', 7)
               + pad(r.tilePx, 9) + pad(r.cols, 8) + pad(r.rows, 8) + r.heroPx);
 }
-console.log('  ' + pad('FF6 field', 12) + pad('256x224', 12) + pad('1x', 7)
+console.log('  ' + pad('reference', 12) + pad('256x224', 12) + pad('1x', 7)
             + pad(16, 9) + pad('16.00', 8) + pad('14.00', 8) + 24);
 console.log('\n  guards: 480x1400 -> ' + out.guards.tallNarrow + 'x, 480x320 -> '
             + out.guards.tiny + 'x, 5120x2880 -> ' + out.guards.huge + 'x');
@@ -621,5 +621,5 @@ if (fail.length) {
   for (const m of fail) console.log('  - ' + m);
   process.exit(1);
 }
-console.log('PASS — FF6\'s pixel scale, the camera holds, and nothing the zoom '
+console.log('PASS — the reference pixel scale, the camera holds, and nothing the zoom '
             + 'moved is mispositioned.');

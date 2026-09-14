@@ -66,10 +66,10 @@ it does not pretend to judge the quality of an interview answer.
 
 Open `/art.html` on the running local server for the renderer gallery. It includes
 animation, silhouette checks, cinematic fixtures and PNG frame export. The
-[reference research](docs/15-reference-research.md) maps FFVI's actual mechanics
+[design research](docs/15-reference-research.md) maps 16-bit RPG principles
 to this game; [art direction](docs/08-art-direction.md) records the original
-visual contracts. Restoration archives were inspected as references; no ROM,
-Final Fantasy artwork, soundtrack or patch code was imported.
+visual contracts. The game uses original artwork and scenes, with separately
+credited music and fonts.
 
 See the [delivery and validation record](docs/16-polish-delivery.md) and the
 [human playtest protocol](docs/17-playtest-protocol.md). Automated checks validate

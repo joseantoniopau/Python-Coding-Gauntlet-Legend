@@ -1,16 +1,14 @@
 # Art direction and rendering contracts
 
-This is an original Python-learning RPG. Its visual references are SNES-era Final Fantasy VI and the painted science-fantasy, ink contours, limited animation and dramatic lighting of Heavy Metal (1981). Reference research and the FFVI-to-Gauntlet feature mapping are in [15-reference-research.md](15-reference-research.md). No reference archive was applied to the game. Artwork and scenes are original; recorded music and fonts retain the licenses and credits shipped with them.
+This is an original Python-learning RPG. Its visual references are 16-bit console RPGs and the painted science-fantasy, ink contours, limited animation and dramatic lighting of Heavy Metal (1981). Design research and the RPG-to-Gauntlet feature mapping are in [15-reference-research.md](15-reference-research.md). No reference archive was applied to the game. Artwork and scenes are original; recorded music and fonts retain the licenses and credits shipped with them.
 
 ## What the references contribute
 
-FFVI contributes readable side-view combat, compact expressive field actors, strong silhouettes, consistent framed menus, distinctive town geography, an ensemble cast and changes to a persistent world. Its ATB Wait setting is a useful reference for giving decisions room. Gauntlet's coding encounters resolve after Python execution and authoritative grading; they do not run an ATB clock while a beginner types. Sealed interviews retain their own explicit clocks.
-
-FFVI's art was a collaboration. Kazuko Shibuya describes translating and sometimes independently developing character concepts into pixels; Amano was a major contributor, not the sole source of every sprite. See [Shibuya's interview](https://shmuplations.com/kazukoshibuya/) and [Square Enix's pixel-art interview](https://na.finalfantasy.com/topics/528). The [Nintendo manual](https://www.nintendo.co.jp/clvs/manuals/common/pdf/CLV-P-SABTE.pdf) supports the gameplay mapping: party commands, ATB/Wait, character abilities, equipment, Espers and exploration.
+The game combines readable side-view combat, compact expressive field actors, strong silhouettes, consistent framed menus, distinctive town geography, an ensemble cast and changes to a persistent world. Decisions need room: the learner must be able to reason before committing an action. Gauntlet's coding encounters resolve after Python execution and authoritative grading; they do not run an ATB clock while a beginner types. Sealed interviews retain their own explicit clocks.
 
 Heavy Metal contributes broad shadow masses, warm highlights against cold ambient light, silhouettes framed by architecture, varied settings and held compositions punctuated by motion. It does not imply that every surface should glow red. Quiet inhabited places and dawn light provide contrast with the hostile citadel. See the [1981 production account](https://www.heavymetal.com/post/heavy-metal-the-making-of-the-movie-from-august-1981) and [Animation World Network's production history](https://www.awn.com/animationworld/here-s-skinny-heavy-metal).
 
-The dimensions below are this game's contracts. They are not claims about FFVI's original sprite dimensions or a hardware-accurate SNES emulator.
+The dimensions below are this game's contracts. They define the authored assets and layout, without requiring hardware-accurate console emulation.
 
 ## Palette, pixels and materials
 
@@ -34,7 +32,7 @@ The dimensions below are this game's contracts. They are not claims about FFVI's
 | Boss bodies | `bosses` / `bossart` | 64 × 64, 96 × 64; final body 96 × 128 |
 | Cinematic plate | `cinema.js` | 480 × 270 |
 
-The hero stands on the left and the enemy on the right. This deliberately preserves the game's established controls and motion rather than claiming FFVI's usual party-on-right composition. The hero is drawn after the enemy so a wide boss can occupy the space behind the party silhouette. Wide-boss scale, sink and horizontal bias belong to `bosses.BOSS_MOTION`; callers must use `drawBoss`, not duplicate offsets. Dissolve uses the last live boss blit to keep particles attached to the same body.
+The hero stands on the left and the enemy on the right. This preserves the game's established controls and motion. The hero is drawn after the enemy so a wide boss can occupy the space behind the party silhouette. Wide-boss scale, sink and horizontal bias belong to `bosses.BOSS_MOTION`; callers must use `drawBoss`, not duplicate offsets. Dissolve uses the last live boss blit to keep particles attached to the same body.
 
 The combat rig has ready, cast, strike, guard, hurt and victory cels for the six classes and two body variants. Equipment attaches to the moving hand and follows armor integrity and forged-blade state. Field and combat actors share identity and color choices without stretching the field sprite into a battle actor. `combatFrame` caches at most 256 variants.
 
@@ -60,4 +58,4 @@ Existing audio provides regional motifs, battle intensity, enemy cries, elementa
 
 Relevant checks live in `scripts/verify/`: `combathero`, `creaturepolish`, `regionalart`, `petpolish`, `stage`, `cinema`, `finale-player`, and the existing subsystem harnesses. `stage.mjs` compares the geometry declarations, safe-area readouts, integer scales and all boss phases. Its fit arithmetic is a synthetic check; browser measurements of the current layout are the acceptance evidence for reading space.
 
-[16-polish-delivery.md](16-polish-delivery.md) records integrated checks and remaining work. Claims of usability or learning outcomes require observation of people using the game. Automated frame counts cannot establish that it is more beautiful than FFVI, fun to a particular player, or sufficient preparation for an interview.
+[16-polish-delivery.md](16-polish-delivery.md) records integrated checks and remaining work. Claims of usability or learning outcomes require observation of people using the game. Automated frame counts cannot establish visual appeal, enjoyment, or sufficient preparation for an interview.

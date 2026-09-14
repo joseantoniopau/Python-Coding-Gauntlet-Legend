@@ -697,7 +697,7 @@ const LAYOUT = { s: 2, cols: 0, maxLines: 0, set: null, innerW: 0, innerH: 0,
  *
  * This is older than the zoom and the zoom did not cause it — but the zoom is
  * what made it findable, because raising the scale is what made the clamped
- * band worth measuring. It gets RARER at FF6 scale, not commoner: the vertical
+ * band worth measuring. It gets RARER at the reference scale, not commoner: the vertical
  * span the camera has to fit shrank from 258..376 world pixels to 206..251, so
  * there is more map above and below the player before the clamp bites.
  *

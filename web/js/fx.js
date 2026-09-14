@@ -28,9 +28,9 @@ import { combatSet, BATTLE_HERO } from './battlehero.js';
  * so a source pixel is always an exact square of screen pixels. Every offset
  * below is in logical units.
  *
- * 256x224 IS THE SNES FRAME, and it is what FFVI shipped. docs/08-art-direction
- * §A-1. The raster moved 192x128 -> 256x224 here, and room for a 96x128 boss
- * standing on the ground line came with it.
+ * 256x224 is the authored stage raster; see the battle composition contract
+ * in docs/08-art-direction.md. The raster moved 192x128 -> 256x224 here,
+ * allowing a 96x128 boss to stand on the ground line.
  *
  * WHAT THE PLAYER ACTUALLY SEES IS NOT 57,344 PIXELS, and this comment used to
  * say it was. 224 lines are AUTHORED; main.js fits the 176-line safe area

@@ -2,7 +2,7 @@
 
 Baseline: clean `7167613`, Fable's explicit completed integration at 2026-09-13 22:59 UTC. Implementation authorized by the user. No original game assets or restoration patch code were imported.
 
-Research: [FFVI feature map and restoration archive analysis](15-reference-research.md). Product and art contracts: `README.md`, `docs/08-art-direction.md`, `docs/09-story-bible.md`, `docs/13-the-first-lesson.md`, `docs/14-the-ramp.md`. Existing runtime tokens in `web/css/metal.css` remain canonical. Existing `main.js`/`uikit.js` own navigation, notifications and dialogs; `editor.js` owns text input; `palette.js` owns sprite palettes; server grading and seals remain authoritative.
+Research: [16-bit RPG feature map and art-system research](15-reference-research.md). Product and art contracts: `README.md`, `docs/08-art-direction.md`, `docs/09-story-bible.md`, `docs/13-the-first-lesson.md`, `docs/14-the-ramp.md`. Existing runtime tokens in `web/css/metal.css` remain canonical. Existing `main.js`/`uikit.js` own navigation, notifications and dialogs; `editor.js` owns text input; `palette.js` owns sprite palettes; server grading and seals remain authoritative.
 
 ## Delivery sequence
 
@@ -173,13 +173,24 @@ practice/assessment boundaries, offline font credits and the reference research.
 The repository About website now points directly to GitHub Pages; the README
 and site canonical URL use the same address. [Capture provenance](verification/browser-captures.json)
 records the untouched browser images and their hashes. No game ROM, restoration
-patch code or Final Fantasy media is included.
+patch code or third-party game media is included.
+
+## Public wording update — 14 September 2026
+
+Public documentation now describes Gauntlet through its original RPG design and
+rendering contracts. The detailed comparative research remains in the local
+research archive. Runtime changes are limited to comments and reference-geometry
+diagnostic names; dimensions, artwork and gameplay rules are unchanged.
+The release benchmark records retain the hashes of the source they measured.
+Validation: all 317 tracked files scanned, eight changed JavaScript files parsed,
+and the field harness passed. All 155 installed app payload files match the
+source, and the rebuilt app passes strict signature verification.
 
 ## Limits that remain explicit
 
 [17-playtest-protocol.md](17-playtest-protocol.md) specifies beginner and
 intermediate sessions, delayed recall and voluntary-return measures. **No human
 participants have been tested yet.** Automated checks do not establish retained
-learning, interview readiness outside the measured tasks, enjoyment, or that this
-art surpasses Final Fantasy VI. The real FFVI was researched through its manual
-and primary design sources; no original-game playthrough was performed here.
+learning, interview readiness outside the measured tasks, enjoyment, or visual
+appeal to players. These outcomes require the participant sessions specified in
+the playtest protocol.
