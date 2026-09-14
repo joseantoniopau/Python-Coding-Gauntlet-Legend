@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import {createDraftWriter} from '../../web/js/drafts.js';
+const data={};globalThis.localStorage={getItem:k=>data[k]??null,setItem:(k,v)=>{data[k]=v;},removeItem:k=>{delete data[k];}};
+let row={problem_id:'example',encounter_started_at:123,code:'# older',explanation:''},release;
+const sent=[],status=[];
+const writer=createDraftWriter({snapshot:()=>row,status:s=>status.push(s),save:async r=>{sent.push(r);if(sent.length===1)await new Promise(r=>release=r);return {saved:true};}});
+const first=writer.flush();await new Promise(setImmediate);
+row={...row,code:'# newest before closing'};writer.changed();const latest=writer.flush();
+assert.equal(sent.length,1);assert.equal(writer.recover(row).code,row.code,'latest edit has synchronous recovery while old request is pending');
+release();await first;await latest;
+assert.equal(sent.length,2);assert.equal(sent[1].code,row.code);assert.equal(writer.recover(row),null,'acknowledged recovery is removed');
+row={...row,code:'# retry'};
+const failed=createDraftWriter({snapshot:()=>row,status:()=>{},save:async()=>{throw new Error('offline');}});
+await failed.flush();assert.equal(failed.recover(row).code,'# retry');
+assert.equal(failed.recover({...row,encounter_started_at:124}),null,'repeat encounter cannot borrow another draft');
+console.log('PASS — serialized saves, immediate browser recovery, failure recovery and encounter isolation');

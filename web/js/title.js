@@ -8,7 +8,7 @@
  * Everything is drawn; there are no image assets.
  */
 import * as pixel from './pixel.js';
-import * as sprites from './sprites.js';
+import { createTitleArt } from './cinema.js';
 
 /* The logo, authored as a pixel grid. Two words, stacked, because
  * "PYTHON CODING GAUNTLET LEGEND" on one line at this resolution is unreadable. */
@@ -65,8 +65,9 @@ export class TitleScreen {
     this.reducedMotion = !!opts.reducedMotion;
     this.hasSave = !!opts.hasSave;
     this.onSelect = opts.onSelect || (() => {});
-    this.index = this.hasSave ? 1 : 0;
+    this.index = 0;
     this.entered = false;
+    this.art = createTitleArt();
 
     this.top = wordCells('GAUNTLET');
     this.bottom = wordCells('LEGEND');
@@ -87,19 +88,14 @@ export class TitleScreen {
     place(this.top, 0);
     place(this.bottom, 7);
 
-    this.stars = Array.from({ length: 90 }, () => ({
-      x: seed(), y: seed() * 0.62, s: seed() < 0.82 ? 1 : 2, tw: seed() * 6.28,
-    }));
     this.shards = Array.from({ length: 14 }, (_, i) => ({
       a: (i / 14) * Math.PI * 2, r: 26 + seed() * 30, s: 2 + Math.floor(seed() * 3),
       speed: 0.16 + seed() * 0.22,
     }));
-    this.embers = pixel.makeParticles('title', 480, 300, 54);
 
     this._key = (e) => this.onKey(e);
     window.addEventListener('keydown', this._key);
-    this.canvas.addEventListener('click', (e) => this.onClick(e));
-    this.canvas.style.cursor = 'pointer';
+    this.mountMenu();
   }
 
   get options() {
@@ -111,39 +107,102 @@ export class TitleScreen {
     return out;
   }
 
-  onKey(e) {
-    if (!this.running) return;
-    const options = this.options;
-    if (e.key === 'ArrowDown' || e.key === 's') {
-      e.preventDefault();
-      this.index = (this.index + 1) % options.length;
-      this.onSelect('move');
-    } else if (e.key === 'ArrowUp' || e.key === 'w') {
-      e.preventDefault();
-      this.index = (this.index + options.length - 1) % options.length;
-      this.onSelect('move');
-    } else if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      this.onSelect(options[this.index].id);
+  mountMenu() {
+    const doc = this.canvas.ownerDocument || document;
+    this._document = doc;
+    const root = doc.createElement('div'); root.className = 'title-native';
+    const style = doc.createElement('style');
+    style.textContent = `.title-native{position:absolute;inset:0;z-index:2;pointer-events:none}.title-native .title-accessible-heading{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}.title-native nav{position:absolute;left:50%;transform:translateX(-50%);display:grid;gap:6px;pointer-events:auto;width:min(390px,calc(100% - 40px))}.title-native button{font:600 16px/1.3 ui-monospace,SFMono-Regular,Consolas,monospace;letter-spacing:.06em;color:#c8c4d7;background:rgba(16,20,32,.9);border:1px solid #65667c;border-radius:3px;min-height:46px;padding:10px 18px;cursor:pointer;text-align:center;box-shadow:0 3px 0 #070b12}.title-native button.selected{color:#ffe0a8;border-color:#d3ab72;background:rgba(57,43,41,.96)}.title-native button:focus-visible{outline:3px solid #f9d091;outline-offset:3px}.title-native button:disabled{cursor:default;opacity:.65}.title-native .title-key-help{position:absolute;bottom:8px;left:0;width:100%;margin:0;text-align:center;font:13px/1.4 system-ui,sans-serif;color:#c3c1cd}.title-native nav.compact{width:min(600px,calc(100% - 32px));grid-template-columns:repeat(2,minmax(0,1fr))}.title-native nav.compact button{padding:8px;font-size:14px}@media(prefers-reduced-motion:reduce){.title-native *{scroll-behavior:auto}}`;
+    // All names are real text. The artwork can remain a pixel composition.
+    const heading = doc.createElement('h1'); heading.className = 'title-accessible-heading';
+    heading.textContent = 'Python Coding Gauntlet Legend — The Algorithm Realms';
+    const nav = doc.createElement('nav'); nav.setAttribute('aria-label', 'Main menu');
+    this.buttons = this.options.map((option, i) => {
+      const button = doc.createElement('button'); button.type = 'button';
+      button.textContent = option.label;
+      button.onclick = () => { this.index = i; this.syncMenu(); this.choose(option.id); };
+      button.onfocus = () => {
+        const moved = this.index !== i; this.index = i; this.syncMenu();
+        if (moved && this.running) this.onSelect('move');
+      };
+      nav.appendChild(button); return button;
+    });
+    const help = doc.createElement('p'); help.className = 'title-key-help';
+    help.textContent = 'Arrow keys or Tab · Enter to choose';
+    root.appendChild(style); root.appendChild(heading); root.appendChild(nav); root.appendChild(help);
+    this._priorAria = this.canvas.getAttribute('aria-hidden');
+    this.canvas.setAttribute('aria-hidden', 'true');
+    this.canvas.parentElement.appendChild(root);
+    this.menuRoot = root; this.menu = nav; this.syncMenu();
+    // About borrows the game's shared modal. Suspend the title controls while
+    // that modal owns input, then restore the selected button on dismissal.
+    const modal = doc.querySelector('#modal-bg');
+    if (modal && typeof MutationObserver !== 'undefined') {
+      this._modalObserver = new MutationObserver(() => this.syncModal());
+      this._modalObserver.observe(modal, {attributes:true, attributeFilter:['class']});
     }
   }
 
-  onClick(event) {
-    if (!this.running || !this._hit) return;
-    const rect = this.canvas.getBoundingClientRect();
-    const y = (event.clientY - rect.top);
-    for (const entry of this._hit) {
-      if (y >= entry.top && y <= entry.bottom) {
-        this.index = entry.index;
-        this.onSelect(this.options[entry.index].id);
-        return;
-      }
+  syncMenu() {
+    this.buttons?.forEach((button, i) => {
+      button.classList.toggle('selected', i === this.index);
+      button.disabled = !!this._selected;
+    });
+  }
+
+  syncModal() {
+    const open = !!this._document.querySelector('#modal-bg.show');
+    if (open === this._modalOpen) return;
+    this._modalOpen = open;
+    this.menuRoot.inert = open;
+    if (open) {
+      const first = this._document.querySelector('#modal button, #modal input, #modal select');
+      if (first) first.focus();
+    } else if (this.running && !this._selected) this.buttons[this.index]?.focus();
+  }
+
+  choose(id) {
+    if (!this.running || this._selected || this._document.querySelector('#modal-bg.show')) return;
+    // Continue/new/options leave through a short fade. Repeated Enter during
+    // that fade must never create another run. About can be opened again.
+    if (id !== 'about') { this._selected = true; this.syncMenu(); }
+    this.onSelect(id);
+    if (id === 'about') this.syncModal();
+  }
+
+  layout() {
+    const preferredCell = Math.max(3, Math.min(10, Math.floor(this.w / 96)));
+    const compact = this.h < 520;
+    const rows = Math.ceil(this.options.length / (compact ? 2 : 1));
+    const menuHeight = rows * 46 + Math.max(0, rows - 1) * 6;
+    const menuTop = Math.min(this.h - menuHeight - 40, this.h * .6);
+    const cell = Math.max(3, Math.min(preferredCell, Math.floor((menuTop - 64) / 15.2)));
+    const logoTop = Math.min(this.h * .31, menuTop - cell * 15.2 - 36);
+    return {cell, compact, menuTop, logoTop};
+  }
+
+  onKey(e) {
+    if (!this.running || this._selected || e.metaKey || e.ctrlKey || e.altKey ||
+        this._document.querySelector('#modal-bg.show')) return;
+    const options = this.options;
+    if (['ArrowDown','ArrowRight','s'].includes(e.key)) {
+      e.preventDefault(); this.index = (this.index + 1) % options.length;
+      this.syncMenu(); this.buttons[this.index]?.focus(); this.onSelect('move');
+    } else if (['ArrowUp','ArrowLeft','w'].includes(e.key)) {
+      e.preventDefault(); this.index = (this.index + options.length - 1) % options.length;
+      this.syncMenu(); this.buttons[this.index]?.focus(); this.onSelect('move');
+    } else if ((e.key === 'Enter' || e.key === ' ') && !this.buttons.includes(e.target)) {
+      // Native buttons already turn Enter/Space into exactly one click.
+      e.preventDefault(); this.choose(options[this.index].id);
     }
   }
 
   start() {
     if (this.running) return;
     this.running = true;
+    this.menuRoot.hidden = false;
+    this.buttons[this.index]?.focus();
+    if (this.reducedMotion) { this.time = 4; this.draw(); return; }
     this.born = performance.now();
     this.bornWall = Date.now();
     this.frames = 0;
@@ -166,6 +225,7 @@ export class TitleScreen {
 
   stop() {
     this.running = false;
+    if (this.menuRoot) this.menuRoot.hidden = true;
     if (this._raf) cancelAnimationFrame(this._raf);
     this._raf = null;
   }
@@ -173,13 +233,18 @@ export class TitleScreen {
   destroy() {
     this.stop();
     window.removeEventListener('keydown', this._key);
+    this._modalObserver?.disconnect();
+    this.buttons?.forEach(button => { button.onclick = button.onfocus = null; });
+    this.menuRoot?.remove();
+    if (this._priorAria === null) this.canvas.removeAttribute('aria-hidden');
+    else this.canvas.setAttribute('aria-hidden', this._priorAria);
   }
 
   resize() {
     const dpr = window.devicePixelRatio || 1;
     const rect = this.canvas.parentElement.getBoundingClientRect();
-    const w = Math.max(480, Math.floor(rect.width));
-    const h = Math.max(360, Math.floor(rect.height));
+    const w = Math.max(280, Math.floor(rect.width));
+    const h = Math.max(260, Math.floor(rect.height));
     this.canvas.width = w * dpr;
     this.canvas.height = h * dpr;
     this.canvas.style.width = w + 'px';
@@ -187,6 +252,10 @@ export class TitleScreen {
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     this.ctx.imageSmoothingEnabled = false;
     this.w = w; this.h = h;
+    const layout = this.layout();
+    this.menu.style.top = `${Math.round(layout.menuTop)}px`;
+    this.menu.classList.toggle('compact', layout.compact);
+    if (this.running && this.reducedMotion) this.draw();
   }
 
   draw() {
@@ -195,21 +264,7 @@ export class TitleScreen {
     const { w, h } = this;
     const t = this.time;
 
-    // --- sky: a vertical gradient, banded to stay in the palette's spirit
-    const sky = ctx.createLinearGradient(0, 0, 0, h);
-    sky.addColorStop(0, '#0a0814');
-    sky.addColorStop(0.45, '#1b1436');
-    sky.addColorStop(0.72, '#3a2050');
-    sky.addColorStop(1, '#6a2f44');
-    ctx.fillStyle = sky;
-    ctx.fillRect(0, 0, w, h);
-
-    // --- stars
-    for (const s of this.stars) {
-      const tw = 0.45 + Math.abs(Math.sin(t * 1.1 + s.tw)) * 0.55;
-      ctx.fillStyle = `rgba(232,232,255,${tw * 0.8})`;
-      ctx.fillRect((s.x * w) | 0, (s.y * h) | 0, s.s, s.s);
-    }
+    this.art.draw(ctx, w, h, t, this.reducedMotion);
 
     // --- the shattered Source, turning overhead
     const cx = w / 2, cy = h * 0.19;
@@ -243,29 +298,10 @@ export class TitleScreen {
     }
     ctx.restore();
 
-    // --- distant mountains, two parallax layers
-    const ridge = (baseY, colour, amp, freq, offset) => {
-      ctx.fillStyle = colour;
-      ctx.beginPath();
-      ctx.moveTo(0, h);
-      for (let x = 0; x <= w; x += 4) {
-        const y = baseY + Math.sin((x + offset) * freq) * amp
-          + Math.sin((x + offset) * freq * 2.3) * amp * 0.4;
-        ctx.lineTo(x, y);
-      }
-      ctx.lineTo(w, h);
-      ctx.closePath();
-      ctx.fill();
-    };
-    ridge(h * 0.62, '#241a3a', 16, 0.011, t * 5);
-    ridge(h * 0.72, '#1a1230', 22, 0.008, t * 9);
-    ridge(h * 0.84, '#120c22', 12, 0.017, t * 15);
-
     // --- the logo, assembling from falling runes
-    const cell = Math.max(4, Math.min(10, Math.floor(w / 96)));
+    const {cell, logoTop:y0} = this.layout();
     const logoW = Math.max(this.top.width, this.bottom.width) * cell;
     const x0 = (w - logoW) / 2;
-    const y0 = h * 0.42;
     const topOffset = (Math.max(this.top.width, this.bottom.width) - this.top.width) / 2;
     const botOffset = (Math.max(this.top.width, this.bottom.width) - this.bottom.width) / 2;
 
@@ -302,61 +338,15 @@ export class TitleScreen {
     ctx.fillStyle = `rgba(168,154,255,${0.55 + Math.sin(t * 1.6) * 0.2})`;
     ctx.fillText(sub, w / 2, y0 + 12 * cell + cell * 3.2);
 
-    // --- menu
-    const options = this.options;
-    const menuTop = Math.min(h - 40 - options.length * 34,
-                             y0 + 12 * cell + cell * 3.2 + 44);
-    this._hit = [];
-    ctx.font = `${Math.max(9, Math.floor(cell * 1.7))}px "Press Start 2P", monospace`;
-    options.forEach((option, i) => {
-      const y = menuTop + i * 34;
-      const active = i === this.index;
-      if (active) {
-        const width = ctx.measureText(option.label).width + 46;
-        ctx.fillStyle = 'rgba(58,51,96,0.55)';
-        ctx.fillRect(w / 2 - width / 2, y - 15, width, 24);
-        ctx.strokeStyle = '#a89aff';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(w / 2 - width / 2, y - 15, width, 24);
-      }
-      ctx.fillStyle = active ? '#ffe8a0' : 'rgba(155,150,184,0.85)';
-      ctx.fillText(option.label, w / 2, y + 3);
-      if (active && Math.sin(t * 6) > -0.3) {
-        ctx.fillStyle = '#e8c37d';
-        const width = ctx.measureText(option.label).width;
-        ctx.fillRect(w / 2 - width / 2 - 18, y - 5, 7, 7);
-      }
-      this._hit.push({ index: i, top: y - 17, bottom: y + 11 });
-    });
-
-    // --- hero silhouette, watching from the ridge
-    const heroFrames = this._hero || (this._hero = sprites.heroSprites({}));
-    const idle = heroFrames.idle.down[Math.floor(t * 1.6) % 2];
-    const scale = Math.max(2, Math.floor(cell / 2));
-    const hx = w * 0.13, hy = h * 0.80;
-    ctx.save();
-    ctx.globalAlpha = 0.9;
-    sprites.drawGroundShadow(ctx, hx + sprites.HERO_W * scale / 2,
-                             hy + sprites.HERO_H * scale, 9 * scale / 2, 3, 0.34);
-    ctx.drawImage(idle, hx, hy, sprites.HERO_W * scale, sprites.HERO_H * scale);
-    ctx.restore();
-
-    // --- embers drifting up
-    pixel.stepParticles(this.embers, pixel.PARTICLE_STYLE.ember, w, h, 1 / 60);
-    pixel.drawParticles(ctx, this.embers, pixel.PARTICLE_STYLE.ember, 0.4);
-
     // --- footer
     ctx.textAlign = 'left';
     ctx.font = '10px "Press Start 2P", monospace';
     ctx.fillStyle = 'rgba(106,102,133,0.9)';
-    ctx.fillText('v1.1', 14, h - 14);
-    ctx.textAlign = 'right';
-    ctx.fillText('↑ ↓  ENTER', w - 14, h - 14);
+    ctx.fillText('v1.1.0', 14, h - 14);
     ctx.textAlign = 'center';
     ctx.fillStyle = 'rgba(106,102,133,0.75)';
-    ctx.fillText('ORIGINAL WORK — NO THIRD-PARTY GAME ASSETS', w / 2, h - 14);
 
-    // --- vignette + scanline feel
+    // --- quiet edge falloff; lettering stays free of scanlines
     const vig = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.42,
                                          w / 2, h / 2, Math.max(w, h) * 0.78);
     vig.addColorStop(0, 'rgba(0,0,0,0)');

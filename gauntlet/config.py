@@ -8,7 +8,7 @@ from pathlib import Path
 APP_NAME = "Python Coding Gauntlet Legend"
 APP_SUBTITLE = "The Algorithm Realms"
 APP_ID = "com.josea.gauntletlegend"
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 PKG_ROOT = Path(__file__).resolve().parent
 REPO_ROOT = PKG_ROOT.parent

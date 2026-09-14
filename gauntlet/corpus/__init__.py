@@ -41,7 +41,7 @@ _FAMILIES = (
     "onboarding", "scaffolds", "parsons", "breaking",
     "arrays_hashing", "sliding_window", "two_pointers", "stacks_queues",
     "trees", "matrix_graphs", "recursion_dp", "python_village",
-    "binary_search", "design_oop", "debugging", "meta", "reasoning",
+    "binary_search", "design_oop", "debugging", "meta", "reasoning", "rematch_variants",
     # Ramp-first families: each of these enters every topic it owns at GUIDED
     # or TUTORIAL, which is why they are listed after the original seventeen
     # rather than folded into them.
@@ -437,6 +437,13 @@ def assign_lineage(problems: list) -> dict:
     for group in (list(by_algorithm.values()) + list(declared.values())):
         for other in group[1:]:
             union.join(group[0], other)
+    # A coached rematch follows an already taught boss. Keep its evidence in
+    # that teaching lineage even when the changed contract needs new code.
+    known = {p.id for p in problems}
+    for problem in problems:
+        for tag in problem.tags:
+            if tag.startswith("rematch-of:") and tag.split(":", 1)[1] in known:
+                union.join(problem.id, tag.split(":", 1)[1])
     for a, b in _behavioural_links(problems):
         union.join(a, b)
 
@@ -451,7 +458,8 @@ def assign_lineage(problems: list) -> dict:
         # somewhere else in the corpus must not rename anybody's lineage, or
         # every "have they seen this" answer in a save file turns to noise.
         family = min(p.spaced_repetition_family or "unfamilied" for p in group)
-        key = min(_algorithm_key(p) for p in group)[:10]
+        originals = [p for p in group if not any(t.startswith("rematch-of:") for t in p.tags)]
+        key = min(_algorithm_key(p) for p in (originals or group))[:10]
         lineage_id = f"lin-{family}-{key}"
         for problem in group:
             problem.lineage_id = lineage_id
@@ -509,6 +517,11 @@ def _rank(lineage_id: str) -> str:
 # that authored the corpus, and the hold-out would quietly differ between them.
 # A hold-out that differs between two builds of the same game is not a hold-out.
 RESERVED = (
+    "rm-anagram-index-pairs", "rm-bst-subtree-report", "rm-shortest-node-path",
+    "rm-streaming-window-max", "rm-wildcard-window-cover",
+    "rp-three-sum-pair", "sw-longest-no-repeat-substr", "tp-trap-water",
+    "rp-matrix-rotate-counter", "mx-transpose", "tr-lowest-common", "ds-undo-redo",
+    "rp-tree-deserialize", "db-window-slice", "db-column-bounds", "ds-time-map",
     "ah-group-anagrams", "ah-three-sum", "ah-two-sum-indices", "bs-search",
     "db-bfs-visited", "db-keyerror", "db-off-by-one-range", "dp-climb-stairs",
     "ds-lru-cache", "ds-text-editor", "gr-bfs-order", "gr-shortest-hops",
@@ -533,7 +546,7 @@ RESERVED = (
     # and, like the language rungs below, it was never sealable anyway: every
     # first_steps rung is GENTLE and sits in a lineage of GENTLE rungs, which
     # `_sealable` refuses outright.
-    "fs-see-a-value",
+    "fs-see-a-value", "fs-write-banner",
     "ob-is-even", "ob-number-to-text", "ob-return-not-print", "ob-say-hello",
     "ob-store-value", "ob-two-arguments", "ob-type-name", "rp-cr-alias",
     "sf-indent-escape", "tr-alias", "tr-assign-order", "tr-lost-value",

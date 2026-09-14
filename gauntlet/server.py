@@ -432,6 +432,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
         """Every GET, dispatched with the game already held."""
         if path == "/api/state":
             return self._json(g.dashboard())
+        if path == "/api/lessons":
+            return self._reply(g.lessons())
+        if path == "/api/practice":
+            return self._reply(g.practice_view())
+        if path == "/api/journal":
+            return self._reply(g.journal())
+        if path == "/api/appearance":
+            return self._reply(g.appearance())
+        if path == "/api/encounter/resume":
+            result = g.resume_encounter((query.get("problem_id") or [None])[0])
+            return self._reply(result, 400 if result.get("error") else 200)
         if path == "/api/world":
             return self._json({
                 "regions": world.REGIONS, "bosses": world.BOSSES,
@@ -454,7 +465,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == "/api/sandbox/check":
             return self._json(sandbox.self_check())
         if path == "/api/export":
-            return self._json(g.export())
+            return self._reply(g.export())
         if path == "/api/problem":
             pid = (query.get("id") or [""])[0]
             mode = (query.get("mode") or [config.MODE_ADVENTURE])[0]
@@ -515,6 +526,33 @@ class Handler(http.server.BaseHTTPRequestHandler):
         g = game()
         try:
             with _LOCK:
+                practice_routes = {
+                    "/api/practice/start": lambda: g.practice_start(
+                        body.get("minutes", 20), body.get("intent", "balanced"), body.get("kind", "expedition")),
+                    "/api/practice/action": lambda: g.practice_action(body.get("action")),
+                    "/api/practice/next": g.practice_next,
+                    "/api/practice/draft": lambda: g.practice_draft(
+                        body.get("problem_id"), body.get("code"), body.get("explanation", ""),
+                        body.get("encounter_started_at")),
+                    "/api/journal/note": lambda: g.journal_note(body.get("family"), body.get("text")),
+                    "/api/trace": lambda: g.trace(body.get("code"), body.get("case_index", 0)),
+                    "/api/appearance": lambda: g.choose_appearance(body.get("id")),
+                }
+                if path in practice_routes:
+                    result = practice_routes[path]()
+                    return self._reply(result, 400 if result.get("error") else 200)
+                if path in ("/api/lesson", "/api/lesson/note"):
+                    beat_id = self._need_str(body, "id", limit=80)
+                    if beat_id is None:
+                        return True
+                    if path == "/api/lesson":
+                        return self._reply(g.lesson(beat_id))
+                    kind = self._need_str(body, "kind", limit=20)
+                    if kind is None:
+                        return True
+                    return self._reply(g.lesson_note(kind, beat_id))
+                if path == "/api/lesson/forget":
+                    return self._reply(g.lessons_forget())
                 if path == "/api/encounter/next":
                     return self._json(g.next_encounter(
                         region=body.get("region"),

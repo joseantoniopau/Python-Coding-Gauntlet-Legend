@@ -1,9 +1,8 @@
 /* Python Coding Gauntlet Legend — metal.css
  * The dark 80s metal skin. Loaded AFTER game.css and overrides it by name.
  *
- * This is a skin, not a rewrite: every selector below already exists in
- * game.css. Nothing here changes layout, box-model sizing, or class contracts;
- * it retunes colour, bevel, shadow and type weight so the UI sits in the same
+ * Shared visual tokens, component finishes and responsive reading layouts.
+ * It retunes colour, bevel, shadow and type weight so the UI sits in the same
  * register as the audio rig — near-black grounds, gunmetal plate, chrome
  * bevels, blood red and bone white, violet and cyan for magic, orange for fire.
  *
@@ -1138,56 +1137,18 @@ body.interview-mode #topbar::after { background: linear-gradient(90deg, rgba(214
     rgba(0,0,0,0) 50%, rgba(0,0,0,.45) 84%, rgba(0,0,0,.85) 100%);
 }
 
-/* ==========================================================================
-   22. CRT
-   Three layers, cheapest to most expensive:
-     scanlines   — the existing repeating-linear-gradient, retuned darker and
-                   given a faint phosphor-green bias so black is never flat;
-     vignette    — ::before, very subtle, so the corners of the tube fall off;
-     aberration  — ::after, a red and a cyan wash confined to the outer edges
-                   by a mask, at an alpha low enough that you only notice it
-                   when it is switched off.
-   All three are static. The CRT costs zero per frame.
-   ========================================================================== */
-
-#crt {
-  background:
-    repeating-linear-gradient(0deg,
-      rgba(0,0,0,.26) 0px, rgba(0,0,0,.26) 1px,
-      rgba(0,0,0,0)   1px, rgba(0,0,0,0)   3px),
-    repeating-linear-gradient(90deg,
-      rgba(255,0,40,.020) 0px, rgba(255,0,40,.020) 1px,
-      rgba(0,255,170,.014) 1px, rgba(0,255,170,.014) 2px,
-      rgba(0,140,255,.020) 2px, rgba(0,140,255,.020) 3px);
-  opacity: .85;
-  mix-blend-mode: normal;
+/* CRT belongs to scene artwork. Reading and input surfaces stay clear. */
+body.crt #battle-stage::after,
+body.crt #world-canvas-wrap::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: repeating-linear-gradient(0deg,
+    rgba(0,0,0,.14) 0px, rgba(0,0,0,.14) 1px,
+    transparent 1px, transparent 3px);
+  z-index: 1;
 }
-
-#crt::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background: radial-gradient(118% 100% at 50% 50%,
-    rgba(0,0,0,0) 58%, rgba(0,0,0,.22) 86%, rgba(0,0,0,.52) 100%);
-}
-
-#crt::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background:
-    linear-gradient(90deg, rgba(255,40,60,.10) 0%, rgba(255,40,60,0) 7%),
-    linear-gradient(270deg, rgba(60,200,255,.10) 0%, rgba(60,200,255,0) 7%),
-    linear-gradient(180deg, rgba(255,40,60,.06) 0%, rgba(255,40,60,0) 5%),
-    linear-gradient(0deg, rgba(60,200,255,.06) 0%, rgba(60,200,255,0) 5%);
-  mix-blend-mode: screen;
-}
-
-/* The CRT is atmosphere, and atmosphere is the first thing to go when the
-   player has asked for legibility. */
-body.high-contrast #crt { display: none !important; }
+#world-overlay { z-index: 2; }
+body.high-contrast #battle-stage::after,
+body.high-contrast #world-canvas-wrap::after { display: none; }
 
 /* ==========================================================================
    23. SCROLLBARS
@@ -1311,3 +1272,114 @@ body.high-contrast .spell.used { opacity: .6; filter: none; }
    need here is a ground so a short list does not show the page through. */
 #battle-side-body { background: linear-gradient(180deg, #0c0e15 0%, #07080d 100%); }
 #editor-pane      { background: #05060a; }
+
+/* Reading surfaces: crisp art, comfortable Python and prose. */
+:root { --ink-dim: #bbb7c7; --ink-faint: #aaa6b5; --reading-size: calc(16px * var(--scale)); }
+:root { --brushed: none; }
+#world-side .list-item .d, #world-side p, #region-desc { font-size: calc(14px * var(--scale)); line-height: 1.6; color: #c8c4d0; }
+.character-preview { display:flex; gap:20px; align-items:center; margin:12px 0 20px; background:radial-gradient(ellipse at 40% 70%,#353047,transparent 65%); }
+.character-preview canvas { width:160px; height:192px; flex:none; }
+.character-preview p { font-size:14px; line-height:1.7; }
+.spell-body, .code-pick, .rune, .puzzle-input, .trace-row input {
+  font-family: 'Courier New', ui-monospace, monospace;
+  font-size: var(--reading-size); line-height: 1.6; color: var(--ink);
+}
+.puzzle-help { font-size:calc(14px * var(--scale)); line-height:1.7; color:#c8c4d0; }
+.code-pick .cl { width:100%; border:0; border-radius:0; padding:6px 10px; text-align:left; font:inherit; background:transparent; color:inherit; }
+.code-pick .cl.picked { background:#342947; color:#ffdf94; }
+.code-pick .cl:focus-visible, .rune:focus-visible { outline:2px solid #ffdf94; outline-offset:-2px; }
+button.rune { text-align:left; width:100%; }
+#battle-brief .statement, #problem-examples,
+#dialogue .what { font-size: var(--reading-size); line-height: 1.65; }
+.editor-shell { font-size: var(--reading-size); line-height: 1.6; }
+#battle-brief .statement, #problem-examples, .editor-shell,
+#battle-side-body, #dialogue .what { text-shadow: none; -webkit-font-smoothing: auto; }
+#answer-here { padding:14px; }
+#answer-here .ah-box { width: 100%; max-width: 860px; text-align: left; padding:14px 18px; }
+#answer-here p { font-size: var(--reading-size); }
+#mcq-choices { display: grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap: 10px; }
+#mcq-choices .spell-body { grid-column:1 / -1; margin: 0 0 4px; font-size: var(--reading-size); }
+.answer-choice {
+  width: 100%; display: flex; align-items: flex-start; gap: 14px;
+  text-align: left; font: inherit; font-size: var(--reading-size);
+  line-height: 1.6; padding: 14px; color: var(--ink);
+  background: var(--panel-2); cursor: pointer;
+}
+.answer-choice .d { color: inherit; font-size: inherit; }
+.answer-choice:disabled { opacity: .6; cursor: wait; }
+.answer-number { color: var(--gold); min-width: 1.2em; font-variant-numeric: tabular-nums; }
+button:focus-visible, a:focus-visible, input:focus-visible,
+select:focus-visible, textarea:focus-visible {
+  outline: 2px solid var(--gold-hi); outline-offset: 3px;
+}
+#topbar { flex-wrap: wrap; }
+#topbar .nav { flex-wrap: wrap; }
+#topbar .vitals { flex-wrap: wrap; }
+.coding-focus #combat-hud.on { display:none; }
+
+@media (max-width: 760px) {
+  #topbar .brand small, #topbar .vitals { display: none; }
+  #topbar { gap: 8px; padding: 8px; }
+  #topbar .brand { font-size: 9px; flex:1 0 100%; }
+  #topbar .nav { width:100%; max-width:none; justify-content:flex-start; }
+  #app { height:100dvh; }
+  #screen-world { flex-direction:column; min-width:0; min-height:0; overflow-y:auto; }
+  #world-canvas-wrap {
+    flex:0 0 clamp(280px,48dvh,440px); width:100%; min-width:0; min-height:280px;
+  }
+  #world-side {
+    width:100%; flex:1 0 220px; min-width:0; min-height:220px;
+    border-left:0; border-top:3px solid var(--line); overflow-y:auto;
+    overscroll-behavior:contain;
+  }
+  #world-overlay { left:8px; right:8px; bottom:8px; gap:6px; }
+  #region-card { flex:1; min-width:0; padding:8px; }
+  #region-card h3 { margin:0; font-size:10px; line-height:1.7; overflow-wrap:anywhere; }
+  #region-card p { display:none; }
+  #world-hint { flex:none; padding:6px; font-size:10px; }
+  #world-hint .kbd { padding:0 3px; font-size:9px; }
+  #screen-battle.active { overflow-y: auto; }
+  #battle-top { flex-shrink: 0; min-height: 150px; }
+  #battle-main { flex: 1 0 auto; flex-direction: column; overflow: visible; }
+  #editor-pane { flex: none; min-height: 380px; }
+  #editor-host { min-height:260px; }
+  .coding-focus #editor-caption .ec-keys { display:none; }
+  #battle-side { width: 100%; flex: none; min-height: 220px; max-height: 420px; }
+  #battle-side-body { min-height: 180px; }
+  #answer-here { max-height: none; }
+  #mcq-choices { grid-template-columns:1fr; }
+}
+
+/* Guidance shares layout space with the game, never with the editor's pixels. */
+#lesson-guide{flex:0 0 auto;display:flex;align-items:flex-start;gap:16px;padding:12px 20px;background:#25283a;border-bottom:1px solid #a38a60;color:#e4dece;max-height:160px;overflow:auto;font:15px/1.6 "Courier New",monospace}
+#lesson-guide[hidden],body.run-open #lesson-guide{display:none}
+#lesson-guide>strong{font:10px/1.7 "Press Start 2P",monospace;color:#efc88c;max-width:150px;padding-top:4px}
+#lesson-guide .lesson-copy{flex:1;min-width:0}#lesson-guide p{margin:0 0 6px}#lesson-guide button{flex-shrink:0}
+@media(max-width:760px){#lesson-guide{padding:10px;gap:10px;font-size:14px;max-height:180px}#lesson-guide>strong{display:none}}
+
+/* Practice and personal evidence use quiet reading surfaces. */
+.learning-page{max-width:1120px;margin:0 auto;font:16px/1.65 "Courier New",monospace;color:var(--ink)}
+.learning-lede{max-width:76ch;margin:0 0 22px;color:#ccc5d2}.learning-card{padding:20px;margin:16px 0;background:#141723}
+.learning-card h3{font:11px/1.8 "Press Start 2P",monospace;color:var(--gold-hi);margin:0 0 12px}
+.learning-card p{margin:10px 0}.learning-card summary{cursor:pointer;color:#ebd6ac;padding:4px 0}.learning-card summary:focus-visible{outline:2px solid var(--gold-hi)}
+.learning-fields{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px}.learning-page label{display:block}
+.learning-page select,.learning-page textarea{display:block;width:100%;margin:8px 0 0;padding:12px;background:#0b0e18;color:#e6e3d8;border:1px solid #696479;font:16px/1.6 "Courier New",monospace}
+.learning-page select:focus,.learning-page textarea:focus{outline:2px solid #dfb475;outline-offset:2px}.journal-picker{max-width:660px}.journal-code{overflow:auto;font:16px/1.6 "Courier New",monospace;background:#090d14;padding:16px;color:#d1ddd1;max-height:480px}
+.practice-counts b{font-size:24px;color:var(--gold-hi)}#draft-status{font-size:12px;color:#bfb9c6;white-space:nowrap}
+@media(max-width:760px){.learning-fields{grid-template-columns:1fr;gap:12px}.learning-card{padding:14px}.learning-page .actions{flex-wrap:wrap}}
+
+#draft-status { font:12px/1.4 Arial,sans-serif; padding:0 12px; min-height:0; }
+#draft-status:empty { display:none; }
+/* Reading a result should be as comfortable as reading the problem. */
+#modal p, #modal li { font:15px/1.65 Arial,sans-serif; color:#d0d0d8; }
+#modal .small, #modal .muted { color:#b5b8c8; }
+#modal pre { font:16px/1.6 'Courier New',monospace; color:#e4e5ec; }
+.learning-page label, #appearance-picker label { display:block; font:15px/1.6 Arial,sans-serif; }
+.rematch-contract { flex-basis:100%; padding:10px; border-left:2px solid var(--gold); font:14px/1.6 Arial,sans-serif; }
+.trace-request { padding-bottom:16px; margin-bottom:18px; border-bottom:1px solid var(--line); }
+.trace-request label { display:block; margin:10px 0; }
+#screen-repo .repo-shell, #screen-repo .repo-body, #screen-repo .repo-head,
+#screen-repo .repo-pane { min-width:0; max-width:100%; }
+#screen-repo .repo-shell { width:100%; }
+#screen-repo .repo-head h2 { min-width:0; overflow-wrap:anywhere; }
+#screen-repo .repo-diff { min-width:0; }

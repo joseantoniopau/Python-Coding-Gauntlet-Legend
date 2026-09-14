@@ -32,9 +32,12 @@ html, body {
   font-family: 'Courier New', ui-monospace, monospace;
   font-size: calc(15px * var(--scale));
   overflow: hidden;
-  image-rendering: pixelated;
-  -webkit-font-smoothing: none;
+  -webkit-font-smoothing: antialiased;
 }
+
+/* Pixel sampling belongs to artwork. Inheriting it on the page also damages
+ * composited text at non-integer display scales. */
+canvas, img.pixel-art { image-rendering: pixelated; }
 
 body.high-contrast { --panel:#000; --panel-2:#0a0a12; --ink:#fff; --line:#888; }
 
@@ -301,6 +304,11 @@ h1, h2, h3, .pixel { font-family: 'Press Start 2P', 'Courier New', monospace; }
 }
 #editor-host { flex: 1 1 auto; min-height: 0; position: relative; }
 
+/* Focus is a reversible view of the same encounter and the same editor. */
+#screen-battle.coding-focus #enemy-stage { display: none; }
+#screen-battle.coding-focus #battle-brief { border-left: 0; }
+#btn-focus[aria-pressed="true"] { color: var(--gold-hi); border-color: var(--gold); }
+
 /* ---------- "I can't tell where to type" ----------
  *
  * The editor used to be an unlabelled black rectangle in the bottom-left
@@ -356,8 +364,8 @@ h1, h2, h3, .pixel { font-family: 'Press Start 2P', 'Courier New', monospace; }
  * pane an empty black rectangle, which reads exactly like a broken screen.
  * Never leave a "type here" pointing at nothing; say where the answer goes. */
 #answer-here {
-  flex: 1 1 auto; min-height: 0; display: flex; align-items: center;
-  justify-content: flex-end; padding: 20px 26px; overflow-y: auto;
+  flex: 1 1 auto; min-height: 0; display: block;
+  padding: 20px 26px; overflow-y: auto;
 }
 #answer-here .ah-box {
   border: 3px solid var(--line-hi); background: var(--panel-2);
@@ -868,12 +876,6 @@ body.interview-mode #interview-banner { display: block; }
 @keyframes blink { 50% { opacity: .35; } }
 
 /* crt */
-#crt {
-  position: fixed; inset: 0; pointer-events: none; z-index: 200; display: none;
-  background: repeating-linear-gradient(0deg, rgba(0,0,0,.10) 0 1px, transparent 1px 3px);
-  opacity: .75;
-}
-body.crt #crt { display: block; }
 body.reduced-motion * { animation: none !important; transition: none !important; }
 
 .muted { color: var(--ink-faint); }

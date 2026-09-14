@@ -7,11 +7,12 @@
 <link rel="stylesheet" href="/css/game.css">
 <!-- the dark 80s metal skin; overrides game.css, never replaces it -->
 <link rel="stylesheet" href="/css/metal.css">
+<link rel="preload" href="/fonts/PressStart2P-Regular.ttf" as="font" type="font/ttf" crossorigin>
 <style>
 /* Bundled pixel face. Falls back to the monospace stack when unavailable. */
 @font-face {
   font-family: 'Press Start 2P';
-  src: local('Press Start 2P');
+  src: url('/fonts/PressStart2P-Regular.ttf') format('truetype');
   font-display: swap;
 }
 </style>
@@ -56,6 +57,7 @@
     </div>
   </div>
 
+  <aside id="lesson-guide" aria-label="Optional field guidance" hidden></aside>
   <div id="interview-banner">
     INTERVIEW MODE — NO SPELLS · NO MENTOR · NO PATTERN NAMES · NO COACH ·
     <span id="interview-timer">--:--</span>
@@ -107,6 +109,8 @@
           <button class="btn small" id="btn-run">RUN ▶</button>
           <button class="btn small primary" id="btn-submit">CAST ✦</button>
           <button class="btn small" id="btn-reset">RESET</button>
+          <button class="btn small" id="btn-focus" aria-pressed="false"
+            aria-controls="battle-top">FOCUS VIEW</button>
           <span class="grow"></span>
           <span class="small muted" id="battle-timer">00:00</span>
           <span class="small muted">target <span id="battle-target">—</span></span>
@@ -125,16 +129,14 @@
           <span class="ec-cast">THEN PRESS <b>CAST ✦</b> ABOVE</span>
           <span class="ec-keys">CTRL/⌘+↵ RUN &nbsp;·&nbsp; SHIFT+CTRL/⌘+↵ CAST &nbsp;·&nbsp; ESC LEAVES THE BOX</span>
         </div>
+        <div id="draft-status" role="status" class="muted"></div>
         <div id="editor-host"></div>
         <div id="puzzle-host" style="display:none;flex:1;overflow-y:auto;padding:14px"></div>
-        <!-- A question has no editor and no CAST button. Say where the answer
-             goes rather than leaving this pane an empty black rectangle. -->
         <div id="answer-here" style="display:none">
           <div class="ah-box">
-            <h3>NOTHING TO TYPE ON THIS ONE</h3>
-            <p>This is a <b>question</b>, not a spell. The answers are the list in the
-              <b>TRIALS</b> panel on the right — click one and it is cast.</p>
-            <div class="ah-arrow">PICK YOUR ANSWER OVER THERE <i>▶</i></div>
+            <h3 id="answer-heading">CHOOSE YOUR ANSWER</h3>
+            <p>Select one answer to resolve this encounter.</p>
+            <div id="mcq-choices" role="group" aria-labelledby="answer-heading"></div>
           </div>
         </div>
       </div>
@@ -174,7 +176,6 @@
 </div>
 
 <div id="toasts"></div>
-<div id="crt"></div>
 
 <script type="module" src="/js/main.js"></script>
 </body>

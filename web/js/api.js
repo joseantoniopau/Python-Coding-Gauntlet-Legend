@@ -42,9 +42,31 @@ async function soft(path, options = {}) {
 const softPost = (path, body) =>
   soft(path, { method: 'POST', body: JSON.stringify(body || {}) });
 const q = encodeURIComponent;
+// Guidance is optional: a stalled localhost request must not hold a lesson
+// trigger forever. Gameplay calls retain their existing timeout policy.
+const guidance = (path, body) => soft(path, {
+  signal: AbortSignal.timeout(4000),
+  ...(body === undefined ? {} : { method: 'POST', body: JSON.stringify(body) }),
+});
 
 export const api = {
   state: () => call('/api/state'),
+  practice: () => soft('/api/practice'),
+  practiceStart: body => softPost('/api/practice/start', body),
+  practiceAction: action => soft('/api/practice/action', { method:'POST', body:JSON.stringify({action}), keepalive:true }),
+  practiceNext: () => softPost('/api/practice/next', {}),
+  practiceDraft: body => soft('/api/practice/draft', {
+    method: 'POST', body: JSON.stringify(body), keepalive: true,
+  }),
+  appearance: () => soft('/api/appearance'),
+  appearanceSelect: id => softPost('/api/appearance', {id}),
+  journal: () => soft('/api/journal'),
+  journalNote: (family, text) => softPost('/api/journal/note', { family, text }),
+  trace: (code, caseIndex) => softPost('/api/trace', { code, case_index: caseIndex }),
+  lessons: () => guidance('/api/lessons'),
+  lesson: (id) => guidance('/api/lesson', { id }),
+  lessonNote: (kind, id) => guidance('/api/lesson/note', { kind, id }),
+  lessonsForget: () => guidance('/api/lesson/forget', {}),
   world: () => call('/api/world'),
   ping: () => call('/api/ping'),
   sandboxCheck: () => call('/api/sandbox/check'),
@@ -52,6 +74,7 @@ export const api = {
     call('/api/history' + (problemId ? `?problem_id=${encodeURIComponent(problemId)}` : '')),
   problem: (id, mode) =>
     call(`/api/problem?id=${encodeURIComponent(id)}&mode=${mode || 'adventure'}`),
+  resumeEncounter: id => soft('/api/encounter/resume'+(id?'?problem_id='+encodeURIComponent(id):'')),
   nextEncounter: (body) =>
     call('/api/encounter/next', { method: 'POST', body: JSON.stringify(body || {}) }),
   startEncounter: (problemId, mode) =>

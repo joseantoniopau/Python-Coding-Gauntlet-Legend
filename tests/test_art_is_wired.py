@@ -13,12 +13,17 @@ So: a harness proves a module WORKS. This proves the game can REACH it.
 
 import ast
 import re
+import shutil
+import subprocess
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 JS = ROOT / "web" / "js"
 ENTRY = "main.js"
+# The art review room is a separate page, not a game screen. Its entry must be
+# loaded by that page; this is not an exemption for unreachable gameplay art.
+PAGE_ENTRIES = {"artroom.js": "art.html"}
 
 # Static `from './x.js'` and dynamic `import('./x.js')` both count as an edge.
 EDGE = re.compile(r"""(?:from|import)\s*\(?\s*['"]\./([A-Za-z0-9_.-]+\.js)['"]""")
@@ -26,6 +31,24 @@ EDGE = re.compile(r"""(?:from|import)\s*\(?\s*['"]\./([A-Za-z0-9_.-]+\.js)['"]""
 # Modules that are deliberately not reachable yet. Each needs a reason and an
 # owner. Shrink this list; never grow it without one.
 KNOWN_UNWIRED = set()
+
+
+def js_function(source: str, name: str) -> str:
+    """Extract a top-level function without importing main's whole browser app."""
+    start = source.index(f"function {name}(")
+    return source[start:source.index("\n}", start) + 2]
+
+
+def run_js(test: unittest.TestCase, script: str) -> None:
+    node = shutil.which("node")
+    if not node:
+        test.skipTest("Node.js is required for the client behavior fixture")
+    result = subprocess.run(
+        [node, "--input-type=module", "-e",
+         "import assert from 'node:assert/strict';\n" + script],
+        capture_output=True, text=True, timeout=20, cwd=ROOT,
+    )
+    test.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
 
 def edges(path: Path) -> set:
@@ -54,11 +77,19 @@ class TestEveryModuleIsReachable(unittest.TestCase):
 
     def test_no_orphaned_client_modules(self):
         on_disk = {p.name for p in JS.glob("*.js")}
-        orphans = on_disk - reachable_from(ENTRY) - KNOWN_UNWIRED
+        # A gallery importing an art module must never substitute for gameplay
+        # reaching it. Only the separate page's entry itself is exempt here.
+        orphans = on_disk - reachable_from(ENTRY) - set(PAGE_ENTRIES) - KNOWN_UNWIRED
         self.assertEqual(
             set(), orphans,
-            "unreachable from main.js — built, possibly harness-verified, and "
+            "unreachable from main.js or an explicit page entry — built, possibly harness-verified, and "
             f"dead to the player: {sorted(orphans)}")
+
+    def test_every_auxiliary_entry_is_loaded_by_its_page(self):
+        for entry, page in PAGE_ENTRIES.items():
+            self.assertTrue((JS / entry).is_file())
+            html = (ROOT / "web" / page).read_text()
+            self.assertRegex(html, rf'<script\b[^>]*\bsrc=[\'"]/js/{re.escape(entry)}[\'"]')
 
     def test_allowlist_does_not_rot(self):
         """A module that got wired must leave KNOWN_UNWIRED, or the list stops
@@ -84,25 +115,14 @@ class TestEveryModuleIsReachable(unittest.TestCase):
 
 
 class TestTheEndingPlayerDrawsWhatTheServerSends(unittest.TestCase):
-    """The same bug one layer in: the module is reachable, the scene arrives
-    over the wire, and the renderer drops fields on the floor.
+    """The shared renderer must retain the ribbon and every roll-call row.
 
-    THE REGRESSION THIS CAUGHT. The ending has two players — the pre-existing
-    web/js/finaleui.js and the one main.js grew when `ending.resolve` started
-    firing at the end of every interview run. The new one dropped
-    `title_card.ribbon`, which is the single sentence that tells the two kinds
-    of freedom apart ('11 BY YOUR HAND. 14 BY THE FALL OF IT.'), and it dropped
-    `beat.rows`, which is the only place in the whole scene a captive is named:
-    the roll-call beat played as one narrator sentence with none of the
-    twenty-five names on screen. Both fields were on the wire the entire time.
-
-    Two players of one scene may differ in style and must not differ about
-    which fields of it exist, so this checks them against each other rather
-    than against a hardcoded list — finale.py WIRING §8 is the contract both
-    are written to.
+    The original regression was a second player in main.js dropping both
+    fields. Main now delegates to finaleui; verify that adapter preserves the
+    authorized scene and that the single renderer still reads its contents.
     """
 
-    # (the expression both renderers must contain, why it matters)
+    # (the expression the shared renderer must contain, why it matters)
     FIELDS = (
         ("beat.rows", "the roll call's names — the only place in the scene a "
                       "captive is named at all"),
@@ -110,33 +130,53 @@ class TestTheEndingPlayerDrawsWhatTheServerSends(unittest.TestCase):
                      "fall of it'"),
     )
 
-    def test_both_players_read_the_same_fields_of_the_scene(self):
-        main = (JS / "main.js").read_text()
+    def test_the_shared_player_reads_the_scene_fields(self):
         finaleui = (JS / "finaleui.js").read_text()
         for field, why in self.FIELDS:
             self.assertIn(field, finaleui,
-                          f"finaleui.js stopped reading {field} — if the scene "
-                          f"really dropped it, update this test and main.js "
-                          f"together. It carried {why}.")
-            self.assertIn(field, main,
-                          f"main.js's ending player never reads {field}, which "
-                          f"finaleui.js does: {why}. The server sends it and no "
-                          f"screen shows it.")
+                          f"finaleui.js stopped reading {field}: {why}.")
 
     def test_the_ending_layer_has_somewhere_to_put_the_names(self):
-        """`beat.rows` being read is not enough; there has to be an element to
-        draw them into. finaleui.js has #fin-rail and main.js needs its own."""
+        finaleui = (JS / "finaleui.js").read_text()
+        self.assertIn('id="fin-rail"', finaleui)
+        self.assertIn("showRail(beat.rows || [])", finaleui)
+        rail = js_function(finaleui, "showRail")
+        self.assertIn("#fin-rail", rail)
+        self.assertIn("rows", rail)
+
+    def test_main_forwards_the_complete_scene_and_player_lifecycle(self):
         main = (JS / "main.js").read_text()
-        self.assertIn('id="ed-rail"', main,
-                      "main.js's ending layer has no name rail, so the roll "
-                      "call has nowhere to land")
-        rail = main.index('id="ed-rail"')
-        beat = main.index("function showEndingBeat")
-        self.assertLess(rail, main.index("function stopEndingCutscene"),
-                        "the rail must be part of the ending layer's markup")
-        self.assertIn("ed-rail", main[beat:],
-                      "showEndingBeat never looks the rail up, so nothing is "
-                      "ever drawn into it")
+        run_js(self, """
+const look = {cloak: '#442233', _gear: {weapon: 'sword'}};
+const G = {state: {hero: look, settings: {reduced_motion: true}}};
+let ENDING = null, returned = 0, stopped = 0;
+const calls = [];
+const finaleui = {playScene(scene, presentation, done) {
+  calls.push({scene, presentation, done});
+  return {stop() { stopped++; done(); }};
+}};
+""" + js_function(main, "playEndingCutscene") + "\n" +
+               js_function(main, "stopEndingCutscene") + """
+const scene = {beats: [{rows: [{name: 'Thessaly'}],
+  title_card: {ribbon: 'BY YOUR HAND'}}], extra_server_field: {kept: true}};
+playEndingCutscene({cutscene: scene}, () => returned++);
+assert.equal(calls[0].scene, scene, 'adapter must preserve the complete payload');
+assert.equal(calls[0].presentation.look, look);
+assert.equal(calls[0].presentation.gear, look._gear);
+assert.equal(calls[0].presentation.reducedMotion, true);
+assert.equal(returned, 0, 'return to the report only when the player finishes');
+stopEndingCutscene();
+assert.equal(stopped, 1);
+assert.equal(returned, 1);
+stopEndingCutscene();
+assert.equal(stopped, 1, 'stopping an already closed adapter is harmless');
+const failure = {beats: [{id: 'the_prompt_waits'}]};
+playEndingCutscene({cutscene: failure}, () => returned++);
+assert.equal(calls[1].scene, failure);
+calls[1].done();
+assert.equal(ENDING, null);
+assert.equal(returned, 2);
+""")
 
 
 # ---------------------------------------------------------------- the server
@@ -156,19 +196,6 @@ PY_ALLOWED = {
     # run.py imports it inside main(), which is a call this AST walk of
     # gauntlet/ deliberately does not follow.
     "cli",
-    # KNOWN ORPHAN, TRACKED ON PURPOSE — the schoolteacher's curriculum.
-    #
-    # Thessaly Brun's lessons: the editor, RUN versus CAST, the trials, the
-    # belt, the Mender's free healing, Ferro's armour repair, the vendor, Orin
-    # Tallow, the forge. It is data with no reader yet because the reader is
-    # main.js and townui.js, and those were owned by another pass on the day it
-    # was written.
-    #
-    # It is NOT dangerous to leave unwired the way ending.py was — nothing is
-    # silently deleted by its absence; the player simply gets no lessons. But it
-    # is the same failure mode this file exists to catch, so it is written down
-    # rather than quietly excused. Wire it and delete this entry.
-    "tutorial",
 }
 
 
@@ -221,12 +248,10 @@ class TestEveryServerModuleIsReachable(unittest.TestCase):
         self.assertNotIn("ending", PY_ALLOWED,
                          "ending.py is wired; it does not belong on the "
                          "orphan allowlist")
-        # And the same rule for the newest entry: the moment anything imports
-        # it, it stops being an allowed orphan and this test says so.
-        if "tutorial" in PY_ALLOWED:
-            self.assertNotIn("tutorial", seen,
-                             "tutorial.py IS imported now — the curriculum is "
-                             "reachable, so remove it from PY_ALLOWED")
+        self.assertIn("tutorial", seen,
+                      "the lesson registry must remain reachable from the engine")
+        self.assertNotIn("tutorial", PY_ALLOWED,
+                         "the wired lesson registry is no longer an orphan")
 
 
 # ------------------------------------------------- the first encounter
@@ -239,10 +264,9 @@ class TestEveryServerModuleIsReachable(unittest.TestCase):
 # button (correctly hidden: the answers are the button), and nothing to click.
 # Clicking any tab did the same thing to any MCQ, anywhere in the game.
 #
-# The fix was to make the choices what the trials tab IS for that encounter, so
-# a repaint restores them instead of destroying them. These are cheap static
-# checks; the real proof is driving it in a browser, but a source guard is what
-# a future edit will actually trip over.
+# Choices now belong to their own main work area, so a tab repaint cannot
+# destroy them or reset their submission lock. The small DOM fixture below
+# exercises that ownership; browser validation remains necessary for layout.
 
 MAIN = JS / "main.js"
 
@@ -254,8 +278,7 @@ class TestTheFirstEncounterIsAnswerable(unittest.TestCase):
         i = src.index("function setTab(")
         body = src[i:i + 1400]
         self.assertIn("G.mcq", body,
-                      "setTab empties #battle-side-body and does not know an "
-                      "MCQ owns it — the choices will be wiped")
+                      "the trials panel must explain where MCQ answers live")
 
     def test_renderMcq_does_not_paint_into_a_node_it_does_not_own(self):
         src = MAIN.read_text()
@@ -268,8 +291,59 @@ class TestTheFirstEncounterIsAnswerable(unittest.TestCase):
     def test_an_mcq_stays_on_the_tab_that_shows_its_answers(self):
         src = MAIN.read_text()
         self.assertIn("G.mcq ? 'trials'", src,
-                      "a measured-run MCQ would open on `approach`, hiding "
-                      "the only way to answer it")
+                      "MCQs should open on the trials panel with answer guidance")
+
+    def test_tabs_preserve_choices_and_the_inflight_answer_lock(self):
+        main = MAIN.read_text()
+        html = (ROOT / "web" / "index.html").read_text()
+        self.assertIn('id="mcq-choices"', html)
+        functions = "\n".join(js_function(main, name) for name in
+                              ("renderMcq", "paintMcq", "setTab"))
+        run_js(self, """
+class Element {
+  constructor() { this.children = []; this.style = {}; this.disabled = false; }
+  replaceChildren() { this.children = []; }
+  appendChild(node) { this.children.push(node); }
+  set innerHTML(value) { this.replaceChildren(); }
+  setAttribute() {}
+  removeAttribute() {}
+  querySelectorAll(tag) { return this.children.filter(node => node.tag === tag); }
+  focus() {}
+}
+const nodes = new Map();
+const $ = id => { if (!nodes.has(id)) nodes.set(id, new Element()); return nodes.get(id); };
+const document = {querySelectorAll() { return []; }};
+const G = {mcq: null};
+const el = (tag, cls, text) => Object.assign(new Element(), {tag, cls, text});
+const markdownish = value => value;
+const setEditorMode = mode => {};
+const stopViz = () => {};
+const tutor = {sync() {}};
+const paintIncantSide = () => {};
+const paintTrials = body => body.appendChild(el('p'));
+const paintTactics = paintTrials, paintSpells = paintTrials;
+const paintApproach = paintTrials, paintVision = paintTrials;
+let requests = 0, release;
+const api = {mcq: async answer => { requests++; return new Promise(resolve => { release = resolve; }); }};
+const showResult = async () => {};
+const toast = () => {};
+""" + functions + """
+renderMcq({mcq: {code: 'print(2 + 2)', choices: ['3', '4']}});
+const work = $('#mcq-choices');
+const choices = work.querySelectorAll('button');
+assert.equal(choices.length, 2);
+const pending = choices[1].onclick();
+assert.equal(requests, 1);
+assert.ok(choices.every(button => button.disabled));
+for (const tab of ['approach', 'vision', 'trials', 'spells', 'trials']) setTab(tab);
+assert.deepEqual(work.querySelectorAll('button'), choices,
+  'tabs must preserve the original answer controls, not repaint them');
+assert.ok(choices.every(button => button.disabled));
+await choices[0].onclick();
+assert.equal(requests, 1, 'a tab change must not unlock a second submission');
+release({solved: true});
+await pending;
+""")
 
 
 # --------------------------------------------------------------- the music

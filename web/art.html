@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Gauntlet · Art room</title>
+<style>
+@font-face{font-family:Pixel;src:url('/fonts/PressStart2P-Regular.ttf')}
+*{box-sizing:border-box}body{margin:0;background:#11131d;color:#eee5d4;font:16px/1.6 system-ui,sans-serif}
+header{padding:28px 32px;border-bottom:1px solid #55506b;background:#191b2b}h1{font:18px/1.7 Pixel,monospace;color:#efd39b;margin:0}p{max-width:850px;color:#bbb8c9;margin:12px 0}
+nav{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin:20px 0 0}select,button{padding:9px 12px;font:inherit;background:#252639;color:inherit;border:1px solid #716983;border-radius:3px}button:focus-visible,select:focus-visible,a:focus-visible{outline:2px solid #ffdb98;outline-offset:3px}a{color:#ffdb98}label{display:flex;align-items:center;gap:8px}
+main{padding:28px 32px;display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:20px;align-items:start}
+figure{margin:0;border:1px solid #4c485e;background:#191b26;overflow:hidden}.art{display:flex;min-height:200px;align-items:center;justify-content:center;background:#242337}.art canvas{max-width:100%;height:auto;image-rendering:pixelated}figcaption{padding:14px;font-size:14px}figcaption strong{display:block;color:#eed296}small{color:#a9a8b8}#status{margin:10px 0 0;color:#cfbc95}body.silhouette canvas{filter:brightness(0)}body.light .art{background:#ccc7ad}nav[hidden]{display:none}.film-study{grid-column:1/-1}.film-study .art{min-height:270px}.film-lines{padding:12px 20px;max-height:220px;overflow:auto}.film-lines p{margin:6px 0;color:#e0d5c1}.error{color:#ff8d8d}
+@media(max-width:600px){header,main{padding:20px}main{grid-template-columns:1fr}h1{font-size:14px}nav label{min-width:0;max-width:100%;flex-wrap:wrap}nav select{min-width:0;max-width:100%}}
+</style></head><body>
+<header><h1>THE ART ROOM</h1><p>Live game renderers, collected in one place. Compare silhouettes, motion, equipment, boss transformations and regional scenery. This room never reads or changes a save.</p>
+<nav><label>Collection <select id="collection"><option value="heroes">Heroes & portraits</option><option value="monsters">Monsters & apexes</option><option value="bosses">Bosses & phases</option><option value="towns">Towns & rebuilding</option><option value="regions">Regional battle scenes</option><option value="pets">Companions</option><option value="cinema">Cinematics &amp; title</option></select></label>
+<button id="motion" aria-pressed="false">Play animation</button><button id="silhouette" aria-pressed="false">Silhouettes</button><button id="light" aria-pressed="false">Light background</button><a href="/">Return to game</a></nav>
+<nav id="film-controls" hidden><label>Story specimen <select id="film"></select></label><label>Jump to beat <select id="shot"></select></label><button id="preview-film">Preview full scene</button></nav>
+<div id="status" role="status">Loading renderers…</div></header>
+<main id="gallery"></main><script type="module" src="/js/artroom.js"></script></body></html>

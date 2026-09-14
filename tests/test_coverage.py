@@ -485,8 +485,8 @@ class TestPlaythroughLength(CoverageTest):
         measured = worldgen.measured_corpus_means(self.corpus)
         self.assertTrue(measured)
         for name, row in measured.items():
-            self.assertAlmostEqual(
-                worldgen.CORPUS_MEAN_TARGET[name], row["mean"], delta=1.0,
+            self.assertEqual(
+                worldgen.CORPUS_MEAN_TARGET[name], round(row["mean"]),
                 msg=f"worldgen plans {name} at "
                     f"{worldgen.CORPUS_MEAN_TARGET[name]}s; the corpus's "
                     f"{row['count']} {name} problems really average "

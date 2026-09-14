@@ -1048,9 +1048,12 @@ export class WorldUI {
    *  exception, so the only thing to do with one is print it. */
   async travel(routeId) {
     if (this.busy) return false;
+    const owner = this.host;
     this.busy = true;
     try {
       const res = await api.travel(routeId);
+      this.hooks.onTravelResponse?.(res);
+      if (owner !== this.host || !owner?.isConnected) return false;
       if (this.refused(res, 'THE ROAD IS CLOSED')) return false;
       this.sfx('unlock');
       // Four paces of road under you. The `unlock` above is the gate; this is
@@ -1058,7 +1061,7 @@ export class WorldUI {
       this.steps('stone', 4);
       const world = res.world || {};
       if (world.events && world.events.length) this.queue.push(...world.events);
-      if (this.hooks.onRegion && res.region) this.hooks.onRegion(res.region);
+      if (this.hooks.onRegion && res.region) this.hooks.onRegion(res.region, res);
       return true;
     } catch (err) {
       this.toast('THE ROAD IS CLOSED', err.message, 'red');

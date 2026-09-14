@@ -858,13 +858,14 @@ are already designed, already written and already owed to `overworld.js` by
 `docs/12-the-zone-companions.md` §8.2. The curriculum does not re-implement
 them and must not print a second caption over the top of one.
 
-**Owed is not delivered.** No file under `web/js` reads any of it today:
-`grep -rn escort web/js/` returns nothing, and so do `zonecompanion` and
-`thessaly`. The server ships all three routes — `escort` on the region view,
-`escort` and `escort_events` on the move payload, `/api/escorts` — so the work
-is one client-side read away and it has not been done. §7.7 row W3 carries it,
-because a handoff row that looks finished is how a lesson goes missing with
-everybody's name on it.
+**Field captions are connected.** `region.escort` and movement/travel snapshots
+feed `Overworld.setEscort`; the current doorstep or exit calls
+`main.showEscortCaption`. The sidebar uses the server's mentor identity,
+region description and correctly oriented route destinations and requirements.
+Each location speaks once per visit, only while the server says she is walking
+and no measured run is open. Today's houses all open the mentor interaction:
+distinct mender/smith signs and enterable interiors from `docs/12` remain
+separate work. The caption does not pretend those service doors already exist.
 
 ---
 
@@ -950,8 +951,8 @@ selections on a fresh save are MISSING_RUNE, measured.
 ---
 
 **8 · `the_trials`** — *teaches: the trials list, and what a locked trial will not tell you*
-Trigger: the first return to the overworld after the first encounter, whatever
-the result.
+Trigger: the next visible battle trials tab after the first encounter, whatever
+the result. Not on the world screen or the MCQ answer pane.
 Channel: say.
 > The list on the right is the trials. The open ones show you what goes in and
 > what should come out.
@@ -964,7 +965,7 @@ Channel: say.
 ---
 
 **9 · `the_tabs`** — *teaches: the five side panels, and why three of them get taken away*
-Trigger: the second return to the overworld from a battle.
+Trigger: a visible battle after two encounters. Not on the world screen.
 Channel: say.
 > Five panels on the right and you are owed all five today. TRIALS, TACTICS,
 > SPELLS, APPROACH, VISION.
@@ -1273,8 +1274,13 @@ lesson in the set to have been missing.
 
 **26 · `the_slate`** — **HANDED OFF.** `zonecompanions.hand_over_early(state)`
 already gives the Slate on `rt_waking_road` and already carries her prose. The
-curriculum adds nothing and must not print a second speech over it. **Not
-delivered either**, and for the same reason as beat 2 — see §7.7 row W3.
+curriculum adds nothing and must not print a second speech over it. **Connected:**
+`consumeEscortResponse` retains the original `escort_events` from movement and
+both travel paths, then `drainEscortNotices` presents the server's lines and
+Slate description on the free world screen. It waits behind existing dialogue
+and modals, never grants an item or acknowledges a lesson, and refuses measured
+contexts. These pending presentation notices last for the browser session; the
+server's grant remains durable if the page closes before the speech appears.
 
 ---
 
@@ -1362,11 +1368,11 @@ the cheapest place to prevent that is a schoolteacher on the first road.
   beats 5, 6, 7 and 28 are handoffs because the screen that needs explaining
   explains itself at the moment it is used. Six handoffs and twenty-four beats
   is thirty numbered entries, which is what §5.3 lists.
-- **A handoff is not a finished lesson.** Beats 2 and 26 hand off to prose that
-  **nothing on the client prints today**: the server ships `escort` on the
-  region view, `escort` and `escort_events` on the move payload and
-  `/api/escorts`, and `grep -rn escort web/js/` returns nothing. §7.7 row W3
-  carries that as work rather than as a row with nothing in it.
+- **Check the actual consumer.** Beats 2 and 26 are connected through
+  `main.js`, `overworld.js` and the `WorldUI` travel-response hook. The focused
+  `scripts/verify/escort-handoffs.mjs` check executes those response handlers,
+  including stale movement, navigation, dialogue and measured-run guards.
+  This does not certify the separate human-follower or interior designs.
 
 ---
 
@@ -1536,7 +1542,7 @@ authority. Numbers are as of `main.js` at 8,507 lines.
 | M11 | `function paintSettings()` | 6703 | Add the `GUIDANCE` block from §3.4: a `data-setting="cues"` checkbox — the existing `document.querySelectorAll('[data-setting]')` handler posts it with no further work — and a `#s-teach-again` button calling `api.lessonsForget()` then `refresh()` |
 | M12 | `function onNodeEnter(marker)` | 1095 | before `startNext(...)`: `await tutor.beat('the_fight')` — beat 3. **Kind-neutral only.** The kind is unknowable here: `startNext()` learns it inside `enterBattle`. |
 | M12b | `enterBattle`, the `else` branch of `if (puzzleui.isPuzzle(...)) … else if (p.entry.kind === 'mcq') … else` | 1313-1321 | inside the `else`, after `setEditorMode('code', verb)`: `tutor.beat('the_code_fight')` — beat 4. This branch is the only place in the client that knows the fight has an editor in it. |
-| M13 | `function returnToWorld()` | 3817 | `tutor.beat()` for `the_trials`, `the_tabs`, `saving`, `stamina`, `the_fall` — beats 8, 9, 10, 11, 12. Each is latched server-side, so the call site needs no counting of its own. **`returnToWorld` removes `body.interview-mode` and nulls `G.interview` while the run is still open server-side** (RETREAT reaches it mid-run), so `tutor.js` must not gate on either — see §7.2 J3. |
+| M13 | `function returnToWorld()` | 3817 | `offerLessons()` for `saving`, `stamina`, `the_fall` — beats 10, 11, 12. Beats 8/9 (`the_trials`, `the_tabs`) are now offered by battle entry and the visible trials tab so they never describe a battle panel from the world screen. Each is latched server-side, so the call site needs no counting of its own. **`returnToWorld` removes `body.interview-mode` and nulls `G.interview` while the run is still open server-side** (RETREAT reaches it mid-run), so `tutor.js` must not gate on either — see §7.2 J3. |
 | M14 | `partyui.showTheFall(scene, { onClose: ... })` | 3643 | `tutor.beat('the_dying')` inside `onClose` — beat 13 |
 | M15 | `partyui.showPetFound(row, { onClose: ... })` | 3649 | `tutor.beat('the_companion')` inside `onClose` — beat 23 |
 | M16 | `function paintCharacter()` / `const forgeHost = $('#forge-panel-host')` | 5932 / 6039 | `tutor.beat('gear')` when an item is equipped; `tutor.beat('the_forge')` when the forge panel first paints — beats 22, 20 |
@@ -1577,7 +1583,7 @@ One beat. `partyui.js` already has a `configure()` injection point
 |---|---|---|
 | W1 | `worldui.js` | **None.** The region card and the road list are already prose and the cue does not enter the world screen. This row exists so the wiring pass does not go looking. |
 | W2 | `fx.js` | **None.** The cue is DOM and CSS. It is not a battle effect, it does not touch the canvas, and it must not acquire a particle. |
-| W3 | `overworld.js` | **Owed, and not built.** Thessaly's building and route captions (beat 2) and the Slate handover (beat 26) are `docs/12` §8.2 rows O11 and O12. The **server already ships all of it** — `escort` on the region view, `escort` and `escort_events` on the move payload, `/api/escorts` — and `grep -rn escort web/js/` returns nothing, as do `zonecompanion` and `thessaly`. Both handoffs therefore reach no player today. Nothing new is asked of this file *by the curriculum*; the row exists so a pass reading HANDOFFS does not conclude the lessons are delivered. |
+| W3 | `main.js`, `overworld.js`, `worldui.js` | **Connected.** Server walking flags enable current doorstep/exit captions; original move and both travel responses deliver the Slate via the existing dialogue shell. No duplicate grant or lesson acknowledgement. Measured runs and stale region responses cannot enable captions. Current houses expose mentor dialogue; distinct service signs, the human follower and enterable interiors remain separate `docs/12` work. |
 | W4 | `tiles.js` | **None.** |
 
 ### 7.8 `gauntlet/engine.py` and `gauntlet/server.py` — OWNED ELSEWHERE

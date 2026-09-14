@@ -116,85 +116,12 @@
  * stops resolving, starts sharing a body with another, or drifts off its own
  * region.
  *
- * MEASURED
+ * VERIFICATION
  *
- * Everything above is a claim, so here are the numbers behind them, taken off
- * the rendered raster rather than off this file's intentions. Re-take them with
- * monsterArtStats() and `node scripts/verify/monsters.mjs`.
- *
- *   colour budget   2,400 frames swept — sixty bodies, two poses, four frames,
- *                   five palettes (own plus four server colours). Worst frame:
- *                   14 colours, on margin_walker; it was 13 at the old 32px
- *                   box. Budget 15. Nothing over, ever, counted off pixels
- *                   rather than off the palette dict.
- *
- *                   The extra colour is NOT a new palette entry. An apex has
- *                   carried fifteen slots since this file was written and a
- *                   32x32 grid never had the corners to spend them: on
- *                   margin_walker at 48 the whole dict is on screen, and the
- *                   two rarest entries are D at eight pixels and H at four —
- *                   cells that did not exist in the smaller box. One glyph was
- *                   genuinely added anywhere in this pass, the accent specular
- *                   `A` on that creature's crossbar, and it shares no colour.
- *   silhouette      closest pair in the whole roster: 22 of 256 outline cells
- *                   differ (rimewolf / sandjackal — a wolf in the Pass and a
- *                   jackal in the Coliseum, which a player never sees in the
- *                   same place). Closest pair a player CAN see side by side:
- *                   43, tuftling / fieldadder in the Fields and the Village —
- *                   two MOBS, the same pair and the same number as before this
- *                   pass. The nearest an apex now comes to anything in its own
- *                   region is 50 (cinder_phoenix / emberwing, the Mines), which
- *                   is deliberate: the mob is the fledgling of the apex. Two
- *                   apexes were re-authored purely to hold this line — see
- *                   fourth_orientation and zeroth_weight above.
- *   apex scale      every apex is between 3.37x and 8.23x the drawn pixels of
- *                   the biggest mob in its own region, thickened outline
- *                   included. It was 1.34x to 3.16x at the old 32px box.
- *   three tones     counted off the raster, per creature, as the share of the
- *                   body ramp each of D/d/B/L/H actually paints. Seven of the
- *                   thirty-two mobs were under three: bonepike, gravehound and
- *                   skullswarm at ZERO (all three skeletons were drawn entirely
- *                   in `g`, the hard-material glyph, which is one flat colour),
- *                   shade, gildscarab, sanddervish and chiselmite at two. All
- *                   sixty creatures are at three or more now, and the cheapest
- *                   four of the seven cost no new authoring at all — the mass
- *                   moved off `g` and onto the body ramp, where applyRim lights
- *                   it. A tone has to paint four cells or 2% of the body to be
- *                   counted; three cells is the shading pass finding a corner.
- *
- *                   The 48px boxes FAILED this the first time and the same
- *                   count caught them: applyRim only lights a cell that touches
- *                   an edge, so doubling the box halves the share of the mass
- *                   it can reach, and margin_walker went 5 tones -> 3 and
- *                   fenlight 5 -> 3 purely by getting bigger. Fourteen of the
- *                   apexes therefore carry authored form shading — per COLUMN,
- *                   a lit shoulder at the top of any body run eight cells deep
- *                   and its own occlusion at the bottom, which follows the form
- *                   instead of striping across it. Every apex is at 4 or 5 now
- *                   except storm_ordinal, which is at 3 because it is a metal
- *                   rod and most of it is `g`.
- *   motion          outline cells changing across one walk cycle: 76 at the low
- *                   end, 840 at the high. Across one idle cycle: 64 to 3,279.
- *                   Fourteen gaits. Nothing in here animates by brightness,
- *                   nothing stands still, and no legless creature touches the
- *                   floor in any frame of either pose.
- *   the hunters     all seventeen gauntlet/hunters.py apexes resolve to their
- *                   own region's body, by `sprite`, by `id` and by display
- *                   name, with no two sharing one body and no name out of step.
- *   the regions     71 enemies x 17 regions = 1,207 combinations drawn, none
- *                   over budget and none broken. All 28 of bestiary.py's sprite
- *                   keys resolve through the table; none falls through; every
- *                   one of them draws between 13 and 15 DIFFERENT creatures
- *                   across the seventeen regions, which is the whole point.
- *   determinism     480 frames hash identically warm, cold and rebuilt.
- *   steady state    240 redraws of one settled frame: 0 canvases. Every region's
- *                   whole cast, both poses, all frames, twice over: 376
- *                   canvases for 376 distinct frames, working set 377 under a
- *                   cap of 720. The cap is unchanged and the working set did
- *                   not move, but the canvases behind it did: a full 720 of
- *                   them is now 6.6MB rather than 2.9MB if every entry were an
- *                   apex. In practice 17 of 60 bodies are, and the largest
- *                   region's cast is three mobs and one apex.
+ * scripts/verify/monsters.mjs checks the live Python roster, raster colours,
+ * silhouettes, rank scale, motion, determinism and capped caches. The optional
+ * creaturepolish.mjs contact sheets show every current creature for review.
+ * Re-run those checks after authoring; old pixel counts are not a release gate.
  *
  * FALLING BACK WITHOUT LYING
  *
@@ -4029,6 +3956,75 @@ export function monsterCacheStats() {
            baseCap: BASE_CACHE_MAX, full: monCache.size >= MON_CACHE_MAX };
 }
 
+/* Cel planes are authored into the resting grid before any limb moves. A
+ * shoulder keeps its shading when it rises, and a wing carries its feather
+ * barbs through the beat. Only undecided B cells change; eyes, outlines,
+ * existing anatomy, elemental cores and accent markings remain authored.
+ * Each surface uses connected clusters, not salt-and-pepper texture. */
+const MONSTER_SURFACE = {};
+for (const [surface, keys] of Object.entries({
+  feather: 'emberwing snowshrike arcshrike dartwren stiltheron cinder_phoenix',
+  membrane: 'ashmoth vaultbat',
+  fur: 'cinderhound rimewolf gravelape stormram tuftling leafmonkey sandjackal thunderhorn lattice_stag',
+  scale: 'slagworm lashvine spinetoad drillgrub coilworm fieldadder mirelord spirewyrm',
+  facet: 'frostcairn icemantis chiselmite plinthguard gildscarab tilewight hoarcolossus fourth_orientation zeroth_weight rimewarden the_doubling',
+  bark: 'webstalker bough_stalker sporecrown thresher fenlight',
+  cloth: 'shade sanddervish margin_walker unreturning memoriam sand_champion bonecrown relighter the_unnamed strayapex straywisp',
+  bone: 'bonepike gravehound skullswarm',
+  plate: 'rodwalker kilnwalker slagmother storm_ordinal',
+})) for (const key of keys.split(' ')) MONSTER_SURFACE[key] = surface;
+
+function sculptMonster(m, grid) {
+  const surface = MONSTER_SURFACE[m.key] || 'fur';
+  const isBody = ch => ch && 'BLHdD'.includes(ch);
+  const out = grid.map(r => r.split(''));
+  for (let y = 0; y < grid.length; y++) {
+    const row = grid[y];
+    for (let x = 0; x < row.length; x++) {
+      if (row[x] === 'g' && (m.hard === 'bronze' || m.hard === 'gold')) {
+        // Engraved brass keys and rods need a bevel, not one flat gold fill.
+        // Their accent ramp is gold already, so the return reuses that ramp.
+        if (row[x - 1] === 'g' && row[x + 1] !== 'g') out[y][x] = 'a';
+        else if (row[x - 1] !== 'g' && row[x + 1] === 'g') out[y][x] = 'A';
+        continue;
+      }
+      if (row[x] !== 'B') continue;
+      let left = x, right = x, top = y, bottom = y;
+      while (left > 0 && isBody(row[left - 1])) left--;
+      while (right + 1 < row.length && isBody(row[right + 1])) right++;
+      while (top > 0 && isBody(grid[top - 1][x])) top--;
+      while (bottom + 1 < grid.length && isBody(grid[bottom + 1][x])) bottom++;
+      const width = right - left + 1, height = bottom - top + 1;
+      if (surface === 'bone' && width >= 2) {
+        out[y][x] = x - left < 2 ? 'L' : x === right ? 'd' : 'B';
+        continue;
+      }
+      if (width < 4 || height < 3) continue;
+      const u = (x - left) / width, v = (y - top) / height;
+      let tone = u > .76 || v > .86 ? 'd' : u < .34 && v < .6 ? 'L' : 'B';
+      if (u > .87 && v > .65) tone = 'D';
+      if (u > .16 && u < .35 && v < .19 && width > 7) tone = 'H';
+      // These marks follow the creature's own coordinate system. They are
+      // surface construction: quills, overlapping scales, bark flutes or folds.
+      if (surface === 'feather' && width > 6 && (x - left + y) % 6 === 0 && u > .4) tone = 'd';
+      if (surface === 'membrane' && width > 5 && (x - left - y + 48) % 7 === 0) tone = 'd';
+      if (surface === 'scale' && width > 7 && y % 4 === 2 && (x + (y >> 2) * 2) % 5 < 2 && v > .25) tone = 'd';
+      if (surface === 'fur' && width > 6 && v > .56 && (x + (y >> 1)) % 6 < 2 && y % 3 === 0) tone = 'd';
+      if (surface === 'bark' && width > 6 && (x + Math.floor(y / 5)) % 7 === 0 && v > .22) tone = 'D';
+      if (surface === 'cloth' && width > 7) {
+        const fold = Math.floor((x - left) * 5 / width);
+        tone = fold === 1 && v < .85 ? 'L' : fold === 3 ? 'd' : tone;
+      }
+      if ((surface === 'facet' || surface === 'plate') && width > 6) {
+        tone = u < .2 ? 'L' : u > .72 ? 'd' : v < .2 ? 'L' : v > .8 ? 'D' : 'B';
+      }
+      if (surface === 'bone' && width > 4) tone = u < .34 ? 'L' : u > .65 ? 'd' : 'B';
+      out[y][x] = tone;
+    }
+  }
+  return out.map(r => r.join(''));
+}
+
 /* The authored rows placed in their own box, once. `oy` defaults to standing on
  * the last row, so a quadruped and a wading bird plant on the same line without
  * anybody counting rows. */
@@ -4037,7 +4033,7 @@ function baseGrid(key) {
   if (hit) return hit;
   const m = MONSTERS[key] || M[MONSTER_FALLBACK];
   const size = m.size || MON_SIZE;
-  const g = mergeGrids(size, size, [{ grid: m.rows, ox: m.ox | 0, oy: m.oy | 0 }]);
+  const g = sculptMonster(m, mergeGrids(size, size, [{ grid: m.rows, ox: m.ox | 0, oy: m.oy | 0 }]));
   if (baseCache.size >= BASE_CACHE_MAX) baseCache.delete(baseCache.keys().next().value);
   baseCache.set(key, g);
   return g;

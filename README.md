@@ -3,10 +3,12 @@
 # PYTHON CODING GAUNTLET LEGEND
 ### The Algorithm Realms
 
-**A 16-bit RPG that makes you fluent in Python under interview conditions.**
+**An original pixel-art RPG for practicing real Python and interview problem solving.**
 
-1,013 validated problems · 17 regions · 14 bosses · 16 dungeons · 74 quests · 6 classes
+1,018 validated problems · 17 regions · 14 bosses · 16 dungeons · 74 quests · 6 classes
 No accounts. No network. No dependencies. It all runs on your machine.
+
+[Visit the game site and visual gallery](https://joseantoniopau.github.io/Python-Coding-Gauntlet-Legend/)
 
 </div>
 
@@ -14,11 +16,12 @@ No accounts. No network. No dependencies. It all runs on your machine.
 
 ## The pitch
 
-You are a competent engineer who freezes at a blank editor. That is a *retrieval*
-problem, not a knowledge problem, and it is fixed by doing the thing repeatedly
-under mild pressure — which happens to be what a good RPG already is.
+Practice starts with small expressions and builds toward complete functions,
+debugging, data structures and timed practicals. Writing, testing and revisiting
+Python drives the adventure. Progress reports distinguish supported practice
+from unaided work and first encounters with sealed material.
 
-So this is a real game, and every system in it is wired to a learning mechanic:
+The RPG systems give practice a setting and a purpose:
 
 | The game thing | The learning thing underneath |
 |---|---|
@@ -33,6 +36,47 @@ So this is a real game, and every system in it is wired to a learning mechanic:
 
 ---
 
+## The graphics and practice overhaul
+
+![Actual Python gameplay with the battle, code editor and passing visible trials](docs/assets/gameplay.jpg)
+
+*Current gameplay from an isolated demonstration save. [More screenshots and art studies on the game site](https://joseantoniopau.github.io/Python-Coding-Gauntlet-Legend/).*
+
+- **Original animated art:** a dedicated 40×48 battle hero with six poses,
+  equipped previews, expressive portraits, distinct creature anatomy, transformed
+  boss phases, 17 regional environments and four stages of town reconstruction.
+  Layered cinematics use the characters actually present in their scripts.
+- **Readable workspaces:** 16px code, a reversible focus view, keyboard-operated
+  choices and file tabs, an offline display font, and motion effects confined to
+  scene artwork.
+- **Practice at your pace:** resumable 10, 20 or 40 minute expeditions and interview
+  rehearsals. Choose balanced practice, review, a weak skill or fresh material.
+  Pause or finish deliberately; ordinary code and explanation drafts can resume.
+- **Learning records:** a personal grimoire with notes, previous attempts,
+  assistance records and spaced-retention evidence. VISION can step through an
+  actual bounded execution of your Python on a public example, with local values,
+  calls, returns and generator suspension shown separately from concept demos.
+- **More reasons to return:** constraint-changing boss rematches, companion
+  journey panels, learning-earned cosmetic colors and Mini-Repo investigations
+  with file diffs and ungraded hypothesis/evidence/regression notes.
+
+Rehearsals are practice. Sealed assessment keeps its separate rules and finite
+holdout pool. Explanation feedback reports topic coverage and quoted evidence;
+it does not pretend to judge the quality of an interview answer.
+
+Open `/art.html` on the running local server for the renderer gallery. It includes
+animation, silhouette checks, cinematic fixtures and PNG frame export. The
+[reference research](docs/15-reference-research.md) maps FFVI's actual mechanics
+to this game; [art direction](docs/08-art-direction.md) records the original
+visual contracts. Restoration archives were inspected as references; no ROM,
+Final Fantasy artwork, soundtrack or patch code was imported.
+
+See the [delivery and validation record](docs/16-polish-delivery.md) and the
+[human playtest protocol](docs/17-playtest-protocol.md). Automated checks validate
+specific behavior; human engagement and retained learning still require testing.
+
+---
+
 ## It teaches the basics first, then ramps
 
 The corpus is deliberately bottom-heavy, because the most common way a learning
@@ -42,8 +86,8 @@ game fails is opening at a difficulty that only helps people who don't need it.
 GUIDED    258  ██████████████░░░░  fill in one expression
 TUTORIAL  215  ████████████░░░░░░  guided, with the shape given
 EASY      321  ██████████████████  on your own
-MEDIUM    196  ███████████░░░░░░░  real interview weight
-HARD       23  █░░░░░░░░░░░░░░░░░  the deep end
+MEDIUM    199  ███████████░░░░░░░  real interview weight
+HARD       25  █░░░░░░░░░░░░░░░░░  the deep end
 ```
 
 **Encounter one is "what does `print(10 - 4)` show?"** — four choices, no function,
@@ -69,7 +113,7 @@ code and ask you to add a feature or fix a bug without breaking anything.
 Ordinary RPG mastery measures familiarity with material you were taught. That is
 a number that flatters you.
 
-So **122 of the 1,013 problems are sealed** — held out permanently, whole
+So **122 of the 1,018 problems are sealed** — held out permanently, whole
 lineages at a time, so no sealed problem has a teachable sibling. Adventure Mode,
 hints, spaced repetition and the coach can never reach them. They appear only in
 measured runs, cold.
@@ -102,6 +146,8 @@ macOS `.app`.
 
 ### Where your save lives
 
+| Platform | Save directory |
+|---|---|
 | macOS | `~/Library/Application Support/GauntletLegend` |
 | Windows | `%APPDATA%\GauntletLegend` |
 | Linux | `~/.local/share/gauntlet-legend` |
@@ -117,7 +163,9 @@ Your solutions run in a separate process behind four independent layers:
 3. **A parent wall-clock kill** — for anything that gets past the first two
 4. **A per-test timeout** — so one runaway test doesn't take the batch with it
 
-`python3 run.py check` verifies all of it.
+`python3 run.py check` checks blocked networking and runaway-loop timeout, and
+reports whether the platform's hardened sandbox is available. The broader
+regression suite covers additional boundaries; this command is a smoke check.
 
 > **On Windows, layers 1 and 2 do not exist.** There is no seatbelt and no
 > `resource` module, so isolation there rests on process separation and the
@@ -159,15 +207,15 @@ changes nothing about the exam that follows.
 
 | | |
 |---|---|
-| Problems | 1,013 validated · 891 teachable · 122 sealed |
+| Problems | 1,018 validated · 896 teachable · 122 sealed |
 | World | 17 regions · 16 dungeons · 16 Mini-Repos · 14 bosses · 17 roaming apex monsters |
 | People | 34 quest NPCs · 12 mentors · 17 vendors · 16 sages · a healer, a smith and a broker |
 | Progression | 6 classes · 126 skill nodes · 6 signature blades × 9 rungs · 11 metals · 96 secret arts |
 | Companions | 12, tiered, one at a time · 31 pieces of regalia |
 | Combat | Turn-based · 6 elements in 3 opposed pairs · 12 potions · status effects · durability |
-| Content | 74 quests in 17 chains · 121 items · 22 artifacts |
-| Bestiary | 59 thematic creatures on 17 regional rosters · 6 boss phase stages |
-| The taken | 25 people across 14 holdings · freed by the boss that took them |
+| Content | 74 quests in 17 chains · 126 items · 22 artifacts |
+| Bestiary | 57 authored creature bodies plus 3 fallbacks · 17 regional rosters · 6 boss phase stages |
+| The taken | 27 people across 14 holdings · freed by the boss that took them |
 | Stakes | Death rewinds the game and never the player · autosaves on region entry and boss kills |
 
 ---
@@ -183,12 +231,9 @@ are already out.
 than a payout: the Null King's index stops pointing, everyone still in a niche
 gets up on their own, and the cutscene is a roll call of what you actually did.
 
-Those two lists are kept apart on purpose, and the ending says so in one line:
-
-> **11 BY YOUR HAND. 14 BY THE FALL OF IT.**
-
-A roll call that quietly rounded up to everybody would be the game telling a lie
-about itself. The ending is a eucatastrophe, not a restoration.
+The ending reports those two counts separately, using the people actually
+recorded in the save. Its roll call distinguishes personal rescues from the
+people released by the fall of the index.
 
 You can still sit the practical from the menu at level one having freed nobody,
 and it is the same sealed, timed, unassisted exam. It measures you; it does not
@@ -205,37 +250,40 @@ python3 run.py build-corpus    # rebuild and re-validate every problem
 python3 run.py doctor          # diagnose an installation
 ```
 
-**1,187 tests across 35 files.** `tests/run_all.py` runs them all, but takes
-~45 minutes and may be killed by a process limit. Every file is also runnable on
-its own — `python3 tests/test_keys_and_seal.py` — which matters more than it
-sounds: a dozen of them had no `__main__` block and exited 0 having run nothing,
-which is a worse failure than a red one because it looks like a pass.
+Run the full Python suite with `python3 -B -m unittest discover -s tests -v`.
+It runs real sandboxed programs and corpus simulations, so allow roughly
+30–45 minutes. A focused module can be run with
+`python3 -m unittest discover -s tests -p 'test_keys_and_seal.py'`.
+Current counts and results are recorded in [the delivery report](docs/16-polish-delivery.md).
 
 There is one more verifier that needs a running server, and it drives the real
 client with no browser — the actual `web/js` modules, under an instrumented
 canvas, against real HTTP:
 
 ```bash
-python3 run.py serve --port 8801 &
+GAUNTLET_DATA_DIR="$(mktemp -d)" python3 run.py serve --port 8801 &
 node scripts/verify/headless.mjs 8801
 ```
 
 It walks boot, twenty-one screens, the road to a boss, one silhouette per phase
 and the practical at zero keys, and reports what rendered: draw calls, canvases
 allocated in the loop, and the four failure classes a parse check cannot see.
+Use a disposable save as shown: this harness changes progression and opens a
+measured assessment.
 
-Every problem carries **two independent implementations** — a reference used to
-compute expected outputs at build time, and a canonical solution shown to the
-player. They must agree on every test, which is how a wrong problem gets caught
-before a player ever sees it.
+Applicable coding problems carry a reference implementation to compute expected
+outputs and a canonical solution shown to the player. Validation checks that
+they agree. Reading and puzzle encounters use their own answer and structural
+checks; they do not all contain two executable implementations.
 
 ---
 
 ## Credits and licence
 
-All art is **original and generated procedurally at runtime** — there are no
-image assets in this repository, and nothing is taken from any existing game. Art
-direction is in `docs/08-art-direction.md`, the story in `docs/09-story-bible.md`.
+Game artwork is **original and rendered procedurally at runtime**. The repository
+also contains exported renderer studies for its public site. No art is copied
+from an existing game. Art direction is in `docs/08-art-direction.md`, the story
+in `docs/09-story-bible.md`.
 
 Music is six licence-clear tracks from [Pixabay](https://pixabay.com/music/)
 under the Pixabay Content License — nickpanek, alec_koff, Alex Morgan and

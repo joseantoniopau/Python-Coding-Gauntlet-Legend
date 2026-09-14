@@ -2484,11 +2484,11 @@ def _errors() -> list:
 def _handover() -> list:
     return [
         _write(
-            "fs-write-banner", "Nothing Left Blank",
+            "fs-write-banner", "A Banner of Stars",
             """
-            No blanks from here. The body is empty and the comments say what
-            each line has to do — one comment, one line of code. Write the first
-            line, run it, then write the second.
+            Build the banner in two steps: first form the row of stars, then
+            join it to the text. Use the numbered comments in the editor as
+            your checklist. Run your work as you complete each step.
 
             `banner("hi")` gives `'** hi **'`: a row of stars as long as the
             text, then the text, then the same row again, single spaces between.
@@ -2519,7 +2519,7 @@ def _handover() -> list:
                        "return edge + \" \" + text + \" \" + edge",
             failures=["Counting the spaces into the edge length",
                       "Printing the banner instead of returning it"],
-            pattern="STRING", time="O(n)",
+            pattern="STRING", time="O(n)", space="O(n)",
         ),
 
         _write(

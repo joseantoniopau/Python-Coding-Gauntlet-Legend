@@ -21,6 +21,7 @@ import * as monsterart from './monsterart.js';
 import * as lootart from './lootart.js';
 import * as spellfx from './spellfx.js';
 import * as stagelayer from './battlescene.js';
+import { combatSet, BATTLE_HERO } from './battlehero.js';
 
 /* ---------------- stage geometry ----------------
  * The stage is drawn in a fixed logical grid and then scaled by a whole number,
@@ -721,6 +722,9 @@ export class BattleFX {
     this.emoteUntil = 0;
     this._buildHero();
     this._warmEmotes();
+    this.combatHero = combatSet(this.heroTint || {}, this.gear);
+    this.combatPose = 'ready';
+    this.combatUntil = 0;
 
     this.hpMax = Math.max(1, (enemy && enemy.hp_max) || 1);
     this.hp = (enemy && enemy.hp !== undefined) ? enemy.hp : this.hpMax;
@@ -917,6 +921,7 @@ export class BattleFX {
   /* The wind-up before trials resolve. Short on purpose: the player already
    * pressed the button, the feedback should start almost immediately. */
   cast() {
+    this.combatPose = 'cast'; this.combatUntil = this.clock + 0.8;
     this.heroPose = 1;
     this.heroLunge = this._amp(8);
     this.setEmote('stubborn', 1.6);
@@ -932,7 +937,7 @@ export class BattleFX {
   async resolveTrials(trials, { interval = 0.09, damagePerTrial } = {}) {
     const list = Array.isArray(trials) ? trials : [];
     if (!list.length) return this;
-    const step = this._t(interval);
+    const step = this._t(Math.min(interval, 0.7 / list.length));
     const dmg = damagePerTrial !== undefined
       ? damagePerTrial
       : Math.max(1, this.hpMax / Math.max(1, list.length));
@@ -970,6 +975,7 @@ export class BattleFX {
    */
   async technique({ tier = 1, name = '', rank = '', colour = '#ffe8a0',
                     accent = '', crit = false } = {}) {
+    this.combatPose = 'strike'; this.combatUntil = this.clock + 1.1;
     const rung = clamp(Math.round(tier) || 1, 1, 9);
     const k = (rung - 1) / 8;                  // 0 at rung one, 1 at rung nine
     const edge = accent || colour;
@@ -1623,13 +1629,13 @@ export class BattleFX {
 
   /* The close of a won fight, in the order the player earned it: the enemy goes,
    * the rank lands, the XP counts, the loot drops. */
-  async victory({ rank = 'B', xp = 0, xpFrom, xpTo, loot, levelUp = false } = {}) {
+  async victory({ rank = 'B', xp = 0, xpFrom, xpTo, loot, levelUp = false, quick = false } = {}) {
     const colour = RANK_COLOUR[rank] || '#ffe8a0';
     this._sfx(rank === 'S' ? 'victory' : 'crit');
     this.setEmote('delighted', 0);      // 0: it stays up, the fight is over
 
     this.setEnemyHp(0);
-    await this.dissolve();
+    await this.dissolve(quick ? 0.25 : 0.55);
     if (!this.el) return this;
 
     this.banner = {
@@ -1643,7 +1649,7 @@ export class BattleFX {
       x: STAGE.w / 2, y: STAGE.h / 2, colour, count: 26, power: 120,
       gravity: 53, life: 0.8,
     });
-    await this._wait(this._t(0.45, { keep: true }));
+    await this._wait(this._t(quick ? 0.15 : 0.45, { keep: true }));
     if (!this.el) return this;
 
     if (xp > 0) {
@@ -1652,7 +1658,7 @@ export class BattleFX {
       if (xpFrom !== undefined && xpTo !== undefined) {
         this.xpBar = { from: clamp(xpFrom, 0, 1), to: clamp(xpTo, 0, 1), t: 0 };
       }
-      await this._wait(this._t(0.9, { keep: true }));
+      await this._wait(this._t(quick ? 0.25 : 0.9, { keep: true }));
     }
     if (!this.el) return this;
 
@@ -1669,7 +1675,7 @@ export class BattleFX {
         x: STAGE.enemyX, y: STAGE.ground - 40,
         colour: loot.rarity_colour || '#e8c37d', count: 18, power: 73, life: 0.7,
       });
-      await this._wait(this._t(0.4, { keep: true }));
+      await this._wait(this._t(quick ? 0.15 : 0.4, { keep: true }));
     }
     if (levelUp && this.el) {
       this._sfx('levelup');
@@ -1717,26 +1723,32 @@ export class BattleFX {
 
   /* Dissolve the enemy into its own pixels. Sampling the sprite means the
    * particles are the creature rather than a generic puff. */
-  dissolve() {
-    const img = this._sprite(0);
+  dissolve(duration = 0.55) {
+    const blit=this.scene?.boss ? this.lastBossBlit : null;
+    const img = blit ? bosses.bossSprite(this.scene.enemy.sprite, this.scene.enemy.colour,
+      blit.frame, {phase:blit.phase,beat:blit.beat}) : this._sprite(0);
     if (img && !this.reducedMotion) {
       /* The same box-aware step as the live blit above. If these two ever
        * disagree the death particles scatter at a different scale from the
        * creature they came off, which reads as the sprite jumping size on the
        * frame it dies. */
-      const scale = figureScale(img, this.scene && this.scene.boss);
+      const scale = blit ? blit.w/img.width : figureScale(img, this.scene && this.scene.boss);
       const w = img.width * scale, h = img.height * scale;
-      const x0 = STAGE.enemyX - w / 2;
-      const y0 = STAGE.ground - h;
+      const x0 = blit ? blit.x : STAGE.enemyX + this.knock - w / 2;
+      const y0 = blit ? blit.y : STAGE.ground - h;
       try {
         const probe = offscreen(img.width, img.height);
         probe.ctx.drawImage(img, 0, 0);
         const data = probe.ctx.getImageData(0, 0, img.width, img.height).data;
+        // Sample evenly across the opaque silhouette with a fixed upper bound.
+        let opaque = 0;
+        for(let i=3;i<data.length;i+=4)if(data[i]>=40)opaque++;
+        const stride=Math.max(1,Math.ceil(opaque/384));let seen=0;
         for (let y = 0; y < img.height; y += 1) {
           for (let x = 0; x < img.width; x += 1) {
             const i = (y * img.width + x) * 4;
             if (data[i + 3] < 40) continue;
-            if (Math.random() < 0.45) continue;      // thin it out; 256 is plenty
+            if (seen++ % stride) continue;
             this.particles.push({
               x: x0 + x * scale, y: y0 + y * scale,
               vx: (Math.random() - 0.3) * 30,
@@ -1752,7 +1764,7 @@ export class BattleFX {
       }
     }
     this.dissolving = 1;
-    return this._wait(this._t(0.55));
+    return this._wait(this._t(duration));
   }
 
   /* ---------------- boss intro ---------------- */
@@ -2425,6 +2437,19 @@ export class BattleFX {
 
   _drawHero(ctx) {
     const x = STAGE.heroX + this.heroLunge;
+    if (this.combatHero) {
+      const pose = this.emote === 'delighted' ? 'victory'
+        : this.emote === 'defeated' ? 'guard'
+        : this.emote === 'alarmed' || this.emote === 'strained' ? 'hurt'
+        : this.clock < this.combatUntil ? this.combatPose : 'ready';
+      const frame = this.reducedMotion ? 0 : Math.floor(this.clock * 2) % 2;
+      const img = this.combatHero[pose][frame];
+      const S = BATTLE_HERO.scale;
+      this._shadow(ctx, x, 42, 0.32);
+      ctx.drawImage(img, Math.round(x-BATTLE_HERO.footX*S),
+        STAGE.ground-(BATTLE_HERO.footY+1)*S, img.width*S, img.height*S);
+      return;
+    }
     if (!this.hero || !this.hero.side) {
       this._shadow(ctx, x, 18, 0.3);
       return;
@@ -2466,7 +2491,7 @@ export class BattleFX {
     if (this.scene.boss) {
       // The boss set carries its own five-frame state machine, ground shadow,
       // ambient bob and hit flash, so it is one call rather than a manual blit.
-      bosses.drawBoss(ctx, e.sprite, STAGE.enemyX + this.knock, STAGE.ground, {
+      this.lastBossBlit = bosses.drawBoss(ctx, e.sprite, STAGE.enemyX + this.knock, STAGE.ground, {
         frame: this.bossFrame,
         time: this.clock * 1000,
         scale: bosses.BOSS_STAGE_SCALE,

@@ -671,15 +671,17 @@ class TheSealedRule(GameTest):
         g = self.measured()
         self.assertTrue(g.state["interview"]["problem_ids"])
         blob = g.export()
-        self.assertIsNone(blob["state"]["interview"])
-        self.assertIsNone(blob["state"].get("exam"))
-        self.assertIn("interview", blob["redacted"])
+        self.assertEqual(blob.get("error"), "sealed")
+        self.assertNotIn("state", blob, "a refusal must not look like a partial save")
+        self.assertNotIn("attempts", blob)
 
     def test_h_the_practical_roster_is_redacted_too(self):
         g = self.game()
         g.start_interview("FINAL_EXAM")
         self.assertTrue(g.state.get("exam"))
-        self.assertIsNone(g.export()["state"]["exam"])
+        blob = g.export()
+        self.assertEqual(blob.get("error"), "sealed")
+        self.assertNotIn("state", blob)
 
     def test_the_world_half_stays_readable_throughout(self):
         """A seal that takes more than it needs is one players turn off."""

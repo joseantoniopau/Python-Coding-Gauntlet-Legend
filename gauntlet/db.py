@@ -58,6 +58,10 @@ CREATE TABLE IF NOT EXISTS attempts (
     declared_cause TEXT NOT NULL DEFAULT '',
     time_to_first_code REAL DEFAULT 0,
     submitted_code TEXT,
+    served_rung    INTEGER,
+    evidence_kind  TEXT,
+    practice_id    TEXT,
+    practice_kind  TEXT,
     created_at     REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_attempts_problem ON attempts(problem_id);
@@ -150,6 +154,10 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
 _ADDED_COLUMNS = (
     ("attempts", "region", "TEXT NOT NULL DEFAULT ''"),
     ("attempts", "declared_cause", "TEXT NOT NULL DEFAULT ''"),
+    ("attempts", "served_rung", "INTEGER"),
+    ("attempts", "evidence_kind", "TEXT"),
+    ("attempts", "practice_id", "TEXT"),
+    ("attempts", "practice_kind", "TEXT"),
 )
 
 

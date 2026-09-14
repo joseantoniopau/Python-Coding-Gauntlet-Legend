@@ -130,7 +130,7 @@ view that leaks an id, a title or a lineage lets a player collect the hold-out
 for free and study it. `Game.run_view` already documents this defect and its
 fix — and it is separate from the swap test precisely because a roster is not
 *about* the question on the screen, so the swap test would wave it through.
-Finding 4.H was that exact case. It is closed: `Game.export` redacts `state["interview"]` and `state["exam"]` on every export, run or no run.
+Finding 4.H was that exact case. `Game.export` now refuses with HTTP 409 while any measured run is open, including between questions: a complete save also contains prior code and interview details. Outside a measured run, exports retain the full attempt history and still redact `state["interview"]` and `state["exam"]`. A refused export is not a partial save.
 
 ---
 
@@ -172,7 +172,7 @@ this is written; section 4 is kept as the record of what was wrong and why.
 | Mini-repo board | `/api/repos` | The index cards and which are cleared | What you have done. The fight itself degrades through `minirepo.player_view`. |
 | Probes left | `/api/probes` | A charge count | Open **by accident and correctly**: `probes_remaining` returns 0 under `sealed(enc, "PROBES")`. See 4.C. |
 | Ping / sandbox | `/api/ping`, `/api/sandbox/check` | Liveness; the sandbox proof | Infrastructure. Neither has ever seen a question. |
-| Save export | `/api/export` | The save, minus two keys | Looks like infrastructure; was not. `interview` and `exam` are redacted always — 4.H, fixed. |
+| Save export | `/api/export` | Complete history outside measured runs | Refused during any open measured run; outside it, `interview` and `exam` remain redacted — 4.H. |
 
 ### The problem — sealed, and correctly
 

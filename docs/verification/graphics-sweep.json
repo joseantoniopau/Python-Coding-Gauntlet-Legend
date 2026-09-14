@@ -1,0 +1,627 @@
+{
+  "started_at": "2026-09-14T01:11:09.075552+00:00",
+  "scope": "Offline rendering and UI verification; no live-server drivers or artifact output flags. Two isolated Node processes at a time; durations are not browser FPS measurements.",
+  "excluded": {
+    "headless.mjs": "Live-server driver can mutate game state; excluded.",
+    "stub.mjs": "Instrumentation helper; not a standalone verification entry.",
+    "raster.mjs": "Raster helper; not a standalone verification entry.",
+    "bossartstub.mjs": "Standalone stub sweep excluded as requested.",
+    "deathstub.mjs": "Standalone stub sweep excluded as requested.",
+    "unmakingstub.mjs": "Standalone stub sweep excluded; unmaking.mjs owns its nested instrumentation check."
+  },
+  "results": [
+    {
+      "harness": "apex.mjs",
+      "command": [
+        "node",
+        "scripts/verify/apex.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.797,
+      "timed_out": false,
+      "status": "passed",
+      "evidence": "Authored/fallback identities resolve; no identical silhouette pairs or undeclared collisions."
+    },
+    {
+      "harness": "apexhunt.mjs",
+      "command": [
+        "node",
+        "scripts/verify/apexhunt.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 19.478,
+      "timed_out": false,
+      "status": "passed",
+      "evidence": "Read-only tracker motion, speed, visibility, edge hints and payload contracts pass."
+    },
+    {
+      "harness": "bossart.mjs",
+      "command": [
+        "node",
+        "scripts/verify/bossart.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 1.505,
+      "timed_out": false,
+      "status": "passed",
+      "evidence": "Element geometry, palette and integration checks pass."
+    },
+    {
+      "harness": "bossforms.mjs",
+      "command": [
+        "node",
+        "scripts/verify/bossforms.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 3.654,
+      "timed_out": false,
+      "status": "passed",
+      "evidence": "Six silhouette phases, map identities and entrance timing pass."
+    },
+    {
+      "harness": "bossseam.mjs",
+      "command": [
+        "node",
+        "scripts/verify/bossseam.mjs"
+      ],
+      "exit_code": 0,
+      "timed_out": false,
+      "status": "passed",
+      "evidence": "Native budget/determinism/warm cache pass. Forced-element over-budget warnings changed from180 to0 after the fix.",
+      "initial": {
+        "exit_code": 0,
+        "seconds": 6.002
+      },
+      "rerun_after_fix": true
+    },
+    {
+      "harness": "cap.mjs",
+      "command": [
+        "node",
+        "scripts/verify/cap.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.18,
+      "timed_out": false,
+      "status": "passed",
+      "evidence": "The checked item working set fits512-entry grid/sprite caches; later passes allocate0 canvases."
+    },
+    {
+      "harness": "cinema.mjs",
+      "command": [
+        "node",
+        "scripts/verify/cinema.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.301,
+      "timed_out": false,
+      "status": "passed",
+      "evidence": "296 frames across4 truthful fixtures;10 cameras; full28-cast freeze at zoom1 with painted edges; all nonblack camera views fill native plate; fixed four-color tableau and no per-frame canvas allocation.",
+      "metrics": {
+        "ok": true,
+        "sampledFrames": 296,
+        "scenes": 4,
+        "cameraMoves": 10,
+        "freeze": "four colors; fixed pixels; sunglasses sole motion",
+        "cast": "0, 4+6, 28; no invented rows",
+        "fullCastFreeze": {
+          "zoom": 1,
+          "paintedEdgeSamples": 315
+        },
+        "perFrameCanvasAllocations": 0
+      }
+    },
+    {
+      "harness": "classes.mjs",
+      "command": [
+        "node",
+        "scripts/verify/classes.mjs"
+      ],
+      "exit_code": 0,
+      "timed_out": false,
+      "status": "passed",
+      "evidence": "Dressed and bare class silhouettes remain distinct and 8-connected in every sampled view.",
+      "initial": {
+        "exit_code": 0,
+        "seconds": 0.135
+      },
+      "rerun_after_fix": true
+    },
+    {
+      "harness": "combathero.mjs",
+      "command": [
+        "node",
+        "scripts/verify/combathero.mjs"
+      ],
+      "exit_code": 0,
+      "timed_out": false,
+      "status": "passed",
+      "evidence": "Six poses and equipped classes, body variants, all armor slots and cached playback pass;4320 frames, maximum14 colors.",
+      "initial": {
+        "exit_code": 0,
+        "seconds": 0.904
+      },
+      "rerun_after_fix": true
+    },
+    {
+      "harness": "companion-journey.mjs",
+      "command": [
+        "node",
+        "scripts/verify/companion-journey.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.1,
+      "timed_out": false,
+      "status": "passed",
+      "evidence": "Actual bond/skill, measured-run and encounter gates, loss/rest states, escort possession, escaping and async teardown pass."
+    },
+    {
+      "harness": "companion.mjs",
+      "command": [
+        "node",
+        "scripts/verify/companion.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 19.798,
+      "timed_out": false,
+      "status": "passed",
+      "evidence": "Companion motion, join/leave, reduced motion, sorting and sampling contracts pass."
+    },
+    {
+      "harness": "creaturepolish.mjs",
+      "command": [
+        "node",
+        "scripts/verify/creaturepolish.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 1.958,
+      "timed_out": false,
+      "status": "passed",
+      "evidence": "182 portrait,480 monster and480 boss samples; maximum15 colors. Art quality still requires visual review."
+    },
+    {
+      "harness": "css.mjs",
+      "command": [
+        "node",
+        "scripts/verify/css.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.056,
+      "timed_out": false,
+      "status": "diagnostic",
+      "evidence": "Diagnostic only: no undefined CSS variables;13 geometry changes flagged for browser layout review. These include intentional code readability and responsive layouts."
+    },
+    {
+      "harness": "death.mjs",
+      "command": [
+        "node",
+        "scripts/verify/death.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 4.571,
+      "timed_out": false,
+      "status": "passed",
+      "evidence": "Three-beat timing, source figure and truthful loss report pass; no fabricated costs."
+    },
+    {
+      "harness": "deathrelease.mjs",
+      "command": [
+        "node",
+        "scripts/verify/deathrelease.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 22.966,
+      "timed_out": false,
+      "status": "passed",
+      "evidence": "Every exit route, arbitrary clocks, deterministic raster and zero playback canvas allocation pass."
+    },
+    {
+      "harness": "determinism.mjs",
+      "command": [
+        "node",
+        "scripts/verify/determinism.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.299,
+      "timed_out": false,
+      "status": "passed",
+      "evidence": "0 deterministic rendering failures and0 reduced-motion failures."
+    },
+    {
+      "harness": "elemental.mjs",
+      "command": [
+        "node",
+        "scripts/verify/elemental.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.511,
+      "timed_out": false,
+      "status": "passed",
+      "evidence": "140 blows across7 elemental motions and both motion settings; no instrumented rendering failures."
+    },
+    {
+      "harness": "faces.mjs",
+      "command": [
+        "node",
+        "scripts/verify/faces.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.057,
+      "timed_out": false,
+      "status": "passed",
+      "evidence": "All open eyes/pupils, blinking, silhouette distinctions and shared palette budget pass."
+    },
+    {
+      "harness": "field.mjs",
+      "command": [
+        "node",
+        "scripts/verify/field.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 142.621,
+      "timed_out": false,
+      "status": "passed",
+      "evidence": "Integer pixel scale, camera following and anchors pass at4 windows; deterministic and0 canvases allocated in draw loops."
+    },
+    {
+      "harness": "finale-player.mjs",
+      "command": [
+        "node",
+        "scripts/verify/finale-player.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.102,
+      "timed_out": false,
+      "status": "passed",
+      "evidence": "Both actual staged ending branches mark coda once; completion/Escape/skip/stop/navigation teardown and pause pass;0 network calls."
+    },
+    {
+      "harness": "forge.mjs",
+      "command": [
+        "node",
+        "scripts/verify/forge.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.344,
+      "timed_out": false,
+      "status": "passed",
+      "evidence": "Forged sprite geometry, palette, server vocabulary and warm cache pass. Informational legacy hero composites use21 colors with rarity gear and19 with forged gear; per-source sprite budget remains15."
+    },
+    {
+      "harness": "forgehero.mjs",
+      "command": [
+        "node",
+        "scripts/verify/forgehero.mjs",
+        "--strict"
+      ],
+      "exit_code": 0,
+      "timed_out": false,
+      "status": "passed",
+      "evidence": "Initial strict failure: three half-step details changed color but were hidden in the field silhouette. Fixed in sprites.js; all48 adjacent tiers now move the outline, bands remain untrimmed, anchors unchanged, maximum15 colors.",
+      "initial": {
+        "exit_code": 1,
+        "seconds": 0.148
+      },
+      "rerun_after_fix": true
+    },
+    {
+      "harness": "hero.mjs",
+      "command": [
+        "node",
+        "scripts/verify/hero.mjs"
+      ],
+      "exit_code": 0,
+      "timed_out": false,
+      "status": "passed",
+      "evidence": "192456 raster views pass equipment outline, native15-color budget, determinism and warm allocations.",
+      "initial": {
+        "exit_code": 0,
+        "seconds": 11.675
+      },
+      "rerun_after_fix": true
+    },
+    {
+      "harness": "kingui.mjs",
+      "command": [
+        "node",
+        "scripts/verify/kingui.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 24.874,
+      "timed_out": false,
+      "status": "passed",
+      "evidence": "King and unmaking integration fixture checks pass; no live game state used."
+    },
+    {
+      "harness": "markup.mjs",
+      "command": [
+        "node",
+        "scripts/verify/markup.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.047,
+      "timed_out": false,
+      "status": "passed",
+      "evidence": "Literal Python operators/strings and HTML escaping pass."
+    },
+    {
+      "harness": "monsters.mjs",
+      "command": [
+        "node",
+        "scripts/verify/monsters.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.749,
+      "timed_out": false,
+      "status": "passed",
+      "evidence": "Monster lookup/shape integration reports0 failures."
+    },
+    {
+      "harness": "namespaced.mjs",
+      "command": [
+        "node",
+        "scripts/verify/namespaced.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.069,
+      "timed_out": false,
+      "status": "passed",
+      "evidence": "Namespaced art/FX co-import contracts pass."
+    },
+    {
+      "harness": "petpolish.mjs",
+      "command": [
+        "node",
+        "scripts/verify/petpolish.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 46.394,
+      "timed_out": false,
+      "status": "passed",
+      "evidence": "1118208 native companion raster samples; palette15, cache and fainted-state contracts pass. Visual quality is assessed separately."
+    },
+    {
+      "harness": "petroster.mjs",
+      "command": [
+        "node",
+        "scripts/verify/petroster.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.102,
+      "timed_out": false,
+      "status": "passed",
+      "evidence": "Actual Python pet catalogue vocabulary agrees with client art."
+    },
+    {
+      "harness": "regionalart.mjs",
+      "command": [
+        "node",
+        "scripts/verify/regionalart.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.48,
+      "timed_out": false,
+      "status": "passed",
+      "evidence": "816 regional architecture samples over17 region palettes; geometry distinctions, anchors, deterministic scene wiring and quiet ground textures pass."
+    },
+    {
+      "harness": "repoworkspace.mjs",
+      "command": [
+        "node",
+        "scripts/verify/repoworkspace.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.053,
+      "timed_out": false,
+      "status": "passed",
+      "evidence": "Fake-DOM editable repository workspace, patch reconstruction, immutable suite, persistence and sealed-mode absence pass; no live server."
+    },
+    {
+      "harness": "resolve.mjs",
+      "command": [
+        "node",
+        "scripts/verify/resolve.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.059,
+      "timed_out": false,
+      "status": "diagnostic",
+      "evidence": "Diagnostic roster-to-art mapping printed; no execution error. Knight and Interpreter absence in regional bosses is expected for distinct apex/final contexts."
+    },
+    {
+      "harness": "run.mjs",
+      "command": [
+        "node",
+        "scripts/verify/run.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.461,
+      "timed_out": false,
+      "status": "passed",
+      "evidence": "Static vocabulary/art lookups, draw validity and scene allocations report0 errors. Legacy effect loop calls optional update(), so timeline evidence comes from spells2 and fx-lifecycle instead."
+    },
+    {
+      "harness": "shapes.mjs",
+      "command": [
+        "node",
+        "scripts/verify/shapes.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.066,
+      "timed_out": false,
+      "status": "diagnostic",
+      "evidence": "Diagnostic API, dimensions, motion and effect duration inventory printed; no execution error."
+    },
+    {
+      "harness": "spells2.mjs",
+      "command": [
+        "node",
+        "scripts/verify/spells2.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.122,
+      "timed_out": false,
+      "status": "passed",
+      "evidence": "4230 effect/adapter frames, pathological deltas,0 effect problems/null images/nonfinite paints. Cold first-play cache builds allocate156 canvases inside draws; steady.mjs verifies repeats allocate0."
+    },
+    {
+      "harness": "stage.mjs",
+      "command": [
+        "node",
+        "scripts/verify/stage.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 1.847,
+      "timed_out": false,
+      "status": "passed",
+      "evidence": "Stage/editor geometry, integer scales, safe readouts and full boss boxes pass."
+    },
+    {
+      "harness": "steady.mjs",
+      "command": [
+        "node",
+        "scripts/verify/steady.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.19,
+      "timed_out": false,
+      "status": "passed",
+      "evidence": "Spell playback second and subsequent passes allocate0; working set below512. Current warmCache prewarm leaves49 first-play canvas allocations to build lazily."
+    },
+    {
+      "harness": "steady2.mjs",
+      "command": [
+        "node",
+        "scripts/verify/steady2.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.29,
+      "timed_out": false,
+      "status": "passed",
+      "evidence": "Repeated boss/loot playback and3400 scene draws allocate0 canvases."
+    },
+    {
+      "harness": "title-menu.mjs",
+      "command": [
+        "node",
+        "scripts/verify/title-menu.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.076,
+      "timed_out": false,
+      "status": "passed",
+      "evidence": "Native labels/focus, Arrow/Tab semantics, single activation, modal handoff, reduced motion,280\u20131440px layouts and teardown pass."
+    },
+    {
+      "harness": "unmaking.mjs",
+      "command": [
+        "node",
+        "scripts/verify/unmaking.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.829,
+      "timed_out": false,
+      "status": "passed",
+      "evidence": "Truthful loss semantics and warm draw allocation checks pass."
+    },
+    {
+      "harness": "unmakingfx.mjs",
+      "command": [
+        "node",
+        "scripts/verify/unmakingfx.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.601,
+      "timed_out": false,
+      "status": "passed",
+      "evidence": "Source-role classification and deterministic masks pass;1200 warm draw frames allocate0, all cache caps hold after700 distinct requests."
+    },
+    {
+      "harness": "unmakingworld.mjs",
+      "command": [
+        "node",
+        "scripts/verify/unmakingworld.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 36.016,
+      "timed_out": false,
+      "status": "passed",
+      "evidence": "World unmaking teardown, timeline, truthful payload and static-final-state checks pass."
+    },
+    {
+      "harness": "weather.mjs",
+      "command": [
+        "node",
+        "scripts/verify/weather.mjs"
+      ],
+      "exit_code": 0,
+      "seconds": 3.906,
+      "timed_out": false,
+      "status": "passed",
+      "evidence": "Actual biome weather, distinct frames, light/surface integrity, deterministic rebuild and no live entropy pass."
+    },
+    {
+      "harness": "bosspalette.mjs",
+      "command": [
+        "node",
+        "scripts/verify/bosspalette.mjs"
+      ],
+      "exit_code": 0,
+      "status": "passed",
+      "metrics": {
+        "ok": true,
+        "identities": 48,
+        "elements": 7,
+        "phases": 6,
+        "samples": 14140,
+        "maximum": 15,
+        "cachedReuse": true,
+        "coldDeterminism": true
+      }
+    },
+    {
+      "harness": "fx-lifecycle.mjs",
+      "command": [
+        "node",
+        "scripts/verify/fx-lifecycle.mjs"
+      ],
+      "exit_code": 0,
+      "status": "passed",
+      "metrics": {
+        "ok": true,
+        "dissolves": 480,
+        "maxDissolveParticles": 384,
+        "reducedDissolveParticles": 0,
+        "renderClockCompletions": 44,
+        "interruptedCompletions": 44,
+        "stoppedBackstop": true,
+        "capScope": "new particles emitted by each dissolve; other overlapping effects have separate particles"
+      }
+    }
+  ],
+  "completed_at": "2026-09-14T01:14:07.610410+00:00",
+  "baseline_regression": {
+    "nativePixelIdentical": 2016,
+    "foreignShapesIdentical": 6048,
+    "foreignFramesRequiringMaterialSharing": 420,
+    "maxChangedPixels": 2239,
+    "scope": "Comparison against pre-fix source copy; all48 standalone/named identities, six phases, native and forced-element map/battle frames. Palette edits do not change shape or dimensions."
+  },
+  "finished_review_at": "2026-09-14T01:26:04.414688+00:00",
+  "summary": {
+    "initial_harnesses": 43,
+    "total_harnesses": 45,
+    "passed": 42,
+    "diagnostics": 3,
+    "remaining_assertion_failures": 0,
+    "fixed_issues": [
+      "180 forced-element preview frames exceeded15 colors in the legacy three-phase sweep; now0, plus all-six-phase dedicated regression passes.",
+      "Three forged half-step silhouettes were unchanged; all48 tier steps now differ."
+    ],
+    "limitations": [
+      "Offline canvas/stub checks do not establish visual production quality or browser FPS.",
+      "Cold spell cache construction and legacy composited gear palette counts remain documented observations.",
+      "Live-server driver and direct helper-only scripts excluded; no game save or server was used."
+    ]
+  }
+}

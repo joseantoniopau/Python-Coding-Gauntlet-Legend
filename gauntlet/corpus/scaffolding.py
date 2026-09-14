@@ -1018,11 +1018,9 @@ EASY = {
         ("counts[item] == 1", "this item appears exactly once in the whole list"),
         ("Counter(items)", "how many times each item turns up"),
     ],
-    # DERIVED ORDER OVERRIDDEN. The hand-blanked starter put `visited.add(...)`
-    # first, and the objective test proved it can be filled with `discard` and
-    # still pass every test — without the mark the search re-queues cells and is
-    # slower, but it still finds the shortest path. The step that carries
-    # correctness is the one that queues the neighbour one further out.
+    # Distance first, then discovery marking. The hidden cyclic-component case
+    # makes both spans observable: omitting the visited mark never exhausts the
+    # frontier when the exit is unreachable, while the honest BFS returns -1.
     "sc-bfs-grid-shortest": [
         ("frontier.append((nr, nc, dist + 1))",
          "queue it, one step further out than the cell it came from"),

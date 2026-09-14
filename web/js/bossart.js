@@ -723,28 +723,38 @@ function vHollow(cells, w, h, rand, amp, beat, core) {
   let touched = 0;
   const cx = core ? core[0] : (w >> 1);
   const cy = core ? core[1] : (h >> 1);
-  const maxd = Math.hypot(w, h) * 0.5 || 1;
-  for (let y = 1; y < h - 1; y++) {
-    for (let x = 1; x < w - 1; x++) {
-      if (cells[y][x] !== 'B') continue;
-      // Interior only: a hole punched on the contour is a chip, not an absence.
-      if (isEmpty(cells[y - 1][x]) || isEmpty(cells[y + 1][x])
-        || isEmpty(cells[y][x - 1]) || isEmpty(cells[y][x + 1])) continue;
-      const d = Math.hypot(x - cx, y - cy) / maxd;
-      if (rand() > 0.09 * amp * Math.max(0, 1 - d)) continue;
-      cells[y][x] = 'k';
-      touched++;
+  // A few connected absences read as the material failing. Independent black
+  // dots over a pale 96x128 breastplate read as compression noise and conceal
+  // the sigil. The cuts remain inside undecorated body mass.
+  const cuts = 2 + Math.min(3, amp);
+  for (let n = 0; n < cuts; n++) {
+    const startX = Math.round(cx + (rand() - .5) * w * .48);
+    const startY = Math.max(1, Math.round(cy - h * .2 + (rand() - .5) * h * .3));
+    const length = Math.round(h * .12 + amp * 2 + rand() * 5);
+    const lean = rand() < .5 ? -1 : 1;
+    for (let step = 0; step < length; step++) {
+      const y = startY + step;
+      const x = startX + lean * Math.floor(step / 5);
+      if (y < 1 || y >= h - 1 || x < 1 || x >= w - 2) continue;
+      const thickness = step > 2 && step < length - 3 ? 2 : 1;
+      for (let dx = 0; dx < thickness; dx++) {
+        const px = x + dx;
+        if (cells[y][px] !== 'B') continue;
+        if (isEmpty(cells[y - 1][px]) || isEmpty(cells[y + 1][px])
+          || isEmpty(cells[y][px - 1]) || isEmpty(cells[y][px + 1])) continue;
+        cells[y][px] = 'k'; touched++;
+      }
     }
   }
-  /* And the part that is actually the idea: the outline goes missing exactly
-   * where the key light would have hit it. Lower left, which for every other
-   * creature in this game is the brightest edge on the sprite. */
-  for (let y = (h * 0.45) | 0; y < h; y++) {
-    for (let x = 0; x < (w * 0.55) | 0; x++) {
-      if (cells[y][x] !== 'o') continue;
-      if (rand() > 0.18) continue;
-      cells[y][x] = T;
-      touched++;
+  // Sparse contiguous gaps interrupt the lower-left outline, where other
+  // creatures take their rim. Keep broad unbroken contours between them.
+  for (let band = 0; band < 3; band++) {
+    const startY = Math.floor(h * (.48 + band * .15) + rand() * 3);
+    for (let y = startY; y < Math.min(h, startY + 2 + amp); y++) {
+      for (let x = 0; x < Math.floor(w * .55); x++) {
+        if (cells[y][x] !== 'o') continue;
+        cells[y][x] = T; touched++; break;
+      }
     }
   }
   return touched;

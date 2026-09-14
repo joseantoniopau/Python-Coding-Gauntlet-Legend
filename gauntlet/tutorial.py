@@ -174,17 +174,13 @@ class Handoff:
 HANDOFFS = (
     Handoff(2, "the_doors and the_roads",
             "zonecompanions.ESCORTS[0].verb  ->  web/js/overworld.js",
-            "Her building captions and route captions are already designed, "
-            "already written and already owed to overworld.js by docs/12 §8.2 "
-            "rows O11 and O12. The curriculum must not print a second caption "
-            "over the top of one. NOT DELIVERED TODAY, and that is a fact "
-            "about the client rather than about this row: the server ships "
-            "`escort` on the region view, `escort` and `escort_events` on the "
-            "move payload and /api/escorts — and `grep -rn escort web/js/` "
-            "returns nothing, as do `zonecompanion` and `thessaly`. Until "
-            "overworld.js reads one of those three this lesson reaches "
-            "nobody, so it is on the WIRING list below as row W3 rather than "
-            "being left to look finished."),
+            "Delivered by Overworld.setEscort/_offerEscortCaption and "
+            "main.showEscortCaption from the server's walking flags, region "
+            "description, mentor identity and oriented route requirements. "
+            "Captions appear once per doorstep/exit per visit in the field "
+            "sidebar, never during a measured run. The current houses all "
+            "open mentorTalk; authored mender/smith signs and enterable "
+            "interiors remain separate work. No second curriculum caption."),
     Handoff(5, "the_question",
             "web/index.html #answer-here  (setEditorMode('mcq'))",
             "The MCQ surface teaches itself, permanently, in the pane the "
@@ -214,12 +210,12 @@ HANDOFFS = (
             "counting features against screens finds it."),
     Handoff(26, "the_slate",
             "zonecompanions.hand_over_early(state)",
-            "The Slate is handed over on rt_waking_road by code that exists "
-            "and carries her prose. The curriculum adds nothing and must not "
-            "print a second speech over it. NOT DELIVERED TODAY, for exactly "
-            "the reason HANDOFF 2 is not: the payload carrying it reaches the "
-            "client and no file under web/js reads it. Row W3 on the WIRING "
-            "list."),
+            "The server hands the Slate over on rt_waking_road and carries "
+            "her prose. main.consumeEscortResponse now retains the original "
+            "move/travel escort_events and drainEscortNotices presents the "
+            "gift on the free world screen, behind existing dialogue. Both "
+            "side-panel travel and WorldUI travel feed it. No second grant, "
+            "lesson acknowledgement or speech is authored by the curriculum."),
     Handoff(28, "the_incantation",
             "web/js/main.js showIncantList()'s modal",
             "SPEAK AN INCANTATION, in the world screen's ACTIONS list on the "
@@ -348,8 +344,8 @@ BEATS = (
     Beat(
         id="the_trials", order=8,
         teaches="the trials list, and what a locked trial will not tell you",
-        trigger="The first return to the overworld after the first encounter, "
-                "whatever the result.",
+        trigger="The next visible battle trials tab after the first encounter, "
+                "whatever the result. Never on the overworld or MCQ answer pane.",
         site="main.js · M13",
         channel=CHANNEL_SAY, title="",
         lines=(
@@ -379,7 +375,7 @@ BEATS = (
     Beat(
         id="the_tabs", order=9,
         teaches="the five side panels, and why three of them get taken away",
-        trigger="The second return to the overworld from a battle.",
+        trigger="A visible battle after two encounters; never on the overworld.",
         site="main.js · M13",
         channel=CHANNEL_SAY, title="",
         lines=(
@@ -400,8 +396,7 @@ BEATS = (
     Beat(
         id="saving", order=10,
         teaches="it saves itself",
-        trigger="Queued behind the_trials, on the same return to the "
-                "overworld. A toast under a dialogue, deliberately.",
+        trigger="The first return to the overworld after an encounter.",
         site="main.js · M13",
         channel=CHANNEL_TOAST, title="SHE WRITES IT DOWN",
         lines=(
@@ -1977,23 +1972,17 @@ CLIENT — web/js/tutor.js (new; created by the cue half of this run)
   already refused. The retirement rule is `cue_retired()` and lives here on
   purpose, so `tutor.js` asks rather than counts.
 
-STILL OWED TO THE CLIENT, AND NOT BY THIS FILE — the rows a wiring pass would
-otherwise read as finished, because their owner is named and their prose is
-already written:
+FIELD HANDOFF DELIVERY — the client consumers for the two companion-owned rows:
 
-  W3  web/js/overworld.js   HANDOFF 2 (`the_doors and the_roads`) and
-                            HANDOFF 26 (`the_slate`) are handoffs to prose
-                            NOTHING ON THE CLIENT PRINTS TODAY. The server
-                            ships all of it — `escort` on the region view,
-                            `escort` and `escort_events` on the move payload,
-                            /api/escorts — and `grep -rn escort web/js/`
-                            returns nothing, as do `zonecompanion` and
-                            `thessaly`. They are owed to overworld.js by
-                            docs/12 §8.2 rows O11 and O12 and are not built.
-                            A pass that reads HANDOFFS and concludes "somebody
-                            else has this" is right about the owner and wrong
-                            about the state: two lessons stay undelivered
-                            until overworld.js reads one of those payloads.
+  W3  DELIVERED: main.js consumeEscortResponse / drainEscortNotices consumes
+      region.escort and the original move/travel.escort_events; WorldUI passes
+      its travel response before navigation teardown. Overworld.setEscort and
+      _offerEscortCaption feed the field sidebar from walking capability flags.
+      The Slate uses the server's existing grant and authored lines once; no
+      second grant or tutorial acknowledgement. Measured runs suppress both.
+      Captions reset per visit. Current house doorsteps speak to the mentor;
+      distinct service signs, human follower animation and enterable interiors
+      in docs/12 are still separate work, not implied by this handoff.
 
 TRIGGERS — the twenty-four call sites, by docs/13 §7 row. Every one of them is
 a single unconditional `tutor.beat('<id>')`: the second call returns {} and

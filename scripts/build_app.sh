@@ -6,6 +6,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="Python Coding Gauntlet Legend"
 APP="$REPO/dist/$APP_NAME.app"
 CONTENTS="$APP/Contents"
+APP_VERSION="$(python3 -c 'import runpy,sys; print(runpy.run_path(sys.argv[1])["VERSION"])' "$REPO/gauntlet/config.py")"
 
 echo "==> building $APP_NAME.app"
 rm -rf "$APP"
@@ -33,8 +34,8 @@ cat > "$CONTENTS/Info.plist" <<PLIST
   <key>CFBundleName</key>               <string>Gauntlet Legend</string>
   <key>CFBundleDisplayName</key>        <string>$APP_NAME</string>
   <key>CFBundleIdentifier</key>         <string>com.josea.gauntletlegend</string>
-  <key>CFBundleVersion</key>            <string>1.0.0</string>
-  <key>CFBundleShortVersionString</key> <string>1.0.0</string>
+  <key>CFBundleVersion</key>            <string>$APP_VERSION</string>
+  <key>CFBundleShortVersionString</key> <string>$APP_VERSION</string>
   <key>CFBundleExecutable</key>         <string>GauntletLegend</string>
   <key>CFBundleIconFile</key>           <string>AppIcon</string>
   <key>CFBundlePackageType</key>        <string>APPL</string>
@@ -66,7 +67,7 @@ note "starting from $APP_ROOT"
 pick_python() {
   local best=""
   local best_minor=-1
-  # Prefer a modern interpreter, but the system one is always an acceptable floor.
+  # The game uses Python 3.11 APIs; a system interpreter can be too old.
   for candidate in \
       /opt/homebrew/bin/python3.13 /opt/homebrew/bin/python3.12 \
       /opt/homebrew/bin/python3.11 /opt/homebrew/bin/python3 \
@@ -76,7 +77,7 @@ pick_python() {
     local minor
     minor="$("$candidate" -c 'import sys; print(sys.version_info[1] if sys.version_info[0]==3 else -1)' 2>/dev/null)" || continue
     [ -n "$minor" ] || continue
-    if [ "$minor" -ge 9 ] && [ "$minor" -gt "$best_minor" ]; then
+    if [ "$minor" -ge 11 ] && [ "$minor" -gt "$best_minor" ]; then
       best="$candidate"
       best_minor="$minor"
     fi
@@ -86,8 +87,8 @@ pick_python() {
 
 PY="$(pick_python)"
 if [ -z "$PY" ]; then
-  note "no python3 found"
-  /usr/bin/osascript -e 'display alert "Python 3 not found" message "Python Coding Gauntlet Legend needs Python 3.9 or newer.\n\nInstall the Xcode Command Line Tools with:\n\n    xcode-select --install\n\nthen open the app again." as critical'
+  note "no Python 3.11 or newer found"
+  /usr/bin/osascript -e 'display alert "Python 3.11 or newer required" message "Install a current Python 3 release from python.org/downloads/macos, or run brew install python if you use Homebrew.\n\nThen open the app again." as critical'
   exit 1
 fi
 note "using $PY ($("$PY" -V 2>&1))"
@@ -131,9 +132,21 @@ if [ -d "$INSTALLED" ]; then
   if pgrep -f "gauntlet.launcher" >/dev/null 2>&1; then
     echo "==> a copy is RUNNING; quit it before launching the new one"
   fi
-  rm -rf "$INSTALLED"
-  cp -R "$APP" "$INSTALLED"
+  # Copy completely before moving the installed app. Keep the previous bundle
+  # launchable in a dated directory so an update can be rolled back locally.
+  STAGING="$(mktemp -d "$HOME/Applications/.gauntlet-install.XXXXXX")"
+  cp -R "$APP" "$STAGING/"
+  BACKUP_DIR="$HOME/Applications/Gauntlet Legend Backups/$(date '+%Y-%m-%d_%H-%M-%S')-$$"
+  mkdir -p "$BACKUP_DIR"
+  mv "$INSTALLED" "$BACKUP_DIR/"
+  if ! mv "$STAGING/$(basename "$APP")" "$INSTALLED"; then
+    echo "==> install failed; restoring the previous app"
+    mv "$BACKUP_DIR/$(basename "$APP")" "$INSTALLED"
+    exit 1
+  fi
+  rmdir "$STAGING"
   echo "==> installed: $INSTALLED"
+  echo "==> previous app preserved: $BACKUP_DIR/$(basename "$APP")"
 else
   echo "==> not installed to ~/Applications (no copy there yet)"
   echo "    to install:  cp -R \"$APP\" ~/Applications/"

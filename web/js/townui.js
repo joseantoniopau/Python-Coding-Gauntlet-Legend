@@ -28,6 +28,7 @@
  */
 import { api } from './api.js';
 import * as sprites from './sprites.js';
+import * as tutor from './tutor.js';
 import {
   $, el, esc, lines, num, card, prose, meter, makeDisposer, faceFor,
   HOST, refusal, isSealed, sealedTitle, refusalCard,
@@ -208,19 +209,22 @@ function paintTabs() {
 async function paintBody() {
   const body = $('#town-body');
   if (!body) return;
-  if (TAB === 'mender') return paintMender(body);
-  if (TAB === 'smith') return paintSmith(body);
-  if (TAB === 'shelf') return paintShelf(body);
-  if (TAB === 'broker') return paintBroker(body);
   // A player who opened the portal tab and then walked out of the village
   // keeps the tab selected; the door does not come with them.
-  if (TAB === 'portal') {
-    if (tabsHere().some(t => t.id === 'portal')) return paintPortal(body);
+  if (TAB === 'portal' && !tabsHere().some(t => t.id === 'portal')) {
     TAB = 'mender';
     paintTabs();
-    return paintMender(body);
   }
-  return paintVoices(body);
+  const tab = TAB;
+  const painters = { mender: paintMender, smith: paintSmith, shelf: paintShelf,
+    broker: paintBroker, portal: paintPortal, voices: paintVoices };
+  await (painters[tab] || paintVoices)(body);
+  const valid = () => body.isConnected && TAB === tab;
+  // The square's introduction goes first. Each counter is taught on a later
+  // visit if another lesson is still visible; no queue of popups accumulates.
+  void tutor.beat('the_square_panel', { valid }).then(shown => {
+    if (!shown && TABS.some(t => t.id === tab)) void tutor.beat(`town_${tab}`, { valid });
+  });
 }
 
 /* ------------------------------------------------------- the Standing Portal */

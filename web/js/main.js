@@ -4,6 +4,7 @@ import { audio } from './audio.js';
 import * as pixel from './pixel.js';
 import * as sprites from './sprites.js';
 import * as lootart from './lootart.js';
+import { combatFrame } from './battlehero.js';
 import { createBattleFX, DAMAGE_KIND, trialsFromFeedback,
          screenShake, stopScreenShake, SHAKE } from './fx.js';
 import * as puzzleui from './puzzleui.js';
@@ -31,6 +32,11 @@ import { Transformation } from './transform.js';
 import * as spellfx from './spellfx.js';
 import * as legendui from './legendui.js';
 import * as finaleui from './finaleui.js';
+import * as tutor from './tutor.js';
+import { formatProse } from './markup.js';
+import * as learningui from './learningui.js';
+import { createDraftWriter } from './drafts.js';
+import * as traceui from './traceui.js';
 
 const $ = (sel) => document.querySelector(sel);
 const el = (tag, cls, html) => {
@@ -39,6 +45,50 @@ const el = (tag, cls, html) => {
   if (html !== undefined) n.innerHTML = html;
   return n;
 };
+
+// Optional guidance occupies its own strip; it never traps focus or covers code.
+const lessonQueue = [];
+let lessonPending = false;
+function offerLessons(...ids) {
+  ids = ids.filter(id => !['the_trials', 'the_tabs'].includes(id) || G.screen === 'battle');
+  for (const id of ids) if (!lessonQueue.includes(id)) lessonQueue.push(id);
+  void nextLesson();
+}
+async function nextLesson() {
+  if (lessonPending || !lessonQueue.length || !$('#lesson-guide').hidden ||
+      G.state?.run_open !== false || $('#modal-bg').classList.contains('show') ||
+      $('#dialogue').classList.contains('show')) return;
+  lessonPending = true;
+  const id = lessonQueue.shift();
+  try { await tutor.beat(id, { valid: () =>
+    !['the_trials', 'the_tabs'].includes(id) ||
+    (G.screen === 'battle' && (id !== 'the_trials' ||
+      (G.tab === 'trials' && !G.mcq && !G.incant))) });
+  } finally { lessonPending = false; }
+  if ($('#lesson-guide').hidden && lessonQueue.length) void nextLesson();
+}
+function configureTutor() {
+  tutor.configure({
+    state: () => ({ ...G.state, screen: G.screen,
+      encounterId: G.problem?.id || '', kind: G.problem?.encounter_kind || '',
+      busy: $('#modal-bg').classList.contains('show') || $('#dialogue').classList.contains('show') }),
+    show: lesson => {
+      const card = $('#lesson-guide');
+      const heading = el('strong'); heading.textContent = lesson.who || lesson.title || 'FIELD NOTES';
+      const close = el('button', 'btn small', 'GOT IT'); close.type = 'button';
+      close.onclick = () => tutor.dismiss();
+      const copy = el('div', 'lesson-copy');
+      for (const line of lesson.lines || []) copy.appendChild(el('p', '', markdownish(line)));
+      card.replaceChildren(heading, copy, close); card.hidden = false;
+      fitBattleStage(); return card.getClientRects().length > 0;
+    },
+    hide: () => { $('#lesson-guide').hidden = true; $('#lesson-guide').replaceChildren(); fitBattleStage(); queueMicrotask(nextLesson); },
+  });
+}
+async function startMeasured(action) {
+  tutor.sync({ run_open: true });
+  try { return await action(); } finally { await refresh(); }
+}
 
 const G = {
   state: null,
@@ -142,6 +192,7 @@ function modal(html, { wide = false } = {}) {
   m.innerHTML = html;
   m.style.width = wide ? 'min(1040px,96vw)' : 'min(900px,94vw)';
   $('#modal-bg').classList.add('show');
+  tutor.sync(G.state || {});
   return m;
 }
 
@@ -150,6 +201,8 @@ function closeModal() {
   G.modalTimer = null;
   $('#modal-bg').classList.remove('show');
   focusEditor();
+  void nextLesson();
+  queueMicrotask(drainEscortNotices);
 }
 
 $('#modal-bg').addEventListener('click', (e) => {
@@ -212,7 +265,9 @@ function advanceDialogue() {
   }
   if (next === undefined) {
     $('#dialogue').classList.remove('show');
+    void nextLesson();
     if (G.storyQueue && G.storyQueue.length) { setTimeout(playStoryQueue, 120); return; }
+    if (drainEscortNotices()) return;
     // Nobody is talking any more: the caret goes back to the editor, which is
     // where the player was about to need it. focusEditor waits out the tail of
     // the player's SPACE taps before it does.
@@ -243,10 +298,11 @@ $('#dialogue').addEventListener('click', advanceDialogue);
  *
  *   code    the editor, its caption and the CAST button
  *   puzzle  #puzzle-host; CAST still submits, so no caption and no pointer
- *   mcq     nothing to type: the answers are the TRIALS list, so say so
+ *   mcq     answer choices occupy the main work area
  *   incant  IncantationUI owns the pane and carries its own cast control
  */
 function setEditorMode(mode, verb = 'CAST ✦') {
+  $('#screen-battle').dataset.encounterLayout = mode;
   const caption = $('#editor-caption');
   const answer = $('#answer-here');
   /* ONE STRING, TWO PLACES. The caption used to hard-code "CAST ✦" while
@@ -259,6 +315,7 @@ function setEditorMode(mode, verb = 'CAST ✦') {
   if (castName) castName.textContent = verb;
   if (caption) caption.style.display = mode === 'code' ? '' : 'none';
   if (answer) answer.style.display = mode === 'mcq' ? '' : 'none';
+  if (mode !== 'mcq') $('#mcq-choices').replaceChildren();
   const pane = $('#editor-pane');
   if (pane && mode !== 'code') pane.classList.remove('typing');
 }
@@ -389,11 +446,7 @@ function fmtTime(seconds) {
 }
 
 function markdownish(text) {
-  return (text || '')
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/```(?:python)?\n([\s\S]*?)```/g, (m, code) => `<pre>${code}</pre>`)
-    .replace(/`([^`\n]+)`/g, '<code>$1</code>')
-    .replace(/\*\*([^*]+)\*\*/g, '<b style="color:var(--gold-hi)">$1</b>');
+  return formatProse(text);
 }
 
 function show(screen) {
@@ -407,10 +460,13 @@ function show(screen) {
    * The transform goes with them: a shake frozen mid-throw by a screen change
    * leaves the world canvas permanently three pixels to the left. */
   if (G.screen !== screen) {
+    if(G.screen === 'battle')void drafts.flush();
     audio.stopLoops();
     stopScreenShake();
   }
+  if (G.screen !== screen) { lessonQueue.length = 0; tutor.leaveEncounter(); }
   G.screen = screen;
+  tutor.sync(G.state || {});
   // A mounted child panel keeps its own timers and listeners. Leaving the panel
   // screen without telling it is the fifth leak this file is not going to have.
   if (screen !== 'panel') destroyChild();
@@ -504,6 +560,11 @@ function fitBattleStage() {
   const sh = screen.clientHeight;
   const sw = screen.clientWidth;
   if (sh < 80 || sw < 80) return;   // not laid out yet
+  // A presentation choice only: never recreate the editor or touch the run.
+  if (screen.classList.contains('coding-focus')) {
+    $('#battle-top').style.height = `${Math.max(120, Math.min(210, sh * .25))}px`;
+    return;
+  }
 
   // 0.62, and the exact number is load-bearing because THE SCALE IS AN
   // INTEGER. Measured at 1600x1000 with BAND 0.60: the height allowance came
@@ -656,6 +717,12 @@ async function refresh() {
     return G.state;
   }
   G.state = next;
+  tutor.sync(next);
+  if (next.run_open !== false) {
+    G.overworld?.setEscort(null);
+    G.escortCaption = null;
+    $('#escort-caption')?.remove();
+  }
   /* THE SKY RIDES ON THE REGION RECORD, AND THE RECORD IS BEING REPLACED HERE.
    *
    * Every payload carries a fresh 24-slot weather strip — two hours of sky —
@@ -741,6 +808,10 @@ function currentRegion() {
 
 function loadRegion(regionId, spawn) {
   const region = G.state.regions.find(r => r.id === regionId) || G.state.regions[0];
+  clearTimeout(G._moveSave);
+  G._fieldEpoch = (G._fieldEpoch || 0) + 1;
+  G.escortCaption = null;
+  G.regionElement = null;
   G.state.player.region = region.id;
   G.overworld.load(region, region.tier, spawn);
   G.overworld.solvedNodes = new Set(JSON.parse(
@@ -787,6 +858,14 @@ function paintWorldSide() {
   const region = currentRegion();
   const due = s.retests_due.length;
   side.innerHTML = '';
+  if (s.run_open === false && G.escortCaption?.region === region.id) {
+    const caption = el('div', 'frame');
+    caption.id = 'escort-caption';
+    caption.setAttribute('role', 'status');
+    caption.innerHTML = uikit.card(G.escortCaption.name,
+      uikit.prose(G.escortCaption.lines));
+    side.appendChild(caption);
+  }
 
   const ch = s_.chapter;
   if (ch) {
@@ -826,6 +905,12 @@ function paintWorldSide() {
   const actions = el('div', 'stack');
   const btnNext = el('button', 'btn primary', 'NEXT ENCOUNTER (N)');
   btnNext.onclick = () => startNext();
+  const active=G.state?.active_encounter;
+  if(active?.mode==='adventure' && !active.repo_id && !active.boss_id && !active.practice_id && !(active.dungeon_room>=0) && !G.state.run_open && !G.state.dungeon && !G.state.incantation && !G.state.boss_fight){
+    const resume=el('button','btn','RESUME UNFINISHED ENCOUNTER');
+    resume.onclick=async()=>{resume.disabled=true;try{const payload=await api.resumeEncounter(active.problem_id);if(!resume.isConnected)return;if(payload.error)throw new Error(payload.message||payload.error);enterBattle(payload);}catch(error){if(resume.isConnected){resume.disabled=false;toast('CANNOT RESUME',error.message,'red');}}};
+    actions.appendChild(resume);
+  }
   const btnBoss = el('button', 'btn danger', 'CHALLENGE BOSS');
   btnBoss.onclick = () => showBossList();
   const btnShrine = el('button', 'btn', 'MEMORY SHRINE');
@@ -1000,15 +1085,99 @@ function affinityPanel(region) {
 /* One fetch per region, cached. The overworld repaints its side panel often and
  * a request per repaint would be a request per keystroke. */
 function ensureRegionElement(regionId) {
-  if (G._regionElementPending === regionId) return;
-  G._regionElementPending = regionId;
+  const epoch = G._fieldEpoch;
+  if (G._regionElementPending?.region === regionId && G._regionElementPending.epoch === epoch) return;
+  const request = { region: regionId, epoch };
+  G._regionElementPending = request;
   api.region(regionId).then((view) => {
-    G._regionElementPending = null;
-    if (!view || view.error) return;
+    if (G._regionElementPending === request) G._regionElementPending = null;
+    if (!view || view.error || epoch !== G._fieldEpoch || currentRegion().id !== regionId) return;
     G.regionElement = { region: regionId, data: view.element || {} };
+    consumeEscortResponse(view, regionId, epoch);
     // Only if the player is still standing where the answer is about.
     if (G.screen === 'world' && currentRegion().id === regionId) paintWorldSide();
-  }).catch(() => { G._regionElementPending = null; });
+  }).catch(() => { if (G._regionElementPending === request) G._regionElementPending = null; });
+}
+
+/* These are pending presentation notices, not a second companion state or an
+ * acknowledgement ledger. The server has already granted and latched a gift.
+ * Keep the original movement/travel response through a dashboard refresh,
+ * which intentionally does not repeat its one-shot events. */
+const escortNotices = [];
+const escortResponses = new WeakSet();
+function escortPlayer() { return G.state?.player?.created_at; }
+
+function consumeEscortResponse(payload, regionId, epoch = G._fieldEpoch) {
+  if (!payload || typeof payload !== 'object' || payload.error || G.state?.run_open !== false) return;
+  if (!escortResponses.has(payload)) {
+    escortResponses.add(payload);
+    for (const event of payload.escort_events || []) {
+      if (!['given', 'kept'].includes(event.kind) || !event.drop?.id) continue;
+      const person = payload.escort?.id === event.escort ? payload.escort : null;
+      const lines = [...(event.lines || []), event.note, event.drop.mechanic].filter(Boolean);
+      if (lines.length) escortNotices.push({ player: escortPlayer(),
+        name: person?.name || event.drop.name, portrait: uikit.faceFor(person?.sprite),
+        lines: [`${event.drop.name} — received`, ...lines] });
+    }
+  }
+  if (epoch === G._fieldEpoch && currentRegion().id === regionId &&
+      G.overworld?.region?.id === regionId && Object.hasOwn(payload, 'escort')) {
+    G.overworld.setEscort(payload.escort);
+    if (!payload.escort?.walking) {
+      G.escortCaption = null;
+      $('#escort-caption')?.remove();
+    }
+  }
+}
+
+function drainEscortNotices() {
+  if (G.screen !== 'world' || G.state?.run_open !== false ||
+      document.body.classList.contains('titling') ||
+      $('#dialogue').classList.contains('show') || $('#modal-bg').classList.contains('show') ||
+      G.storyQueue?.length || G.afterStory) return false;
+  while (escortNotices.length) {
+    const notice = escortNotices.shift();
+    if (notice.player !== escortPlayer()) continue;
+    say(notice.name, notice.lines, notice.portrait, 'pleased');
+    return true;
+  }
+  return false;
+}
+
+function showEscortCaption(row, marker) {
+  if (G.screen !== 'world' || G.state?.run_open !== false ||
+      $('#dialogue').classList.contains('show') || $('#modal-bg').classList.contains('show')) return false;
+  const region = currentRegion();
+  let lines = [];
+  if (marker.kind === 'building') {
+    const mentor = G.world.mentors[region.mentor];
+    if (!mentor) return false;
+    // These houses currently share the mentor interaction. Do not assign a
+    // smith or mender to a facade that actually opens mentorTalk().
+    lines = [`${mentor.name} — SPACE to speak at this doorstep.`, region.physical];
+  } else if (marker.kind === 'exit') {
+    lines = roadsFromHere().map(road => `${road.name} → ${road.to_name}. ${
+      road.passable ? `Danger ${road.danger}${road.warning ? ' · ' + road.warning : ''}.`
+        : `${road.requirement} — ${road.percent}% of the way there.`}`);
+  }
+  if (!lines.length) return false;
+  G.escortCaption = { region: region.id, name: row.name, lines: lines.filter(Boolean) };
+  paintWorldSide();
+  return true;
+}
+
+function saveFieldMove(x, y) {
+  clearTimeout(G._moveSave);
+  const regionId = currentRegion().id, epoch = G._fieldEpoch, player = escortPlayer();
+  G._moveSave = setTimeout(async () => {
+    if (epoch !== G._fieldEpoch || G.screen !== 'world' || G.state?.run_open !== false) return;
+    try {
+      const result = await api.move(regionId, x, y);
+      if (player !== escortPlayer()) return;
+      consumeEscortResponse(result, regionId, epoch);
+      drainEscortNotices();
+    } catch { /* The next field step retries the position save. */ }
+  }, 900);
 }
 
 /* Every road leaving the region the server says you are standing in. Sorted
@@ -1057,6 +1226,8 @@ function routeRow(road) {
 }
 
 async function takeRoad(road) {
+  const screen = G.screen, epoch = G._fieldEpoch, player = escortPlayer();
+  clearTimeout(G._moveSave);
   let r;
   try {
     r = await api.travel(road.id);
@@ -1068,13 +1239,19 @@ async function takeRoad(road) {
       (r.route && r.route.requirement) || r.error, 'red');
     return;
   }
+  if (player !== escortPlayer()) return;
+  consumeEscortResponse(r, r.region, -1);
+  if (G.screen !== screen || G._fieldEpoch !== epoch || G.state?.run_open !== false) return;
   audio.sfx('unlock');
   await refresh();
+  if (G.screen !== screen || G._fieldEpoch !== epoch || G.state?.run_open !== false) return;
   closeModal();
   loadRegion(r.region);
+  consumeEscortResponse(r, r.region);
   // Travelling is reachable from the map panel as well as the world side, so
   // the screen it lands on has to be the world rather than whatever was open.
   returnToWorld();
+  offerLessons('the_practical');
 }
 
 /* Icons for state.todo rows. Decoration, not meaning — every row carries its
@@ -1200,18 +1377,55 @@ function showTravel() {
 
 /* ---------------- battle ---------------- */
 
+const drafts = createDraftWriter({
+  snapshot: () => G.encounter && G.encounter.mode !== 'interview' && !G.state?.run_open &&
+    !G.mcq && !G.puzzle && G.editor && G.screen === 'battle' ? {
+      problem_id:G.problem.id, encounter_started_at:G.encounter.encounter.started_at,
+      code:G.editor.value, explanation:G.encounter.encounter.explanation || '',
+    } : null,
+  save: row => api.practiceDraft(row),
+  status: text => { const node=$('#draft-status'); if(node)node.textContent=text; },
+});
+let practicePausing = false;
+async function pauseAwayPractice(){
+  if(practicePausing || G.state?.practice?.status !== 'active')return;
+  practicePausing=true;
+  try{
+    await drafts.flush();
+    const result=await api.practiceAction('pause');
+    if(!result.error && G.state?.practice)G.state.practice.status='paused';
+  }catch(_){/* The server's activity lease caps time after a lost connection. */}
+  finally{practicePausing=false;}
+}
+window.addEventListener('pagehide',()=>{void drafts.flush();void pauseAwayPractice();});
+document.addEventListener('visibilitychange',()=>{
+  if(document.hidden)void pauseAwayPractice();
+  else if(G.state?.practice?.status==='paused')toast('PRACTICE PAUSED','Resume your session from PRACTICE when you are ready.','blue');
+});
+setInterval(()=>{
+  if(!document.hidden && G.state?.practice?.status==='active')void api.practiceAction('heartbeat').catch(()=>{});
+},30000);
+
 async function startNext(opts = {}) {
   try {
-    const payload = await api.nextEncounter({
-      region: opts.region, mode: 'adventure', kind: opts.kind,
-    });
+    await drafts.flush();
+    const payload = G.state?.practice?.status === 'active' && !Object.keys(opts).length
+      ? await api.practiceNext() : await api.nextEncounter({
+        region: opts.region, mode: 'adventure', kind: opts.kind,
+      });
+    if(payload.error)throw new Error(payload.message || payload.error);
     enterBattle(payload);
   } catch (e) { toast('THE WORLD RESISTS', e.message, 'red'); }
 }
 
 async function startProblem(id, mode = 'adventure') {
   try {
-    enterBattle(await api.startEncounter(id, mode));
+    await drafts.flush();
+    const active=G.state?.active_encounter;
+    const resume=mode==='adventure' && active?.problem_id===id && !active.repo_id && !active.boss_id && !active.practice_id;
+    const payload=resume?await api.resumeEncounter(id):await api.startEncounter(id,mode);
+    if(payload.error)throw new Error(payload.message||payload.error);
+    enterBattle(payload);
   } catch (e) { toast('CANNOT ENTER', e.message, 'red'); }
 }
 
@@ -1230,9 +1444,13 @@ function enterBattle(payload) {
   partyui.beginEncounter();
   G.encounter = payload;
   G.problem = payload.problem;
+  G.explainBox = null;
+  const recovery=payload.mode!=='interview' && !G.state?.run_open ? drafts.recover({problem_id:payload.problem.id,encounter_started_at:payload.encounter.started_at}) : null;
+  if(recovery)payload.draft={...payload.draft,...recovery};
+  if(payload.draft)payload.encounter.explanation=payload.draft.explanation || '';
   G.hints = [];
   G.probeCharges = payload.probe_charges;
-  G.startedAt = Date.now();
+  G.startedAt = ['ENCOUNTER_RESUME','PRACTICE_RESUME'].includes(payload.reason) ? Number(payload.encounter.started_at)*1000 : Date.now();
   G.interview = payload.interview || null;
   // What this fight has taken off you. Interview Mode is the full seal; a boss
   // is whatever its rung has taken. Read it once, here, and let the tabs obey.
@@ -1257,6 +1475,12 @@ function enterBattle(payload) {
   meta.appendChild(el('span', 'tag', p.encounter_kind.replace(/_/g, ' ')));
   if (payload.encounter.is_retest) {
     meta.appendChild(el('span', 'tag red', `MEMORY AMBUSH · ${Math.round(payload.encounter.interval_days)}d`));
+  }
+  const contract=payload.boss?.rematch_contract;
+  if(contract && contract.rematch>0){
+    const note=el('div','rematch-contract');
+    note.innerHTML=`<b>${contract.constraint_changed?'CHANGED CONTRACT':'BOSS PRACTICE'}</b> ${uikit.esc(contract.what_changed)}${contract.constraint?`<br>${uikit.esc(contract.constraint)}`:''}<br><span class="muted">Practice material · does not count as unseen transfer evidence.</span>`;
+    meta.appendChild(note);
   }
   if (p.reported_company) {
     meta.appendChild(el('span', 'tag green',
@@ -1295,6 +1519,10 @@ function enterBattle(payload) {
     G.editor = new Editor($('#editor-host'), {
       onRun: doRun, onSubmit: doSubmit, assist: !interview,
     });
+    G.editor.input.addEventListener('input', () => drafts.changed());
+    G.editor.input.addEventListener('keyup', event => {
+      if(['Tab','Enter'].includes(event.key))drafts.changed();
+    });
   }
   G.editor.setAssist(!interview);
 
@@ -1313,7 +1541,7 @@ function enterBattle(payload) {
   } else if (p.entry && p.entry.kind === 'mcq') {
     renderMcq(p);
   } else {
-    G.editor.reset(p.starter_code || '');
+    G.editor.reset(payload.draft?.code ?? p.starter_code ?? '');
     $('#editor-host').style.display = '';
     $('#puzzle-host').style.display = 'none';
     // One verb, set on the button and on the sentence that points at it.
@@ -1340,6 +1568,14 @@ function enterBattle(payload) {
   // only way to answer, and the seal is about help, not about the question.
   setTab(G.mcq ? 'trials' : visibleTab(interview ? 'approach' : 'trials'));
   show('battle');
+  drafts.reset(!!payload.draft && !recovery);
+  if(recovery)drafts.changed();
+  tutor.enterEncounter();
+  if (payload.mode !== 'interview') {
+    offerLessons('the_fight', ...(!G.mcq && !G.puzzle ? ['the_code_fight'] : []));
+    if ((G.state.stats.encounters || 0) >= 1) offerLessons('the_trials');
+    if ((G.state.stats.encounters || 0) >= 2) offerLessons('the_tabs');
+  }
   // AFTER show(), and this is the whole reason the caret was never in the
   // editor: Editor.reset() focuses the textarea, but it runs while
   // #screen-battle is still display:none and focusing a node in a hidden
@@ -2750,40 +2986,52 @@ function renderPuzzle(p) {
   $('#btn-submit').disabled = !G.puzzle.ready();
 }
 
-/* THE CHOICES ARE THE ENCOUNTER, so they cannot live in a node somebody else
- * owns. They used to be appended straight into #battle-side-body — which
- * `setTab` empties on every call — and `enterBattle` calls `setTab` four lines
- * after rendering the problem. The result was the FIRST ENCOUNTER OF A NEW GAME
- * showing its question, hiding the CAST button (correctly: the answers are the
- * button), and offering nothing to click. Clicking any tab did the same thing.
- *
- * So the choices are registered as what the trials tab IS for this encounter,
- * and repainting is now what restores them rather than what destroys them. */
+/* Choices own the main work area. Tabs can change without replacing the
+ * controls or resetting the submission lock for this encounter. */
 function renderMcq(p) {
   $('#editor-host').style.display = 'none';
-  // No editor and no CAST: the pane says where the answers are instead of
-  // sitting there as an empty black rectangle.
+  $('#puzzle-host').style.display = 'none';
   setEditorMode('mcq');
   $('#btn-run').style.display = 'none';
+  $('#btn-reset').style.display = 'none';
   // The answers ARE the choices. Leaving a primary submit button on screen
   // just offers a way to fail an encounter without answering it.
   $('#btn-submit').style.display = 'none';
   G.mcq = p.mcq;
+  paintMcq($('#mcq-choices'));
   setTab('trials');
 }
 
-/* Painted by setTab, so it survives a tab round-trip and the repaint at the
- * end of enterBattle. */
+/* The working area owns answers; tab changes cannot erase or unlock them. */
 function paintMcq(body) {
   const mcq = G.mcq;
   if (!mcq) return;
+  body.replaceChildren();
   if (mcq.code) body.appendChild(el('pre', 'spell-body', mcq.code));
+  let pending = false;
   (mcq.choices || []).forEach((choice, i) => {
-    const item = el('div', 'list-item', `<span class="d">${markdownish(choice)}</span>`);
+    const item = el('button', 'list-item answer-choice',
+      `<span class="answer-number" aria-hidden="true">${i + 1}</span><span class="d">${markdownish(choice)}</span>`);
+    item.type = 'button';
     item.onclick = async () => {
+      if (pending) return;
+      pending = true;
+      body.setAttribute('aria-busy', 'true');
+      const buttons = Array.from(body.querySelectorAll('button'));
+      buttons.forEach(b => { b.disabled = true; });
+      let accepted = false;
       try {
-        await showResult(await api.mcq(i));
-      } catch (e) { toast('ANSWER FAILED', e.message, 'red'); }
+        const result = await api.mcq(i);
+        accepted = true;
+        if (G.mcq === mcq) await showResult(result);
+      } catch (e) {
+        toast(accepted ? 'ANSWER SAVED · DISPLAY FAILED' : 'ANSWER FAILED', e.message, 'red');
+        if (!accepted && G.mcq === mcq) {
+          pending = false;
+          buttons.forEach(b => { b.disabled = false; });
+          item.focus();
+        }
+      } finally { body.removeAttribute('aria-busy'); }
     };
     body.appendChild(item);
   });
@@ -2798,6 +3046,8 @@ function startTimer() {
       $('#battle-timer').style.color = 'var(--orange)';
     }
     if (G.interview) paintInterviewTimer();
+    void tutor.tick();
+    void nextLesson();
   }, 500);
 }
 
@@ -2870,6 +3120,7 @@ function setTab(tab) {
   // ticking against a canvas that is no longer in the document, forever.
   stopViz();
   G.tab = tab;
+  tutor.sync(G.state || {});
   for (const b of document.querySelectorAll('#battle-side-tabs button')) {
     b.classList.toggle('active', b.dataset.tab === tab);
   }
@@ -2878,14 +3129,18 @@ function setTab(tab) {
   // An incantation fight has no problem, no trials and no probes. Its side is
   // the battlefield: the names in scope and what the fight is asking for.
   if (G.incant) { paintIncantSide(body); return; }
-  // An MCQ owns the trials slot: there are no trials to show, and the choices
-  // are the only way to answer the encounter.
-  if (G.mcq && tab === 'trials') { paintMcq(body); return; }
+  if (G.mcq && tab === 'trials') {
+    body.appendChild(el('p', 'muted', 'Your answers are in the main panel. Select one when you are ready.'));
+    return;
+  }
   if (tab === 'trials') paintTrials(body);
   else if (tab === 'tactics') paintTactics(body);
   else if (tab === 'spells') paintSpells(body);
   else if (tab === 'approach') paintApproach(body);
   else if (tab === 'vision') paintVision(body);
+  if (G.screen === 'battle' && tab === 'trials' && (G.state.stats.encounters || 0) >= 1) {
+    offerLessons('the_trials');
+  }
 }
 
 document.querySelectorAll('#battle-side-tabs button').forEach(b => {
@@ -3168,20 +3423,21 @@ function paintSpells(body) {
 
 function paintApproach(body) {
   body.appendChild(el('div', 'muted small',
-    'Before you write: what is your approach, which structure, and what does it cost? '
-    + 'Interviewers score this as heavily as the code.'));
+    'Before you write: explain your approach, the structure you need, and its cost. '
+    + 'Use the feedback as a communication self-check.'));
   const ta = el('textarea', 'explain');
-  ta.placeholder = "I'll use a dictionary of value → index. One pass; for each value I "
-    + 'check whether its complement is already stored. Each element is handled once, '
-    + 'so O(n) time and O(n) space.';
+  ta.placeholder = 'Explain your representation, the fact that stays true as the algorithm runs, an edge case, and time/space cost in terms of the input.';
+  ta.maxLength = 4000;
+  ta.setAttribute('aria-label', 'My approach and reasoning');
   ta.value = G.encounter.encounter.explanation || '';
   body.appendChild(ta);
   G.explainBox = ta;
+  ta.oninput=()=>{G.encounter.encounter.explanation=ta.value;drafts.changed();};
 
   // The coach is a crutch with a rung on the ladder. Once a boss has taken it,
   // the button is gone in Adventure Mode too — the server refuses it either way.
   if (!capSealed('COACH')) {
-    const btn = el('button', 'btn small', 'SCORE MY EXPLANATION');
+    const btn = el('button', 'btn small', 'CHECK MY COMMUNICATION');
     btn.onclick = async () => {
       let r;
       try {
@@ -3189,13 +3445,13 @@ function paintApproach(body) {
       } catch (e) { toast('NOT SCORED', e.message, 'red'); return; }
       if (r.error) { toast('NOT SCORED', r.error, 'red'); return; }
       const out = el('div', 'frame', `<div style="padding:12px">
-        <div class="pixel" style="color:var(--gold);font-size:11px">SCORE ${r.score}</div>
+        <div class="pixel" style="color:var(--gold);font-size:11px">TOPIC COVERAGE ${r.score}%</div>
         <div style="margin:8px 0">${r.checks.map(c =>
           `<div class="gate ${c.passed ? 'pass' : 'fail'}">
              <span class="mark">${c.passed ? '✔' : '·'}</span>
-             <span>${c.label} <span class="muted small">— ${c.why}</span></span></div>`).join('')}</div>
-        <div class="small" style="color:var(--violet)">${r.verdict}</div>
-        <div class="small muted" style="margin-top:8px">${r.model_answer}</div>
+             <span>${uikit.esc(c.label)} <span class="muted small">— ${uikit.esc(c.why)}</span>${c.evidence?`<blockquote>${uikit.esc(c.evidence)}</blockquote>`:""}<span class="muted small">${uikit.esc(c.status || "unverified").replaceAll("_", " ")}</span></span></div>`).join('')}</div>
+        <div class="small" style="color:var(--violet)">${uikit.esc(r.verdict)}</div>
+        <div class="small muted" style="margin-top:8px">${uikit.esc(r.model_answer)}</div>
       </div>`);
       body.appendChild(out);
       audio.sfx('select');
@@ -3234,6 +3490,32 @@ function paintVision(body) {
     body.appendChild(el('div', 'muted', 'Sealed during Interview Mode.'));
     return;
   }
+  const visible=(G.problem.visible_tests || []).filter(row=>!row.hidden);
+  if(['function','class_ops'].includes(G.problem.entry?.kind) && visible.length && !capSealed('COACH')){
+    const section=el('section','trace-request');
+    section.appendChild(el('h3','','TRACE MY PYTHON'));
+    section.appendChild(el('p','muted','Run your current code on one public test. Step through real Python line events, local values and output. This is a coaching tool; it does not submit or grade a solution.'));
+    const label=el('label','','Public test '),select=el('select');
+    visible.forEach((row,index)=>{const option=el('option');option.value=index;option.textContent=row.name || `Public test ${index+1}`;select.appendChild(option);});
+    label.appendChild(select);section.appendChild(label);
+    const button=el('button','btn small','TRACE CURRENT CODE'),out=el('div');
+    section.append(button,out);body.appendChild(section);
+    button.onclick=async()=>{
+      button.disabled=true;out.textContent='Running the selected public test…';
+      if(G.trace){G.trace.destroy();G.trace=null;}
+      const encounter=G.encounter;
+      try{
+        const result=await api.trace(G.editor.value,Number(select.value));
+        if(!out.isConnected||G.encounter!==encounter)return;
+        if(result.error)throw new Error(result.message||result.error);
+        out.replaceChildren();
+        G.trace=traceui.mount(out,result);
+      }catch(error){if(out.isConnected)out.textContent=error.message;}
+      finally{if(button.isConnected)button.disabled=false;}
+    };
+  }
+  body.appendChild(el('h3','','CONCEPT DEMONSTRATION'));
+  body.appendChild(el('p','muted','The animation below uses an authored example to explain the pattern. It is separate from your program trace above.'));
   const kind = (G.problem.visualization && G.problem.visualization.type)
     || G.problem.pattern.toLowerCase();
   if (!hasViz(kind)) {
@@ -3269,6 +3551,7 @@ function paintVision(body) {
 /* Stop and forget the visualiser. Called from every path that removes its
  * canvas from the document — tab switch, leaving the battle, a new encounter. */
 function stopViz() {
+  if(G.trace){G.trace.destroy();G.trace=null;}
   if (!G.viz) return;
   G.viz.stop();
   G.viz = null;
@@ -3277,7 +3560,8 @@ function stopViz() {
 
 /* --- run / submit --- */
 
-async function doRun() {
+async function doRun(event) {
+  if (!event) void tutor.used('run');
   if (!G.encounter) return;
   const btn = $('#btn-run');
   btn.disabled = true;
@@ -3325,7 +3609,8 @@ async function doRun() {
   focusEditor({ keepSelection: true, guard: false });
 }
 
-async function doSubmit() {
+async function doSubmit(event) {
+  if (!event) void tutor.used('cast');
   if (!G.encounter) return;
   const btn = $('#btn-submit');
   const label = btn.textContent;
@@ -3356,10 +3641,11 @@ async function doSubmit() {
     return;
   }
   try {
+    await drafts.flush();
     const result = await api.submit({
       code: G.editor.value,
       declared_pattern: G.declared || '',
-      explanation: G.explainBox ? G.explainBox.value : '',
+      explanation: G.encounter.encounter.explanation || '',
       interview: G.encounter.mode === 'interview',
     });
     // Awaited inside the try: a failure while building the report must surface
@@ -3371,6 +3657,8 @@ async function doSubmit() {
 }
 
 async function showResult(result) {
+  const choiceEncounter = !!G.mcq;
+  const puzzleEncounter = !!G.puzzle;
   G.lastResult = result;
   G.declared = null;
   clearInterval(G.timer);
@@ -3441,10 +3729,10 @@ async function showResult(result) {
          * "stop making me wait for the animation". */
         audio.sfx('defeat');
         if (!(G.state && G.state.settings.reduced_motion)) {
-          await new Promise(r => setTimeout(r, 360));
+          await new Promise(r => setTimeout(r, G.encounter.enemy?.boss ? 360 : 120));
         }
         await G.fx.victory({ rank: result.rank, xp: result.xp,
-                             loot: result.loot });
+                             loot: result.loot, quick: !G.encounter.enemy?.boss });
       } else await G.fx.defeat({ cause: (result.analysis || {}).root_cause });
     } catch (err) { /* the report must appear even if the animation cannot */ }
   }
@@ -3497,8 +3785,8 @@ async function showResult(result) {
       <span class="tag blue">${fmtTime(result.seconds)} / target ${fmtTime(result.target_seconds)}</span>
       ${result.combo > 1 ? `<span class="tag green">COMBO ×${result.combo_multiplier.toFixed(2)}</span>` : ''}
       ${result.skill ? `<span class="tag violet">${result.skill.replace(/_/g, ' ')}
-        → ${result.skill_state ? Math.round(result.skill_state.mastery) : '—'}
-        (${result.skill_state ? result.skill_state.stage : ''})</span>` : ''}
+        · familiarity ${result.skill_state ? Math.round(result.skill_state.mastery) : '—'}
+        ${choiceEncounter ? '· code reading' : puzzleEncounter ? '· guided reasoning' : ''}</span>` : ''}
       ${result.next_retest_days ? `<span class="tag">retest in ${result.next_retest_days}d</span>` : ''}
     </div>`;
 
@@ -3516,7 +3804,9 @@ async function showResult(result) {
       html += `<h3>THE COACH ASKS</h3><ul style="line-height:1.9;color:var(--ink-dim)">`
         + result.coach.questions.map(q => `<li>${q}</li>`).join('') + '</ul>';
     }
-    if (result.coach.analysis) html += `<p>${markdownish(result.coach.analysis)}</p>`;
+    if (choiceEncounter) html += `<p>${result.solved ? 'You read the program correctly.' : 'Compare your answer with what the program evaluates.'}
+      This encounter practices code reading. Writing a solution independently is measured in later coding encounters.</p>`;
+    else if (result.coach.analysis) html += `<p>${markdownish(result.coach.analysis)}</p>`;
     if (result.coach.next_steps.length) {
       html += '<h3>WHAT TO TRAIN NEXT</h3><ul style="line-height:1.9;color:var(--ink-dim)">'
         + result.coach.next_steps.map(s => `<li>${s}</li>`).join('') + '</ul>';
@@ -3549,7 +3839,7 @@ async function showResult(result) {
       }
       html += `<p class="small muted">You probed those boundaries before you cast.
         That is what the ×${c.xp_multiplier} XP multiplier is for.</p>`;
-    } else if (c.probes_used === 0 && result.solved) {
+    } else if (c.probes_used === 0 && result.solved && !choiceEncounter && !puzzleEncounter) {
       html += `<p class="small muted">No probes spent. Exposing a weakness before you
         cast turns its hidden trial into a critical — and criticals multiply both XP
         and loot quality.</p>`;
@@ -3606,11 +3896,13 @@ async function showResult(result) {
     html += bossReport(result.boss);
   }
   if (result.canonical_solution) {
-    html += `<h3>THE WORKED SOLUTION</h3>
+    html += `<h3>${choiceEncounter ? 'THE ANSWER' : 'THE WORKED SOLUTION'}</h3>
       <pre class="spell-body">${result.canonical_solution
         .replace(/&/g, '&amp;').replace(/</g, '&lt;')}</pre>
-      <p class="small muted">Close this, clear the editor, and rebuild it from memory.
-      Reading a solution is not learning it.</p>`;
+      <p class="small muted">${choiceEncounter
+        ? 'Explain the result in your own words, then predict what would change if one input changed.'
+        : puzzleEncounter ? 'Explain why the structure works, then try the next variation without this example.'
+        : 'Close this and rebuild the solution from memory. A later variation will test whether the idea transfers.'}</p>`;
   }
   if (result.explanation) html += `<h3>WHY</h3><p>${markdownish(result.explanation)}</p>`;
   if (result.explanation_score) {
@@ -3669,7 +3961,12 @@ async function showResult(result) {
   });
   // The server keeps enc.started_at from first entry and grades SPEED on it, so
   // restarting the visible clock would only lie to the player about their rank.
-  bind('r-retry', () => { closeModal(); startTimer(); G.editor.focus(); });
+  bind('r-retry', () => {
+    closeModal(); startTimer();
+    if (G.mcq) { paintMcq($('#mcq-choices')); $('#mcq-choices button')?.focus(); }
+    else if (G.puzzle) $('#puzzle-host button, #puzzle-host input')?.focus();
+    else G.editor.focus();
+  });
   bind('r-world', () => {
     closeModal();
     afterReport(() => { returnToWorld(); playStoryQueue(); });
@@ -3835,6 +4132,8 @@ function playStoryQueue() {
 }
 
 function returnToWorld() {
+  void drafts.flush();
+  const fromBattle = G.screen === 'battle';
   clearInterval(G.timer);
   stopViz();
   // The door shuts behind you on the way out to the field, wherever you were.
@@ -3864,13 +4163,33 @@ function returnToWorld() {
   audio.play(region.music || 'overworld');
   paintWorldSide();
   show('world');
+  drainEscortNotices();
+  if (fromBattle) {
+    offerLessons('saving');
+    if (G.state.player.stamina < G.state.player.stamina_max) offerLessons('stamina');
+    if (G.lastResult && !G.lastResult.solved) offerLessons('the_fall');
+  }
 }
 
 $('#btn-run').onclick = doRun;
+$('#btn-focus').onclick = () => {
+  const active = $('#screen-battle').classList.toggle('coding-focus');
+  $('#btn-focus').setAttribute('aria-pressed', String(active));
+  $('#btn-focus').textContent = active ? 'SHOW BATTLE' : 'FOCUS VIEW';
+  try { localStorage.setItem('gauntlet-focus-view', String(active)); } catch (_) { /* optional preference */ }
+  fitBattleStage();
+};
+try {
+  if (localStorage.getItem('gauntlet-focus-view') === 'true') {
+    $('#screen-battle').classList.add('coding-focus');
+    $('#btn-focus').setAttribute('aria-pressed', 'true');
+    $('#btn-focus').textContent = 'SHOW BATTLE';
+  }
+} catch (_) { /* Storage may be unavailable; the view still works. */ }
 $('#btn-submit').onclick = doSubmit;
 $('#btn-reset').onclick = () => {
   if (G.puzzle && G.problem) { renderPuzzle(G.problem); return; }
-  if (G.problem) G.editor.reset(G.problem.starter_code || '');
+  if (G.problem) { G.editor.reset(G.problem.starter_code || ''); drafts.changed(); }
 };
 $('#btn-flee').onclick = () => {
   say('RETREAT', ['Nothing is lost. The pattern stays in your schedule and will '
@@ -4646,6 +4965,7 @@ async function showRepoResult(result) {
 /* ---------------- shrine ---------------- */
 
 async function doShrine() {
+  offerLessons('the_shrine');
   let q;
   try {
     q = await api.shrine();
@@ -4883,6 +5203,7 @@ function bossGate(b) {
 }
 
 function showBossList(regionId) {
+  offerLessons('the_keys');
   const bosses = G.state.bosses.filter(b => !regionId || b.region === regionId);
   const gates = new Map();
   // The ladder the player walked out of, if they walked out of one. Four to six
@@ -5480,6 +5801,7 @@ function paintGrimoire() {
     </div>`).join('');
 
   panel('PATTERN GRIMOIRE', `
+    <div class="actions"><button class="btn primary" id="grimoire-personal">MY CODE &amp; NOTES</button></div>
     <p class="small muted">Cards are earned by demonstrated use, not by walking into a
     region. ${known.length} of ${Object.keys(cards).length} pattern cards
     · ${storyCards.length} card(s) recovered from the story.</p>
@@ -5494,6 +5816,7 @@ function paintGrimoire() {
     </div>` : ''}
     <div class="frame" style="padding:14px">
       <div class="section-title">NOT YET EARNED</div>${locked || '—'}</div>`);
+  $('#grimoire-personal').onclick = () => go('journal');
 }
 
 function paintInterview() {
@@ -5583,27 +5906,25 @@ function paintInterview() {
     };
   });
   document.querySelectorAll('[data-format]').forEach(b => {
-    b.onclick = async () => {
-      let run;
-      try {
-        run = await api.startInterview(b.dataset.format, s.player.profile);
-      } catch (e) { toast('CANNOT START', e.message, 'red'); return; }
-      if (run.error) { toast('CANNOT START', run.error, 'red'); return; }
-      const m = modal(`<h2>${run.label}</h2>
-        <ul style="line-height:2;color:var(--ink-dim)">${run.rules.map(r => `<li>${r}</li>`).join('')}</ul>
-        <p class="small muted">${run.problems.length} problems, rising in difficulty.
-        The family is never named.</p>
+    b.onclick = () => {
+      const format = b.dataset.format;
+      const m = modal(`<h2>START ${uikit.esc(b.textContent)}</h2>
+        <p>Spells, patterns, the Grimoire and coaching are withheld during this measured run.
+        Unanswered questions are recorded as unanswered when you finish.</p>
+        <p>The clock and exposure record begin when you press BEGIN below.</p>
         <div class="actions">
-          <button class="btn danger" id="iv-go">BEGIN. THE CLOCK STARTS NOW.</button>
+          <button class="btn danger" id="iv-go">BEGIN</button>
           <button class="btn" id="iv-cancel">NOT YET</button></div>`);
       m.querySelector('#iv-go').onclick = async () => {
+        const begin = m.querySelector('#iv-go'); begin.disabled = true;
+        let started;
+        try { started = await startMeasured(() => api.startInterview(format, G.state.player.profile)); }
+        catch (e) { begin.disabled = false; toast('CANNOT START', e.message, 'red'); return; }
+        if (started.error) { begin.disabled = false; toast('CANNOT START', started.error, 'red'); return; }
         closeModal();
-        // He takes the fourteen things first. The exam is identical either way
-        // — this is the reason for it, not a gate on it.
-        await playUnmaking();
-        try {
-          enterBattle(await api.interviewCurrent());
-        } catch (e) { toast('CANNOT START', e.message, 'red'); }
+        // Open the question immediately: no cinematic consumes measured time.
+        try { enterBattle(await api.interviewCurrent()); }
+        catch (e) { toast('RUN STARTED', 'Use INTERVIEW to resume. ' + e.message, 'red'); }
       };
       m.querySelector('#iv-cancel').onclick = closeModal;
     };
@@ -5695,7 +6016,7 @@ function showInterviewReportModal(report) {
       closeModal();
       let r;
       try {
-        r = await api.startFinalTrial(G.state.player.profile);
+        r = await startMeasured(() => api.startFinalTrial(G.state.player.profile));
       } catch (e) { toast('CANNOT START', e.message, 'red'); return; }
       if (r.error) { toast('CANNOT START', r.message || r.error, 'red'); return; }
       try {
@@ -5710,7 +6031,7 @@ function showInterviewReportModal(report) {
    * just handed over is passed straight through — finale.py reads it, this file
    * does not. */
   const fin = $('#iv-finale');
-  if (fin) fin.onclick = () => { closeModal(); finaleui.play(report); };
+  if (fin) fin.onclick = () => { closeModal(); finaleui.play(report, { look: G.state.hero || {}, gear: G.state.hero?._gear, reducedMotion: !!G.state.settings.reduced_motion }); };
 }
 
 /* ======================================================================
@@ -5729,8 +6050,8 @@ function showInterviewReportModal(report) {
  *         one: nothing was spent, the portal is still open, and the report
  *         behind this carries the button that goes straight back down.
  *
- * Every word, every timing and every colour below came off the server. This
- * file owns the clock and nothing else.
+ * The shared finale player owns the script clock, art and controls. This
+ * adapter passes the authorized scene and returns to its original report.
  *
  * THE TWO HALVES. The title card is the freeze frame and it is NOT the end.
  * `the_prompt_stays` (pass) and `the_prompt_waits` (failure) are, and
@@ -5741,146 +6062,23 @@ let ENDING = null;
 function playEndingCutscene(result, done) {
   stopEndingCutscene();
   const scene = (result || {}).cutscene;
-  if (!scene || !(scene.beats || []).length) { if (done) done(); return; }
-
-  const layer = el('div', 'ending-layer');
-  layer.style.cssText = 'position:fixed;inset:0;z-index:9000;background:#06060a;'
-    + 'display:flex;flex-direction:column;justify-content:center;'
-    + 'padding:6vh 8vw;overflow:hidden';
-  layer.innerHTML = `
-    <div id="ed-act" class="pixel" style="font-size:11px;color:var(--gold-hi);
-      letter-spacing:2px;margin-bottom:14px;min-height:16px"></div>
-    <div id="ed-lines" style="max-width:58ch;line-height:1.7"></div>
-    <div id="ed-card" style="position:absolute;inset:0;display:none;
-      align-items:center;justify-content:center;flex-direction:column;
-      text-align:center;pointer-events:none"></div>
-    <!-- THE NAME RAIL. The roll call is a list of PEOPLE and the beats carry
-         them in \`rows\`; without somewhere to put them the biggest beat in the
-         scene plays as one narrator sentence and not one of the twenty-five
-         names reaches a screen. finaleui.js has drawn this since it shipped. -->
-    <div id="ed-rail" style="position:absolute;left:0;right:0;bottom:56px;
-      display:flex;flex-wrap:wrap;gap:8px;padding:0 8vw;opacity:.85"></div>
-    <div style="position:absolute;left:0;right:0;bottom:0;display:flex;
-      align-items:center;gap:12px;padding:12px 8vw;background:#0a0a0ccc">
-      <span class="bar" style="flex:1"><i id="ed-prog" style="width:0%;
-        background:var(--gold-hi)"></i></span>
-      <button class="btn small" id="ed-skip">SKIP</button>
-    </div>`;
-  document.body.appendChild(layer);
-
-  ENDING = {
-    scene, layer, done, t0: performance.now(), shown: -1, coda: false,
-    raf: 0, key: null,
-  };
-  ENDING.key = (e) => { if (e.key === 'Escape') stopEndingCutscene(); };
-  window.addEventListener('keydown', ENDING.key);
-  layer.querySelector('#ed-skip').onclick = () => stopEndingCutscene();
-
-  try { audio.play(scene.music || 'final'); } catch (e) { /* muted is fine */ }
-  const tick = () => {
-    if (!ENDING || ENDING.layer !== layer) return;
-    const t = performance.now() - ENDING.t0;
-    const beats = scene.beats || [];
-    const total = Math.max(1, Number(scene.duration_ms) || 1);
-    const prog = layer.querySelector('#ed-prog');
-    if (prog) prog.style.width = `${Math.min(100, (t / total) * 100)}%`;
-    let idx = -1;
-    for (let i = 0; i < beats.length; i++) {
-      if (t >= (Number(beats[i].at_ms) || 0)) idx = i; else break;
-    }
-    if (idx >= 0 && idx !== ENDING.shown) {
-      ENDING.shown = idx;
-      showEndingBeat(beats[idx]);
-    }
-    if (t >= total) { stopEndingCutscene(); return; }
-    ENDING.raf = requestAnimationFrame(tick);
-  };
-  ENDING.raf = requestAnimationFrame(tick);
-}
-
-function showEndingBeat(beat) {
-  if (!ENDING) return;
-  const { layer, scene } = ENDING;
-  const act = layer.querySelector('#ed-act');
-  if (act) act.textContent = beat.act || '';
-
-  const host = layer.querySelector('#ed-lines');
-  if (host) {
-    host.innerHTML = (beat.lines || []).map((l) => `
-      <div style="margin:10px 0;color:${l.speaker && l.speaker !== 'narrator'
-        ? 'var(--gold-hi)' : 'var(--ink-dim)'}">
-        ${l.name ? `<span class="pixel" style="font-size:10px;
-          color:var(--violet);display:block">${uikit.esc(l.name)}</span>` : ''}
-        ${uikit.esc(l.text || '')}</div>`).join('');
-  }
-
-  const fx = beat.fx || [];
-  /* The title card slams in on the freeze and comes off again at `unfreeze`.
-   * A card left up over the second half is this scene ending at the title,
-   * which is the half the player is supposed to stay past. */
-  const card = layer.querySelector('#ed-card');
-  if (card) {
-    if (fx.indexOf('title_card') >= 0 && scene.title_card) {
-      const c = scene.title_card;
-      card.style.display = 'flex';
-      /* THE RIBBON IS THE SENTENCE THAT TELLS THE TWO KINDS OF FREEDOM APART —
-       * "11 BY YOUR HAND. 14 BY THE FALL OF IT." Dropping it left the counts
-       * alive as numbers in the report banner and the distinction itself on no
-       * screen at all. finale.py §8 is the spec; finaleui.js draws it as
-       * .fin-ribbon and this is the same row. */
-      card.innerHTML = `
-        <div class="pixel" style="font-size:12px;color:var(--violet);
-          letter-spacing:3px">${uikit.esc(c.eyebrow || '')}</div>
-        <div class="pixel" style="font-size:min(6vw,44px);color:#f2ead8;
-          margin:14px 0;text-shadow:0 6px 0 #0a0a0c">${uikit.esc(c.slab || '')}</div>
-        <div class="pixel" style="font-size:min(3.4vw,22px);color:${
-          (c.style || {}).rim || 'var(--gold-hi)'}">${uikit.esc(c.shout || '')}</div>
-        <div class="pixel" style="font-size:min(2.6vw,16px);color:var(--gold-hi);
-          margin-top:10px">${uikit.esc(c.ribbon || '')}</div>
-        <div class="small muted" style="margin-top:18px">${
-          uikit.esc(c.stinger || '')}</div>`;
-    } else {
-      card.style.display = 'none';
-      card.innerHTML = '';
-    }
-  }
-
-  /* THE NAMES. `beat.rows` is the roll call forming up — eleven on the beat
-   * that counts the ones carried out, fourteen on the ones nobody came for —
-   * and it is the only place in the scene a captive's NAME appears. Ported
-   * from finaleui.showRail, capped at forty the same way, and cleared on the
-   * beats that carry nobody so the rail belongs to the beat that named them. */
-  const rail = layer.querySelector('#ed-rail');
-  if (rail) {
-    rail.innerHTML = (beat.rows || []).slice(0, 40).map((r) =>
-      `<span class="pixel" style="font-size:10px;color:var(--ink-dim)">${
-        uikit.esc(r.name || '')}</span>`).join('');
-  }
-
-  if ((beat.sfx || []).indexOf('finale_hit') >= 0 || fx.indexOf('guitar_hit') >= 0) {
-    try { audio.sfx('crit'); } catch (e) { /* no context yet */ }
-  }
-  /* `cut` means cut: the guitar hit is the only sound in the room on the
-   * freeze frame, and stopping is not the same as playing nothing. */
-  if (beat.music === 'cut') { try { audio.stop(); } catch (e) { /* ignore */ } }
-  else if (beat.music) { try { audio.play(beat.music); } catch (e) { /* ignore */ } }
-
-  /* THE CODA, on the last beat of either scene and on nothing else. */
-  if ((beat.id === 'the_prompt_stays' || beat.id === 'the_prompt_waits')
-      && !ENDING.coda) {
-    ENDING.coda = true;
-    api.markCodaSeen().catch(() => { /* bookkeeping, never a gate */ });
-  }
+  const run = { player: null };
+  ENDING = run;
+  const look = (G.state && G.state.hero) || {};
+  run.player = finaleui.playScene(scene, {
+    look,
+    gear: look._gear || null,
+    reducedMotion: !!(G.state && G.state.settings && G.state.settings.reduced_motion),
+  }, () => {
+    if (ENDING === run) ENDING = null;
+    if (done) done();
+  });
 }
 
 function stopEndingCutscene() {
-  if (!ENDING) return;
-  const { layer, raf, key, done } = ENDING;
+  const run = ENDING;
   ENDING = null;
-  if (raf) cancelAnimationFrame(raf);
-  if (key) window.removeEventListener('keydown', key);
-  if (layer && layer.isConnected) layer.remove();
-  if (done) done();
+  if (run && run.player) run.player.stop();
 }
 
 /* What just happened to the world, in the report, under the debrief. Every
@@ -5947,6 +6145,24 @@ function examDebriefHtml(debrief) {
              — ${d.why || ''} <span class="muted small">${d.occurrences || 1}×</span></li>`
         )).join('')}</ul>` : ''}
     ${debrief.what_it_says ? `<p class="small muted">${debrief.what_it_says}</p>` : ''}`;
+}
+
+async function paintAppearance(){
+  const host=$('#appearance-picker');if(!host)return;
+  let card;try{card=await api.appearance();}catch(error){host.textContent=error.message;return;}
+  if(!host.isConnected)return;
+  if(card.error||card.available===false){host.textContent=card.message||card.error||'Appearance selection is sealed during this run.';return;}
+  host.innerHTML=`<label>Colors from your journey<select id="appearance-choice">${card.options.map(row=>
+    `<option value="${uikit.esc(row.id)}" ${row.id===card.selected?'selected':''} ${row.unlocked?'':'disabled'}>${uikit.esc(row.name)}${row.unlocked?'':' · locked'}</option>`).join('')}</select></label>
+    <p class="muted">These colors commemorate learning. They do not change equipment, scores or difficulty.</p>
+    <details><summary>How each keepsake is earned</summary>${card.options.map(row=>
+      `<p>${row.unlocked?'✓':'◇'} <b>${uikit.esc(row.name)}</b> — ${uikit.esc(row.requirement)}</p>`).join('')}</details>
+    <span id="appearance-status" role="status"></span>`;
+  const choice=host.querySelector('select');choice.onchange=async()=>{
+    choice.disabled=true;
+    try{const result=await api.appearanceSelect(choice.value);if(!host.isConnected)return;if(result.error)throw new Error(result.message||result.error);await refresh();if(host.isConnected)paintCharacter();}
+    catch(error){if(host.isConnected){host.querySelector('#appearance-status').textContent=error.message;choice.value=card.selected;choice.disabled=false;}}
+  };
 }
 
 function paintCharacter() {
@@ -6022,6 +6238,9 @@ function paintCharacter() {
     <div class="grid2">
       <div class="frame" style="padding:14px">
         <div class="section-title">EQUIPPED${lo.build ? ' · ' + lo.builds[lo.build].name.toUpperCase() : ''}</div>
+        <div class="character-preview"><canvas id="character-cel" width="160" height="192" aria-label="Your character wearing current equipment"></canvas>
+          <p>Your current equipment.<br><span class="muted">Armor integrity and forged weapons appear on the character.</span></p></div>
+        <div id="appearance-picker" class="learning-card"></div>
         <div class="slot-grid">${slots}</div>
         <div class="section-title">YOUR BUILD DOES</div>
         <p class="small" style="color:var(--green);line-height:1.8">
@@ -6057,7 +6276,13 @@ function paintCharacter() {
   // "what am I working toward" are one question and this feature only means
   // anything if the answer to the second one is visible without a click.
   const forgeHost = $('#forge-panel-host');
-  if (forgeHost) forgePanel(forgeHost);
+  if (forgeHost) { forgePanel(forgeHost); offerLessons('the_forge'); }
+  void paintAppearance();
+  const portrait = $('#character-cel');
+  if (portrait) {
+    const ctx = portrait.getContext('2d'); ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(combatFrame('ready', 0, G.state.hero || {}, (G.state.hero || {})._gear), 0, 0, 160, 192);
+  }
 
   // The art placeholders are filled after the panel exists, so each card gets a
   // live canvas rather than a data URL baked into the HTML string.
@@ -6082,6 +6307,7 @@ function paintCharacter() {
       G.regionElement = null;
       await refresh();
       paintCharacter();
+      offerLessons('gear');
     };
   });
   document.querySelectorAll('[data-slot]').forEach(node => {
@@ -6727,7 +6953,8 @@ function paintSettings() {
       <div class="frame" style="padding:14px">
         <div class="section-title">ACCESSIBILITY</div>
         ${[['music', 'Audio on'], ['crt', 'CRT scanlines'],
-           ['reduced_motion', 'Reduced motion'], ['high_contrast', 'High contrast']]
+           ['reduced_motion', 'Reduced motion'], ['high_contrast', 'High contrast'],
+           ['cues', 'Optional control hints']]
           .map(([k, label]) => `<label class="row" style="margin:8px 0;cursor:pointer">
             <input type="checkbox" data-setting="${k}" ${s[k] ? 'checked' : ''}>
             <span>${label}</span></label>`).join('')}
@@ -6764,6 +6991,9 @@ function paintSettings() {
           <button class="btn" id="s-export">EXPORT SAVE</button>
           <button class="btn" id="s-import">IMPORT SAVE</button>
         </div>
+        <div class="section-title">FIELD GUIDE</div>
+        <p class="small muted">Read the interface lessons again without changing your learning progress.</p>
+        <button class="btn small" id="s-lessons">RESTART FIELD GUIDE</button>
         <div class="section-title">PLACEMENT</div>
         <p class="small muted">The Trial of the Architect decides where on the ladder
         you start. ${G.state.diagnostic_done ? 'You have taken it.' : 'You have not taken it.'}</p>
@@ -6813,6 +7043,11 @@ function paintSettings() {
         + 'it plays.', 'gold');
     };
   }
+  $('#s-lessons').onclick = async () => {
+    await tutor.forget();
+    await refresh();
+    offerLessons('the_square');
+  };
   $('#s-export').onclick = async () => {
     let data;
     try {
@@ -6896,12 +7131,12 @@ function paintSettings() {
         <div class="body"><div class="name">${a.problem_id}
           <span class="muted">${a.difficulty} · ${a.mode}</span></div>
         <div class="msg">${fmtTime(a.seconds)}${a.rank ? ' · rank ' + a.rank : ''}
-        ${a.hints_used ? ' · ' + a.hints_used + ' spell(s)' : ' · unaided'}
+         · ${uikit.esc(learningui.evidenceLabel(a.evidence_kind))}${a.hints_used ? ' · ' + a.hints_used + ' spell(s)' : ''}
         ${a.root_cause ? ' · ' + a.root_cause.replace(/_/g, ' ') : ''}</div></div></div>`).join('');
     $('#history-body').innerHTML = `
-      <p>${h.stats.solved}/${h.stats.total} cleared · ${h.stats.unaided} unaided ·
+      <p>${h.stats.solved}/${h.stats.total} cleared · ${h.stats.unaided} without hints ·
       ${h.stats.first_try} on the first submission ·
-      median ${fmtTime(h.stats.avg_seconds || 0)}</p>${rows || 'No attempts yet.'}`;
+      average ${fmtTime(h.stats.avg_seconds || 0)}</p>${h.seal_note ? `<p>${uikit.esc(h.seal_note)}</p>` : rows || 'No attempts yet.'}`;
   }).catch((e) => {
     $('#history-body').textContent = `Could not read your history — ${e.message}`;
   });
@@ -7283,7 +7518,7 @@ async function paintExam() {
       async () => {
         let r;
         try {
-          r = await api.startExam(G.state.player.profile);
+          r = await startMeasured(() => api.startExam(G.state.player.profile));
         } catch (e) { toast('CANNOT START', e.message, 'red'); return; }
         if (r.error) { toast('CANNOT START', r.message || r.error, 'red'); return; }
         try {
@@ -7420,6 +7655,7 @@ function destroyChild() {
 /* Everything worldui.js needs from the shell, so it never reaches into the
  * document for chrome that is not its own. */
 function worldHooks() {
+  const player = escortPlayer();
   return {
     audio,
     toast,
@@ -7428,12 +7664,20 @@ function worldHooks() {
     /* The panel keeps its own copy of the dashboard; main.js keeps the
      * original, and there is only allowed to be one of those. */
     onRefresh: async () => { await refresh(); return G.state; },
+    onTravelResponse: response => {
+      if (player !== escortPlayer()) return;
+      consumeEscortResponse(response, response?.region, -1);
+      drainEscortNotices();
+    },
     /* The player walked. The world screen is drawn from the region, so it has
      * to be told too or it keeps painting the place they left. api.travel
      * answers with the region's id; api.region answers with the whole view. */
-    onRegion: (region) => {
+    onRegion: (region, response) => {
       const id = typeof region === 'string' ? region : (region && region.id);
-      if (id) loadRegion(id);
+      if (id) {
+        loadRegion(id);
+        consumeEscortResponse(response || region, id);
+      }
     },
     /* Rows the map does not own — an encounter, a boss, a shrine, unspent
      * points. doTodo already knows every action kind the server emits. */
@@ -7472,7 +7716,9 @@ async function mountMap() {
 const PARTY_CHILD = { destroy: () => partyui.leave() };
 
 function configureParty() {
+  configureTutor();
   partyui.configure({
+    practiceRegion: region => startNext({region}),
     panel: (title, html) => { panel(title, html); G.child = PARTY_CHILD; },
     modal,
     closeModal,
@@ -7655,7 +7901,7 @@ function openLastRoom(room) {
     closeModal();
     let r;
     try {
-      r = await api.startFinalTrial(G.state.player.profile);
+      r = await startMeasured(() => api.startFinalTrial(G.state.player.profile));
     } catch (e) { toast('CANNOT START', e.message, 'red'); return; }
     if (r.error) { toast('CANNOT START', r.message || r.error, 'red'); return; }
     /* `staging.staged === false` here would mean the wards went dark between
@@ -7675,6 +7921,8 @@ function openLastRoom(room) {
 /* The index. Fifteen screens do not fit across a topbar, and a topbar that
  * tried would be a wall of eight-point capitals nobody reads twice. */
 const LEDGER = [
+  { id: 'practice', label: 'PRACTICE EXPEDITIONS', blurb: 'A manageable session, a coaching rehearsal, or a return to unfinished work.' },
+  { id: 'journal', label: 'MY GRIMOIRE', blurb: 'Your code, reflections and delayed review evidence.' },
   { id: 'status', label: 'STATUS',
     blurb: 'Skills as evidence, readiness gates, weapons, achievements.' },
   { id: 'character', label: 'GEAR & BUILD',
@@ -7877,6 +8125,8 @@ function paintLedger() {
  * ledger carries the rest; both arrive here, so there is exactly one place that
  * knows how to open anything. */
 const SCREENS = {
+  practice: () => mountWorldScreen(learningui, learningui.paintPractice),
+  journal: () => mountWorldScreen(learningui, learningui.paintJournal),
   world: () => returnToWorld(),
   quests: paintQuests,
   map: mountMap,
@@ -7972,6 +8222,7 @@ const NAV = [
   // player comes back to it between every second fight, and a door you use
   // that often should not be two clicks deep.
   { id: 'town', label: 'TOWN' },
+  { id: 'practice', label: 'PRACTICE' },
   { id: 'quests', label: 'QUESTS' },
   { id: 'map', label: 'MAP' },
   { id: 'party', label: 'PARTY' },
@@ -8237,13 +8488,13 @@ async function runDiagnostic() {
 function chooseBuild() {
   const lo = G.state.loadout;
   const cards = Object.entries(lo.builds).map(([id, spec]) => `
-    <div class="list-item" data-build="${id}">
+    <button type="button" class="list-item" data-build="${id}">
       <span class="t">${spec.name.toUpperCase()}</span>
       <span class="d">${spec.blurb}<br>
       <span class="muted small">Starts with ${Object.entries(spec.starting)
         .filter(([, v]) => v >= 3).map(([k, v]) => `${k} ${v}`).join(', ')}
         · favours the ${lo.sets[spec.set].name}</span></span>
-    </div>`).join('');
+    </button>`).join('');
   const m = modal(`<h2>CHOOSE YOUR PATH</h2>
     <p>Three ways to fight. None of them writes Python for you — they change what a
     fight <i>costs</i> you, and what it pays. You can pay the Armorer to change your
@@ -8263,6 +8514,7 @@ function chooseBuild() {
       toast(r.build.name.toUpperCase(),
         'Starting gear equipped. Check GEAR to spend your first points.', 'gold');
       loadRegion(G.state.player.region);
+      offerLessons('the_square');
       const mentor = G.world.mentors.byte;
       say(mentor.name, [
         mentor.greeting,
@@ -8327,6 +8579,7 @@ async function boot() {
   // one thing overworld.js's budget is written to avoid.
   G.overworld.stateSource = () => huntui.stateFor(G.state);
   G.overworld.onEnter = onNodeEnter;
+  G.overworld.onEscortCaption = showEscortCaption;
   /* THE SHAKE, HANDED TO A FILE THAT IS OWNED ELSEWHERE.
    *
    * web/js/overworld.js belongs to the pass building the zones — the ice, the
@@ -8385,10 +8638,7 @@ async function boot() {
       G.overworld.region = here;
     }
   };
-  G.overworld.onMove = (x, y) => {
-    clearTimeout(G._moveSave);
-    G._moveSave = setTimeout(() => api.move(currentRegion().id, x, y), 900);
-  };
+  G.overworld.onMove = saveFieldMove;
   loadRegion(G.state.player.region);
   show('world');
   G.overworld.start();

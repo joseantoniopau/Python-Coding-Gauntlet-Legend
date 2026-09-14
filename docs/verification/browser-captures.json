@@ -1,0 +1,27 @@
+{
+  "date": "2026-09-14",
+  "method": "Codex in-app browser screenshot API; original JPEG bytes saved without image editing through a temporary local capture form",
+  "save": "Isolated demonstration save; no user save or real assessment result shown",
+  "captures": [
+    {
+      "file": "assets/gameplay.jpg",
+      "screen": "A Name for a Value: real Python RUN, two visible trials passed",
+      "viewport": [
+        1280,
+        800
+      ],
+      "sha256": "3073e27adf89810b6c0a498f2a8d7b7fc0fef90830c2d81144d2293516773c24",
+      "bytes": 113252
+    },
+    {
+      "file": "assets/overworld.jpg",
+      "screen": "Fields of Syntax, hero and companion, quest panel",
+      "viewport": [
+        1280,
+        800
+      ],
+      "sha256": "d5661fc6cb967510cc1d0bbdbe5e14c59ce964877559f8ce9fc9867bcc5933a9",
+      "bytes": 211449
+    }
+  ]
+}

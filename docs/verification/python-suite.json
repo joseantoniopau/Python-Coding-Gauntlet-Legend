@@ -1,0 +1,19 @@
+{
+  "recorded_at": "2026-09-14T06:52:09.385082+00:00",
+  "command": "python3 -B -m unittest discover -s tests -v",
+  "python": "3.14.4",
+  "tests": 1618,
+  "duration_seconds": 1949.016,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 3,
+  "corpus_followup": {
+    "tests": 2,
+    "passed": 2,
+    "duration_seconds": 0.63,
+    "corpus_problems": 1018,
+    "description": "The two tutorial ID checks skipped without a corpus were rerun against the validated isolated corpus."
+  },
+  "remaining_inapplicable_case": "The no-apex-region case skips because every region currently has an apex.",
+  "warnings": "Existing unclosed-resource warnings and the teaching example return-in-finally SyntaxWarning were visible, not suppressed."
+}

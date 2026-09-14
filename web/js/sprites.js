@@ -483,40 +483,40 @@ export const HERO_BODY = {
   down: [
     '................',
     '....oooooooo....',
-    '...oHHhhhhhho...',
-    '..oHHhhhhhhhho..',
+    '...oHHHhhhhho...',
+    '..oHhhHHhhhhho..',
     '..ohssssssssho..',
     '..ohssssssssho..',
     '..ohssssssssho..',
     '..ohNssssssSho..',
     '...oNssssssSo...',
-    '..oCCccccccvvo..',
-    '.oCCccccccccvvo.',
-    '.oCcttttttttcvo.',
-    '.occttTTTTttvvo.',
-    '..octtttttttvo..',
+    '..oCCccgcccvvo..',
+    '.oCCccvvccccvvo.',
+    '.oCctTTtttttcvo.',
+    '.occttTTttttvvo.',
+    '..octtTtttttvo..',
     '..ocggggggggvo..',
     '...octtttttvo...',
-    '...occttttvvo...',
+    '...occtttvvvo...',
     '...occccvvvvo...',
   ],
   up: [
     '................',
     '....oooooooo....',
-    '...oHHhhhhhho...',
-    '..oHHhhhhhhhho..',
-    '..oHhhhhhhhhho..',
+    '...oHHHhhhhho...',
+    '..oHhhHHhhhhho..',
+    '..oHhhHHhhhhho..',
     '..ohhhhhhhhhho..',
-    '..ohhhHHHHhhho..',
+    '..ohhhHHhhhHho..',
     '..ohhhhhhhhhho..',
     '...ohhhhhhhho...',
-    '..oCCccccccvvo..',
-    '.oCCccccccccvvo.',
-    '.oCcccCCCCcccvo.',
-    '.occCCCCCCccvvo.',
-    '..occccccccvvo..',
+    '..oCCccgcccvvo..',
+    '.oCCccvvccccvvo.',
+    '.oCccCCcccvccvo.',
+    '.occCCcccvccvvo.',
+    '..ocCCccvccvvo..',
     '..ocggggggggvo..',
-    '...occcccccvo...',
+    '...occCcvccvo...',
     '...occccvvvvo...',
     '...occcvvvvvo...',
   ],
@@ -531,9 +531,9 @@ export const HERO_BODY = {
     '..ossssshhhho...',
     '..osssssShho....',
     '..oCcccccccvvo..',
-    '.ottttCcccccvvo.',
-    '.otTTtCccccvcvo.',
-    '.ottttcccccvcvo.',
+    '.otTTtCccvccvvo.',
+    '.otTTtCCcvvvcvo.',
+    '.ottttcccCvvcvo.',
     '..oggggcccvcvo..',
     '..ottttcccvcvo..',
     '..otttccccvcvo..',
@@ -551,9 +551,9 @@ export const HERO_BODY = {
     '...ohhhhssssso..',
     '....ohhSssssso..',
     '..ovvcccccccCo..',
-    '.ovvcccccCtttto.',
-    '.ovcvccccCtTTto.',
-    '.ovcvccccctttto.',
+    '.ovvccvccCtTTto.',
+    '.ovcvvccCCtTTto.',
+    '.ovcvvCccctttto.',
     '..ovcvcccggggo..',
     '..ovcvccctttto..',
     '..ovcvccccttto..',
@@ -1171,7 +1171,10 @@ const HERO_WEAPON_LINES = {
  *      'u' grip, all already on the sprite.
  *
  * Sparse {row: pattern} overlays in the same six-wide space as the grid, '.'
- * keeps what is underneath. Only hero rungs 1, 2 and 3 are ever shared, so only
+ * keeps what is underneath; a space clears only the weapon cell, never the
+ * hero beneath it. The Calipers' closing jaw uses that cutback. Details at the
+ * outer heel and pommel remain visible beside the hero, where a tip or an
+ * interior pin alone can disappear against the head and shoulder. Only hero rungs 1, 2 and 3 are ever shared, so only
  * those three are drawn; forge.py sends `half` and nothing else can set it, so
  * an unforged weapon never sees one of these.
  *
@@ -1189,7 +1192,7 @@ const HALF_STEP = {
   /* the Needle: the loomsteel shank runs a row longer, then it LEANS — the
    * wastes-iron reforge thickens one side of the shank and not the other —
    * then tilegold fills the open quillons and turns the corner of the cap */
-  dagger: { 1: { 0: '..o...', 1: '.oMo..' }, 2: { 2: '...Mo.', 3: '...Mo.' },
+  dagger: { 1: { 0: '..o...', 1: '.oMo..', 10: '....o.' }, 2: { 2: '...Mo.', 3: '...Mo.' },
             3: { 8: '..gg..', 11: '....o.' } },
   /* the Draft Axe: the bit welded out to the full head, a second ring on the
    * haft, then the outermost doubling plate closes the crown */
@@ -1213,7 +1216,8 @@ const HALF_STEP = {
    * of each interior glyph, and two rows of 'm' where there was one is enough
    * to move the runework off the trim it was cut into. A half step adds a
    * detail; it does not get to retarget the rung above it. */
-  relic:  { 1: { 2: '..gg..' }, 2: { 0: '.....o', 1: '.....o' }, 3: { 2: '.oo...' } },
+  relic:  { 1: { 2: '..gg..' }, 2: { 0: '.....o', 1: '.....o' },
+            3: { 0: '.... .', 2: '.oo...' } },
 };
 const HALF_STEP_LINES = {
   /* a third link opens below the hand, a small link leans on the middle span,
@@ -1223,7 +1227,7 @@ const HALF_STEP_LINES = {
   /* a shim ring at the butt, quarterturn bronze packed through the head so it
    * reads square, then a second course down the back of the larger jaw and the
    * grip closing over the doubled shank */
-  toolwrights_spanner: { 1: { 11: '.o..o.' }, 2: { 0: '.g.g..' },
+  toolwrights_spanner: { 1: { 11: '.o..o.' }, 2: { 0: '.g.g..', 3: '...go.' },
                          3: { 2: 'o.....', 9: '..uu..' } },
 };
 
@@ -4014,10 +4018,9 @@ export function bossSprite(spriteKey, colour, frame = 0) {
 /* ================================================================
  * PORTRAITS
  * ================================================================
- * 24x24. A shared head carries the anatomy, a brow/eye/mouth overlay carries
- * the EMOTION, and a headwear grid plus a garment grid carry who this is. Two
- * of them (BYTE and the Interviewer) are not human enough to share a face and
- * are authored whole.
+ * 24x24. Each mentor has a jaw, complexion, hair material and facial planes.
+ * Shared brow/eye/mouth performances fit over that anatomy. BYTE and the
+ * Interviewer have mechanical and porcelain faces authored separately.
  *
  * Seven emotes per character, two frames each. The frames are authored events —
  * a blink, a squeeze, a jaw setting — not the same face at two brightnesses,
@@ -4049,6 +4052,67 @@ const PORTRAIT_FACE = [
   '........................',
   '........................',
 ];
+
+/* Facial anatomy is independent of profession colour. Jaw coordinates describe
+ * rows 10..17; asymmetric cheeks and noses keep these busts from becoming a
+ * row of identical faces in different hats. All marks reuse the 15 paid slots.
+ * The brow/eye band remains open for every performance. */
+const PORTRAIT_PERSON = {
+  scholar: { skin: '#c58c65', hair: '#b6a494', jaw: [[4,19],[4,19],[5,18],[5,18],[6,17],[7,16],[8,15],[9,14]], nose: 12,
+    marks: [[10,6,'SS'],[10,16,'SS'],[14,7,'Yh'],[14,15,'Yh'],[15,8,'hHHhhh'],[16,9,'hHHh']] },
+  mage: { skin: '#b78273', hair: '#221b37', jaw: [[4,19],[5,19],[5,18],[6,18],[6,17],[7,16],[9,14],[10,13]], nose: 11,
+    marks: [[10,6,'NN'],[11,15,'SS'],[14,6,'S'],[15,15,'S']] },
+  ranger: { skin: '#986949', hair: '#362b25', jaw: [[4,19],[4,18],[4,18],[5,18],[5,17],[6,16],[7,15],[9,14]], nose: 11,
+    marks: [[10,15,'S'],[11,15,'N'],[12,15,'S'],[14,7,'S'],[15,8,'SS']] },
+  druid: { skin: '#bd966c', hair: '#c8b48e', jaw: [[4,19],[4,19],[5,19],[5,18],[6,18],[7,17],[8,16],[9,15]], nose: 12,
+    marks: [[10,6,'SS'],[10,16,'SS'],[14,6,'Yh'],[14,16,'hY'],[15,7,'hHHhhhhhh'],[16,8,'hHHhhhh'],[17,9,'hhhYh']] },
+  cartographer: { skin: '#d1aa7c', hair: '#704b32', jaw: [[4,19],[4,19],[4,19],[5,19],[5,18],[6,17],[7,16],[8,15]], nose: 12,
+    marks: [[10,5,'N'],[11,17,'S'],[14,7,'N'],[15,14,'SS']] },
+  armorer: { skin: '#925e43', hair: '#30272a', jaw: [[4,19],[4,19],[4,19],[4,19],[5,18],[5,18],[6,17],[8,15]], nose: 12,
+    marks: [[10,6,'S'],[10,16,'S'],[14,5,'Yhh'],[14,16,'hhY'],[15,6,'hHHhhhhhhh'],[16,7,'hHHhhhh'],[17,9,'YhhY']] },
+  oracle: { skin: '#b3a0a0', hair: '#d9d4cc', jaw: [[5,18],[5,18],[6,18],[6,17],[7,17],[8,16],[9,15],[10,13]], nose: 12,
+    marks: [[10,7,'N'],[11,15,'SS'],[14,8,'S'],[15,14,'S']] },
+  smith: { skin: '#b67753', hair: '#563129', jaw: [[4,19],[4,19],[4,19],[5,19],[5,18],[6,18],[7,17],[8,15]], nose: 11,
+    marks: [[10,16,'SS'],[11,6,'S'],[14,6,'Yh'],[14,16,'hY'],[15,7,'hHHhhhhhh'],[16,8,'hhhhhY']] },
+  chronomancer: { skin: '#c3a092', hair: '#aba9b8', jaw: [[4,19],[5,19],[5,19],[6,18],[6,18],[7,17],[8,16],[9,14]], nose: 12,
+    marks: [[10,6,'SS'],[10,16,'SS'],[11,7,'S'],[11,16,'S'],[14,7,'S'],[15,8,'SS'],[15,15,'S']] },
+  scribe: { skin: '#825344', hair: '#181b29', jaw: [[4,19],[5,19],[5,18],[5,18],[6,18],[7,17],[8,16],[9,14]], nose: 11,
+    marks: [[10,6,'N'],[11,15,'SS'],[14,7,'N'],[15,14,'S']] },
+  architect: { skin: '#bd9272', hair: '#433d46', jaw: [[4,19],[4,19],[5,19],[5,19],[6,18],[6,17],[7,16],[8,15]], nose: 12,
+    marks: [[10,6,'SS'],[11,16,'S'],[14,6,'S'],[15,7,'SS'],[16,9,'SSS']] },
+};
+
+function portraitAnatomy(kind) {
+  const p = PORTRAIT_PERSON[kind] || PORTRAIT_PERSON.scholar;
+  const rows = PORTRAIT_FACE.map(r => r.split(''));
+  for (let n = 0; n < p.jaw.length; n++) {
+    const y = n + 10, [left, right] = p.jaw[n];
+    rows[y].fill('.');
+    for (let x = left; x <= right; x++) {
+      rows[y][x] = x === left || x === right ? 'o'
+        : n === 7 ? 'K' : x >= right - 3 ? 'S'
+        : x === left + 1 && n < 4 ? 'N' : 's';
+    }
+  }
+  rows[10][p.nose] = 'N'; rows[10][p.nose + 1] = 'S';
+  rows[11][p.nose - 1] = 'N'; rows[11][p.nose] = 'N'; rows[11][p.nose + 1] = 'S';
+  for (const [y, x, strip] of p.marks) for (let i = 0; i < strip.length; i++) {
+    if (rows[y][x + i] !== '.' && rows[y][x + i] !== 'o') rows[y][x + i] = strip[i];
+  }
+  return rows.map(r => r.join(''));
+}
+
+/* Broad fabric planes and swept hair highlights, never random texture. The
+ * same construction is used on every crown/garment, but each authored cut,
+ * accessory and colour remains the mentor's own. */
+function portraitMaterials(grid) {
+  return grid.map((row, y) => [...row].map((ch, x) => {
+    if (ch === 'h') return x < 8 && y < 5 ? 'H' : x > 15 ? 'Y' : 'h';
+    if (ch === 'c') return x > 15 || (x > 10 && x < 13 && y > 1) ? 'v'
+      : x < 8 && y < 4 ? 'C' : 'c';
+    return ch;
+  }).join(''));
+}
 
 /* Headwear, drawn over the skull from row 0.
  *
@@ -4439,10 +4503,11 @@ const AUTOMATON_SHUTTER_Y = 6, AUTOMATON_VENT_Y = 10, AUTOMATON_X = 8;
  * R is mixed from the SKIN's lightest step and then used on cloth and metal
  * too. That is deliberate: it is one lamp in the room, not a per-material
  * effect, and a rim that changes hue per surface stops reading as light. */
-function portraitPalette(tint) {
+function portraitPalette(tint, kind) {
   const c = ramp(tint || '#4a5a8a');
-  const skin = ramp('#e8b88a');
-  const hair = ramp(mix(tint || '#4a5a8a', '#2a2038', 0.55));
+  const person = PORTRAIT_PERSON[kind] || (PORTRAIT_FULL[kind] ? null : PORTRAIT_PERSON.scholar);
+  const skin = ramp(person ? person.skin : kind === 'interviewer' ? '#b7b6c6' : '#c9a17c');
+  const hair = ramp(person ? person.hair : '#302b38');
   const gold = ramp('#d8b04a');
   const pal = {
     o: '#0a0810',
@@ -4474,6 +4539,20 @@ function featureGrid(emote, frame) {
   }
   featureCache.set(key, rows);
   return rows;
+}
+
+/* Brass has a bright bevel and a dark return; porcelain has broad, quiet
+ * facets. Keep the authored lamps and expressive strips as the focal points. */
+function portraitFullMaterials(kind, grid) {
+  return grid.map((row, y) => [...row].map((ch, x) => {
+    if (kind === 'automaton_small' && ch === 'g') {
+      return x > 15 || y > 19 ? 'v' : x < 8 || y < 5 ? 'C' : 'c';
+    }
+    if (kind === 'interviewer' && ch === 'w' && y < 15) {
+      return x > 14 || y > 11 ? 'S' : x > 10 && y > 3 ? 's' : 'w';
+    }
+    return ch;
+  }).join(''));
 }
 
 /* Swap the lamp glyph inside a machine's core band. */
@@ -4524,11 +4603,11 @@ export function portraitEmote(kind, emote = 'neutral', frame = 0) {
   const ck = `${key}:${em}:${f}`;
   if (portraitCache.has(ck)) return portraitCache.get(ck);
   const tint = PORTRAIT_TINT[key] || PORTRAIT_TINT.scholar;
-  const pal = portraitPalette(tint);
+  const pal = portraitPalette(tint, key);
   let grid;
   if (PORTRAIT_FULL[key]) {
     const lamp = (PORTRAIT_LAMP[em] || PORTRAIT_LAMP.neutral)[f];
-    grid = lampGrid(PORTRAIT_FULL[key], PORTRAIT_LAMP_BAND[key], lamp);
+    grid = lampGrid(portraitFullMaterials(key, PORTRAIT_FULL[key]), PORTRAIT_LAMP_BAND[key], lamp);
     if (key === 'automaton_small') {
       grid = stampRow(grid, AUTOMATON_SHUTTER_Y, AUTOMATON_X,
         (AUTOMATON_SHUTTER[em] || AUTOMATON_SHUTTER.neutral)[f]);
@@ -4543,10 +4622,10 @@ export function portraitEmote(kind, emote = 'neutral', frame = 0) {
     else if (f === 1 && em === 'defeated') grid = bobGrid(grid, 1);
     grid = normalise(grid, PORTRAIT_SIZE);
   } else {
-    const crown = PORTRAIT_CROWN[key] || PORTRAIT_CROWN.scholar;
-    const garb = PORTRAIT_GARB[key] || PORTRAIT_GARB.scholar;
+    const crown = portraitMaterials(PORTRAIT_CROWN[key] || PORTRAIT_CROWN.scholar);
+    const garb = portraitMaterials(PORTRAIT_GARB[key] || PORTRAIT_GARB.scholar);
     grid = mergeGrids(PORTRAIT_SIZE, PORTRAIT_SIZE, [
-      { grid: PORTRAIT_FACE },
+      { grid: portraitAnatomy(key) },
       { grid: featureGrid(em, f) },
       { grid: garb, oy: 18 },
       { grid: crown },
@@ -4595,7 +4674,7 @@ export function portraitSilhouette(kind) {
   const key = PORTRAIT_ALIAS[kind] || kind || 'scholar';
   if (PORTRAIT_FULL[key]) return silhouetteAt(PORTRAIT_FULL[key], 16);
   return silhouetteAt(mergeGrids(PORTRAIT_SIZE, PORTRAIT_SIZE, [
-    { grid: PORTRAIT_FACE },
+    { grid: portraitAnatomy(key) },
     { grid: PORTRAIT_GARB[key] || PORTRAIT_GARB.scholar, oy: 18 },
     { grid: PORTRAIT_CROWN[key] || PORTRAIT_CROWN.scholar },
   ]), 16);

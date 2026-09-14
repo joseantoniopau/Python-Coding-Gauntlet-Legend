@@ -560,22 +560,19 @@ MIN_PHASE_OCCURRENCES = 2        # per phase kind, across the whole world
 # recorded solve times the moment a save file has any.
 
 # Mean authored `target_seconds` per difficulty, measured over the corpus itself
-# rather than typed here by hand. Re-derived after the first_steps family
-# shipped: 1013 problems, of which GUIDED 258, TUTORIAL 215, EASY 321,
-# MEDIUM 196, HARD 23.
-#
-# GUIDED moved 119 -> 114 and nothing else moved at all. That is first_steps
-# arriving: 52 new GUIDED rungs, most of them a sixty-second question about one
-# line of code, which is a shorter ask than the fill-in-the-blank that used to
-# be the gentlest thing in the corpus. The mean falling is the ramp getting a
-# genuinely lower bottom rather than a wider one, which is what it was for.
+# rather than typed here by hand, rounded to the nearest whole second.
+# Re-derived after rematch_variants: 1018 problems, of which GUIDED 258,
+# TUTORIAL 215, EASY 321, MEDIUM 199, HARD 25. The five changed contracts add
+# three MEDIUM targets of 900 seconds and two HARD targets of 1500 seconds.
+# Their resulting means are 795.0 and 1443.6 seconds; the gentle bands do not
+# change. These remain authored time budgets, not observed player solve times.
 #
 # ELITE and BOSS have no authored problems at all — the fourteen bosses are
 # assembled from ordinary corpus problems by `finalexam` and `world.BOSS_PHASES`,
 # so those two rows are `schema.TARGET_SECONDS` defaults and are marked as such
 # by `measured_corpus_means()`, which is what a caller should prefer.
 CORPUS_MEAN_TARGET = {
-    "GUIDED": 114, "TUTORIAL": 179, "EASY": 385, "MEDIUM": 793, "HARD": 1439,
+    "GUIDED": 114, "TUTORIAL": 179, "EASY": 385, "MEDIUM": 795, "HARD": 1444,
     "ELITE": 1500, "BOSS": 2100,
 }
 CLEARED_FRACTION_OF_TARGET = 0.72   # a clear usually lands inside its own budget

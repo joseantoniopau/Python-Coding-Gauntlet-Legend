@@ -73,6 +73,7 @@ import * as monsterart from '../../web/js/monsterart.js';
 import * as apex from '../../web/js/apex.js';
 import * as bosses from '../../web/js/bosses.js';
 import * as bossart from '../../web/js/bossart.js';
+import {BATTLE_HERO} from '../../web/js/battlehero.js';
 
 const ROOT = new URL('../../', import.meta.url).pathname;
 const fails = [];
@@ -289,7 +290,8 @@ for (const [ww, wh, sh, hudH, wantPx, wantW, wantH] of WINDOWS) {
  * with nothing in it is allowed to hang over the edge. */
 console.log('\n5. EVERY FIGURE BLIT IS A WHOLE NUMBER, AND STAYS IN FRAME');
 const PXS = [1, 2, 3, 4, 5, 6];
-const HERO_L = S.heroX - (16 * 4) / 2, HERO_R = S.heroX + (16 * 4) / 2 - 1;
+const HERO_L = S.heroX - BATTLE_HERO.footX*BATTLE_HERO.scale,
+      HERO_R = HERO_L+BATTLE_HERO.width*BATTLE_HERO.scale-1;
 const fills = [];
 /* THE WHOLE ENVELOPE, NOT A CORNER OF IT.
  *
@@ -330,7 +332,7 @@ function swayOffsets(key, scale) {
   return [...out].sort((a, b) => a - b);
 }
 ok(Number.isInteger(24 * 4), 'the figure blit is not a whole number');
-console.log(`   hero / mob figure blit 4      whole at px ${PXS.join(',')}   hero stands ${HERO_L}..${HERO_R}`);
+console.log(`   combat hero blit 2 / field mob 4 · whole at px ${PXS.join(',')}   hero stands ${HERO_L}..${HERO_R}`);
 /* Every archetype, not a hand-picked six. The literal list covered 6 of 16 and
  * omitted `interviewer`, the 96x128 rung this pass added — so the newest rig in
  * the game was the one rig whose painted box nothing asserted. */

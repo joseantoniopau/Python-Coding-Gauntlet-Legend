@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -152,6 +153,38 @@ def _child_python() -> str:
     return sys.executable or "/usr/bin/python3"
 
 
+def _child_launch(scratch, harness_path, payload_path, result_path):
+    """Shared interpreter flags, seatbelt and scrubbed environment for every mode."""
+    argv = [_child_python(), "-I", "-S", "-B", str(harness_path),
+            str(payload_path), str(result_path)]
+    hardened = False
+    if SANDBOX_EXEC and sys.platform == "darwin":
+        profile = scratch / "profile.sb"
+        profile.write_text(_SEATBELT.format(
+            scratch=scratch, home=os.path.realpath(Path.home())))
+        argv = [SANDBOX_EXEC, "-f", str(profile)] + argv
+        hardened = True
+
+    env = {
+        "PATH": os.environ.get("PATH", "") if WINDOWS else "/usr/bin:/bin",
+        "HOME": str(scratch),
+        "TMPDIR": str(scratch),
+        "LC_ALL": "C.UTF-8",
+        "PYTHONIOENCODING": "utf-8",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONHASHSEED": "0",
+    }
+    if WINDOWS:
+        # CPython will not boot without these two.
+        for key in ("SystemRoot", "SYSTEMROOT", "ComSpec"):
+            if key in os.environ:
+                env[key] = os.environ[key]
+        env["USERPROFILE"] = str(scratch)
+        env["TEMP"] = env["TMP"] = str(scratch)
+
+    return argv, env, hardened
+
+
 def _clean_stderr(raw: str) -> str:
     keep = [ln for ln in raw.splitlines() if not any(n in ln for n in _NOISE)]
     return "\n".join(keep).strip()
@@ -241,32 +274,7 @@ def run_tests(
             "timeout_ms": timeout_ms,
         }))
 
-        argv = [_child_python(), "-I", "-S", "-B", str(harness_path),
-                str(payload_path), str(result_path)]
-        hardened = False
-        if SANDBOX_EXEC and sys.platform == "darwin":
-            profile = scratch / "profile.sb"
-            profile.write_text(_SEATBELT.format(
-                scratch=scratch, home=os.path.realpath(Path.home())))
-            argv = [SANDBOX_EXEC, "-f", str(profile)] + argv
-            hardened = True
-
-        env = {
-            "PATH": os.environ.get("PATH", "") if WINDOWS else "/usr/bin:/bin",
-            "HOME": str(scratch),
-            "TMPDIR": str(scratch),
-            "LC_ALL": "C.UTF-8",
-            "PYTHONIOENCODING": "utf-8",
-            "PYTHONDONTWRITEBYTECODE": "1",
-            "PYTHONHASHSEED": "0",
-        }
-        if WINDOWS:
-            # CPython will not boot without these two.
-            for key in ("SystemRoot", "SYSTEMROOT", "ComSpec"):
-                if key in os.environ:
-                    env[key] = os.environ[key]
-            env["USERPROFILE"] = str(scratch)
-            env["TEMP"] = env["TMP"] = str(scratch)
+        argv, env, hardened = _child_launch(scratch, harness_path, payload_path, result_path)
 
         try:
             proc = subprocess.run(
@@ -370,31 +378,7 @@ def run_project(
             "timeout_ms": timeout_ms,
         }))
 
-        argv = [_child_python(), "-I", "-S", "-B", str(harness_path),
-                str(payload_path), str(result_path)]
-        hardened = False
-        if SANDBOX_EXEC and sys.platform == "darwin":
-            profile = scratch / "profile.sb"
-            profile.write_text(_SEATBELT.format(
-                scratch=scratch, home=os.path.realpath(Path.home())))
-            argv = [SANDBOX_EXEC, "-f", str(profile)] + argv
-            hardened = True
-
-        env = {
-            "PATH": os.environ.get("PATH", "") if WINDOWS else "/usr/bin:/bin",
-            "HOME": str(scratch),
-            "TMPDIR": str(scratch),
-            "LC_ALL": "C.UTF-8",
-            "PYTHONIOENCODING": "utf-8",
-            "PYTHONDONTWRITEBYTECODE": "1",
-            "PYTHONHASHSEED": "0",
-        }
-        if WINDOWS:
-            for key in ("SystemRoot", "SYSTEMROOT", "ComSpec"):
-                if key in os.environ:
-                    env[key] = os.environ[key]
-            env["USERPROFILE"] = str(scratch)
-            env["TEMP"] = env["TMP"] = str(scratch)
+        argv, env, hardened = _child_launch(scratch, harness_path, payload_path, result_path)
 
         try:
             proc = subprocess.run(
@@ -444,6 +428,141 @@ def run_project(
         ok=raw.get("ok", False), phase=raw.get("phase", "tests"), tests=tests_out,
         stdout=stdout, stderr=stderr, error=raw.get("error"),
         wall_ms=wall_ms, hardened=hardened)
+
+
+# Tracing is a separate, ungraded run over exactly one public case. These limits
+# are server-owned ceilings, never values a browser request can raise.
+TRACE_SOURCE_BYTES = 64 * 1024
+TRACE_INPUT_BYTES = 32 * 1024
+TRACE_RESULT_BYTES = 768 * 1024
+
+
+def _trace_json_input(value, depth=0, budget=None):
+    """Validate before serialization; never call a caller object's JSON hooks."""
+    if budget is None:
+        budget = [10000]
+    budget[0] -= 1
+    if depth > 16 or budget[0] < 0:
+        raise ValueError("this visible case is too large or deeply nested to trace")
+    kind = type(value)
+    if value is None or kind in (bool, float):
+        return
+    if kind is int:
+        if value.bit_length() > 4096:
+            raise ValueError("this visible case contains an integer too large to trace")
+        return
+    if kind is str:
+        if len(value) > TRACE_INPUT_BYTES:
+            raise ValueError("this visible case contains text too large to trace")
+        return
+    if kind in (list, dict):
+        for item in value if kind is list else value.items():
+            if kind is dict:
+                key, item = item
+                if type(key) is not str:
+                    raise ValueError("trace input keys must be JSON strings")
+                _trace_json_input(key, depth + 1, budget)
+            _trace_json_input(item, depth + 1, budget)
+        return
+    raise ValueError("trace input must contain only JSON values")
+
+
+def trace_program(source: str, entry: dict, public_case: dict, *,
+                  max_steps: int = 400, timeout_ms: int = 1200,
+                  wall_seconds: float = 4, snapshot_depth: int = 3) -> dict:
+    """Trace real Python in the test sandbox, without grading or reference code.
+
+    ``line`` events contain locals *before* that source line runs. ``return``
+    includes its safe value. Generators use ``yield`` and ``resume`` with a
+    stable call_id; coroutines/async generators use ``suspend`` and ``resume``.
+    ``unwind`` ends a call through an exception. Preamble lines are omitted.
+    Unsupported objects are labeled, never inspected through repr/properties.
+    The engine must select a visible case and refuse sealed runs before calling.
+    """
+    if type(source) is not str or len(source.encode("utf-8")) > TRACE_SOURCE_BYTES:
+        raise ValueError("trace source must be at most 64 KiB of Python")
+    if type(entry) is not dict or type(public_case) is not dict:
+        raise ValueError("trace needs an entry point and one visible test case")
+    if public_case.get("hidden") or public_case.get("reveal") is False:
+        raise ValueError("hidden or unrevealed cases cannot be traced")
+    for value, low, high, label in ((max_steps, 1, 1000, "steps"),
+            (timeout_ms, 50, 3000, "timeout"), (snapshot_depth, 1, 5, "snapshot depth")):
+        if type(value) is not int or not low <= value <= high:
+            raise ValueError("invalid trace " + label)
+    if type(wall_seconds) not in (int, float) or not .1 <= wall_seconds <= 8:
+        raise ValueError("invalid trace wall-clock limit")
+    # Expected answers, hidden tests and grading comparators never enter this
+    # child, even when callers pass the original visible-test dictionary.
+    case = {key: public_case[key] for key in ("args", "kwargs", "ops") if key in public_case}
+    trace_entry = {key: entry[key] for key in
+                   ("kind", "name", "preamble", "arg_adapters", "result_adapter") if key in entry}
+    if trace_entry.get("kind", "function") not in ("function", "class_ops"):
+        raise ValueError("this encounter does not have a traceable Python entry point")
+    if type(trace_entry.get("name")) is not str or not trace_entry["name"].isidentifier():
+        raise ValueError("trace entry needs a Python function or class name")
+    if type(case.get("args", [])) is not list or type(case.get("kwargs", {})) is not dict:
+        raise ValueError("trace case needs a list of arguments and a keyword dictionary")
+    data = {"entry": trace_entry, "case": case}
+    _trace_json_input(data)
+    try:
+        encoded = json.dumps(data, allow_nan=False)
+    except ValueError:
+        raise ValueError("this visible case cannot be represented as bounded JSON") from None
+    if len(encoded.encode("utf-8")) > TRACE_INPUT_BYTES:
+        raise ValueError("trace entry and visible case must be at most 32 KiB")
+    payload = dict(data, mode="trace", source=source, max_steps=max_steps,
+                   timeout_ms=timeout_ms, snapshot_depth=snapshot_depth)
+    started = time.perf_counter()
+    with tempfile.TemporaryDirectory(prefix="gauntlet-trace-") as scratch_str:
+        scratch = Path(os.path.realpath(scratch_str))
+        payload_path, result_path = scratch / "payload.json", scratch / "result.json"
+        harness_path = scratch / "harness.py"
+        shutil.copyfile(HARNESS, harness_path)
+        payload_path.write_text(json.dumps(payload), encoding="utf-8")
+        argv, env, hardened = _child_launch(scratch, harness_path, payload_path, result_path)
+        killed = False
+        # File sinks avoid unbounded parent RAM even if code bypasses sys.stdout
+        # with os.write. The child has the same 8 MiB file limit as normal tests.
+        with (scratch / "stdout.log").open("wb") as out, (scratch / "stderr.log").open("wb") as err:
+            proc = subprocess.Popen(argv, cwd=str(scratch), env=env, stdin=subprocess.DEVNULL, stdout=out, stderr=err,
+                preexec_fn=_preexec(config.SANDBOX_CPU_SECONDS, config.SANDBOX_MEMORY_MB),
+                **({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if WINDOWS else {}))
+            try:
+                proc.wait(timeout=wall_seconds)
+            except subprocess.TimeoutExpired:
+                killed = True
+            finally:
+                # Clean descendants as well as the interpreter, including after
+                # an early exit. POSIX children inherit the isolated session.
+                if not WINDOWS and resource is not None:
+                    try:
+                        os.killpg(proc.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                elif proc.poll() is None:
+                    proc.kill()
+                proc.wait()
+        raw = None
+        if not killed and result_path.exists():
+            with result_path.open("rb") as fh:
+                result_bytes = fh.read(TRACE_RESULT_BYTES + 1)
+            if len(result_bytes) <= TRACE_RESULT_BYTES:
+                try:
+                    raw = json.loads(result_bytes)
+                except (ValueError, UnicodeDecodeError):
+                    pass
+        if not isinstance(raw, dict) or not isinstance(raw.get("frames"), list):
+            with (scratch / "stderr.log").open("rb") as fh:
+                detail = _clean_stderr(fh.read(4096).decode("utf-8", "replace"))
+            raw = {"ok": False, "frames": [], "truncated": True,
+                   "truncation_reason": "wall-clock limit" if killed else "interpreter stopped",
+                   "exception": {"type": "Timeout" if killed else "ExecutionAborted",
+                       "message": "The trace reached its wall-clock limit." if killed else
+                           (detail or "The isolated interpreter exited without a trace.")},
+                   "output": None, "stdout": "", "stdout_truncated": False}
+        raw["hardened"] = hardened
+        raw["wall_ms"] = round((time.perf_counter() - started) * 1000, 2)
+        return raw
 
 
 def run_scratch(source: str, *, wall_seconds: int = 8) -> ExecutionReport:

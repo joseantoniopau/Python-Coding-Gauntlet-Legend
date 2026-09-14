@@ -702,7 +702,7 @@ def select_next(corpus: list, *, skills: dict, schedule: dict, profile: str,
                 solved_ids: set, recent_ids: list, region: str | None = None,
                 now: float | None = None, allow_retest: bool = True,
                 recent_kinds: list | None = None,
-                session: list | None = None) -> Selection:
+                session: list | None = None, intent: str = "balanced") -> Selection:
     """Retests come first — a due pattern is the highest-value thing we can show.
     Otherwise pick the best-scoring fresh encounter."""
     now = now or time.time()
@@ -712,7 +712,7 @@ def select_next(corpus: list, *, skills: dict, schedule: dict, profile: str,
     # callers that already hand us teachable content lose nothing by it.
     corpus = teachable(corpus)
 
-    if allow_retest:
+    if allow_retest and intent != "new":
         for entry in srs.due(schedule, now=now, limit=6):
             candidates = [p for p in corpus
                           if p.spaced_repetition_family == entry.family
@@ -765,11 +765,21 @@ def select_next(corpus: list, *, skills: dict, schedule: dict, profile: str,
 
     session = list(session or ())
     frontier_families = curriculum.frontier_families(skills)
+    def intent_bonus(p):
+        if intent == "new":
+            return 18.0 if p.id not in solved_ids else 0.0
+        if intent == "review":
+            return 18.0 if p.spaced_repetition_family in schedule else 0.0
+        if intent == "weakest":
+            state = skills.get(skillmod.PATTERN_TO_SKILL.get(p.pattern, "PYTHON"))
+            return max(0, 100 - getattr(state, "mastery", 0)) * 0.22
+        return 0.0
+
     scored = [(score_problem(p, skills=skills, profile=profile,
                              solved_ids=solved_ids, recent_ids=recent_ids,
                              region=region, now=now, recent_kinds=recent_kinds,
                              session=session,
-                             frontier_families=frontier_families), p)
+                             frontier_families=frontier_families) + intent_bonus(p), p)
               for p in eligible]
     scored.sort(key=lambda pair: pair[0], reverse=True)
     if not scored:
@@ -794,7 +804,9 @@ def select_next(corpus: list, *, skills: dict, schedule: dict, profile: str,
         return Selection(problem=best, reason="SESSION_ECHO",
                          encounter_kind=best.encounter_kind,
                          tags=["echo", best.spaced_repetition_family])
-    return Selection(problem=best, reason="ADAPTIVE",
+    reason = {"new": "PRACTICE_NEW", "review": "PRACTICE_REVIEW",
+              "weakest": "PRACTICE_WEAKEST"}.get(intent, "ADAPTIVE")
+    return Selection(problem=best, reason=reason,
                      encounter_kind=best.encounter_kind)
 
 

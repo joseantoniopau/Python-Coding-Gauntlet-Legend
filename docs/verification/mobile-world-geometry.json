@@ -1,0 +1,247 @@
+{
+  "cases": 24,
+  "cameraChecks": 168,
+  "viewports": [
+    {
+      "width": 320,
+      "height": 280,
+      "dpr": 1,
+      "scale": 2,
+      "backing": [
+        320,
+        280
+      ]
+    },
+    {
+      "width": 320,
+      "height": 280,
+      "dpr": 2,
+      "scale": 2,
+      "backing": [
+        640,
+        560
+      ]
+    },
+    {
+      "width": 320,
+      "height": 280,
+      "dpr": 3,
+      "scale": 2,
+      "backing": [
+        960,
+        840
+      ]
+    },
+    {
+      "width": 360,
+      "height": 320,
+      "dpr": 1,
+      "scale": 2,
+      "backing": [
+        360,
+        320
+      ]
+    },
+    {
+      "width": 360,
+      "height": 320,
+      "dpr": 2,
+      "scale": 2,
+      "backing": [
+        720,
+        640
+      ]
+    },
+    {
+      "width": 360,
+      "height": 320,
+      "dpr": 3,
+      "scale": 2,
+      "backing": [
+        1080,
+        960
+      ]
+    },
+    {
+      "width": 390,
+      "height": 405,
+      "dpr": 1,
+      "scale": 2,
+      "backing": [
+        390,
+        405
+      ]
+    },
+    {
+      "width": 390,
+      "height": 405,
+      "dpr": 2,
+      "scale": 2,
+      "backing": [
+        780,
+        810
+      ]
+    },
+    {
+      "width": 390,
+      "height": 405,
+      "dpr": 3,
+      "scale": 2,
+      "backing": [
+        1170,
+        1215
+      ]
+    },
+    {
+      "width": 430,
+      "height": 440,
+      "dpr": 1,
+      "scale": 2,
+      "backing": [
+        430,
+        440
+      ]
+    },
+    {
+      "width": 430,
+      "height": 440,
+      "dpr": 2,
+      "scale": 2,
+      "backing": [
+        860,
+        880
+      ]
+    },
+    {
+      "width": 430,
+      "height": 440,
+      "dpr": 3,
+      "scale": 2,
+      "backing": [
+        1290,
+        1320
+      ]
+    },
+    {
+      "width": 760,
+      "height": 360,
+      "dpr": 1,
+      "scale": 2,
+      "backing": [
+        760,
+        360
+      ]
+    },
+    {
+      "width": 760,
+      "height": 360,
+      "dpr": 2,
+      "scale": 2,
+      "backing": [
+        1520,
+        720
+      ]
+    },
+    {
+      "width": 760,
+      "height": 360,
+      "dpr": 3,
+      "scale": 2,
+      "backing": [
+        2280,
+        1080
+      ]
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "dpr": 1,
+      "scale": 3,
+      "backing": [
+        1000,
+        700
+      ]
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "dpr": 2,
+      "scale": 3,
+      "backing": [
+        2000,
+        1400
+      ]
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "dpr": 3,
+      "scale": 3,
+      "backing": [
+        3000,
+        2100
+      ]
+    },
+    {
+      "width": 1110,
+      "height": 893,
+      "dpr": 1,
+      "scale": 4,
+      "backing": [
+        1110,
+        893
+      ]
+    },
+    {
+      "width": 1110,
+      "height": 893,
+      "dpr": 2,
+      "scale": 4,
+      "backing": [
+        2220,
+        1786
+      ]
+    },
+    {
+      "width": 1110,
+      "height": 893,
+      "dpr": 3,
+      "scale": 4,
+      "backing": [
+        3330,
+        2679
+      ]
+    },
+    {
+      "width": 1590,
+      "height": 1000,
+      "dpr": 1,
+      "scale": 4,
+      "backing": [
+        1590,
+        1000
+      ]
+    },
+    {
+      "width": 1590,
+      "height": 1000,
+      "dpr": 2,
+      "scale": 4,
+      "backing": [
+        3180,
+        2000
+      ]
+    },
+    {
+      "width": 1590,
+      "height": 1000,
+      "dpr": 3,
+      "scale": 4,
+      "backing": [
+        4770,
+        3000
+      ]
+    }
+  ],
+  "note": "Actual Overworld.load/resize/_camera at eight viewport sizes and DPR1/2/3; canvas CSS dimensions equal viewport and backing dimensions equal DPR. CSS structure checked; browser layout is parent QA."
+}

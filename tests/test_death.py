@@ -42,7 +42,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from gauntlet import config, db, death, saves, upkeep, world  # noqa: E402
+from gauntlet import config, db, death, practice, saves, upkeep, world  # noqa: E402
 
 HEALTH = upkeep.HEALTH_FIELD
 FOCUS = upkeep.FOCUS_FIELD
@@ -336,6 +336,98 @@ class TheRecordDoesNotMove(DeathTest):
         self.assertEqual(woken["settings"], dying["settings"])
         self.assertTrue(woken["settings"]["high_contrast"])
         self.assertEqual(woken["settings"]["colourblind"], "deuteranopia")
+
+    def test_appearance_and_delivered_lessons_survive_on_disk(self):
+        _, dying, _ = self.a_real_death(over_a_manual_slot=False)
+        dying["appearance"] = {"selected": "ember"}
+        dying["lessons"] = {"beats": ["first_arrival", "first_submit"],
+                            "cue": {"shown": {"test": 2}, "used": {"test": 1}}}
+        before = copy.deepcopy(dying)
+
+        woken = death.die(self.conn, dying, now=1045)["state"]
+        on_disk = db.load_state(self.conn)
+
+        for key in ("appearance", "lessons"):
+            self.assertEqual(woken[key], before[key])
+            self.assertEqual(on_disk[key], before[key])
+        self.assertEqual(dying, before, "waking must not rewrite the forensic source")
+
+    def test_practice_record_survives_but_its_dead_encounter_cannot_resume(self):
+        _, dying, _ = self.a_real_death(over_a_manual_slot=False)
+        plan = practice.begin(20, "weakest", "expedition", now=1000)
+        plan.update(elapsed=12, results=[{
+            "attempt_id": 7, "problem_id": "p27", "solved": True,
+            "task_id": "task-completed", "hints_used": 1,
+            "evidence_kind": "scaffolded", "served_rung": 2, "retained": False}],
+            completed=["task-completed"], retreated=2)
+        plan["current"] = {"problem_id": "p28", "task_id": "task-dying",
+                           "encounter": {"problem_id": "p28", "hp": 0,
+                                         "draft": {"code": "unfinished"}}}
+        dying["practice"] = {"plan": plan,
+                             "history": [{"id": "previous", "status": "finished"}],
+                             "notes": {"HASH_MAP": "Check duplicate keys."}}
+        before = copy.deepcopy(dying)
+        expected = copy.deepcopy(dying["practice"])
+        expected["plan"].update(status="paused", elapsed=57, current=None)
+
+        result = death.die(self.conn, dying, now=1045)
+        woken = result["state"]
+        on_disk = db.load_state(self.conn)
+
+        self.assertEqual(woken["practice"], expected)
+        self.assertEqual(on_disk["practice"], expected)
+        self.assertIsNone(woken["encounter"])
+        self.assertIn("practice.plan.current", result["wake"]["closed"])
+        self.assertEqual(dying, before, "pausing must not mutate the forensic source")
+        self.assertEqual(practice.elapsed(woken["practice"]["plan"], now=9000), 57)
+        # Resuming has no saved encounter to resurrect, and cannot claim another solve.
+        practice.resume(woken["practice"]["plan"], now=9000)
+        view = practice.view(woken["practice"]["plan"], now=9010)
+        self.assertFalse(view["active_problem_id"])
+        self.assertEqual(view["completed_count"], 1)
+        self.assertEqual(view["elapsed_seconds"], 67)
+
+    def test_paused_and_finished_practice_keep_their_status_and_clock(self):
+        for status in ("paused", "finished"):
+            with self.subTest(status=status):
+                dying = self.fresh(**{HEALTH: 0})
+                plan = practice.begin(10, "review", "rehearsal", now=1000)
+                plan.update(status=status, elapsed=40,
+                            current={"problem_id": "stale", "task_id": "stale",
+                                     "encounter": {"problem_id": "stale"}})
+                dying["practice"]["plan"] = plan
+                expected = copy.deepcopy(dying["practice"])
+                expected["plan"]["current"] = None
+
+                woken = death.wake(dying, self.fresh(), now=2000)["state"]
+
+                self.assertEqual(woken["practice"], expected)
+
+    def test_old_anchor_cannot_restore_a_practice_plan_the_learner_cleared(self):
+        anchored = self.fresh()
+        anchored["practice"]["plan"] = practice.begin(10, "review", "expedition", now=1000)
+        dying = self.fresh(**{HEALTH: 0})
+        dying["practice"]["notes"]["LOOPS"] = "Trace the accumulator."
+
+        woken = death.wake(dying, anchored, now=1050)["state"]
+
+        self.assertEqual(woken["practice"], dying["practice"])
+        self.assertIsNone(woken["practice"]["plan"])
+
+    def test_legacy_death_still_closes_an_anchor_practice_snapshot(self):
+        anchored = self.fresh()
+        plan = practice.begin(10, "review", "expedition", now=1000)
+        plan["current"] = {"problem_id": "stale", "task_id": "stale",
+                           "encounter": {"problem_id": "stale"}}
+        anchored["practice"]["plan"] = plan
+        legacy = self.fresh(**{HEALTH: 0})
+        legacy.pop("practice")
+
+        woken = death.wake(legacy, anchored, now=1500)["state"]
+
+        self.assertEqual(woken["practice"]["plan"]["status"], "paused")
+        self.assertEqual(woken["practice"]["plan"]["elapsed"], practice.IDLE_LEASE_SECONDS)
+        self.assertIsNone(woken["practice"]["plan"]["current"])
 
     def test_survivor_counters_are_monotone_never_lowered(self):
         """stats is half evidence and half game. The evidence half is raised by

@@ -611,18 +611,24 @@ function palOf(palette, style) {
  * a lit pixel goes up-left of the form, the occlusion goes down-right of it. */
 
 function mottle(ctx, seed, salt, hi, lo, hiT, loT, alt, altT, base, k) {
-  // `base` and `k` pull the two speckle tones back toward the surface colour.
-  // Grain at full ramp contrast on every pixel is television static; the mosaic
-  // effect wants texture you read at arm's length and stop seeing up close.
-  const H = base ? mixHex(base, hi, k) : hi;
-  const L = base ? mixHex(base, lo, k) : lo;
-  const A = alt && base ? mixHex(base, alt, Math.min(1, k + 0.25)) : alt;
-  for (let y = 0; y < TILE; y++) {
-    for (let x = 0; x < TILE; x++) {
+  // Ground is a quiet painted plane behind silhouettes. Cluster the marks into
+  // small brush shapes instead of sampling every pixel independently. Each
+  // caller has just filled its base; explicit bases still control unusual stone
+  // and snow ramps. No full-ramp speckles compete with paths or interactables.
+  const ground = base || ctx.fillStyle;
+  const contrast = Math.min(k == null ? 0.48 : k, 0.58);
+  const H = mixHex(ground, hi, contrast);
+  const L = mixHex(ground, lo, contrast * 0.85);
+  const A = alt ? mixHex(ground, alt, contrast) : null;
+  for (let y = 0; y < TILE; y += 4) {
+    for (let x = 0; x < TILE; x += 4) {
       const n = cellRand(seed, x, y, salt);
-      if (n > hiT) px(ctx, x, y, 1, 1, H);
-      else if (n < loT) px(ctx, x, y, 1, 1, L);
-      else if (A && n > altT && bayer(x, y) < 0.42) px(ctx, x, y, 1, 1, A);
+      const colour = n > hiT ? H : n < loT ? L : A && n > altT ? A : null;
+      if (!colour) continue;
+      const ox = cellRand(seed, x, y, salt + 101) > 0.5 ? 1 : 0;
+      const oy = cellRand(seed, x, y, salt + 103) > 0.5 ? 1 : 0;
+      px(ctx, x + ox, y + oy, 2, 1, colour);
+      if (cellRand(seed, x, y, salt + 107) > 0.55) px(ctx, x + ox + 1, y + oy + 1, 2, 1, colour);
     }
   }
 }
@@ -692,12 +698,12 @@ function surfaceTile(P, st, seed, variant) {
     case 'meadow': {
       px(ctx, 0, 0, TILE, TILE, R[2]);
       mottle(ctx, S, 3, R[3], R[1], 0.88 - 0.06 * g, 0.10 * g, variant >= 2 ? R2[2] : null, 0.62);
-      for (let i = 0, n = 4 + Math.floor(rand() * 3); i < n; i++) {
+      for (let i = 0, n = 1 + Math.floor(rand() * 2); i < n; i++) {
         const x = 1 + Math.floor(rand() * (TILE - 2)), y = 2 + Math.floor(rand() * (TILE - 5));
         blade(ctx, x, y, 3, R[1], R[3]);
         if (rand() < 0.5) px(ctx, x + 1, y + 3, 1, 1, R[0]);
       }
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < 1; i++) {
         const x = Math.floor(rand() * TILE), y = Math.floor(rand() * TILE);
         px(ctx, x, y, 1, 1, F[3]);
       }
@@ -709,7 +715,7 @@ function surfaceTile(P, st, seed, variant) {
       mottle(ctx, S, 3, R[3], R[1], 0.84, 0.14, R2[2], 0.58);
       if (variant % 3 === 0) clump(ctx, 3 + Math.floor(rand() * 9), 3 + Math.floor(rand() * 9),
                                    3, D[2], D[3], D[1]);
-      for (let i = 0, n = 5 + Math.floor(rand() * 3); i < n; i++) {
+      for (let i = 0, n = 2 + Math.floor(rand() * 2); i < n; i++) {
         const x = 1 + Math.floor(rand() * (TILE - 2)), y = 1 + Math.floor(rand() * (TILE - 6));
         const h = 3 + Math.floor(rand() * 2);
         blade(ctx, x, y, h, R[1], rand() < 0.4 ? mixHex(R[3], A[3], 0.4) : R[3]);
@@ -722,11 +728,11 @@ function surfaceTile(P, st, seed, variant) {
       const base = mixHex(R[2], F[2], 0.34);
       px(ctx, 0, 0, TILE, TILE, base);
       mottle(ctx, S, 3, F[3], mixHex(R[0], F[0], 0.5), 0.80, 0.22, F[2], 0.52);
-      for (let i = 0, n = 2 + (variant % 2); i < n; i++) {
+      for (let i = 0, n = 1 + (variant % 2); i < n; i++) {
         clump(ctx, 2 + Math.floor(rand() * 12), 2 + Math.floor(rand() * 12),
               2 + Math.floor(rand() * 2), F[2], F[3], F[0]);
       }
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < 1; i++) {
         const x = 1 + Math.floor(rand() * 14), y = 2 + Math.floor(rand() * 12);
         px(ctx, x, y, 1, 2, F[1]); px(ctx, x, y, 1, 1, F[4]);
       }
@@ -765,7 +771,7 @@ function surfaceTile(P, st, seed, variant) {
     case 'gravel': {
       px(ctx, 0, 0, TILE, TILE, Rk[2]);
       mottle(ctx, S, 3, Rk[3], Rk[1], 0.80, 0.26, Rk[0], 0.62, Rk[2], 0.6);
-      for (let i = 0, n = 4 + Math.floor(rand() * 3); i < n; i++) {
+      for (let i = 0, n = 2 + Math.floor(rand() * 2); i < n; i++) {
         chip(ctx, Math.floor(rand() * 13), Math.floor(rand() * 13), 1 + Math.floor(rand() * 2), Rk);
       }
       break;
@@ -2441,149 +2447,311 @@ function chestSprite(P, st, seed, open) {
 const BUILD_VARIANTS = ['cottage', 'hall', 'forge', 'tower'];
 const BUILD_W = 40, BUILD_H = 36;
 
+// Architecture is chosen by material and silhouette, independently of palette.
+// Related settlements share a craft tradition; their roofs, supports and civic
+// buildings still belong to the same region through all four recovery stages.
+const BUILD_STYLE = {
+  village: 'timber', grass: 'longhouse', forest: 'lodge', deepforest: 'gothic',
+  canopy: 'pavilion', swamp: 'stilt', cave: 'vault', mine: 'foundry',
+  mountain: 'alpine', highland: 'longhouse', citadel: 'arcade', ruins: 'antique',
+  wastes: 'bastion', dungeon: 'gothic', tower: 'observatory', arena: 'arena', castle: 'citadel',
+};
+const BUILD_MATERIAL = {
+  timber: ['#c8b492', '#795248'], longhouse: ['#a9a28c', '#596351'],
+  lodge: ['#a8875e', '#375b4b'], gothic: ['#858597', '#51465e'],
+  pavilion: ['#aa9d78', '#456659'], stilt: ['#99947a', '#616759'],
+  vault: ['#8b8393', '#555261'], foundry: ['#a58c7d', '#655267'],
+  alpine: ['#b5c4cf', '#637588'], arcade: ['#d6ceba', '#6a657f'],
+  antique: ['#b8aa8a', '#716d58'], bastion: ['#8e8585', '#50434c'],
+  observatory: ['#a3b6c4', '#476b84'], arena: ['#c9b18e', '#6f524c'],
+  citadel: ['#908395', '#583b54'],
+};
+
 export function buildingSprite(palette, seed, tier = 2, variant = 0, biome) {
   const st = biomeStyle(biome);
   const P = palOf(palette, biome ? st : null);
   const kind = BUILD_VARIANTS[variant % BUILD_VARIANTS.length];
+  const style = BUILD_STYLE[biome] || 'timber';
+  const [wallBase, roofBase] = BUILD_MATERIAL[style];
   const { canvas, ctx } = make(BUILD_W, BUILD_H);
-  const rand = rng(seed + variant * 1301 + tier * 17 + 1);
-  const wall = ramp(tier >= 2 ? '#c8b492' : tier === 1 ? '#a2907a' : '#7a6f60');
-  const roof = tier >= 2 ? P.accent : ramp(mixHex(P.accent[2], '#4a4038', 0.55));
+  const wall = ramp(mixHex(wallBase, '#635863', tier >= 2 ? 0 : tier === 1 ? 0.22 : 0.42));
+  const roof = ramp(mixHex(roofBase, P.accent[1], tier >= 2 ? 0.15 : 0.06));
   const Bk = P.bark;
 
-  /* FIFTEEN colours, declared up front, and nothing in the drawing below is
-   * allowed to invent a sixteenth.
-   *
-   * A house is the most complicated object this file draws — walls, roof,
-   * timber, glass, trim, four rebuild tiers — and it is exactly the kind of
-   * sprite where a shading helper called ad hoc at six different strengths
-   * quietly produces thirty-odd tones. Naming the palette first is what makes
-   * the timber in the frame the same black as the shadow under the eaves, and
-   * that agreement is the whole reason a village reads as one village. */
-  const D  = INK;                                    // 0  outline, every deep shadow
-  const W0 = wall[0], W1 = wall[1], W2 = wall[2], W3 = wall[3];
-  const R0 = roof[0], R1 = roof[1], R2 = roof[2], R3 = roof[3];
-  const T0 = Bk[0],  T1 = Bk[1],  T2 = Bk[2];        // timber
+  // Four wall tones, four roof tones, two joinery tones, ink, two window
+  // lights and one trim leave one slot for the shared cast-shadow plate.
+  // Deep joinery borrows ink instead of inventing a sixteenth raster colour.
+  const D = INK;
+  const [W0, W1, W2, W3] = wall, [R0, R1, R2, R3] = roof;
+  const T0 = D, T1 = Bk[1], T2 = Bk[2];
   const LIT = tier >= 3 ? '#ffeaa8' : tier === 2 ? '#ffd98a' : '#2e2a1c';
   const GLOW = tier >= 2 ? '#fff4c8' : LIT;
   const TRIM = P.accent[3];
-
-  const tall = kind === 'tower';
-  const wide = kind === 'hall';
-  const x0 = tall ? 9 : wide ? 1 : 3;
-  const x1 = tall ? 23 : wide ? 31 : 29;
-  const wallTop = (tall ? 8 : wide ? 13 : 15) + 4;
-  const base = 34;
-
-  /* One rung only. The palette above is fifteen colours and this sprite is not
-   * allowed a sixteenth, so the house is grounded by a single dithered tone
-   * rather than by the full four-step ladder the smaller props can afford. */
-  castShadow(ctx, BUILD_W, BUILD_H, (x0 + x1) / 2, base, (x1 - x0) / 2, 2.5, 13, 1, 1);
-  contactShadow(ctx, (x0 + x1) / 2, base, (x1 - x0) / 2, 2.5, 1);
-
-  // walls
-  px(ctx, x0, wallTop, x1 - x0, base - wallTop, W2);
-  px(ctx, x0, wallTop, 1, base - wallTop, W3);
-  px(ctx, x1 - 2, wallTop, 1, base - wallTop, W1);
-  px(ctx, x1 - 1, wallTop, 1, base - wallTop, D);
-  for (let y = wallTop; y < base; y++) {
-    for (let x = x0; x < x1; x++) {
-      if (cellRand(seed, x, y, 81) > 0.93) px(ctx, x, y, 1, 1, W1);
-    }
-  }
-  // timber framing, which is what makes a wall read as built rather than poured
-  if (kind !== 'tower') {
-    px(ctx, x0 + 4, wallTop, 1, base - wallTop, T1);
-    px(ctx, x0 + 5, wallTop, 1, base - wallTop, T0);
-    px(ctx, x1 - 5, wallTop, 1, base - wallTop, T1);
-    px(ctx, x0, wallTop + 6, x1 - x0, 1, T1);
-    px(ctx, x0, wallTop + 7, x1 - x0, 1, T0);
-  }
-  // Where the wall meets the ground. Every solid in this game ends in this band.
-  bottomBand(ctx, x0, base - 2, x1 - x0, W0);
-  bottomBand(ctx, x0, base - 1, x1 - x0, D);
-
-  // roof — a gable stepped one pixel per row, the cheapest honest 16-bit roof
-  const roofBase = wallTop + 1;
-  const span = x1 - x0 + 4;
-  const rows = tall ? 7 : 9;
-  for (let i = 0; i < rows; i++) {
-    const w = span - i * 2;
-    const rx = x0 - 2 + i;
-    const y = roofBase - i;
-    if (w <= 0) break;
-    const holed = tier === 0 && cellRand(seed, i, 0, 82) > 0.55;
-    px(ctx, rx, y, w, 1, i % 2 ? R1 : R2);
-    // Light gathers at the ridge and runs off the right eave. Splitting the
-    // roof down the middle instead — which is the obvious thing to write — puts
-    // a seam where a house has none.
-    if (i >= rows - 3) px(ctx, rx, y, w, 1, R3);
-    px(ctx, rx, y, 2, 1, R3);
-    px(ctx, rx + w - 2, y, 2, 1, R0);
-    if (holed) {
-      const hx = rx + 2 + Math.floor(cellRand(seed, i, 1, 83) * Math.max(1, w - 4));
-      ctx.clearRect(hx, y, 2, 1);
-    }
-  }
-  // The eaves throw a hard shadow down the wall. These three rows are most of
-  // why a roof reads as overhanging rather than as painted on.
-  px(ctx, x0 - 2, roofBase + 1, span, 1, R0);
-  px(ctx, x0, roofBase + 2, x1 - x0, 1, D);
-  px(ctx, x0, roofBase + 3, x1 - x0, 1, W0);
-
-  // windows
-  const winY = wallTop + 9;
-  const winXs = tall ? [15] : wide ? [6, 14, 23] : [7, 20];
+  const tall = kind === 'tower', wide = kind === 'hall';
+  const x0 = tall ? 9 : wide ? 1 : 3, x1 = tall ? 23 : wide ? 31 : 29;
+  const width = x1 - x0, centre = (x0 + x1) >> 1;
+  const base = 34, top = tall ? 12 : wide ? 17 : 19;
+  const raised = style === 'stilt' || style === 'pavilion';
+  const wallBottom = raised ? 30 : base;
+  const stone = ['gothic', 'vault', 'arcade', 'antique', 'bastion', 'observatory', 'arena', 'citadel'].includes(style);
   const windows = [];
+  const rect = (x, y, w, h, c) => px(ctx, x, y, w, h, c);
+
+  castShadow(ctx, BUILD_W, BUILD_H, centre, base, width / 2, 2.5, 13, 1, 1);
+  contactShadow(ctx, centre, base, width / 2, 2.5, 1);
+
+  // A broad unbroken wall plane gives the roof and readable entrances room.
+  rect(x0, top, width, wallBottom - top, W2);
+  rect(x0, top, 2, wallBottom - top, W3);
+  rect(x1 - 3, top, 2, wallBottom - top, W1);
+  rect(x1 - 1, top, 1, wallBottom - top, D);
+  if (stone) {
+    for (let y = top + 4; y < wallBottom - 2; y += 5) {
+      rect(x0 + 2, y, width - 5, 1, W1);
+      for (let x = x0 + 3 + ((y - top) % 2) * 3; x < x1 - 3; x += 8) rect(x, y - 3, 1, 3, W1);
+    }
+  } else {
+    for (const x of [x0 + 3, x1 - 5]) {
+      rect(x, top, 2, wallBottom - top, T0);
+      rect(x, top, 1, wallBottom - top, T2);
+    }
+    rect(x0, top + 7, width, 1, T1);
+    if (style === 'lodge' || style === 'longhouse') {
+      for (let y = top + 4; y < wallBottom - 1; y += 3) rect(x0 + 1, y, width - 3, 1, T1);
+    }
+  }
+  rect(x0, wallBottom - 2, width, 1, W0);
+  rect(x0, wallBottom - 1, width, 1, D);
+  if (raised) {
+    // Raised floor with a readable stair; the footprint and footY stay fixed.
+    for (const x of [x0 + 2, x1 - 4]) {
+      rect(x, wallBottom, 2, base - wallBottom, T0);
+      rect(x, wallBottom, 1, base - wallBottom, T2);
+    }
+    for (let y = wallBottom; y < base; y++) rect(13 - ((y - wallBottom) >> 1), y,
+      7 + 2 * ((y - wallBottom) >> 1), 1, y % 2 ? T1 : T2);
+  }
+
+  // Draw stepped triangles with a single large light plane, then a narrow dark
+  // return. Roof tile seams are sparse; alternating every row looks corrugated.
+  const gable = (cx, bottom, half, height, light = false) => {
+    for (let row = 0; row < height; row++) {
+      const reach = Math.max(0, Math.floor(half * (height - row) / height));
+      const y = bottom - row;
+      rect(cx - reach, y, reach * 2 + 1, 1, D);
+      if (reach < 1) continue;
+      rect(cx - reach + 1, y, reach * 2 - 1, 1, light ? W2 : R2);
+      rect(cx - reach + 1, y, 1, 1, light ? W3 : R3);
+      rect(cx + reach - 2, y, 2, 1, light ? W1 : R0);
+      if (!light && row % 4 === 1 && reach > 3) rect(cx - reach + 3, y, reach * 2 - 6, 1, R1);
+    }
+  };
+  const cap = (y, overhang = 2) => {
+    rect(Math.max(0, x0 - overhang), y, width + overhang * 2, 1, R0);
+    rect(x0, y + 1, width, 1, D);
+    rect(x0, y + 2, width, 1, W0);
+  };
+  const pier = (x, y, h, w = 3) => {
+    rect(x, y, w, h, W1); rect(x, y, 1, h, W3);
+    rect(x + w - 1, y, 1, h, W0);
+    rect(x - 1, y, w + 2, 2, W3);
+    rect(x - 1, y + h - 2, w + 2, 2, W1);
+  };
+
+  switch (style) {
+    case 'arcade': case 'antique': case 'arena': {
+      // Colonnade and broad pediment: the civic profile is legible in silhouette.
+      const roofY = top - 1;
+      if (style === 'arena') {
+        rect(x0, roofY - 5, width, 5, W1);
+        for (let x = x0; x < x1; x += 5) rect(x, roofY - 7, 3, 3, W3);
+        rect(x0, roofY - 2, width, 1, TRIM);
+      } else gable(centre, roofY, (width >> 1) + 1, tall ? 5 : 7, true);
+      rect(x0, roofY, width, 2, W3);
+      rect(x0, roofY + 2, width, 1, W0);
+      for (const x of [x0 + 1, x1 - 4]) pier(x, top + 2, wallBottom - top - 2);
+      if (wide) for (const x of [x0 + 9, x1 - 12]) pier(x, top + 2, wallBottom - top - 2, 2);
+      if (style === 'antique') {
+        // Ruined civic masonry remains its own architecture when restored.
+        rect(x0 + 4, roofY - 2, 2, 1, W0);
+        rect(x1 - 7, top + 5, 2, 1, W0);
+        if (tier < 2) ctx.clearRect(x1 - 4, roofY - 4, 3, 4);
+      }
+      break;
+    }
+    case 'citadel': case 'bastion': {
+      const roofY = top - 4;
+      rect(x0, roofY, width, 5, W1);
+      rect(x0, roofY, width, 1, W3);
+      for (let x = x0; x < x1; x += 5) {
+        rect(x, roofY - 3, 3, 3, W2); rect(x, roofY - 3, 3, 1, W3);
+      }
+      cap(top + 1, 0);
+      for (const x of [x0, x1 - 5]) {
+        pier(x + 1, top + 2, base - top - 2);
+        if (style === 'citadel') gable(x + 2, roofY + 1, 4, tall ? 9 : 11);
+        else { rect(x, roofY - 5, 5, 2, R1); rect(x, roofY - 5, 5, 1, R3); }
+      }
+      break;
+    }
+    case 'foundry': {
+      // Saw-tooth roof, forge stacks, and riveted iron girders.
+      const roofY = top;
+      for (let x = x0; x < x1; x += 7) {
+        for (let i = 0; i < 7 && x + i < x1; i++) {
+          const rise = Math.min(5, i);
+          rect(x + i, roofY - rise, 1, rise + 1, i === 6 ? R0 : R2);
+          rect(x + i, roofY - rise, 1, 1, R3);
+        }
+      }
+      for (const x of [x0 + 1, x1 - 6]) {
+        rect(x, top - 12, 4, 12, W1); rect(x, top - 12, 1, 12, W3);
+        rect(x - 1, top - 12, 6, 2, R0); rect(x - 1, top - 12, 6, 1, R3);
+      }
+      cap(top + 1, 1);
+      for (const y of [top + 5, wallBottom - 3]) {
+        rect(x0, y, width, 2, R0);
+        for (let x = x0 + 2; x < x1 - 1; x += 5) rect(x, y, 1, 1, R3);
+      }
+      break;
+    }
+    case 'observatory': {
+      // Faceted copper dome and an open astronomical instrument on its crown.
+      const radius = (width >> 1) + 1, roofY = top;
+      for (let row = 0; row < 9; row++) {
+        const half = Math.floor(radius * Math.sqrt(1 - (row / 9) ** 2));
+        rect(centre - half, roofY - row, half * 2 + 1, 1, R2);
+        rect(centre - half, roofY - row, 2, 1, R3);
+        rect(centre + half - 2, roofY - row, 3, 1, R0);
+        rect(centre, roofY - row, 1, 1, R1);
+      }
+      cap(top + 1, 1);
+      rect(centre, Math.max(0, top - 13), 1, 5, TRIM);
+      rect(centre - 2, Math.max(0, top - 11), 5, 1, TRIM);
+      rect(x0 + 2, top + 4, 1, wallBottom - top - 6, W3);
+      rect(x1 - 4, top + 4, 1, wallBottom - top - 6, W0);
+      break;
+    }
+    case 'vault': {
+      // A low barrel vault inset into dressed rock, without a timber gable.
+      for (let row = 0; row < 7; row++) {
+        const inset = Math.floor(row * row / 7);
+        rect(x0 + inset, top - row, Math.max(1, width - inset * 2), 1, row > 3 ? W3 : W1);
+      }
+      rect(x0, top + 1, width, 2, W0);
+      pier(x0 + 1, top + 2, wallBottom - top - 2);
+      pier(x1 - 4, top + 2, wallBottom - top - 2);
+      break;
+    }
+    case 'pavilion': {
+      // Two separated roofs with lifted eaves and an open raised gallery.
+      gable(centre, top - 4, Math.max(4, (width >> 1) - 3), tall ? 6 : 8);
+      rect(x0 + 4, top - 3, width - 8, 2, W0);
+      gable(centre, top + 2, (width >> 1) + 1, 4);
+      for (const x of [Math.max(0, x0 - 1), x1]) rect(x, top, 2, 3, R3);
+      cap(top + 3, 1);
+      break;
+    }
+    case 'gothic': {
+      gable(centre, top + 1, (width >> 1) + 1, tall ? 12 : 15);
+      for (const x of [x0, x1 - 3]) {
+        pier(x + 1, top + 4, wallBottom - top - 4, 2);
+        gable(x + 1, top + 5, 3, 6);
+      }
+      cap(top + 2, 1);
+      break;
+    }
+    case 'alpine': {
+      gable(centre, top + 2, (width >> 1) + 1, tall ? 12 : 16);
+      // A snow cap is a contiguous windward mass, using the wall's cool ramp.
+      for (let row = 0; row < (tall ? 11 : 15); row++) {
+        const reach = Math.floor(((width >> 1) + 1) * ((tall ? 12 : 16) - row) / (tall ? 12 : 16));
+        if (reach < 2) continue;
+        rect(centre - reach + 1, top + 2 - row, Math.max(1, reach - 1), 1, W3);
+      }
+      cap(top + 3, 1);
+      break;
+    }
+    case 'lodge': case 'longhouse': case 'stilt': case 'timber': {
+      const height = style === 'lodge' ? 12 : style === 'longhouse' ? 6 : 9;
+      gable(centre, top + 1, (width >> 1) + 1, tall ? Math.min(height, 10) : height);
+      cap(top + 2, 1);
+      if (style === 'lodge') {
+        // Carved ridge poles and porch supports belong to woodland lodges.
+        for (let i = 0; i < 4; i++) {
+          rect(centre - 3 + i, top - height - 1 + i, 1, 1, T2);
+          rect(centre + 3 - i, top - height - 1 + i, 1, 1, T2);
+        }
+        for (const x of [x0, x1 - 1]) rect(x, top + 4, 1, wallBottom - top - 4, T2);
+      }
+      break;
+    }
+  }
+
+  // Small windows are always subordinate to the front entrance. Tall buildings
+  // use an upper window; this avoids the old window/door overlap at x=15.
+  const winY = tall ? top + 5 : top + 7;
+  const winXs = tall ? [centre - 1] : wide ? [x0 + 5, x1 - 9] : [x0 + 4, x1 - 8];
+  const pointed = ['gothic', 'citadel', 'vault', 'arcade', 'antique', 'arena'].includes(style);
   for (const wx of winXs) {
-    if (tier === 0 && cellRand(seed, wx, 2, 84) > 0.5) continue;
-    px(ctx, wx - 1, winY - 1, 6, 6, T1);
-    px(ctx, wx - 1, winY - 1, 6, 1, T2);
-    px(ctx, wx - 1, winY + 4, 6, 1, D);
-    px(ctx, wx, winY, 4, 4, LIT);
+    rect(wx - 1, winY - 1, 5, 6, stone ? W0 : T0);
+    if (pointed) {
+      rect(wx, winY - 2, 3, 1, W0); rect(wx + 1, winY - 3, 1, 1, W3);
+    } else rect(wx - 1, winY - 1, 5, 1, stone ? W3 : T2);
+    rect(wx, winY, 3, 3, LIT);
     if (tier >= 2) {
-      px(ctx, wx, winY, 4, 1, GLOW);
-      px(ctx, wx + 2, winY, 1, 4, T1);
-      px(ctx, wx - 1, winY + 5, 6, 1, W3);   // light spilling onto the sill
-      windows.push([wx + 2, winY + 2]);
-    } else if (tier === 1) {
-      px(ctx, wx - 1, winY + 1, 6, 1, T2);   // boards
-      px(ctx, wx - 1, winY + 3, 6, 1, T2);
-    }
+      rect(wx, winY, 3, 1, GLOW);
+      rect(wx + 1, winY + 1, 1, 2, stone ? W0 : T1);
+      windows.push([wx + 1, winY]);
+    } else if (tier === 1) rect(wx - 1, winY + 1, 5, 1, T2);
+    else rect(wx + 1, winY, 2, 3, D);
+    rect(wx - 1, winY + 3, 5, 1, W3);
   }
 
-  // door
-  const dx = 14;
-  px(ctx, dx, base - 11, 5, 11, T1);
-  px(ctx, dx, base - 11, 5, 1, T2);
-  px(ctx, dx, base - 11, 1, 11, T2);
-  px(ctx, dx + 1, base - 10, 3, 10, tier === 0 ? D : T0);
-  px(ctx, dx + 4, base - 11, 1, 11, D);
-  if (tier >= 1) px(ctx, dx + 3, base - 6, 1, 1, TRIM);
+  const doorBottom = wallBottom - 1, doorTop = doorBottom - 8;
+  rect(14, doorTop, 5, 9, stone ? W0 : T1);
+  rect(15, doorTop + 1, 3, 8, tier === 0 ? D : T0);
+  rect(14, doorTop, 1, 9, stone ? W3 : T2);
+  rect(14, doorTop, 5, 1, stone ? W3 : T2);
+  if (pointed) { rect(15, doorTop - 1, 3, 1, W1); rect(16, doorTop - 2, 1, 1, W3); }
+  if (tier >= 1) rect(17, doorBottom - 3, 1, 1, TRIM);
 
-  // tier flourishes
+  // The four stages change structure and occupancy as well as colour.
   if (tier === 0) {
-    for (let i = 0; i < 6; i++) {
-      const rx = x0 + Math.floor(rand() * (x1 - x0 - 2));
-      px(ctx, rx, base - 1, 2, 1, W0);
-      px(ctx, rx + Math.floor(rand() * 3) - 1, base, 2, 1, W1);
+    for (let i = 0; i < 3; i++) {
+      const x = x0 + 2 + Math.floor(cellRand(seed, i, variant, 82) * (width - 5));
+      const y = Math.max(1, top - 4 - i);
+      ctx.clearRect(x, y, 2 + (i % 2), 2);
+      rect(x, top + 5 + i, 1, 2, W0);
+      rect(x, base - 1, 2, 1, W0); rect(x + 1, base, 2, 1, W1);
     }
+  } else if (tier === 1) {
+    rect(x0 + 1, top + 4, 2, wallBottom - top - 3, T1);
+    rect(x0, wallBottom - 5, width, 1, T2);
   }
-  if (tier >= 2 && kind === 'forge') {
-    px(ctx, x1 - 8, roofBase - rows - 3, 4, 8, W1);
-    px(ctx, x1 - 8, roofBase - rows - 3, 4, 1, W3);
-    px(ctx, x1 - 5, roofBase - rows - 3, 1, 8, D);
-    px(ctx, x1 - 7, roofBase - rows - 4, 2, 1, TRIM);
+  if (kind === 'forge') {
+    const cx = x1 - 7, cy = Math.max(0, top - 13);
+    rect(cx, cy, 4, 10, W1); rect(cx, cy, 1, 10, W3);
+    rect(cx - 1, cy, 6, 2, R0); rect(cx - 1, cy, 6, 1, R3);
+    if (tier >= 2) rect(cx + 1, cy + 1, 2, 1, TRIM);
   }
   if (tier >= 3) {
-    px(ctx, x0 + 1, base - 5, 6, 3, T1);          // window box
-    px(ctx, x0 + 1, base - 5, 6, 1, T2);
-    px(ctx, x0 + 2, base - 6, 1, 1, TRIM);
-    px(ctx, x0 + 5, base - 6, 1, 1, TRIM);
-    for (let i = 0; i < span; i += 3) px(ctx, x0 - 2 + i, roofBase + 2, 2, 1, TRIM);
+    // Restored settlements carry a heraldic strip and a warm threshold. Stilt
+    // platforms get rails; stone architecture gets a banner instead of flowers.
+    if (stone || style === 'foundry') {
+      rect(x1 - 5, top + 3, 2, 5, R0); rect(x1 - 5, top + 3, 2, 3, TRIM);
+    } else if (raised) {
+      rect(x0, wallBottom - 1, 11 - x0, 1, T2);
+      rect(21, wallBottom - 1, Math.max(0, x1 - 21), 1, T2);
+    } else {
+      rect(x0 + 2, wallBottom - 5, 5, 2, T1); rect(x0 + 2, wallBottom - 5, 5, 1, T2);
+      rect(x0 + 3, wallBottom - 6, 1, 1, TRIM); rect(x0 + 5, wallBottom - 6, 1, 1, TRIM);
+    }
+    rect(14, doorBottom + 1, 5, 1, W3);
   }
   canvas.windows = windows;
   canvas.footY = base;
+  canvas.architecture = style;
   return canvas;
 }
 

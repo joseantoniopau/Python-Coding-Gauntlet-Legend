@@ -46,7 +46,7 @@ function runeAssembly(problem, onChange) {
   function build(host) {
     host.innerHTML = '';
     host.appendChild(el('div', 'puzzle-help',
-      'Drag or click runes from the pile into the sequence, then set each one\'s '
+      'Choose runes from the pile to add them to the sequence, then set each one\'s '
       + 'depth with the arrows. Depth is meaning in Python — a line one step too '
       + 'far left runs at the wrong time. Some runes do not belong at all.'));
 
@@ -75,6 +75,8 @@ function runeAssembly(problem, onChange) {
         build(host); onChange && onChange();
       };
       const up = el('button', '', '▲');
+      up.setAttribute('aria-label', `Move line ${position + 1} up`);
+      up.disabled = position === 0;
       up.onclick = (e) => {
         e.stopPropagation();
         if (position === 0) return;
@@ -82,6 +84,8 @@ function runeAssembly(problem, onChange) {
         build(host); onChange && onChange();
       };
       const down = el('button', '', '▼');
+      down.setAttribute('aria-label', `Move line ${position + 1} down`);
+      down.disabled = position === placed.length - 1;
       down.onclick = (e) => {
         e.stopPropagation();
         if (position === placed.length - 1) return;
@@ -108,7 +112,8 @@ function runeAssembly(problem, onChange) {
     if (!tray.length) pile.appendChild(el('div', 'muted small', 'every rune is placed'));
     tray.forEach((index) => {
       const rune = runes[index];
-      const row = el('div', 'rune');
+      const row = el('button', 'rune');
+      row.type = 'button';
       row.appendChild(el('span', 'grip', '⠿'));
       row.appendChild(el('span', '', escape(rune.text)));
       row.onclick = () => {
@@ -156,6 +161,7 @@ function trace(problem, onChange) {
       row.appendChild(el('label', '',
         `after line ${cp.after_line} — <code>${escape(cp.variable)}</code>`));
       const input = el('input');
+      input.setAttribute('aria-label', `${cp.variable} after line ${cp.after_line}`);
       input.placeholder = 'its value here';
       input.addEventListener('input', () => onChange && onChange());
       inputs.push(input);
@@ -180,7 +186,7 @@ function spotTheFlaw(problem, onChange) {
   function build(host) {
     host.innerHTML = '';
     host.appendChild(el('div', 'puzzle-help',
-      'Two spells, near identical. One is cursed. Click the line that breaks it.'));
+      'Two spells, near identical. One is cursed. Select the line that breaks it.'));
     if (spec.reference_code) {
       host.appendChild(el('div', 'section-title', 'THE HONEST SPELL'));
       const pre = el('pre', 'spell-body');
@@ -192,10 +198,19 @@ function spotTheFlaw(problem, onChange) {
     const pick = el('div', 'code-pick frame');
     pick.style.padding = '8px';
     lines.forEach((line, i) => {
-      const row = el('div', `cl ${chosen === i + 1 ? 'picked' : ''}`);
+      const row = el('button', `cl ${chosen === i + 1 ? 'picked' : ''}`);
+      row.type = 'button';
+      row.setAttribute('aria-pressed', String(chosen === i + 1));
       row.appendChild(el('span', 'n', String(i + 1)));
       row.appendChild(el('span', '', escape(line) || ' '));
-      row.onclick = () => { chosen = i + 1; build(host); onChange && onChange(); };
+      row.onclick = () => {
+        chosen = i + 1;
+        Array.from(pick.children).forEach((line, index) => {
+          line.classList.toggle('picked', index === i);
+          line.setAttribute('aria-pressed', String(index === i));
+        });
+        onChange && onChange();
+      };
       pick.appendChild(row);
     });
     host.appendChild(pick);

@@ -53,7 +53,7 @@ import math
 import sqlite3
 import time
 
-from . import config, saves, upkeep, world
+from . import config, practice, saves, upkeep, world
 
 # ==========================================================================
 # A. THE LEDGER — exactly what is rolled back, exactly what survives
@@ -194,6 +194,11 @@ SURVIVES: dict = {
                 "Resetting somebody's contrast setting because they lost a "
                 "fight is indefensible and is exactly the kind of key that gets "
                 "swept into a rollback by accident.",
+    "appearance": "the chosen cosmetic palette is a player preference. The "
+                  "equipment still rewinds; palette eligibility remains derived "
+                  "from the surviving graded record.",
+    "lessons": "delivered lessons and used teaching cues. The learner has "
+               "already seen them; death must not re-arm the tutorial.",
 }
 
 # Fields inside `player`. The body rewinds; these two do not.
@@ -220,9 +225,9 @@ STATS_SURVIVE: tuple = (
 )
 
 # --------------------------------------------------------------------------
-# MIXED. Two keys are not one thing, and pretending otherwise is how a rollback
+# MIXED. These keys are not one thing, and pretending otherwise is how a rollback
 # eats something it should not. Each gets a ledger at FIELD level instead —
-# PLAYER_SURVIVES and STATS_SURVIVE above — and is named here so that `classify`
+# PLAYER_SURVIVES and STATS_SURVIVE above, practice below — so that `classify`
 # has an answer for it and `self_check` does not report it as forgotten.
 # --------------------------------------------------------------------------
 MIXED: dict = {
@@ -233,6 +238,10 @@ MIXED: dict = {
              "evidence. STATS_SURVIVE names the evidence half, and it is "
              "carried MONOTONELY — raised, never lowered — for the same reason "
              "db.merge_transfer is monotone.",
+    "practice": "notes, history, plan evidence, completed tasks and elapsed "
+                "practice time survive. An active plan pauses and its current "
+                "encounter snapshot closes, just like the main encounter. "
+                "Waking neither finishes the plan nor records a result or retreat.",
 }
 
 # The four graded tables. Named here so that the assertion in `self_check` reads
@@ -602,7 +611,7 @@ def _carry(source: dict, target: dict, keys) -> list:
     return moved
 
 
-def wake(dying: dict, restored: dict) -> dict:
+def wake(dying: dict, restored: dict, *, now: float | None = None) -> dict:
     """Fold the surviving half of the ledger onto a restored state.
 
     Pure: it reads `dying`, writes `restored`, touches no database and no disk,
@@ -638,6 +647,17 @@ def wake(dying: dict, restored: dict) -> dict:
     # "normally" is not a guarantee and waking inside the fight that killed you
     # is the spiral in its purest form.
     closed = []
+    carried += _carry(dying, restored, (practice.STATE_KEY,))
+    practice_block = restored.get(practice.STATE_KEY)
+    plan = practice_block.get("plan") if isinstance(practice_block, dict) else None
+    if isinstance(plan, dict):
+        # The plan also stores an encounter, so clearing only the top-level
+        # fight would let practice_next reopen the pre-death snapshot. Keep the
+        # learner's record and pause its existing clock without awarding a task.
+        practice.pause(plan, now=now)
+        if plan.get("current"):
+            closed.append("practice.plan.current")
+        plan["current"] = None
     for key in ("encounter", "boss_fight", "incantation", "interview", "exam",
                 "pet_fall"):
         if restored.get(key):
@@ -1089,7 +1109,7 @@ def die(conn: sqlite3.Connection, state: dict, *, cause: str = "enemy_turn",
         woke_from = slot
         fallback = False
 
-    woken = wake(dying, restored)
+    woken = wake(dying, restored, now=now)
     new_state = woken["state"]
     saves.apply_state(conn, new_state)
     if fallback:

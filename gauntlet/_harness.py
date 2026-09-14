@@ -6,6 +6,7 @@ The payload carries the player's source, the entry-point spec and the test
 batch. Results are written to <result.json> so the player's own stdout stays
 pristine and can be shown in the battle log verbatim.
 """
+import dis
 import json
 import math
 import os
@@ -14,6 +15,7 @@ import signal
 import sys
 import time
 import traceback
+from inspect import CO_GENERATOR, CO_COROUTINE, CO_ITERABLE_COROUTINE, CO_ASYNC_GENERATOR
 
 RECURSION_LIMIT = 20000
 
@@ -440,6 +442,269 @@ def run_project_tests(project_dir, test_files, timeout_ms):
     return results
 
 
+class TraceStopped(BaseException):
+    """A bounded teaching recording has ended; it is not a failed test."""
+
+
+class TraceOutput:
+    encoding = "utf-8"
+
+    def __init__(self):
+        self.text = ""
+        self.truncated = False
+
+    def write(self, text):
+        if type(text) is not str:
+            raise TypeError("stdout.write needs a string")
+        room = 4096 - len(self.text)
+        self.text += text[:room]
+        self.truncated = self.truncated or len(text) > room
+        return len(text)
+
+    def flush(self):
+        pass
+
+    def isatty(self):
+        return False
+
+
+def trace_snapshot(value, depth=3, budget=None, seen=None):
+    """A detached JSON snapshot, with no repr, properties or object iteration.
+
+    Exact built-in types only: even list/dict subclasses may override iteration
+    or formatting. Containers share a node budget and cycles never recurse.
+    """
+    if budget is None:
+        budget = [100]
+    if seen is None:
+        seen = set()
+    budget[0] -= 1
+    if budget[0] < 0:
+        return "<snapshot limit>"
+    kind = type(value)
+    if value is None or kind is bool:
+        return value
+    if kind is int:
+        return value if value.bit_length() <= 256 else "<large integer omitted>"
+    if kind is float:
+        return value if math.isfinite(value) else "<non-finite float>"
+    if kind is str:
+        return value if len(value) <= 160 else value[:160] + "…"
+    if kind not in (list, tuple, dict, set, frozenset):
+        # Calling type.__getattribute__ bypasses a custom metaclass hook.
+        name = type.__getattribute__(kind, "__name__")
+        return "<" + name[:60] + " omitted>"
+    if id(value) in seen:
+        return "<cycle>"
+    if depth <= 0:
+        return "<container depth limit>"
+    seen.add(id(value))
+    try:
+        if kind is dict:
+            rows = []
+            for key, item in value.items():
+                if len(rows) >= 16 or budget[0] <= 0:
+                    break
+                rows.append((trace_snapshot(key, depth - 1, budget, seen),
+                             trace_snapshot(item, depth - 1, budget, seen)))
+            # Preserve common string-key dictionaries as dictionaries. Tagged
+            # entries preserve distinct nonstring/truncated keys without coercion.
+            simple = len(value) <= 16 and all(type(k) is str and len(k) <= 160 for k in value)
+            if simple and len(rows) == len(value):
+                return dict(rows)
+            return {"$type": "dict", "entries": [list(row) for row in rows],
+                    "omitted": len(value) - len(rows)}
+        items = []
+        for item in value:
+            if len(items) >= 16 or budget[0] <= 0:
+                break
+            items.append(trace_snapshot(item, depth - 1, budget, seen))
+        if kind is list and len(items) == len(value):
+            return items
+        return {"$type": type.__getattribute__(kind, "__name__"), "items": items,
+                "omitted": len(value) - len(items)}
+    finally:
+        seen.remove(id(value))
+
+
+def _trace_exception(exc, line=None):
+    name = type.__getattribute__(type(exc), "__name__")[:80]
+    # Exception subclasses may override __str__, __repr__, and args access.
+    args = BaseException.args.__get__(exc, type(exc))
+    message = args[0][:240] if args and type(args[0]) is str else "The program raised " + name + "."
+    return {"type": name, "message": message, "line": line}
+
+
+# sys.settrace reports a suspended generator/coroutine as "return", followed
+# by "call" when it resumes. Use this interpreter's bytecode names, not opcode
+# numbers (which changed between CPython 3.11, 3.12, 3.13 and 3.14). Reading the
+# opcode byte avoids dis.get_instructions(), whose argument formatting could
+# call repr() on a player-supplied object in a replaced code object's constants.
+_TRACE_OPNAMES = tuple(dis.opname)
+_TRACE_RESUMABLE = CO_GENERATOR | CO_COROUTINE | CO_ITERABLE_COROUTINE | CO_ASYNC_GENERATOR
+_TRACE_ASYNC = CO_COROUTINE | CO_ITERABLE_COROUTINE | CO_ASYNC_GENERATOR
+_TRACE_CPYTHON = sys.implementation.name == "cpython"
+_TRACE_RETURNS = frozenset(("RETURN_VALUE", "RETURN_CONST"))
+_TRACE_YIELDS = frozenset(("YIELD_VALUE", "YIELD_FROM"))
+
+
+def _trace_opcode(frame):
+    code = frame.f_code.co_code
+    offset = frame.f_lasti
+    opcode = _TRACE_OPNAMES[code[offset]] if 0 <= offset < len(code) else ""
+    # CPython 3.13 reports suspension at the following RESUME instruction;
+    # 3.11, 3.12 and 3.14 report YIELD_VALUE itself. Instructions are two-byte
+    # code units in all supported versions. Exception unwinds at RESUME are
+    # distinguished by the preceding trace event in record(), below.
+    if opcode == "RESUME" and offset >= 2:
+        previous = _TRACE_OPNAMES[code[offset - 2]]
+        if previous in _TRACE_YIELDS:
+            return previous
+    return opcode
+
+
+def trace_program(payload):
+    source, entry = payload["source"], payload["entry"]
+    preamble = entry.get("preamble") or ""
+    offset = preamble.rstrip().count("\n") + 2 if preamble else 0
+    compiled_source = preamble.rstrip() + "\n\n" + source if preamble else source
+    outcome = {"ok": False, "frames": [], "truncated": False,
+               "truncation_reason": "", "exception": None, "output": None,
+               "stdout": "", "stdout_truncated": False}
+    try:
+        compiled = compile(compiled_source, "<player>", "exec")
+    except SyntaxError as exc:
+        outcome["exception"] = {"type": "SyntaxError", "message": exc.msg,
+                                "line": max(1, (exc.lineno or 1) - offset)}
+        return outcome
+    except Exception as exc:
+        outcome["exception"] = _trace_exception(exc)
+        return outcome
+    capture = TraceOutput()
+    previous_stdout = sys.stdout
+    frames = outcome["frames"]
+    max_steps = payload.get("max_steps", 400)
+    snapshot_depth = payload.get("snapshot_depth", 3)
+    frame_ids, next_id, trace_bytes = {}, 0, 0
+    suspended, last_events = set(), {}
+    last_line = None
+
+    def stop(reason):
+        outcome["truncated"] = True
+        outcome["truncation_reason"] = reason
+        raise TraceStopped()
+
+    def record(frame, event, arg):
+        nonlocal next_id, trace_bytes, last_line
+        if frame.f_code.co_filename != "<player>":
+            return None
+        line = frame.f_lineno - offset
+        if line < 1:
+            return record
+        if event not in ("call", "line", "return", "exception"):
+            return record
+        if len(frames) >= max_steps:
+            stop("step limit reached")
+        parent, depth = frame.f_back, 0
+        while parent is not None:
+            if parent.f_code.co_filename == "<player>" and parent.f_lineno > offset:
+                depth += 1
+            if depth >= 48:
+                stop("call depth limit reached")
+            parent = parent.f_back
+        fid = id(frame)
+        resumable = frame.f_code.co_flags & _TRACE_RESUMABLE
+        if resumable and not _TRACE_CPYTHON:
+            stop("generator/coroutine tracing is unsupported by this interpreter")
+        if fid not in frame_ids:
+            next_id += 1
+            frame_ids[fid] = next_id
+        raw_event = event
+        if event == "call" and fid in suspended:
+            event = "resume"
+            suspended.remove(fid)
+        elif event == "return":
+            opcode = _trace_opcode(frame)
+            if resumable and opcode in _TRACE_YIELDS and last_events.get(fid) != "exception":
+                event = "suspend" if frame.f_code.co_flags & _TRACE_ASYNC else "yield"
+                suspended.add(fid)
+            elif opcode in _TRACE_RETURNS:
+                # await/yield-from completion raises an internal StopIteration
+                # trace event before a real return, sometimes on the same line.
+                pass
+            elif last_events.get(fid) == "exception" or opcode in ("RAISE_VARARGS", "RERAISE", "CLEANUP_THROW"):
+                # throw()/close() can exit at the suspended yield instruction;
+                # an exception return is neither a yield nor a returned None.
+                event = "unwind"
+            elif resumable and opcode not in _TRACE_RETURNS:
+                stop("generator/coroutine boundary is unsupported by this interpreter")
+        local_values, budget = {}, [100]
+        local_count = 0
+        for name, value in frame.f_locals.items():
+            if name.startswith("__"):
+                continue
+            if local_count >= 24 or budget[0] <= 0:
+                local_values["…"] = "<remaining locals omitted>"
+                break
+            local_values[name[:120]] = trace_snapshot(value, snapshot_depth, budget)
+            local_count += 1
+        item = {"line": line, "event": event, "function": frame.f_code.co_name,
+                "depth": depth, "call_id": frame_ids[fid],
+                "locals": local_values, "stdout": capture.text}
+        if event in ("return", "yield"):
+            item["value"] = trace_snapshot(arg, snapshot_depth)
+        # Async-generator yield arguments are private interpreter wrappers.
+        # A suspend event exposes locals without inventing an unwrapped value.
+        elif event == "exception":
+            item["exception"] = _trace_exception(arg[1], line)
+        trace_bytes += len(json.dumps(item, ensure_ascii=True))
+        if trace_bytes > 512 * 1024:
+            stop("recording size limit reached")
+        frames.append(item)
+        last_line = line
+        if event in ("return", "unwind"):
+            frame_ids.pop(fid, None)
+            suspended.discard(fid)
+            last_events.pop(fid, None)
+        else:
+            last_events[fid] = raw_event
+        return record
+
+    ns = {"__name__": "__player__"}
+    try:
+        sys.stdout = capture
+        _deadline_start(payload.get("timeout_ms", 1200) / 1000.0)
+        sys.settrace(record)
+        exec(compiled, ns)  # noqa: S102 - only this isolated child executes Python
+        if entry.get("kind", "function") == "class_ops":
+            value = run_class_ops_test(ns, entry, payload["case"])
+        else:
+            value = run_function_test(ns, entry, payload["case"])
+        sys.settrace(None)
+        outcome["output"] = trace_snapshot(value, snapshot_depth)
+        outcome["ok"] = True
+    except TraceStopped:
+        pass
+    except TestTimeout:
+        outcome["truncated"] = True
+        outcome["truncation_reason"] = "execution time limit reached"
+        outcome["exception"] = {"type": "Timeout", "message": "This trace reached its execution time limit.", "line": last_line}
+    except BaseException as exc:  # player SystemExit must also produce a trace
+        tb = BaseException.__traceback__.__get__(exc, type(exc))
+        while tb is not None:
+            if tb.tb_frame.f_code.co_filename == "<player>" and tb.tb_lineno > offset:
+                last_line = tb.tb_lineno - offset
+            tb = tb.tb_next
+        outcome["exception"] = _trace_exception(exc, last_line)
+    finally:
+        sys.settrace(None)
+        _deadline_clear()
+        sys.stdout = previous_stdout
+    outcome["stdout"] = capture.text
+    outcome["stdout_truncated"] = capture.truncated
+    return outcome
+
+
 def main():
     payload_path, result_path = sys.argv[1], sys.argv[2]
     with open(payload_path) as fh:
@@ -455,6 +720,10 @@ def main():
 
     sys.setrecursionlimit(RECURSION_LIMIT)
     _deadline_install()
+
+    if payload.get("mode") == "trace":
+        _emit(result_path, trace_program(payload))
+        return
 
     # A Mini-Repo is graded by running the project's own tests, not by calling a
     # function the player wrote, so it never reaches the compile path below.

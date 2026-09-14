@@ -1,0 +1,640 @@
+{
+  "generated_at": "2026-09-14T03:10:18.627Z",
+  "method": {
+    "renderer": "@napi-rs/canvas synchronous CPU raster; production module calls",
+    "samples_per_case": 480,
+    "warmup_draws_per_case": 240,
+    "isolation": "Fresh Node process per case; module import, fixture setup and first draw excluded from warm samples.",
+    "clocks": "Per-draw elapsed time from performance.now; process CPU user+system time over the measured loop is reported separately.",
+    "sequence": "Deterministic 120-frame loop; cinematic samples remain inside the named authored beat.",
+    "allocations": "Counts Canvas instances created through document/OffscreenCanvas and getImageData calls/pixels. Does not measure all JavaScript/native heap allocation or resizing.",
+    "exclusions": [
+      "DOM layout",
+      "browser compositing",
+      "requestAnimationFrame scheduling",
+      "full BattleFX spell/particle/HUD layer",
+      "audio",
+      "grading",
+      "Python server work"
+    ],
+    "interpretation": "Frame-budget references are comparisons only. These timings do not establish browser FPS, responsiveness on other hardware, learning outcomes, or production readiness."
+  },
+  "machine": {
+    "node": "v25.8.2",
+    "platform": "darwin",
+    "arch": "arm64",
+    "os_release": "25.4.0",
+    "cpu": "Apple M5 Max",
+    "logical_cpus": 18
+  },
+  "canvas_module": "@napi-rs/canvas (bundled development dependency)",
+  "source_sha256": {
+    "web/js/battlescene.js": "733b39fd00bf0f1136b3ca2cc3d4d06d90da1fb360a43366c61bb97242b3f252",
+    "web/js/battlehero.js": "3d137a85ea55049901e4332f6b58914507ed11b8cdc933ff39c7f51acd41e2f8",
+    "web/js/bosses.js": "03fb3d6c599d47bac7a6dbf770f4459e655688e732efc55dc37ac1ea370f53d3",
+    "web/js/bossart.js": "d233f8748479d72df30fe5fe301d064b19f9f306c67cc93af4c234e0b339acb1",
+    "web/js/monsterart.js": "e52809d191a49bb7fc7feecc0d2a1f3fe93ed0dccf864bfeebc5d684d914fddd",
+    "web/js/sprites.js": "651b565c25af8f1ae1f50299780e80591e7a403315e028d07c00f855f0af0d60",
+    "web/js/cinema.js": "e96925e334538d1e40eca01be06bee4b7cf7cae8b3531b7c7169bf0a337e4a3d",
+    "web/art/cinematic-scenes.json": "fc48759204c85684ebb58d1cc9db9a706a691eb012c6ac92bff4441c84824512"
+  },
+  "rows": [
+    {
+      "id": "scene:all_regions",
+      "width": 256,
+      "height": 224,
+      "coverage": [
+        "python_village",
+        "fields_of_syntax",
+        "hashmap_highlands",
+        "stringwood_labyrinth",
+        "array_caverns",
+        "sliding_window_marsh",
+        "twin_pointer_pass",
+        "stack_queue_mines",
+        "matrix_citadel",
+        "recursive_forest",
+        "binary_tree_canopy",
+        "graph_wastes",
+        "dp_ruins",
+        "debugging_dungeon",
+        "complexity_tower",
+        "coding_coliseum",
+        "null_kings_castle"
+      ],
+      "first_use": {
+        "module_import_ms": 98.4304,
+        "setup_ms": 207.5069,
+        "draw_ms": 10.1405,
+        "allocations": {
+          "canvas_instances": 356,
+          "image_data_reads": 0,
+          "image_data_pixels": 0
+        }
+      },
+      "warmup_ms": 219.781,
+      "warm": {
+        "samples": 480,
+        "p50_ms": 0.1963,
+        "p95_ms": 0.2475,
+        "p99_ms": 0.3865,
+        "max_ms": 0.8693,
+        "mean_ms": 0.2041,
+        "process_cpu_ms": 102.097,
+        "allocations": {
+          "canvas_instances": 0,
+          "image_data_reads": 0,
+          "image_data_pixels": 0
+        },
+        "over_16_67_ms": 0,
+        "over_33_33_ms": 0
+      },
+      "output_sha256": "b5aca4794bc001973afdbbf7f364feb85b6e61152a0421a185a20917800657d3"
+    },
+    {
+      "id": "battle:python_village:slime",
+      "width": 256,
+      "height": 224,
+      "coverage": {
+        "region": "python_village",
+        "enemy": "slime",
+        "phase": null,
+        "hero_poses": [
+          "ready",
+          "cast",
+          "strike",
+          "guard",
+          "hurt",
+          "victory"
+        ]
+      },
+      "first_use": {
+        "module_import_ms": 84.7945,
+        "setup_ms": 13.4874,
+        "draw_ms": 13.3345,
+        "allocations": {
+          "canvas_instances": 23,
+          "image_data_reads": 0,
+          "image_data_pixels": 0
+        }
+      },
+      "warmup_ms": 63.6718,
+      "warm": {
+        "samples": 480,
+        "p50_ms": 0.2207,
+        "p95_ms": 0.2649,
+        "p99_ms": 0.3567,
+        "max_ms": 0.4103,
+        "mean_ms": 0.2256,
+        "process_cpu_ms": 115.013,
+        "allocations": {
+          "canvas_instances": 0,
+          "image_data_reads": 0,
+          "image_data_pixels": 0
+        },
+        "over_16_67_ms": 0,
+        "over_33_33_ms": 0
+      },
+      "output_sha256": "dff4e20a0140182a75065d9978627db0660259dff9a3d3133e010f3435055969"
+    },
+    {
+      "id": "battle:array_caverns:behemoth",
+      "width": 256,
+      "height": 224,
+      "coverage": {
+        "region": "array_caverns",
+        "enemy": "behemoth",
+        "phase": 2,
+        "hero_poses": [
+          "ready",
+          "cast",
+          "strike",
+          "guard",
+          "hurt",
+          "victory"
+        ]
+      },
+      "first_use": {
+        "module_import_ms": 86.3635,
+        "setup_ms": 16.3624,
+        "draw_ms": 20.7348,
+        "allocations": {
+          "canvas_instances": 24,
+          "image_data_reads": 0,
+          "image_data_pixels": 0
+        }
+      },
+      "warmup_ms": 92.337,
+      "warm": {
+        "samples": 480,
+        "p50_ms": 0.205,
+        "p95_ms": 0.2556,
+        "p99_ms": 0.3361,
+        "max_ms": 0.454,
+        "mean_ms": 0.2113,
+        "process_cpu_ms": 108.915,
+        "allocations": {
+          "canvas_instances": 0,
+          "image_data_reads": 0,
+          "image_data_pixels": 0
+        },
+        "over_16_67_ms": 0,
+        "over_33_33_ms": 0
+      },
+      "output_sha256": "81c863c1cf15203f4ba72f57f38a30ee3100e3c007edafdeb2f27ad461884c07"
+    },
+    {
+      "id": "battle:sliding_window_marsh:hydra",
+      "width": 256,
+      "height": 224,
+      "coverage": {
+        "region": "sliding_window_marsh",
+        "enemy": "hydra",
+        "phase": 2,
+        "hero_poses": [
+          "ready",
+          "cast",
+          "strike",
+          "guard",
+          "hurt",
+          "victory"
+        ]
+      },
+      "first_use": {
+        "module_import_ms": 83.3088,
+        "setup_ms": 16.3643,
+        "draw_ms": 21.9036,
+        "allocations": {
+          "canvas_instances": 24,
+          "image_data_reads": 0,
+          "image_data_pixels": 0
+        }
+      },
+      "warmup_ms": 96.7491,
+      "warm": {
+        "samples": 480,
+        "p50_ms": 0.2076,
+        "p95_ms": 0.2598,
+        "p99_ms": 0.3527,
+        "max_ms": 0.4313,
+        "mean_ms": 0.2145,
+        "process_cpu_ms": 110.688,
+        "allocations": {
+          "canvas_instances": 0,
+          "image_data_reads": 0,
+          "image_data_pixels": 0
+        },
+        "over_16_67_ms": 0,
+        "over_33_33_ms": 0
+      },
+      "output_sha256": "b00a2d7d54004edbba8c17abcf7c5a1e1039fdbed43339958d7b7f63fa582122"
+    },
+    {
+      "id": "battle:binary_tree_canopy:dragon",
+      "width": 256,
+      "height": 224,
+      "coverage": {
+        "region": "binary_tree_canopy",
+        "enemy": "dragon",
+        "phase": 2,
+        "hero_poses": [
+          "ready",
+          "cast",
+          "strike",
+          "guard",
+          "hurt",
+          "victory"
+        ]
+      },
+      "first_use": {
+        "module_import_ms": 83.7847,
+        "setup_ms": 16.3014,
+        "draw_ms": 21.5345,
+        "allocations": {
+          "canvas_instances": 24,
+          "image_data_reads": 0,
+          "image_data_pixels": 0
+        }
+      },
+      "warmup_ms": 94.0117,
+      "warm": {
+        "samples": 480,
+        "p50_ms": 0.2038,
+        "p95_ms": 0.258,
+        "p99_ms": 0.2955,
+        "max_ms": 0.3681,
+        "mean_ms": 0.2085,
+        "process_cpu_ms": 108.639,
+        "allocations": {
+          "canvas_instances": 0,
+          "image_data_reads": 0,
+          "image_data_pixels": 0
+        },
+        "over_16_67_ms": 0,
+        "over_33_33_ms": 0
+      },
+      "output_sha256": "9cdaf2c088d407225a22fb3a684954b7b7568c1b4f6ff91f4c5926431d88d33a"
+    },
+    {
+      "id": "battle:debugging_dungeon:demon",
+      "width": 256,
+      "height": 224,
+      "coverage": {
+        "region": "debugging_dungeon",
+        "enemy": "demon",
+        "phase": 2,
+        "hero_poses": [
+          "ready",
+          "cast",
+          "strike",
+          "guard",
+          "hurt",
+          "victory"
+        ]
+      },
+      "first_use": {
+        "module_import_ms": 83.9582,
+        "setup_ms": 14.2318,
+        "draw_ms": 18.6574,
+        "allocations": {
+          "canvas_instances": 24,
+          "image_data_reads": 0,
+          "image_data_pixels": 0
+        }
+      },
+      "warmup_ms": 95.441,
+      "warm": {
+        "samples": 480,
+        "p50_ms": 0.2311,
+        "p95_ms": 0.2922,
+        "p99_ms": 0.3517,
+        "max_ms": 0.4929,
+        "mean_ms": 0.2366,
+        "process_cpu_ms": 120.83,
+        "allocations": {
+          "canvas_instances": 0,
+          "image_data_reads": 0,
+          "image_data_pixels": 0
+        },
+        "over_16_67_ms": 0,
+        "over_33_33_ms": 0
+      },
+      "output_sha256": "523e2bd47beffd1f3d450a6f2aacd9dcbe57f5075cf7f36fb4e354b091d5fec3"
+    },
+    {
+      "id": "battle:null_kings_castle:interviewer",
+      "width": 256,
+      "height": 224,
+      "coverage": {
+        "region": "null_kings_castle",
+        "enemy": "interviewer",
+        "phase": 2,
+        "hero_poses": [
+          "ready",
+          "cast",
+          "strike",
+          "guard",
+          "hurt",
+          "victory"
+        ]
+      },
+      "first_use": {
+        "module_import_ms": 84.5392,
+        "setup_ms": 13.3835,
+        "draw_ms": 25.7513,
+        "allocations": {
+          "canvas_instances": 24,
+          "image_data_reads": 0,
+          "image_data_pixels": 0
+        }
+      },
+      "warmup_ms": 161.4862,
+      "warm": {
+        "samples": 480,
+        "p50_ms": 0.2301,
+        "p95_ms": 0.279,
+        "p99_ms": 0.3678,
+        "max_ms": 0.4958,
+        "mean_ms": 0.2368,
+        "process_cpu_ms": 120.816,
+        "allocations": {
+          "canvas_instances": 0,
+          "image_data_reads": 0,
+          "image_data_pixels": 0
+        },
+        "over_16_67_ms": 0,
+        "over_33_33_ms": 0
+      },
+      "output_sha256": "b25259f6133fd32bc9c0502f33b35aa1d63e4f7694356b2b27cd1ffb253bc7c2"
+    },
+    {
+      "id": "hero:all_classes_and_poses",
+      "width": 256,
+      "height": 224,
+      "coverage": {
+        "classes": [
+          "analyst",
+          "berserker",
+          "archivist",
+          "warden",
+          "artificer",
+          "seer"
+        ],
+        "poses": [
+          "ready",
+          "cast",
+          "strike",
+          "guard",
+          "hurt",
+          "victory"
+        ],
+        "frame_variants": 72
+      },
+      "first_use": {
+        "module_import_ms": 84.9405,
+        "setup_ms": 0.0439,
+        "draw_ms": 3.014,
+        "allocations": {
+          "canvas_instances": 1,
+          "image_data_reads": 0,
+          "image_data_pixels": 0
+        }
+      },
+      "warmup_ms": 45.2148,
+      "warm": {
+        "samples": 480,
+        "p50_ms": 0.0048,
+        "p95_ms": 0.0069,
+        "p99_ms": 0.0155,
+        "max_ms": 0.047,
+        "mean_ms": 0.0053,
+        "process_cpu_ms": 3.39,
+        "allocations": {
+          "canvas_instances": 0,
+          "image_data_reads": 0,
+          "image_data_pixels": 0
+        },
+        "over_16_67_ms": 0,
+        "over_33_33_ms": 0
+      },
+      "output_sha256": "32d59133cd83aa8c677a70de565a4d276dd6cd26e65ad370e707e61af4ad7618"
+    },
+    {
+      "id": "boss:all_archetypes",
+      "width": 256,
+      "height": 224,
+      "coverage": {
+        "archetypes": [
+          "lich",
+          "dragon",
+          "knight",
+          "titan",
+          "colossus",
+          "hydra",
+          "wraith",
+          "behemoth",
+          "golem",
+          "ent",
+          "necromancer",
+          "automaton",
+          "demon",
+          "wyrm",
+          "interpreter",
+          "interviewer"
+        ],
+        "phase": 2,
+        "frames": [
+          "idle",
+          "breathe",
+          "windup",
+          "attack",
+          "hurt"
+        ]
+      },
+      "first_use": {
+        "module_import_ms": 84.2521,
+        "setup_ms": 0.0101,
+        "draw_ms": 5.7572,
+        "allocations": {
+          "canvas_instances": 2,
+          "image_data_reads": 0,
+          "image_data_pixels": 0
+        }
+      },
+      "warmup_ms": 552.0113,
+      "warm": {
+        "samples": 480,
+        "p50_ms": 0.0125,
+        "p95_ms": 0.0192,
+        "p99_ms": 0.0375,
+        "max_ms": 0.0985,
+        "mean_ms": 0.0136,
+        "process_cpu_ms": 9.342,
+        "allocations": {
+          "canvas_instances": 0,
+          "image_data_reads": 0,
+          "image_data_pixels": 0
+        },
+        "over_16_67_ms": 0,
+        "over_33_33_ms": 0
+      },
+      "output_sha256": "5a054b3789b202c06bf9c00b8f1ad3b1ef341a07f721f3d40085c2152dfa65b0"
+    },
+    {
+      "id": "cinema:forming_up",
+      "width": 480,
+      "height": 270,
+      "coverage": {
+        "fixture": "pass_full",
+        "beat": "forming_up",
+        "duration_ms": 3200,
+        "fixture_is_player_evidence": false
+      },
+      "first_use": {
+        "module_import_ms": 84.9374,
+        "setup_ms": 27.9427,
+        "draw_ms": 5.7871,
+        "allocations": {
+          "canvas_instances": 26,
+          "image_data_reads": 0,
+          "image_data_pixels": 0
+        }
+      },
+      "warmup_ms": 64.3803,
+      "warm": {
+        "samples": 480,
+        "p50_ms": 0.259,
+        "p95_ms": 0.3036,
+        "p99_ms": 0.337,
+        "max_ms": 0.4063,
+        "mean_ms": 0.2633,
+        "process_cpu_ms": 134.759,
+        "allocations": {
+          "canvas_instances": 0,
+          "image_data_reads": 0,
+          "image_data_pixels": 0
+        },
+        "over_16_67_ms": 0,
+        "over_33_33_ms": 0
+      },
+      "output_sha256": "a3822e707477e88fa588be263c28c902d6105af6aa827cf48de4c827e7b47646"
+    },
+    {
+      "id": "cinema:the_world_is_not_restored",
+      "width": 480,
+      "height": 270,
+      "coverage": {
+        "fixture": "pass_full",
+        "beat": "the_world_is_not_restored",
+        "duration_ms": 5200,
+        "fixture_is_player_evidence": false
+      },
+      "first_use": {
+        "module_import_ms": 84.5059,
+        "setup_ms": 28.0123,
+        "draw_ms": 1.2805,
+        "allocations": {
+          "canvas_instances": 26,
+          "image_data_reads": 0,
+          "image_data_pixels": 0
+        }
+      },
+      "warmup_ms": 39.2327,
+      "warm": {
+        "samples": 480,
+        "p50_ms": 0.1599,
+        "p95_ms": 0.1929,
+        "p99_ms": 0.2497,
+        "max_ms": 0.2945,
+        "mean_ms": 0.1635,
+        "process_cpu_ms": 80.78,
+        "allocations": {
+          "canvas_instances": 0,
+          "image_data_reads": 0,
+          "image_data_pixels": 0
+        },
+        "over_16_67_ms": 0,
+        "over_33_33_ms": 0
+      },
+      "output_sha256": "2b9d329631f1cd343c8cd448695a1888755da041a857f6c2152c57a5d6f82340"
+    },
+    {
+      "id": "cinema:the_one_you_teach",
+      "width": 480,
+      "height": 270,
+      "coverage": {
+        "fixture": "pass_full",
+        "beat": "the_one_you_teach",
+        "duration_ms": 5000,
+        "fixture_is_player_evidence": false
+      },
+      "first_use": {
+        "module_import_ms": 85.095,
+        "setup_ms": 28.3864,
+        "draw_ms": 1.8915,
+        "allocations": {
+          "canvas_instances": 26,
+          "image_data_reads": 0,
+          "image_data_pixels": 0
+        }
+      },
+      "warmup_ms": 40.8934,
+      "warm": {
+        "samples": 480,
+        "p50_ms": 0.1616,
+        "p95_ms": 0.1903,
+        "p99_ms": 0.2191,
+        "max_ms": 0.2361,
+        "mean_ms": 0.1648,
+        "process_cpu_ms": 81.363,
+        "allocations": {
+          "canvas_instances": 0,
+          "image_data_reads": 0,
+          "image_data_pixels": 0
+        },
+        "over_16_67_ms": 0,
+        "over_33_33_ms": 0
+      },
+      "output_sha256": "23028c7768847f95f64f2b2e26e596440c3b483bdbcb7d7547a07d02d30808fa"
+    },
+    {
+      "id": "cinema:freeze",
+      "width": 480,
+      "height": 270,
+      "coverage": {
+        "fixture": "pass_full",
+        "beat": "freeze",
+        "duration_ms": 120,
+        "fixture_is_player_evidence": false
+      },
+      "first_use": {
+        "module_import_ms": 84.2336,
+        "setup_ms": 28.5395,
+        "draw_ms": 8.0584,
+        "allocations": {
+          "canvas_instances": 26,
+          "image_data_reads": 1,
+          "image_data_pixels": 129600
+        }
+      },
+      "warmup_ms": 41.2859,
+      "warm": {
+        "samples": 480,
+        "p50_ms": 0.1632,
+        "p95_ms": 0.2004,
+        "p99_ms": 0.2493,
+        "max_ms": 0.3117,
+        "mean_ms": 0.1668,
+        "process_cpu_ms": 88.075,
+        "allocations": {
+          "canvas_instances": 0,
+          "image_data_reads": 0,
+          "image_data_pixels": 0
+        },
+        "over_16_67_ms": 0,
+        "over_33_33_ms": 0
+      },
+      "output_sha256": "c47952fd7121dc5d051cba333b28fde1122ead9353945c24e357e05902273844"
+    }
+  ]
+}

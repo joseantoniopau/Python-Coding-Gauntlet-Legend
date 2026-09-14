@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import random
 import time
+import uuid
 from dataclasses import dataclass, field, asdict
 
 from . import adaptive, config, coach as coachmod, db, grading, items, sandbox
@@ -39,6 +40,7 @@ from . import antagonist, arts, banter, captives, economy, finale, hunters, move
 # `villagelife` is the 82 villagers and 41 buildings that make a village look
 # like one. Every call below is at a site the module's own CONTRACT names.
 from . import shop, villagelife, zonecompanions
+from . import tutorial, practice, keepsakes, rematches
 # ending.py is the seam between the two exams and it is the ONLY thing in
 # this file that decides whether a practical was the story's last room or a
 # measurement sat from the menu. See ending.WIRING; the four touch points it
@@ -296,6 +298,10 @@ class Encounter:
     # does not throw away twenty minutes of reading.
     repo_id: str = ""
     repo_files: dict = field(default_factory=dict)
+    practice_id: str = ""
+    practice_kind: str = ""
+    practice_task_id: str = ""
+    draft: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -461,6 +467,8 @@ assert potions.POUCH_STATE_KEY == "potions", (
 SAGES_STATE_KEY = "sages"
 
 DEFAULT_STATE = {
+    practice.STATE_KEY: practice.new_state(),
+    "appearance": {"selected": "equipment"},
     "player": {
         "name": "The Security Architect",
         "xp": 0, "gold": 0, "level": 1, "title": "Python Apprentice",
@@ -509,7 +517,7 @@ DEFAULT_STATE = {
     "codex": [],
     "settings": {"music": True, "sfx": True, "reduced_motion": False,
                  "text_scale": 1.0, "high_contrast": False, "colorblind": False,
-                 "crt": True,
+                 "crt": True, tutorial.SETTING_KEY: tutorial.SETTING_DEFAULT,
                  # the mixer: master, music and sound effects move independently
                  "vol_master": 0.7, "vol_music": 0.55, "vol_sfx": 0.8},
     "skills": {},
@@ -579,6 +587,7 @@ DEFAULT_STATE = {
     # save is not a migration: the arc reads correct on that save's first tick
     # whether the latch was ever written or not. See zonecompanions.WIRING.
     zonecompanions.STATE_KEY: zonecompanions.new_escort_state(),   # "escorts"
+    tutorial.LESSON_KEY: tutorial.new_lesson_state(),
     finale.STATE_KEY: finale.new_state(),                 # "finale"
     # THE SEAM BETWEEN THE TWO EXAMS — "ending". Which practical was the
     # story climax, whether it was passed, and whether the coda was watched.
@@ -883,6 +892,13 @@ class Game:
 
     def _write_encounter(self, enc: Encounter | None) -> None:
         self.state["encounter"] = enc.to_dict() if enc else None
+        plan = (self.state.get(practice.STATE_KEY) or {}).get("plan")
+        if enc and enc.mode == config.MODE_INTERVIEW and plan:
+            practice.pause(plan)
+        if enc and plan and enc.practice_id == plan.get("id"):
+            current = plan.get("current")
+            if current and current.get("task_id") == enc.practice_task_id:
+                current["encounter"] = enc.to_dict()
 
     # -- story -------------------------------------------------------------
     def story_context(self, *, readiness: dict | None = None,
@@ -1845,6 +1861,9 @@ class Game:
         cls = (self.state.get("class") or {}).get("class", "")
         if cls:
             look["sprite"] = cls
+        colors = keepsakes.palette(self.state, self._appearance_rows())
+        look.update({key: value for key, value in colors.items()
+                     if key in ("cloak", "tunic", "hair", "trim")})
         return look
 
     def forge_card(self) -> dict:
@@ -2161,6 +2180,7 @@ class Game:
         for b in world.BOSSES:
             region_boss.setdefault(b["region"], b)
 
+        run_open = self._run_is_open()
         return {
             "player": {**player, "xp_into_level": into, "xp_for_level": need},
             "skills": [
@@ -2231,6 +2251,10 @@ class Game:
             "weakness": skillmod.weakest(skills, limit=3),
             "stats": {**self.state["stats"], **stats},
             "settings": self.state["settings"],
+            tutorial.RUN_OPEN_FIELD: run_open,
+            "practice": None if run_open else practice.view(
+                (self.state.get(practice.STATE_KEY) or {}).get("plan")),
+            "lessons": {**tutorial.snapshot(self.state), "available": not run_open},
             "corpus_size": len(self.corpus),
             "teachable_size": len(self.teachable),
             # The second number, beside the first and never folded into it.
@@ -2352,10 +2376,283 @@ class Game:
 
     def _run_is_open(self) -> bool:
         """Is a measured run open AT ALL, question on screen or not?"""
-        return bool(self.state.get("interview")
-                    or self.state.get("exam")
-                    or (self.encounter
-                        and self.encounter.mode == config.MODE_INTERVIEW))
+        try:
+            return bool(self.state.get("interview")
+                        or self.state.get("exam")
+                        or (self.encounter
+                            and self.encounter.mode == config.MODE_INTERVIEW))
+        except (AttributeError, TypeError, ValueError):
+            # An unreadable encounter is not evidence that a measured run has
+            # ended. Assistance stays closed until the save can be read.
+            return True
+
+    def lesson(self, beat_id: str) -> dict:
+        """Acknowledge a lesson the client actually displayed, once per save."""
+        if not isinstance(beat_id, str):
+            return {}
+        result = tutorial.teach(self.state, beat_id, run_open=self._run_is_open())
+        if result:
+            self.save()
+        return result
+
+    def lesson_note(self, kind: str, control_id: str) -> dict:
+        if not isinstance(kind, str) or not isinstance(control_id, str):
+            return {}
+        result = tutorial.cue_note(self.state, kind, control_id,
+                                   run_open=self._run_is_open())
+        if result:
+            self.save()
+        return result
+
+    def lessons_forget(self) -> dict:
+        result = tutorial.forget(self.state, run_open=self._run_is_open())
+        if result:
+            self.save()
+        return result
+
+    def lessons(self) -> dict:
+        """Read-only curriculum preview. Showing it never spends a latch."""
+        run_open = self._run_is_open()
+        return {**tutorial.snapshot(self.state), "run_open": run_open,
+                "available": not run_open,
+                "beats": ([] if run_open else
+                          [tutorial.view(self.state, bid) for bid in tutorial.ORDER])}
+
+    def practice_view(self) -> dict:
+        if self._run_is_open():
+            return {**finalexam.refuse("COACH"), "available": False,
+                    "plan": None, "options": {}, "history": []}
+        block = self.state[practice.STATE_KEY]
+        return {"available": True, "plan": practice.view(block.get("plan")),
+                "options": _deep_copy(practice.OPTIONS),
+                "history": _deep_copy(block.get("history", []))}
+
+    def _appearance_rows(self) -> list:
+        return self.conn.execute(
+            "SELECT DISTINCT solved,mode,hints_used,evidence_kind,is_retest,problem_id "
+            "FROM attempts WHERE solved=1 AND mode='adventure'").fetchall()
+
+    def appearance(self) -> dict:
+        if self._run_is_open():
+            return {**finalexam.refuse("COACH"), "available": False}
+        return keepsakes.view(self.state, self._appearance_rows())
+
+    def choose_appearance(self, identifier: str) -> dict:
+        if self._run_is_open():
+            return {**finalexam.refuse("COACH"), "available": False}
+        if not isinstance(identifier, str):
+            return {"error": "invalid appearance"}
+        result = keepsakes.select(self.state, self._appearance_rows(), identifier)
+        if not result.get("error"):
+            self.save()
+        return result
+
+    def practice_start(self, minutes=20, intent="balanced", kind="expedition") -> dict:
+        if self._run_is_open():
+            return {**finalexam.refuse("COACH"), "available": False}
+        if type(minutes) is not int or minutes not in practice.MINUTES:
+            return {"error": "invalid practice duration", "message": "Choose 10, 20 or 40 minutes."}
+        if not isinstance(intent, str) or intent not in practice.INTENTS:
+            return {"error": "invalid practice intent"}
+        if not isinstance(kind, str) or kind not in practice.KINDS:
+            return {"error": "invalid practice kind"}
+        block = self.state[practice.STATE_KEY]
+        plan = block.get("plan")
+        if plan and plan.get("status") != "finished":
+            if (plan["minutes"], plan["intent"], plan["kind"]) != (minutes, intent, kind):
+                return {"error": "a practice plan is already open",
+                        "message": "Resume it or finish it before starting another."}
+            return self.practice_view()
+        enc = self.encounter
+        if enc and (enc.repo_id or enc.boss_id or enc.dungeon_room >= 0
+                    or enc.problem_id not in {p.id for p in self.teachable}):
+            return {"error": "another encounter is open",
+                    "message": "Finish or leave the current special encounter first."}
+        block["plan"] = practice.begin(minutes, intent, kind)
+        if enc:
+            self._practice_attach(enc)
+        self.save()
+        return self.practice_view()
+
+    def _practice_attach(self, enc: Encounter) -> None:
+        plan = self.state[practice.STATE_KEY]["plan"]
+        enc.practice_id = plan["id"]
+        enc.practice_kind = plan["kind"]
+        enc.practice_task_id = uuid.uuid4().hex
+        plan["current"] = {"problem_id": enc.problem_id,
+                           "task_id": enc.practice_task_id, "encounter": enc.to_dict()}
+        self._write_encounter(enc)
+
+    def practice_action(self, action: str) -> dict:
+        if self._run_is_open():
+            return {**finalexam.refuse("COACH"), "available": False}
+        if not isinstance(action, str) or action not in ("pause", "resume", "finish", "retreat", "heartbeat"):
+            return {"error": "invalid practice action"}
+        block = self.state[practice.STATE_KEY]
+        plan = block.get("plan")
+        if not plan:
+            return {"error": "no practice plan is open"}
+        if plan["status"] == "finished":
+            return self.practice_view()
+        if action == "pause":
+            practice.pause(plan)
+        elif action == "resume":
+            practice.resume(plan)
+        elif action == "heartbeat":
+            practice.heartbeat(plan)
+        elif action == "retreat":
+            if plan.get("current"):
+                plan["retreated"] += 1
+                enc = self.encounter
+                if enc and enc.practice_id == plan["id"]:
+                    self._write_encounter(None)
+                plan["current"] = None
+        else:
+            # Finishing the plan does not delete an unfinished ordinary draft.
+            # It remains on the encounter and a later plan may adopt it.
+            enc = self.encounter
+            current = plan.get("current")
+            if current and enc and enc.practice_id != plan["id"]:
+                return {"error": "another encounter is open",
+                        "message": "Finish or leave that encounter, or retreat from this practice task explicitly."}
+            if current and enc is None:
+                enc = Encounter(**{k: v for k, v in current["encounter"].items()
+                                   if k in _ENC_FIELDS})
+            if enc and enc.practice_id == plan["id"]:
+                enc.practice_id = enc.practice_kind = enc.practice_task_id = ""
+                self._write_encounter(enc)
+            practice.finish(block)
+        self.save()
+        return self.practice_view()
+
+    def practice_next(self) -> dict:
+        if self._run_is_open():
+            return {**finalexam.refuse("COACH"), "available": False}
+        plan = self.state[practice.STATE_KEY].get("plan")
+        if not plan or plan["status"] != "active":
+            return {"error": "practice is not active", "message": "Start or resume your plan first."}
+        if len(plan["results"]) >= 1000 and not plan.get("current"):
+            return {"error": "practice record is full", "message": "Finish this plan and begin another."}
+        practice.heartbeat(plan)
+        enc = self.encounter
+        current = plan.get("current")
+        if enc and (not current or enc.practice_task_id != current["task_id"]):
+            return {"error": "another encounter is open",
+                    "message": "Finish or leave that encounter before resuming this plan."}
+        if current:
+            raw = current["encounter"]
+            enc = Encounter(**{k: v for k, v in raw.items() if k in _ENC_FIELDS})
+            problem = self.by_id.get(enc.problem_id)
+            if problem is None or corpusmod.is_sealed(problem):
+                return {"error": "practice content changed",
+                        "message": "Retreat from this task to select current practice content."}
+            self._write_encounter(enc)
+            payload = self._encounter_payload(problem, enc, reason="PRACTICE_RESUME")
+        else:
+            payload = self.next_encounter(intent=plan["intent"])
+            if payload.get("error"):
+                return payload
+            enc = self.encounter
+            self._practice_attach(enc)
+            payload["encounter"] = enc.to_dict()
+        payload["practice"] = practice.view(plan)
+        payload["draft"] = _deep_copy(enc.draft) if enc.draft else None
+        self.save()
+        return payload
+
+    def practice_draft(self, problem_id: str, code: str, explanation: str = "",
+                       encounter_started_at=None) -> dict:
+        if self._run_is_open():
+            return {**finalexam.refuse("COACH"), "available": False}
+        if (not isinstance(problem_id, str) or not isinstance(code, str)
+                or not isinstance(explanation, str) or len(code) > 20000
+                or len(explanation) > 4000):
+            return {"error": "invalid draft", "message": "Drafts allow 20,000 code characters and 4,000 explanation characters."}
+        enc = self.encounter
+        problem = self.by_id.get(problem_id)
+        if (not enc or enc.problem_id != problem_id or enc.mode != config.MODE_ADVENTURE
+                or enc.repo_id or not problem or corpusmod.is_sealed(problem)):
+            return {"error": "draft does not belong to the current practice encounter"}
+        if encounter_started_at is not None and encounter_started_at != enc.started_at:
+            return {"error": "draft belongs to an earlier encounter"}
+        enc.draft = {"problem_id": problem_id, "code": code,
+                     "explanation": explanation, "saved_at": time.time()}
+        self._write_encounter(enc)
+        plan = self.state[practice.STATE_KEY].get("plan")
+        if plan and enc.practice_id == plan.get("id"):
+            practice.heartbeat(plan)
+        self.save()
+        return {"saved": True, "problem_id": problem_id, "saved_at": enc.draft["saved_at"]}
+
+    def journal(self) -> dict:
+        if self._run_is_open():
+            return {**finalexam.refuse("COACH"), "available": False, "families": []}
+        by_family = {}
+        for problem in self.teachable:
+            by_family.setdefault(problem.spaced_repetition_family, {})[problem.id] = problem
+        notes = self.state[practice.STATE_KEY].get("notes", {})
+        schedule = self.schedule
+        families = []
+        now = time.time()
+        for family, problems in sorted(by_family.items()):
+            marks = ",".join("?" for _ in problems)
+            args = list(problems)
+            rows = self.conn.execute(
+                f"SELECT * FROM attempts WHERE problem_id IN ({marks}) ORDER BY id DESC LIMIT 20", args).fetchall()
+            count = self.conn.execute(
+                f"SELECT COUNT(*) FROM attempts WHERE problem_id IN ({marks})", args).fetchone()[0]
+            attempts = []
+            for raw in rows:
+                row = dict(raw)
+                attempt = {key: row[key] for key in (
+                    "id", "problem_id", "created_at", "solved", "mode", "encounter_kind",
+                    "served_rung", "hints_used", "seconds", "is_retest", "submitted_code",
+                    "root_cause", "practice_id", "practice_kind")}
+                attempt["evidence_kind"] = row["evidence_kind"] or "unknown"
+                attempt["title"] = problems[row["problem_id"]].title
+                attempts.append(attempt)
+            entry = schedule.get(family)
+            status = "not_started" if not entry or not entry.due_at else (
+                "recovering" if entry.recovering else "due" if entry.due_at <= now else "scheduled")
+            families.append({"id": family, "name": family.replace("_", " ").title(),
+                "notes": notes.get(family, ""), "due_at": entry.due_at if entry else None,
+                "retention": {"status": status, "stage": entry.stage if entry else 0,
+                    "reviews": entry.reviews if entry else 0, "lapses": entry.lapses if entry else 0,
+                    "last_reviewed": entry.last_reviewed if entry else None},
+                "attempts": attempts, "attempt_count": count})
+        return {"available": True, "families": families}
+
+    def journal_note(self, family: str, text: str) -> dict:
+        if self._run_is_open():
+            return {**finalexam.refuse("COACH"), "available": False}
+        if (not isinstance(family, str) or not isinstance(text, str) or len(text) > 4000
+                or family not in {p.spaced_repetition_family for p in self.teachable}):
+            return {"error": "invalid journal note", "message": "Choose a practice family and use at most 4,000 characters."}
+        self.state[practice.STATE_KEY].setdefault("notes", {})[family] = text
+        self.save()
+        return {"saved": True, "family": family, "notes": text}
+
+    def trace(self, code: str, case_index: int = 0) -> dict:
+        if self._run_is_open() or self._sealed_for("COACH"):
+            return finalexam.refuse("COACH")
+        enc = self.encounter
+        problem = self.by_id.get(enc.problem_id) if enc else None
+        if (not problem or corpusmod.is_sealed(problem) or enc.repo_id
+                or problem.entry.get("kind") not in ("function", "class_ops")):
+            return {"error": "this encounter does not support a program trace"}
+        if not isinstance(code, str) or len(code) > 20000:
+            return {"error": "invalid trace source"}
+        visible = [row for row in problem.visible_tests
+                   if not row.get("hidden") and row.get("reveal") is not False]
+        if type(case_index) is not int or not 0 <= case_index < len(visible):
+            return {"error": "choose a visible test case"}
+        case = visible[case_index]
+        try:
+            result = sandbox.trace_program(code, problem.entry, case)
+        except ValueError as exc:
+            return {"error": "trace input was refused", "message": str(exc)}
+        return {**result, "source": code, "case_label": case.get("name", "Visible case"),
+                "case_index": case_index, "kind": "actual_program"}
 
     def _sealed_for(self, capability: str) -> bool:
         """`finalexam.sealed`, asked so that it cannot be answered by an
@@ -4266,7 +4563,7 @@ class Game:
     def next_encounter(self, *, region: str | None = None,
                        mode: str = config.MODE_ADVENTURE,
                        kind: str | None = None,
-                       armor_piece: str = "") -> dict:
+                       armor_piece: str = "", intent: str = "balanced") -> dict:
         skills = self.skills
         # The Armorer could not be asked to fix the piece you actually broke:
         # the repair went to whichever piece the served problem happened to be
@@ -4300,6 +4597,7 @@ class Game:
             # the SRS minimum interval to expire.
             session=self.state["session"].get("log", []),
             region=region, allow_retest=(mode == config.MODE_ADVENTURE),
+            intent=intent,
         )
         return self.start_encounter(selection.problem.id, mode=mode,
                                     is_retest=selection.is_retest,
@@ -4364,8 +4662,27 @@ class Game:
                 floor=curriculum.lapse_floor(problem.difficulty) if lapsed else None)
         return curriculum.servable_rung(problem, state, mode=enc.mode)
 
+    def resume_encounter(self, problem_id: str | None = None) -> dict:
+        """Restore only the ordinary fight already on disk; never select one."""
+        if self._run_is_open():
+            return finalexam.refuse("COACH")
+        enc = self.encounter
+        if not enc:
+            return {"error": "no active encounter", "message": "There is no unfinished ordinary encounter to resume."}
+        if problem_id is not None and (not isinstance(problem_id, str) or problem_id != enc.problem_id):
+            return {"error": "encounter changed", "message": "That link is not the current encounter."}
+        problem = self.by_id.get(enc.problem_id)
+        if (enc.mode != config.MODE_ADVENTURE or enc.repo_id or enc.boss_id
+                or enc.interview_id or enc.holdout or enc.dungeon_room >= 0
+                or enc.practice_id or self.state.get("boss_fight")
+                or self.state.get(dungeons.STATE_KEY) or self.state.get("incantation")
+                or not problem or corpusmod.is_sealed(problem)):
+            return {"error": "encounter has its own resume flow",
+                    "message": "Resume this activity from its practice, boss, dungeon, repository, or interview screen."}
+        return self._encounter_payload(problem, enc, reason="ENCOUNTER_RESUME", preserve_rung=True)
+
     def _encounter_payload(self, problem: Problem, enc: Encounter,
-                           reason: str = "") -> dict:
+                           reason: str = "", *, preserve_rung: bool = False) -> dict:
         seal = finalexam.encounter_seal(enc)
         interview = enc.mode == config.MODE_INTERVIEW
         # An exam question goes through exam_view, which is the only payload an
@@ -4380,8 +4697,13 @@ class Game:
         # is served. `servable_rung` refuses to go below the band's floor, below
         # what the declaration supports, or below rung 4 for a measured mode or
         # a sealed problem, and every one of those corrections moves UP.
-        enc.rung = self._serve_rung(problem, enc)
-        rendered = scaffold.render(problem, enc.rung)
+        if not preserve_rung:
+            enc.rung = (enc.rung if enc.practice_id and enc.rung
+                        else self._serve_rung(problem, enc))
+        # Legacy saves may not record a rung. Show the neutral whole-function
+        # surface and any saved draft while keeping their support evidence
+        # unknown; a reload must not invent an earlier assistance level.
+        rendered = scaffold.render(problem, enc.rung if enc.rung in (1, 2, 3, 4) else 4)
         view["starter_code"] = rendered["starter_code"]
         view["scaffold"] = {"rung": rendered["rung"], "name": rendered["name"],
                             "blanks": rendered["blanks"],
@@ -4524,6 +4846,11 @@ class Game:
                 "note": ("A sealed problem, served cold. Nothing here will help "
                          "you and nothing here is a lesson."),
             }
+        if not self._run_is_open():
+            payload["draft"] = _deep_copy(enc.draft) if enc.draft else None
+            plan = self.state[practice.STATE_KEY].get("plan")
+            if plan and enc.practice_id == plan.get("id"):
+                payload["practice"] = practice.view(plan)
         if interview:
             # Refuse to ship rather than hope. A bare `assert` would vanish under
             # python -O, and this is the one guarantee the whole mode rests on.
@@ -5839,7 +6166,8 @@ class Game:
             skill_name=skill_name, first_try=first_try, fx=fx,
             levels_gained=levels_gained, analysis=analysis)
 
-        db.record_attempt(
+        served_rung, evidence_kind = practice.evidence(problem, enc)
+        attempt_id = db.record_attempt(
             self.conn, problem_id=problem.id, pattern=problem.pattern,
             family=family, difficulty=problem.difficulty, mode=enc.mode,
             encounter_kind=problem.encounter_kind, solved=int(solved), rank=rank,
@@ -5856,7 +6184,14 @@ class Game:
             region=enc.region, declared_cause=enc.declared_cause,
             time_to_first_code=(enc.first_code_at - enc.started_at)
             if enc.first_code_at else 0.0,
-            submitted_code=code[:20000])
+            submitted_code=code[:20000], served_rung=served_rung,
+            evidence_kind=evidence_kind, practice_id=enc.practice_id or None,
+            practice_kind=enc.practice_kind or None)
+        plan = self.state[practice.STATE_KEY].get("plan")
+        if plan and enc.practice_id == plan.get("id"):
+            practice.record(plan, enc, attempt_id=attempt_id, solved=solved,
+                            evidence_kind=evidence_kind, rung=served_rung,
+                            root_cause=analysis.root_cause or "")
 
         # --- narrative: which events did this outcome actually produce?
         events = ["encounter_cleared"] if solved else []
@@ -5906,7 +6241,8 @@ class Game:
         reply = coachmod.coach(mode=enc.mode, analysis=analysis, problem=problem,
                                report=report, hints_used=enc.hints_used,
                                seconds=seconds, history=history,
-                               attempts_on_problem=len(history))
+                               attempts_on_problem=len(history),
+                               served_rung=served_rung, evidence_kind=evidence_kind)
 
         interval = srsmod.interval_days(entry.stage, entry.ease)
         result = {
@@ -6051,6 +6387,10 @@ class Game:
             result["companion_line"] = ""
         if extra:
             result.update(extra)
+        result["evidence"] = {"served_rung": served_rung, "kind": evidence_kind,
+                              "practice_kind": enc.practice_kind or None}
+        if plan and enc.practice_id == plan.get("id"):
+            result["practice"] = practice.view(plan)
 
         if solved or enc.mode == config.MODE_INTERVIEW:
             self._write_encounter(None)
@@ -8093,13 +8433,15 @@ class Game:
         fight = self._open_boss_fight(boss_id, rematch)
         fight_view = bestiary.view(fight) if fight else {}
 
-        # A rematch that replays the identical problem id is not a rematch. The
-        # victory copy promised "the same boss, a different surface form", so the
-        # rematch draws a different problem from the boss's own family, one rung
-        # harder per tier, and only falls back to the authored one when the
-        # family has nothing else. Each PHASE then draws its own problem on top
-        # of that, by the kind bestiary.phase_kind names.
+        # The first phase uses an authored, tested changed contract. Later
+        # phases retain their existing kind selection and are labelled as phase
+        # practice rather than inheriting the first contract's novelty claim.
         problem_id = self._phase_problem(boss, fight, rematch)
+        contract = rematches.get_rematch(boss, rematch, self.by_id)
+        if int((fight or {}).get("phase", 0) or 0) > 0:
+            contract = {**contract, "problem_id": problem_id, "kind": "phase_practice",
+                        "constraint_changed": False, "constraint": "",
+                        "what_changed": "This is a later boss phase. Follow this exercise's stated contract; it is practice, not fresh transfer evidence."}
         if fight is not None and problem_id not in (fight.get("problems") or ()):
             # So the next phase does not draw the same question again. A boss
             # that asked one problem six times would be a rematch of itself.
@@ -8132,6 +8474,7 @@ class Game:
         seal = finalexam.seal_for(mode=config.MODE_ADVENTURE, boss_id=boss_id)
         payload["boss"] = {
             **boss, "phases": phases, "rematch": rematch,
+            "rematch_contract": contract,
             # WHAT `hp_max` USED TO BE: a count of the seeded phase keys, which
             # no client ever read and which was not a health bar in any sense.
             # It is the current phase's real pool now, and `fight` beside it is
@@ -8169,19 +8512,7 @@ class Game:
         return payload
 
     def _rematch_problem(self, boss: dict, rematch: int) -> str:
-        authored = boss["problem_id"]
-        if not rematch:
-            return authored
-        problem = self.by_id.get(authored)
-        if problem is None:
-            return authored
-        family = [p for p in self.teachable
-                  if p.spaced_repetition_family == problem.spaced_repetition_family
-                  and p.id != authored]
-        if not family:
-            return authored
-        family.sort(key=lambda p: (adaptive.DIFF_ORDER.index(p.difficulty), p.id))
-        return family[min(rematch - 1, len(family) - 1)].id
+        return rematches.get_rematch(boss, rematch, self.by_id)["problem_id"]
 
     # What a submission that did NOT solve the problem takes off the phase, as
     # a share of that phase's pool at full trial coverage.
@@ -8547,6 +8878,9 @@ class Game:
         spec = self.INTERVIEW_FORMATS.get(fmt)
         if not spec:
             return {"error": "unknown format"}
+        plan = self.state[practice.STATE_KEY].get("plan")
+        if plan:
+            practice.pause(plan)
         profile = config.normalise_profile(
             profile or self.state["player"]["profile"])
         if fmt == "FINAL_EXAM":
@@ -9764,28 +10098,30 @@ class Game:
     def performance_history(self, problem_id: str | None = None) -> dict:
         """What you have done. DEGRADE — docs/10-sealed-views.md §4.B.
 
-        The aggregates are world: recent attempts, boss history, interview
-        history, the stats block. `problem_id` is not. `db.attempts_for` is a
-        SELECT *, and the attempts table stores `pattern`, `family`,
-        `declared_pattern` and `root_cause` — so asking it for the id on the
-        screen answered with the family name. That is the same leak as the
-        problem lookup, one hop further round, and it survives fixing that one.
-
-        A measured run gets the aggregates and an empty per-problem list, with
-        the reason named, rather than a 409 on the whole screen.
+        Both attempt queries contain submitted code and family information.
+        Interview history also contains per-question details and problem ids.
+        While any measured run is open, keep only totals and run summaries;
+        leaving the question screen does not make teaching available again.
+        Outside a measured run the player's full history remains available.
         """
-        sealed = bool(self._sealed_in_interview())
+        sealed = self._run_is_open()
+        interviews = db.interview_history(self.conn)
+        if sealed:
+            summary_fields = ("id", "profile", "format", "score", "solved",
+                              "total", "seconds", "created_at")
+            interviews = [{key: row[key] for key in summary_fields if key in row}
+                          for row in interviews]
         return {
-            "recent": db.recent_attempts(self.conn, limit=60),
+            "recent": [] if sealed else db.recent_attempts(self.conn, limit=60),
             "problem": ([] if sealed or not problem_id
                         else db.attempts_for(self.conn, problem_id)),
             "bosses": db.boss_history(self.conn),
-            "interviews": db.interview_history(self.conn),
+            "interviews": interviews,
             "stats": db.attempt_stats(self.conn),
             "sealed": sealed,
-            "seal_note": ("Prior attempts on one problem name its pattern and "
-                          "its family. The totals are yours to read; the row "
-                          "for the question in front of you is not."
+            "seal_note": ("Prior attempts include code, patterns and feedback. "
+                          "Those details return when the measured run ends. "
+                          "Your totals and run summaries remain available."
                           if sealed else ""),
         }
 
@@ -9794,7 +10130,7 @@ class Game:
     EXPORT_REDACTED = ("interview", "exam")
 
     def export(self) -> dict:
-        """The save, with the unserved hold-out roster taken out of it.
+        """Complete saves outside measured runs; no lossy mid-run export.
 
         docs/10-sealed-views.md §4.H, the spend test, and the other critical.
         `run_view` was fixed once for exactly this and the save was never
@@ -9808,10 +10144,12 @@ class Game:
         title" — which is why the RESPONSE uses `exam.player_view()`. The save
         kept the other one and this door shipped the save.
 
-        Redacted ALWAYS, not only mid-run, because neither key is needed to
-        restore a save: a reload re-derives both, and an exported run is a run
-        the player has chosen to bank rather than one they are sitting.
+        Ordinary exports still remove parked interview/exam identities. During
+        any open measured run, refuse instead: full attempt history would reveal
+        code, while a history-stripped export would be an incomplete backup.
         """
+        if self._run_is_open():
+            return finalexam.refuse("COACH")
         payload = db.export_save(self.conn)
         state = payload.get("state") if isinstance(payload, dict) else None
         if isinstance(state, dict):

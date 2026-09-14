@@ -128,7 +128,8 @@ def _history_note(history: list) -> str:
 
 
 def coach(*, mode: str, analysis, problem, report, hints_used: int,
-          seconds: float, history: list, attempts_on_problem: int) -> CoachReply:
+          seconds: float, history: list, attempts_on_problem: int,
+          served_rung: int | None = None, evidence_kind: str | None = None) -> CoachReply:
     if not available_in(mode):
         return CoachReply(
             available=False, questions=[],
@@ -140,14 +141,27 @@ def coach(*, mode: str, analysis, problem, report, hints_used: int,
     questions = SOCRATIC_LADDER.get(root, DEFAULT_LADDER)[:]
 
     if not root:
+        kind = str(evidence_kind or "unknown")
+        encounter_kind = str(getattr(problem, "encounter_kind", ""))
+        noncoding = {"PATTERN_ENCOUNTER", "COMPLEXITY_DUEL", "CODE_READING", "RUNE_ASSEMBLY",
+                     "TRACE", "SPOT_THE_FLAW", "STATE_PREDICT", "BREAK_IT", "COMPLEXITY_MATCH", "DEBUG_BATTLE", "TEST_FORGE", "MINI_REPO"}
+        if kind in {"reading", "puzzle", "debugging", "test_writing", "repository"} or encounter_kind in noncoding:
+            support = f"{kind if kind != 'unknown' else 'reading/puzzle'} practice; this is not whole-function coding evidence"
+        elif served_rung in (1, 2, 3):
+            support = f"scaffold support at rung {served_rung}; this is supported practice"
+        elif kind == "whole_function" and served_rung == 4:
+            support = "whole-function coding practice"
+        else:
+            support = "support level not recorded; independence is unverified"
         text = (f"Clean clear in {int(seconds)}s against a target of "
                 f"{problem.target_seconds}s"
-                + (f", with {hints_used} spell(s) used." if hints_used
-                   else ", entirely unaided."))
+                + f", with {support}"
+                + (f" and {hints_used} spell(s) used." if hints_used
+                   else " and no recorded spells."))
         steps = []
-        if hints_used:
-            steps.append("Solve the disguised variant with no spells to convert this "
-                         "into independent evidence.")
+        if hints_used or kind != "whole_function" or served_rung != 4:
+            steps.append("Try a whole-function version without scaffold support or spells "
+                         "to check independent code production.")
         if seconds > problem.target_seconds:
             steps.append(f"Target time is {problem.target_seconds}s. The Chronomancer's "
                          "Arena trains exactly this gap.")
@@ -198,85 +212,6 @@ def coach(*, mode: str, analysis, problem, report, hints_used: int,
 
 
 def explanation_score(text: str, problem) -> dict:
-    """Score a typed approach explanation. Deterministic and offline: it looks
-    for the things an interviewer actually listens for."""
-    lowered = (text or "").lower()
-    words = [w for w in lowered.split() if w]
-    checks = []
-
-    structure_words = ["dict", "map", "set", "stack", "queue", "deque", "heap",
-                       "array", "list", "tree", "graph", "pointer", "window",
-                       "counter", "table", "memo"]
-    checks.append({
-        "label": "Named a data structure",
-        "passed": any(w in lowered for w in structure_words),
-        "why": "Interviewers want to hear the structure before the loop.",
-    })
-
-    complexity_words = ["o(n", "o(1", "o(log", "linear", "constant", "quadratic",
-                        "logarithmic", "n log n", "n^2", "n squared"]
-    checks.append({
-        "label": "Stated a complexity",
-        "passed": any(w in lowered for w in complexity_words),
-        "why": "Saying the cost unprompted is a large part of the score.",
-    })
-
-    reason_words = ["because", "since", "so that", "which lets", "avoids", "instead of",
-                    "rather than", "this means"]
-    checks.append({
-        "label": "Justified the choice",
-        "passed": any(w in lowered for w in reason_words),
-        "why": "'What' without 'why' reads as memorisation.",
-    })
-
-    checks.append({
-        "label": "Concise (20-120 words)",
-        "passed": 20 <= len(words) <= 120,
-        "why": "Long enough to be a plan, short enough to be a plan.",
-    })
-
-    pattern_hint = problem.pattern.replace("_", " ").lower()
-    checks.append({
-        "label": "Matched the actual family",
-        "passed": pattern_hint in lowered or problem.pattern.lower() in lowered
-        or any(w in lowered for w in pattern_hint.split()),
-        "why": f"The intended family here is {problem.pattern.replace('_', ' ')}.",
-    })
-
-    passed = sum(1 for c in checks if c["passed"])
-    score = round(100 * passed / len(checks))
-    if score >= 80:
-        verdict = "That is what a strong answer sounds like."
-    elif score >= 60:
-        verdict = "Close. Add the missing piece and say it again."
-    else:
-        verdict = ("Structure, then approach, then complexity, then why. In that order, "
-                   "in about three sentences.")
-    return {"score": score, "checks": checks, "verdict": verdict,
-            "model_answer": _model_answer(problem)}
-
-
-def _model_answer(problem) -> str:
-    structure = {
-        "HASH_MAP": "a dictionary keyed by value",
-        "SET": "a set for O(1) membership",
-        "SLIDING_WINDOW": "two indices and a frequency dictionary",
-        "TWO_POINTER": "two indices converging from both ends",
-        "STACK": "a list used as a stack",
-        "QUEUE": "a deque as the frontier",
-        "BFS": "a deque frontier plus a visited set",
-        "DFS": "recursion plus a visited set",
-        "TREE": "recursion over left and right children",
-        "RECURSION": "a recursive call on a smaller input",
-        "BINARY_SEARCH": "lo/hi bounds halved each step",
-        "MATRIX": "row and column indices",
-        "HEAP": "a heap of size k",
-        "PREFIX_SUM": "a running total plus a dictionary of prefixes",
-        "DP": "a table indexed by subproblem",
-        "DESIGN": "a dict for lookup plus an ordered structure for recency",
-    }.get(problem.pattern, "the appropriate structure")
-    time = problem.optimal_complexity.get("time", "O(n)")
-    space = problem.optimal_complexity.get("space", "O(n)")
-    return (f"\"I'll use {structure}. I'll scan once, updating it as I go, and read the "
-            f"answer off it at the end. Each element is handled a constant number of "
-            f"times, so this is {time} time and {space} space.\"")
+    """Communication-topic coverage, with explicit unverified reasoning status."""
+    from .communication import checklist
+    return checklist(text, problem)

@@ -23,6 +23,8 @@ import { api } from './api.js';
 import { audio } from './audio.js';
 import * as sprites from './sprites.js';
 import * as lootart from './lootart.js';
+import * as tutor from './tutor.js';
+import { HOST as SHELL } from './uikit.js';
 
 export const PARTY_UI_VERSION = '1.0.0';
 
@@ -62,6 +64,7 @@ const HOST = {
   toast: defaultToast,
   refresh: async () => null,
   state: () => null,
+  practiceRegion: async () => SHELL.go('practice'),
   back: defaultBack,
   sfx: (kind) => audio.sfx(kind),
 };
@@ -125,6 +128,7 @@ function defaultBack() {
  * stop the sprites breathing on the panel behind it, and a companion speaking
  * mid-fight belongs to the encounter rather than to either. Everything with a
  * clock or a listener lands in whichever bag is current when it is made. */
+let companionEpoch = 0;
 const SCREEN_BAG = new Set();
 const CARD_BAG = new Set();
 let MODAL_BAG = new Set();
@@ -192,6 +196,7 @@ function dismiss() {
  * on the way in, but the shell leaving for the world screen is a dismissal too,
  * and nothing in this file would ever hear about it. */
 export function leave() {
+  companionEpoch++;
   release(MODAL_BAG);
   release(SCREEN_BAG);
 }
@@ -324,6 +329,20 @@ const PARTY_CSS = `
   color:var(--ink-faint); font-weight:normal }
 .pt-delta .col.after li { color:var(--green) }
 .pt-delta ul { margin:0; padding-left:14px }
+
+/* ---- shared journey ---- */
+.pt-journey { border:1px solid #596174; background:linear-gradient(135deg,#232737,#151d29); margin:12px 0 24px; padding:20px; font:16px/1.65 system-ui,sans-serif; color:#e7e7df }
+.pt-journey h3 { font:600 26px/1.25 system-ui,sans-serif; color:#e6bb83; margin:5px 0 8px }
+.pt-journey h4 { font:600 18px/1.4 system-ui,sans-serif; margin:0 0 6px; color:#f0d8b5 }
+.pt-journey p { margin:5px 0 12px }.pt-j-kicker {font-size:12px;letter-spacing:.1em;color:#bdc6d6}
+.pt-j-select {display:flex;align-items:center;gap:12px;margin:16px 0}.pt-j-select select {font:16px system-ui,sans-serif;min-height:44px;padding:8px;color:#eee6d6;background:#121d2b;border:1px solid #8793a5;border-radius:3px;max-width:75%}
+.pt-j-select select:focus-visible,.pt-journey button:focus-visible,.pt-j-roads summary:focus-visible {outline:3px solid #e6bb83;outline-offset:3px}
+.pt-j-body {display:flex;gap:20px;align-items:flex-start}.pt-j-body canvas {image-rendering:pixelated;max-width:96px;height:auto}
+.pt-journey blockquote {margin:8px 0 16px;border-left:2px solid #ad8b67;padding-left:14px;color:#dedbcf;font-style:italic}
+.pt-journey dl {margin:10px 0;display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}.pt-journey dt {color:#afbdce;font-size:13px}.pt-journey dd {margin:1px 0 0;font-size:16px}
+.pt-j-next {padding:15px 0 0;margin-top:10px;border-top:1px solid #505c70}.pt-journey .btn {font:600 15px/1.4 system-ui,sans-serif;min-height:44px;white-space:normal}
+.pt-j-keepsake {color:#e0bf93}.pt-j-roads {margin-top:16px;border-top:1px solid #505c70;padding-top:14px}.pt-j-roads summary {cursor:pointer;min-height:44px;font-weight:600}.pt-j-roads article {padding:14px 0;border-top:1px solid #39475a}.pt-j-empty {color:#c8ceda}
+@media(max-width:600px){.pt-journey{padding:16px}.pt-j-body{gap:10px}.pt-j-body canvas{max-width:64px}.pt-journey dl{grid-template-columns:1fr}.pt-j-select{align-items:flex-start;flex-direction:column}.pt-j-select select{max-width:100%;width:100%}}
 
 /* ---- companions ---- */
 .pt-pets { display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr));
@@ -941,6 +960,8 @@ export async function paintClassSelection() {
     const spec = selection.find(c => c.id === node.dataset.ptClass);
     if (spec) showClassPage(spec, { chosen, tree });
   });
+  const classCards = $('.pt-classes');
+  void tutor.beat('the_disciplines', { valid: () => !!classCards?.isConnected });
 }
 
 function showClassPage(spec, { chosen, tree }) {
@@ -1410,14 +1431,117 @@ function confirmRespec(scope, branchId, tree, branch) {
  * fact stated in words underneath. It keeps its card and its bond. The codex
  * does not quietly lose people.
  */
+/* Read only relationship summaries. Every milestone below comes from an
+ * existing catalogue or escort row; there is no second relationship counter. */
+export function companionJourney(payload = {}, state = {}, escortSnapshot = {}, selectedId = '') {
+  const roster = (payload.pets || []).filter(p => p.found);
+  const fallen = new Set(payload.fallen || []);
+  const pet = roster.find(p => p.id === selectedId) || roster.find(p => p.active)
+    || roster.find(p => !p.fallen && !fallen.has(p.id)) || roster[0] || null;
+  const dead = !!pet && (pet.fallen || fallen.has(pet.id));
+  const facts = [];
+  let activity = null;
+  if (pet) {
+    if (pet.where) facts.push({label:'Meeting place', value:pet.where});
+    if (pet.arrival_label) facts.push({label:'How they arrived', value:pet.arrival_label});
+    if (Number.isFinite(pet.bond)) facts.push({label:'Bond kept', value:`${pet.rank_label || pet.rank || 'Recorded'} · ${pet.bond} bond`});
+    if (pet.skill) facts.push({label:'Teaches', value:String(pet.skill).replaceAll('_', ' ')});
+    facts.push({label:'Today', value:dead ? 'Remembered in the codex' : pet.fainted ? 'Fainted — free revival in town' : pet.active ? 'In the field' : 'In your roster'});
+    if (state.run_open !== false) activity = {kind:'none', text:'Shared practice is available outside measured assessments.'};
+    else if (state.active_encounter) activity = {kind:'resume', label:'RETURN TO THE WORLD', text:'Finish or resume the encounter already in progress before choosing another challenge.'};
+    else if (dead) activity = {kind:'journal', label:'OPEN MY GRIMOIRE', text:`Recall one ${String(pet.skill || 'Python').replaceAll('_', ' ')} idea in your own words. Your notes and this bond remain.`};
+    else if (pet.fainted) activity = {kind:'town', label:'VISIT THE MENDER', text:'The town healer can revive a fainted companion at no cost.'};
+    else if (!pet.active) activity = {kind:'roster', label:'CHOOSE A COMPANION BELOW', text:'Use Take Along on a companion card when you want company for practice.'};
+    else {
+      const regions = (state.regions || []).filter(r => r.skill === pet.skill);
+      const here = regions.find(r => r.id === state.player?.region && r.unlocked);
+      if (here) activity = {kind:'practice', region:here.id, label:`PRACTICE ${String(pet.skill).replaceAll('_', ' ')}`,
+        text:`Try one ${String(pet.skill).replaceAll('_', ' ')} challenge here in ${here.name || here.id}. ${pet.name} reads through ${pet.helps_through || 'their recorded tier'}; help still costs a hint and affects rank.`};
+      else {
+        const open = regions.filter(r => r.unlocked);
+        activity = {kind:'map', label:'OPEN THE MAP', text:open.length
+          ? `For ${String(pet.skill).replaceAll('_', ' ')} practice, travel to ${open.map(r => r.name || r.id).join(' or ')}. Choose a challenge after you arrive.`
+          : `Explore the map for ${String(pet.skill || 'their skill').replaceAll('_', ' ')} practice. Region access follows your recorded progress.`};
+      }
+    }
+  }
+  // A WALKING row can describe somebody waiting in another zone. Only the
+  // authoritative `here` row is described as accompanying the player now.
+  const roads = (escortSnapshot.escorts || []).filter(row => ['WALKING','TAKEN','ITEM_HELD','FREED','RETAKEN'].includes(row.state) && (row.state !== 'WALKING' || row.id === escortSnapshot.here?.id))
+    .map(row => ({id:row.id, name:row.name, state:row.state, status:row.state_label,
+      place:row.state === 'FREED' ? row.home : row.state === 'WALKING' ? row.zone?.name : row.held_in,
+      quote:(row.lines || [])[0] || '', keepsake:row.held ? row.drop?.name || '' : ''}));
+  return {pet, roster, facts, activity, roads,
+    keepsake:fallen.size && payload.keepsake ? payload.keepsake : '',
+    quote:pet?.line || ''};
+}
+
+export function companionJourneyHTML(view) {
+  const {pet, facts, activity, roads} = view;
+  return `<section class="pt-journey" aria-label="Shared journey">
+    <header><span class="pt-j-kicker">A MOMENT BETWEEN ENCOUNTERS</span><h3>Shared journey</h3>
+    <p>A place for the company you keep and the ideas you are learning.</p></header>
+    ${pet ? `<label class="pt-j-select">Companion
+      <select data-pt-journey-select>${view.roster.map(p => `<option value="${esc(p.id)}"${p.id === pet.id ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>
+      <div class="pt-j-body"><span data-pt-journey-art="${esc(pet.id)}" aria-hidden="true"></span><div class="grow">
+      <h4>${esc(pet.name)}</h4><blockquote>“${esc(view.quote)}”</blockquote>
+      <dl>${facts.map(f => `<div><dt>${esc(f.label)}</dt><dd>${esc(f.value)}</dd></div>`).join('')}</dl></div></div>
+      ${activity ? `<div class="pt-j-next"><h4>A small next step</h4><p>${esc(activity.text)}</p>
+      ${activity.kind !== 'none' ? `<button class="btn" data-pt-journey-action="${esc(activity.kind)}"${activity.region ? ` data-region="${esc(activity.region)}"` : ''}>${esc(activity.label)}</button>` : ''}</div>` : ''}`
+      : '<p class="pt-j-empty">A shared journey begins when you meet a companion. The trails below show where to look and what the game has recorded.</p>'}
+    ${view.keepsake ? `<p class="pt-j-keepsake"><b>Remembered:</b> ${esc(view.keepsake)}. The bond stays in the codex.</p>` : ''}
+    ${roads.length ? `<details class="pt-j-roads"><summary>People on the road · ${roads.length} recorded ${roads.length === 1 ? 'story' : 'stories'}</summary>
+      ${roads.map(row => `<article><h4>${esc(row.name)}</h4><p><b>${esc(row.status)}</b>${row.place ? ` · ${esc(row.place.replaceAll('_', ' '))}` : ''}</p>
+      ${row.quote ? `<blockquote>“${esc(row.quote)}”</blockquote>` : ''}${row.keepsake ? `<p class="pt-j-keepsake">Carrying: ${esc(row.keepsake)}</p>` : ''}</article>`).join('')}
+      <button class="btn small" data-pt-journey-action="rollcall">OPEN THE ROLL CALL</button></details>` : ''}
+  </section>`;
+}
+
+function mountJourney(payload, escortSnapshot) {
+  const host = $('[data-pt-journey]');
+  if (!host) return;
+  const bag = new Set();
+  SCREEN_BAG.add(() => release(bag));
+  function paint(selectedId = '') {
+    release(bag);
+    const view = companionJourney(payload, HOST.state() || {}, escortSnapshot, selectedId);
+    host.innerHTML = companionJourneyHTML(view);
+    const art = $('[data-pt-journey-art]', host);
+    if (art && view.pet) inBag(bag, () => art.appendChild(petCanvas(view.pet, 3)));
+    const select = $('[data-pt-journey-select]', host);
+    if (select) select.onchange = () => paint(select.value);
+    bind('[data-pt-journey-action]', async button => {
+      const action = button.dataset.ptJourneyAction;
+      if (action === 'roster') { $('.pt-pets')?.scrollIntoView({block:'start', behavior:'auto'}); return; }
+      if (action === 'practice') {
+        // Refresh the permission/encounter check when clicked, not only when
+        // this card was painted. The host owns draft flushing and encounter UI.
+        const now = companionJourney(payload, HOST.state() || {}, escortSnapshot, view.pet?.id);
+        if (now.activity?.kind !== 'practice' || now.activity.region !== button.dataset.region) { paint(view.pet?.id); return; }
+        button.disabled = true;
+        try { await HOST.practiceRegion(button.dataset.region); }
+        catch (e) { broke('PRACTICE', e); }
+        finally { if (button.isConnected) button.disabled = false; }
+        return;
+      }
+      if (action === 'resume') { leave(); HOST.back(); return; }
+      leave(); SHELL.go(action);
+    }, host);
+  }
+  paint();
+}
+
 export async function paintCompanions() {
   ensureStyle();
   leave();
+  const ticket = companionEpoch;
   let payload;
   let discovery;
+  let map;
   try {
-    [payload, discovery] = await Promise.all([api.pets(), api.petDiscovery()]);
+    [payload, discovery, map] = await Promise.all([api.pets(), api.petDiscovery(), api.worldMap().catch(() => null)]);
   } catch (e) { broke('THE ANIMALS ARE ELSEWHERE', e); return; }
+  if (ticket !== companionEpoch) return;
   if (payload.error) { HOST.toast('NO', refusal(payload), 'red'); return; }
 
   const roster = payload.pets || [];
@@ -1544,6 +1668,7 @@ export async function paintCompanions() {
       after a failed submission and has never asked who you brought, and the
       worked solution comes free after three attempts. Those three do not care
       about tiers and never have.</p>
+    <div data-pt-journey></div>
     <div class="section-title">THE LADDER</div>
     <div class="pt-ladder">${ladder}</div>
     <div class="pt-pets">${cards}</div>
@@ -1554,6 +1679,8 @@ export async function paintCompanions() {
         <span class="t">${esc(h.species.toUpperCase())} — ${esc(h.where)}</span>
         <span class="d">${esc(h.how)}</span></div>`).join('')}
     </div>` : ''}`);
+
+  mountJourney(payload, map?.escorts || {});
 
   for (const node of $$('[data-pt-pet-art]')) {
     const pet = roster.find(p => p.id === node.dataset.ptPetArt);

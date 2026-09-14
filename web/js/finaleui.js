@@ -13,7 +13,7 @@
  * that up would be the game lying about itself.
  *
  * THE TWO HALVES. `title_card_at_ms` is the freeze frame and it is NOT the end.
- * `the_prompt_stays` is, and `markCodaSeen()` fires there and nowhere else — a
+ * `the_prompt_stays` (pass) / `the_prompt_waits` (rematch) are the final beat. A
  * player who walked out at the title card has seen half of this.
  *
  * TIMERS. One rAF loop and nothing else, registered in the disposer, killed by
@@ -26,41 +26,105 @@ import {
   refusalCard,
 } from './uikit.js';
 import { audio } from './audio.js';
+import { createCinema } from './cinema.js';
 
-export const FINALE_UI_VERSION = '1.0.0';
+export const FINALE_UI_VERSION = '2.0.0';
 
 const D = makeDisposer();
-export const leave = () => { stop(); D.leave(); };
+export const leave = () => { FINISHED = true; DONE = null; stop(); D.leave(); };
 
 let SCENE = null;
 let LAYER = null;
-let T0 = 0;
-let PAUSED = false;
-let CODA_SENT = false;
-let SHOWN = -1;
+let CLOCK = null;
+let DONE = null;
+let FINISHED = true;
+let RUN = 0;
+let CINEMA = null;
+let PRESENTATION = {};
+
+
+/** Pure scene clock. A stopped/cancelled clock cannot emit completion twice.
+ * Pausing consumes wall time without moving the script or repeating a beat. */
+export function createSceneClock(scene, { startAt = 0, onBeat = () => {}, onFrame = () => {},
+  onCoda = () => {}, onDone = () => {} } = {}) {
+  const beats = scene.beats || [], total = Math.max(1, num(scene.duration_ms, 1));
+  let held = null, pausedFor = 0, shown = -1, coda = false, closed = false;
+  const elapsed = now => Math.max(0, (held ?? now) - startAt - pausedFor);
+  function stop(skipped = true) {
+    if (closed) return;
+    closed = true;
+    onDone(skipped);
+  }
+  return {
+    step(now) {
+      if (closed) return;
+      const ms = elapsed(now);
+      let index = -1;
+      for (let i = 0; i < beats.length; i++) {
+        if (ms >= num(beats[i].at_ms)) index = i; else break;
+      }
+      if (index >= 0 && index !== shown) {
+        shown = index;
+        onBeat(beats[index]);
+        if (!coda && ['the_prompt_stays', 'the_prompt_waits'].includes(beats[index].id)) {
+          coda = true;
+          onCoda();
+        }
+      }
+      onFrame(ms, index);
+      if (ms >= total) stop(false);
+    },
+    togglePause(now) {
+      if (closed) return false;
+      if (held === null) held = now;
+      else { pausedFor += now - held; held = null; }
+      return held !== null;
+    },
+    stop,
+    cancel() { closed = true; },
+    get paused() { return held !== null; },
+    get closed() { return closed; },
+  };
+}
 
 /* -------------------------------------------------------------- the door */
 
 /* Staged AFTER the practical is scored and never before. The exam report the
  * player was just handed is passed straight through — this file does not read
  * it, finale.py does. */
-export async function play(examReport) {
+export async function play(examReport, presentation = {}) {
   const r = await api.finale(examReport || {}).catch(e => ({ error: e.message }));
   if (!r || r.error) {
     HOST.toast(isSealed(r) ? sealedTitle(r) : 'NOT YET', refusal(r), 'red');
     return null;
   }
-  SCENE = r;
-  CODA_SENT = false;
-  SHOWN = -1;
-  mount();
+  playScene(r, presentation);
   return r;
+}
+
+/** Play an already-authorized ending payload. Both staged outcomes and the
+ * standalone finale share this player. The gallery uses createCinema directly;
+ * demonstration payloads additionally suppress coda bookkeeping here. */
+export function playScene(scene, presentation = {}, done = null) {
+  leave();
+  const run = ++RUN;
+  SCENE = scene;
+  PRESENTATION = presentation;
+  DONE = typeof done === 'function' ? done : null;
+  FINISHED = false;
+  const session = {
+    stop() { if (run === RUN && !FINISHED) { if (CLOCK) CLOCK.stop(true); else finish(true); } },
+    get active() { return run === RUN && !FINISHED; },
+  };
+  if (!scene || !(scene.beats || []).length) { finish(true); return session; }
+  mount();
+  return session;
 }
 
 /* The read-only version: what the scene WOULD be, as a page. Reachable from the
  * ledger so a player can find out there is one without finishing the game. */
 export async function paintFinaleCard() {
-  D.leave();
+  leave();
   HOST.panel('THE LAST SCENE', `
     <p class="small muted">It is staged after the practical is scored and never
     before. The practical gates this; this does not gate the practical.</p>
@@ -101,60 +165,99 @@ export async function paintFinaleCard() {
         : 'The second half — the part after the title card — has not been watched.'}</p>
     <div class="actions"><button class="btn primary" id="fin-play">PLAY IT</button></div>`;
   const go = $('#fin-play');
-  if (go) go.onclick = () => { SCENE = r; CODA_SENT = false; SHOWN = -1; mount(); };
+  if (go) go.onclick = () => playScene(r);
 }
 
 /* ------------------------------------------------------------- the stage */
 
 function mount() {
   stop();
+  D.leave();
   ensureStyle();
   LAYER = el('div', 'fin-layer');
+  LAYER.setAttribute('role', 'dialog');
+  LAYER.setAttribute('aria-modal', 'true');
+  LAYER.setAttribute('aria-label', SCENE.title || 'The last scene');
   LAYER.innerHTML = `
     <div class="fin-stage">
-      <div class="fin-note" id="fin-note"></div>
-      <div class="fin-lines" id="fin-lines"></div>
+      <canvas class="fin-art" id="fin-art" width="960" height="540" aria-hidden="true"></canvas>
+      <div class="fin-lines" id="fin-lines" tabindex="0" aria-label="Scene dialogue"></div>
       <div class="fin-card" id="fin-card"></div>
       <div class="fin-rail" id="fin-rail"></div>
     </div>
     <div class="fin-bar">
       <span class="fin-act" id="fin-act"></span>
       <span class="fin-prog"><i id="fin-prog"></i></span>
+      <button class="btn small" id="fin-pause" aria-pressed="false">PAUSE</button>
       <button class="btn small" id="fin-skip">SKIP</button>
     </div>`;
   document.body.appendChild(LAYER);
+  const reducedMotion = PRESENTATION.reducedMotion ?? document.body.classList.contains('reduced-motion');
+  LAYER.classList.toggle('fin-reduced', !!reducedMotion);
+  CINEMA = createCinema(SCENE, { ...PRESENTATION, reducedMotion });
+  const pause = $('#fin-pause', LAYER);
+  if (pause) pause.onclick = () => {
+    if (!CLOCK) return;
+    const held = CLOCK.togglePause(performance.now());
+    pause.textContent = held ? 'RESUME' : 'PAUSE';
+    pause.setAttribute('aria-pressed', String(held));
+  };
   D.keep(() => { if (LAYER && LAYER.isConnected) LAYER.remove(); LAYER = null; });
 
   const skip = $('#fin-skip', LAYER);
-  if (skip) skip.onclick = () => finish(true);
-  const esckey = (e) => { if (e.key === 'Escape') finish(true); };
+  if (skip) skip.onclick = () => CLOCK?.stop(true);
+  const esckey = (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); CLOCK?.stop(true); }
+    if (e.key === 'Tab' && LAYER) {
+      const dialogue = $('#fin-lines', LAYER);
+      const controls = [dialogue && dialogue.innerHTML.trim() ? dialogue : null, pause, skip].filter(Boolean);
+      const first = controls[0], last = controls[controls.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+  };
   D.onWindow('keydown', esckey);
 
-  T0 = performance.now();
-  PAUSED = false;
-  try { audio.play('final'); } catch (e) { /* muted is fine */ }
-  D.frames(LAYER, tick);
+  CLOCK = createSceneClock(SCENE, {
+    startAt: performance.now(),
+    onBeat: showBeat,
+    onFrame: tick,
+    onCoda: () => {
+      if (!SCENE.demonstration) api.markCodaSeen().catch(() => { /* bookkeeping, never a gate */ });
+    },
+    onDone: finish,
+  });
+  // The first beat owns the soundtrack. scene.music is a list of tracks, not
+  // a playable key; do not start an unrelated fallback before the first cut.
+  CLOCK.step(performance.now());
+  D.frames(LAYER, () => {
+    try { CLOCK?.step(performance.now()); }
+    catch (error) {
+      // A drawing failure must release the overlay and return the report.
+      finish(true);
+      HOST.toast('SCENE INTERRUPTED', error.message || String(error), 'red');
+    }
+  });
+  if (skip) skip.focus();
 }
 
-function tick() {
-  if (!SCENE || !LAYER || PAUSED) return;
-  const t = performance.now() - T0;
-  const beats = SCENE.beats || [];
+function tick(t) {
+  if (!SCENE || !LAYER) return;
   const total = Math.max(1, num(SCENE.duration_ms, 1));
-
   const bar = $('#fin-prog', LAYER);
   if (bar) bar.style.width = `${Math.min(100, (t / total) * 100)}%`;
-
-  let idx = -1;
-  for (let i = 0; i < beats.length; i++) {
-    if (t >= num(beats[i].at_ms)) idx = i; else break;
+  const art = $('#fin-art', LAYER);
+  if (art && CINEMA) {
+    const frame = CINEMA.draw(art.getContext('2d'), art.width, art.height, t);
+    const rail = $('#fin-rail', LAYER);
+    if (rail && frame && rail.dataset.current !== String(frame.castIndex)) {
+      rail.dataset.current = String(frame.castIndex);
+      Array.from(rail.children).forEach((node, i) => {
+        node.classList.toggle('current', i === frame.castIndex);
+        if (i === frame.castIndex) node.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      });
+    }
   }
-  if (idx < 0) return;
-  if (idx !== SHOWN) {
-    SHOWN = idx;
-    showBeat(beats[idx]);
-  }
-  if (t >= total) finish(false);
 }
 
 function showBeat(beat) {
@@ -162,19 +265,18 @@ function showBeat(beat) {
   const act = $('#fin-act', LAYER);
   if (act) act.textContent = beat.act || '';
 
-  /* `fx` is a list of names a renderer may honour. Three of them change what is
-   * on screen rather than decorating it, so those three are read and the rest
-   * are left to whoever draws this properly one day. */
+  /* The canvas renders the complete stage/camera vocabulary. DOM text stays
+   * outside its pixel effects so dialogue remains readable. */
   const fx = beat.fx || [];
   LAYER.classList.toggle('letterbox', fx.indexOf('letterbox') >= 0);
   LAYER.classList.toggle('blowout', fx.indexOf('palette_blowout') >= 0);
   LAYER.classList.toggle('cursor', fx.indexOf('cursor_blink') >= 0);
-
-  const note = $('#fin-note', LAYER);
-  if (note) note.textContent = beat.note || '';
+  LAYER.classList.toggle('has-card', fx.includes('title_card'));
+  LAYER.classList.toggle('black-stage', (beat.stage || []).includes('black'));
 
   const host = $('#fin-lines', LAYER);
   if (host) {
+    host.scrollTop = 0;
     host.innerHTML = lines(beat.lines).map(l => `
       <div class="fin-line ${esc(l.kind || 'prose')}">
         ${l.name ? `<span class="fin-who">${esc(l.name)}</span>` : ''}
@@ -198,13 +300,9 @@ function showBeat(beat) {
 
   /* The name rail: everyone who walked out, scrolling past. `pullback` is the
    * roll call's own number for how far the camera has to go to fit them. */
-  if ((beat.rows || []).length) showRail(beat.rows);
+  showRail(beat.rows || []);
 
-  /* THE CODA. Fires on `the_prompt_stays` and on nothing else. */
-  if (beat.id === 'the_prompt_stays' && !CODA_SENT) {
-    CODA_SENT = true;
-    api.markCodaSeen().catch(() => { /* bookkeeping, not a gate */ });
-  }
+
 }
 
 function hideCard() {
@@ -257,23 +355,32 @@ function showCard() {
 function showRail(rows) {
   const rail = $('#fin-rail', LAYER);
   if (!rail) return;
-  rail.innerHTML = rows.slice(0, 40).map(r =>
+  delete rail.dataset.current;
+  rail.innerHTML = rows.map(r =>
     `<span class="fin-name">${esc(r.name || r)}</span>`).join('');
 }
 
 function finish(skipped) {
-  /* Skipping is allowed and is not punished. `skippable` is false on the freeze
-   * and the coda in finale.py's own script, but a player holding Escape has
-   * asked to leave and a scene that refuses is a scene holding somebody
-   * hostage. What skipping does NOT do is mark the coda seen. */
+  if (FINISHED) return;
+  FINISHED = true;
+  const done = DONE;
+  DONE = null;
   stop();
   D.leave();
-  if (!skipped) HOST.sfx('unlock');
-  HOST.back();
+  // Staged endings return to their exact report. Standalone playback keeps its
+  // existing return route. Neither dismissal path grants learning evidence.
+  if (done) done({ skipped: !!skipped });
+  else {
+    if (!skipped) HOST.sfx('unlock');
+    HOST.back();
+  }
 }
 
 function stop() {
-  PAUSED = true;
+  if (CLOCK) CLOCK.cancel();
+  CLOCK = null;
+  if (CINEMA) CINEMA.dispose();
+  CINEMA = null;
   if (LAYER && LAYER.isConnected) LAYER.remove();
   LAYER = null;
 }
@@ -289,27 +396,29 @@ function ensureStyle() {
   node.id = 'finale-style';
   node.textContent = `
 .fin-layer {
-  position: fixed; inset: 0; z-index: 120; background: #07070a;
-  display: flex; flex-direction: column; color: var(--ink);
+  position: fixed; inset: 0; z-index: 9000; background: #07070a;
+  display: flex; flex-direction: column; color: var(--ink,#e6e4dc); --scale: 1;
 }
 .fin-layer.blowout { background: #0a0a0c; }
-.fin-layer.letterbox::before, .fin-layer.letterbox::after {
-  content: ''; position: absolute; left: 0; right: 0; height: 11vh;
+.fin-layer.letterbox .fin-stage::before, .fin-layer.letterbox .fin-stage::after {
+  content: ''; position: absolute; left: 0; right: 0; height: 3vh;
   background: #000; z-index: 3; pointer-events: none;
 }
-.fin-layer.letterbox::before { top: 0; }
-.fin-layer.letterbox::after { bottom: 0; }
+.fin-layer.letterbox .fin-stage::before { top: 0; }
+.fin-layer.letterbox .fin-stage::after { bottom: 0; }
 .fin-stage {
-  flex: 1; position: relative; display: flex; flex-direction: column;
-  justify-content: flex-end; padding: 6vh 8vw 4vh; overflow: hidden;
+  flex: 1; position: relative; display: grid; grid-template-rows: minmax(0,1fr) auto auto;
+  padding: 0 3vw 12px; overflow: hidden; min-height: 0;
 }
-.fin-note {
-  position: absolute; top: 6vh; left: 8vw; right: 8vw;
-  font-size: calc(11px * var(--scale)); color: #4a4658; font-style: italic;
-  line-height: 1.6; max-width: 60ch;
-}
-.fin-lines { position: relative; z-index: 2; max-width: 78ch; }
-.fin-line { margin: 10px 0; font-size: calc(14px * var(--scale)); line-height: 1.75; }
+.fin-art { grid-row: 1; width: 100%; height: 100%; min-height: 0; object-fit: contain; image-rendering: pixelated; }
+.fin-lines { grid-row: 2; position: relative; z-index: 4; width: min(88ch,100%); max-height: 25vh; overflow-y: auto;
+  margin: 0 auto; padding: 8px 18px; border-left: 2px solid #9d7b59;
+  background: #0b1220ed; box-shadow: 0 3px 0 #050a12; }
+.fin-lines:empty { display: none; }
+.fin-lines:focus-visible { outline: 2px solid #d2ae79; outline-offset: 2px; }
+.fin-layer.black-stage .fin-lines { grid-row: 1; align-self: center; margin: auto; text-align: center; background: none; border: 0; box-shadow: none; }
+.fin-layer.black-stage .fin-art { display: none; }
+.fin-line { margin: 8px 0; font-size: calc(16px * var(--scale)); line-height: 1.6; text-shadow: none; }
 .fin-line.prose { color: #cfcbdd; }
 .fin-line.stage { color: #8f98a6; font-style: italic; }
 .fin-line.code {
@@ -325,9 +434,9 @@ function ensureStyle() {
 }
 @keyframes fincur { 0%,49% { opacity: 1 } 50%,100% { opacity: 0 } }
 .fin-card {
-  position: absolute; inset: 0; z-index: 4; display: none;
+  position: absolute; inset: 4vh 3vw auto; min-height: 43%; z-index: 3; display: none;
   flex-direction: column; align-items: center; justify-content: center;
-  text-align: center; gap: 12px; pointer-events: none;
+  text-align: center; gap: 12px; padding: 12px 0; pointer-events: none; background: #080d165c;
 }
 .fin-card.slam { display: flex; animation: finslam var(--slam,90ms) steps(3) 1; }
 @keyframes finslam {
@@ -351,13 +460,15 @@ function ensureStyle() {
   color: #f2ead8; background: #4a5260; padding: 5px 14px;
 }
 .fin-stinger {
-  font-size: calc(10px * var(--scale)); color: #6a6685; letter-spacing: 2px;
+  font-size: calc(10px * var(--scale)); color: #b7a8a1; letter-spacing: 2px;
 }
 .fin-rail {
-  position: absolute; bottom: 2vh; left: 0; right: 0; z-index: 2;
+  grid-row: 3; z-index: 2; max-height: 8vh; overflow-y: auto;
   display: flex; gap: 18px; flex-wrap: wrap; justify-content: center;
   padding: 0 8vw; opacity: .75;
 }
+.fin-rail:empty { display: none; }
+.fin-name.current { color: #f2d6a6; text-decoration: underline; text-underline-offset: 4px; }
 .fin-name {
   font-family: 'Press Start 2P', monospace; font-size: calc(8px * var(--scale));
   color: #8fd07a;
@@ -373,6 +484,16 @@ function ensureStyle() {
 }
 .fin-prog { flex: 1; height: 4px; background: #171426; display: block; }
 .fin-prog > i { display: block; height: 100%; width: 0; background: var(--gold); }
+.fin-reduced .fin-card.slam, .fin-reduced.cursor .fin-line.code::after { animation: none; }
+@media (max-width: 650px) {
+  .fin-bar { flex-wrap: wrap; gap: 8px; }
+  .fin-act { font-size: 7px; flex-basis: 100%; }
+  .fin-lines { max-height: 34vh; padding: 6px 12px; }
+  .fin-slab { font-size: calc(15px * var(--scale)); }
+  .fin-shout { font-size: calc(10px * var(--scale)); }
+  .fin-eyebrow, .fin-stinger { font-size: 8px; }
+  .fin-card { gap: 8px; min-height: 32%; }
+}
 `;
   document.head.appendChild(node);
 }

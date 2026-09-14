@@ -1055,7 +1055,10 @@ class TheNumbersAreTheCodesNumbers(unittest.TestCase):
         js = (self.WEB / "js" / "main.js").read_text(encoding="utf-8")
         approach = js.split("function paintApproach(")[1][:1200]
         self.assertIn("textarea", approach)
-        self.assertIn("Interviewers score this", approach)
+        self.assertIn("communication self-check", approach)
+        self.assertNotIn("Interviewers score this", approach,
+                         "keyword coverage must not claim verified interviewer judgment")
+        self.assertIn("G.explainBox = ta", approach)
         said = self.text("the_tabs")
         self.assertIn("APPROACH is a box you write in", said)
         self.assertNotIn("plain statement of what you were asked", said)
@@ -1132,18 +1135,23 @@ class EveryScreenHasALessonOrAnOwner(unittest.TestCase):
         self.assertIn("puzzle-help", owners)
         self.assertIn("explainBlank", owners)
 
-    def test_a_handoff_that_reaches_nobody_says_so(self):
-        """Beats 2 and 26 hand off to prose no file under web/js reads. The
-        row has to carry that, or a wiring pass reads it as finished."""
-        js = " ".join(p.read_text(encoding="utf-8")
-                      for p in (self.WEB / "js").glob("*.js"))
-        self.assertNotIn("escort", js,
-                         "overworld.js grew escort wiring; the two HANDOFF "
-                         "rows and WIRING row W3 can drop the warning")
+    def test_field_handoffs_reach_the_actual_response_consumers(self):
+        """Execute authored payloads through the shipped movement/travel UI."""
+        import shutil
+        import subprocess
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("Node is required for the actual client consumer check")
+        check = Path(base.REPO) / "scripts" / "verify" / "escort-handoffs.mjs"
+        result = subprocess.run([node, str(check)], cwd=base.REPO,
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("both travel paths", result.stdout)
         for order in (2, 26):
             row = next(h for h in tutorial.HANDOFFS if h.order == order)
-            self.assertIn("NOT DELIVERED TODAY", row.why)
-        self.assertIn("W3", tutorial.WIRING)
+            self.assertNotIn("NOT DELIVERED TODAY", row.why)
+        self.assertIn("W3  DELIVERED", tutorial.WIRING)
+        self.assertIn("distinct service signs", tutorial.WIRING)
 
     def test_the_seal_the_client_is_told_to_watch_is_not_the_one_that_lies(self):
         """`body.interview-mode` and `G.interview` are both cleared by

@@ -487,39 +487,27 @@ class TestTheCurve(base.GameTest):
 
     `Game.next_encounter` for 400 encounters on a fresh save, with the rung read
     off the encounter payload the client is actually sent. Nothing is modelled.
-    The walk is deterministic and is done once for the class, because it is the
-    expensive part and every assertion below is a different question asked of
-    the same career.
+    The career is shared by the assertions below.
 
-    WHAT A WHOLE-CAREER BAND AGGREGATE CAN AND CANNOT SAY. Bucketing 400
-    encounters by the problem's own band confounds three things: the band, the
-    SKILL (evidence is filed per skill, and TWO_POINTER's GUIDED problems arrive
-    after it already holds 23 rung-4 clears while TREE's TUTORIAL problems
-    arrive when it holds three), and the PHASE OF THE CAREER (the selector keeps
-    serving GUIDED problems at encounter 350, by which point PYTHON is fluent
-    and a GUIDED fill-in-the-blank would be an insult). Measured over the full
-    400 that aggregate reads 61.3 / 71.2 / 49.3 / 0.0 / 0.0 — GUIDED below
-    TUTORIAL — and every point of that gap is composition, not ramp: within a
-    single skill at a single moment the rung served is NON-DECREASING in
-    difficulty for every one of the 241 editor encounters in the career, which
-    is what `test_the_taper_never_rises_for_one_player_at_one_moment` asserts
-    and is the strongest true form of the claim.
+    A fixed first-200 window still mixed novices with fluent skills: its eleven
+    whole-function GUIDED servings arrived after encounter 136 at mastery
+    94–100, including six PYTHON problems at mastery 100. Removing the five new
+    rematches reproduced the reversal, so it was not a missing scaffold caused
+    by that content. Before the skill's first rung-4 code clear, the same replay
+    measured GUIDED 16/16, TUTORIAL 26/28, EASY 17/25 scaffolded.
 
-    So the taper is asserted twice, on the same live career: once per encounter,
-    where it is exact, and once as a band aggregate over the stretch in which a
-    fresh player is being taught the ramp, which is the situation §1b's sentence
-    is about ("a player entering the band at the competence the band assumes").
+    Measure that evidence-defined beginner cohort and the subsequent transition
+    to independent code. Keep exact same-state monotonicity and late-EASY
+    assertions; do not change teaching thresholds to fit a mixed-skill average.
     """
 
     WALK = 400
-    TEACHING_WINDOW = 200
     BANDS = ("GUIDED", "TUTORIAL", "EASY", "MEDIUM", "HARD")
-    TARGET = {"GUIDED": 95, "TUTORIAL": 70, "EASY": 35, "MEDIUM": 0, "HARD": 0}
 
     _CAREER = None
 
     def _career(self):
-        """One live career: (index, band, served rung, rungs at every band)."""
+        """One live career, including each skill's evidence before the attempt."""
         if TestTheCurve._CAREER is not None:
             return TestTheCurve._CAREER
         from gauntlet import puzzles, skills as skills_module
@@ -540,7 +528,8 @@ class TestTheCurve(base.GameTest):
                     scaffold.servable(problem, band,
                                       curriculum.rung_for(state, band))
                     for band in self.BANDS)
-                rows.append((index, problem.difficulty, served, at_band))
+                rows.append((index, problem.difficulty, served, at_band,
+                             curriculum.rung_record(state), state.mastery))
             if problem.encounter_kind in puzzles.PUZZLE_KINDS:
                 game.solve_puzzle(puzzles.answer_key(problem))
             elif problem.entry.get("kind") == "mcq":
@@ -572,7 +561,7 @@ class TestTheCurve(base.GameTest):
         """
         rows = self._career()
         self.assertGreater(len(rows), 200, "the career served almost no editors")
-        for index, band, served, at_band in rows:
+        for index, band, served, at_band, _, _ in rows:
             self.assertEqual(
                 list(at_band), sorted(at_band),
                 f"encounter {index} ({band}): the same player at the same "
@@ -585,15 +574,13 @@ class TestTheCurve(base.GameTest):
                 earlier, later,
                 f"the ramp rises: {[round(v, 1) for v in shares]}")
 
-    def test_the_taper_never_rises_across_the_bands_as_they_are_taught(self):
-        """The band aggregate, over the stretch of a live career in which a
-        fresh player is actually being taught the ramp. Measured: 90.9 / 82.1 /
-        61.0 / 0.0 / 0.0. Before this pass the same measurement read 100.0 /
-        100.0 / 69.2 at 120 encounters and 79.0 / 100.0 / 66.7 over the full
-        career — a rise, while the retired per-band model reported 95.2 / 69.5 /
-        37.3 and stayed green."""
-        rows = [r for r in self._career() if r[0] < self.TEACHING_WINDOW]
+    def test_the_taper_never_rises_before_a_skills_first_rung_four_clear(self):
+        """Beginners are identified by code evidence, not elapsed encounters."""
+        rows = [r for r in self._career() if r[4].get(scaffold.WRITE_IT_ALL, 0) == 0]
         served = self._by_band(rows)
+        for band in ("GUIDED", "TUTORIAL", "EASY"):
+            self.assertGreaterEqual(len(served[band]), 10,
+                                    f"too few beginning-skill {band} encounters")
         shares = [self._share(served[band]) for band in self.BANDS if served[band]]
         for earlier, later in zip(shares, shares[1:]):
             self.assertGreaterEqual(
@@ -601,28 +588,33 @@ class TestTheCurve(base.GameTest):
                 f"the ramp rises: "
                 f"{ {b: round(self._share(served[b]), 1) for b in self.BANDS if served[b]} }")
 
-    def test_the_taper_reaches_the_declared_curve(self):
-        """§1b's numbers, against the live selector rather than a model.
+    def test_proven_skills_progress_to_independent_code(self):
+        """Enough code evidence must actually change the served editor.
 
-        The tolerance is wide and says so. §1b names 95 / 70 / 35 / 10 / 0 for
-        "a player entering the band at the competence the band assumes"; a live
-        400-encounter career is a different population, and the two bands that
-        miss do so for reasons that are named rather than tuned away: GUIDED
-        because the selector keeps serving it to a player who has outgrown it,
-        and EASY because rung 3 is EASY's own floor, so its share is bounded by
-        how many of its problems can render two blanks rather than by any climb.
+        Eleven unaided rung-4 clears satisfy every current rung threshold;
+        mastery 55 is the existing ceiling for whole-function work. This tests
+        the live payload after those criteria are met, without demanding that
+        fluent players continue filling blanks to meet a population percentage.
         """
-        served = self._by_band(self._career())
+        rows = self._career()
+        served = self._by_band(rows)
         measured = {band: self._share(served[band])
                     for band in self.BANDS if served[band]}
         for band in ("MEDIUM", "HARD"):
             self.assertEqual(
                 measured.get(band, 0.0), 0.0,
                 f"{band} served a scaffold outside a lapsed review: {measured}")
-        self.assertGreater(measured["GUIDED"], 50.0, measured)
-        self.assertAlmostEqual(measured["TUTORIAL"], self.TARGET["TUTORIAL"],
-                               delta=10, msg=str(measured))
-        self.assertLess(measured["EASY"], measured["TUTORIAL"], str(measured))
+        ready = [r for r in rows
+                 if r[4].get(scaffold.WRITE_IT_ALL, 0) >= max(curriculum.RUNG_EVIDENCE.values())
+                 and r[5] >= 55]
+        self.assertGreater(len(ready), 20, "too few proven-skill encounters to judge")
+        for band in ("GUIDED", "TUTORIAL", "EASY"):
+            self.assertTrue(any(r[1] == band for r in ready),
+                            f"the career never revisited {band} with code evidence")
+        for index, band, rung, _, record, mastery in ready:
+            self.assertEqual(rung, scaffold.WRITE_IT_ALL,
+                             f"encounter {index} ({band}) kept scaffold rung {rung} "
+                             f"despite mastery {mastery} and code evidence {record}")
 
     def test_writing_it_all_is_the_majority_act_by_easy(self):
         """The taper finishes as a teaching device a full band before HARD. Read
@@ -840,7 +832,17 @@ class TestTheHoldOutDoesNotMove(base.GameTest):
                           f"lineage {lineage_id} is sealed in part")
 
     def test_the_ramp_created_no_problems(self):
-        self.assertEqual(len(self.corpus), 1013)
+        # The ramp still renders the original problems rather than multiplying
+        # them into sibling rungs. Five separately authored boss contracts were
+        # added later; account for that explicit addition without permitting
+        # arbitrary corpus growth or moving those practice prompts into holdout.
+        from gauntlet.corpus.families import rematch_variants
+        additions = {problem.id for problem in rematch_variants.build()}
+        self.assertEqual(len(additions), 5)
+        added = [problem for problem in self.corpus if problem.id in additions]
+        self.assertEqual({problem.id for problem in added}, additions)
+        self.assertTrue(all(not problem.sealed for problem in added))
+        self.assertEqual(sum(problem.id not in additions for problem in self.corpus), 1013)
 
     def test_the_declaration_never_reaches_the_client(self):
         """`scaffold_spans[0]['text']` IS the expression the blank is asking

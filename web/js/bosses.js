@@ -1,4 +1,4 @@
-/* Boss art: fourteen authored creatures, generated at runtime.
+/* Boss art: sixteen authored creatures, generated at runtime.
  *
  * Nothing here is traced, sampled or derived from any existing game, film or
  * franchise. "Lich, dragon, knight" are archetypes as old as the woodcut; these
@@ -100,7 +100,7 @@
 import { ramp, mix, shade, rng, hash, drawGrid, applyRim, rimLowLeft, normalise, shiftRows, bobGrid, sinkRows, squashRows, widenRows, drawGroundShadow } from './sprites.js';
 import { bossLook, dressGrid, elementPalette, wantsRim, ingestHunters, ELEMENT_IDS } from './bossart.js';
 
-export const BOSS_ART_VERSION = 4;   // 4: six art stages, wired to the fight's real phase
+export const BOSS_ART_VERSION = 6;   // 6: foreign-element previews share a bounded material palette
 
 /* One box height for every boss, so the battle layer never has to special-case
  * a vertical offset. Width is the only thing that varies: the winged and the
@@ -353,11 +353,46 @@ export function bossPalette(base, accentHex, phase = 0, element = null) {
    *     rim — a perfectly obedient member of a cast it is supposed to break.
    *
    * It also collapses r/f/R/u/i onto three steps of one shared mark ramp, so
-   * the theme pass costs strictly fewer rendered colours than it replaces. A
-   * boss at fifteen cannot go over budget by acquiring an element, which is
-   * what made wiring this safe on sprites that were already at the cap. */
+   * the theme pass shares those material tones. Foreign-element geometry can
+   * still introduce a previously unused mark glyph, so boundedBossPalette()
+   * enforces the final rendered budget after geometry is assembled. */
   return elementPalette(elementLight(pal, element, lit),
     ELEMENT_STUB[element] || ELEMENT_STUB.NEUTRAL, ph);
+}
+
+/* Element geometry can introduce a mark on a body that never used that glyph.
+ * In previews this used to add up to three colours to the Interviewer. Resolve
+ * the palette against the finished grid, keeping the outline, element marks
+ * and rim. Only over-budget palettes share their nearest existing material
+ * tones; ordinary sprites retain every colour. No new hue, geometry or canvas
+ * is created, and this runs only on a sprite-cache miss. */
+function boundedBossPalette(grid, palette) {
+  const used = new Set([...grid.join('')].map(ch => palette[ch]).filter(Boolean));
+  if (used.size <= 15) return palette;
+  const out = { ...palette };
+  const protectedColours = new Set([...'okmQrRfuiUWw']
+    .map(ch => palette[ch]).filter(Boolean));
+  const rgb = c => { const n = parseInt(c.slice(1), 16); return [n >> 16, n >> 8 & 255, n & 255]; };
+  while (used.size > 15) {
+    const colours = [...used].sort();
+    let pair = null, nearest = Infinity;
+    for (const from of colours) {
+      if (protectedColours.has(from)) continue;
+      const a = rgb(from);
+      for (const to of colours) {
+        if (from === to) continue;
+        const b = rgb(to);
+        const distance = 2 * (a[0] - b[0]) ** 2 + 4 * (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2;
+        if (distance < nearest) { nearest = distance; pair = [from, to]; }
+      }
+    }
+    // At most nine protected tones exist, so an over-budget palette always
+    // has a material tone available to share with an existing neighbour.
+    const [from, to] = pair;
+    for (const glyph of Object.keys(out)) if (out[glyph] === from) out[glyph] = to;
+    used.delete(from);
+  }
+  return out;
 }
 
 /* ---------------- grid surgery ----------------
@@ -470,19 +505,66 @@ function rimPass(grid) {
   return rimLowLeft(grid, 'Q', RIM_PROTECT);
 }
 
-/* Deterministic wear. Runs before applyRim so the speckles survive it: applyRim
- * only rewrites 'B', and a pitted pixel is no longer 'B'. Seeded from the art
- * key, so a boss carries the same scars in every session forever. */
+/* Wear is grouped into short chips instead of independently scattered pixels.
+ * It is applied to the unposed body, so marks move with the creature and do not
+ * crawl across it between idle and attack. Keying on its palette/frame made a
+ * boss acquire different scars every time it moved or changed element. */
 function patina(grid, seed, amount, glyph) {
-  const rand = rng(hash(seed) || 1);
-  return grid.map(row => {
+  return grid.map((row, y) => {
     const cells = row.split('');
     for (let x = 0; x < cells.length; x++) {
-      if (cells[x] !== 'B') continue;
-      if (rand() < amount) cells[x] = glyph;
+      if (cells[x] !== 'B' || row[x - 1] !== 'B' || row[x + 1] !== 'B') continue;
+      const tileX = Math.floor(x / 5), tileY = Math.floor(y / 4);
+      const n = hash(`${seed}:${tileX}:${tileY}`) >>> 0;
+      if ((n % 1000) / 1000 >= amount) continue;
+      if (y % 4 === (n >>> 12) % 3 && x % 5 >= 1 && x % 5 <= 2) cells[x] = glyph;
     }
     return cells.join('');
   });
+}
+
+/* Connected material planes for the whole cast. Authored glyph families stay
+ * separate: armour uses a narrow specular and a dark return, bone a rounded
+ * cheek, cloth long folds, organic bodies a broad shoulder and belly shadow.
+ * The pass uses only tones already present in the lit assembly. No added
+ * palette entries, silhouette cells, eyes or damage marks. */
+const BOSS_SURFACE = {
+  lich: 'cloth', dragon: 'scale', knight: 'plate', titan: 'plate',
+  colossus: 'plate', hydra: 'scale', wraith: 'cloth', behemoth: 'fur',
+  golem: 'stone', ent: 'bark', necromancer: 'cloth', automaton: 'plate',
+  demon: 'muscle', wyrm: 'scale', interpreter: 'scale', interviewer: 'plate',
+};
+function materialPlanes(grid, key) {
+  const paid = new Set(grid.join(''));
+  const ramps = { B: ['D','d','B','L','H'], g: ['n','n','g','G','G'],
+    b: ['c','c','b','C','C'], t: ['s','s','t','T','T'], j: ['j','j','j','J','J'] };
+  const families = { B: 'BLHdD', g: 'gGn', b: 'bCc', t: 'tTs', j: 'jJ' };
+  const surface = BOSS_SURFACE[key] || 'muscle';
+  return grid.map((row, y) => [...row].map((ch, x) => {
+    const tones = ramps[ch]; if (!tones) return ch;
+    const same = c => c && families[ch].includes(c);
+    let l = x, r = x, top = y, bottom = y;
+    while (l > 0 && same(row[l - 1])) l--;
+    while (r + 1 < row.length && same(row[r + 1])) r++;
+    while (top > 0 && same(grid[top - 1][x])) top--;
+    while (bottom + 1 < grid.length && same(grid[bottom + 1][x])) bottom++;
+    const width = r - l + 1, height = bottom - top + 1;
+    if (width < 5 || height < 3) return ch;
+    const u = (x - l) / width, v = (y - top) / height;
+    let step = u < .3 && v < .63 ? 3 : u > .74 || v > .85 ? 1 : 2;
+    if (u > .86 && v > .65) step = 0;
+    if (ch === 'g' || ch === 'B' && (surface === 'plate' || surface === 'stone')) {
+      step = u < .14 || v < .14 ? 3 : u > .72 || v > .82 ? 1 : 2;
+    } else if (ch === 't') {
+      const fold = Math.floor((x - l) * 6 / width);
+      step = fold === 1 || fold === 4 ? 3 : fold === 2 || fold === 5 ? 1 : 2;
+    } else if (ch === 'j' || ch === 'B' && surface === 'bark') {
+      step = (x + Math.floor(y / 7)) % 8 < 2 ? 1 : u < .42 ? 3 : 2;
+    } else if (ch === 'B' && surface === 'scale' && width > 10 && y % 5 === 2 && (x + (y >> 2) * 2) % 7 < 3) step = 1;
+    else if (ch === 'B' && surface === 'fur' && v > .55 && y % 4 === 0 && (x + y) % 7 < 2) step = 1;
+    const tone = tones[step];
+    return paid.has(tone) ? tone : ch;
+  }).join(''));
 }
 
 /* ---------------- damage as art ----------------
@@ -1194,19 +1276,19 @@ const LICH_BODY = [
   'oCZooCZCoC',
   'oCCCCCCCCC',
   'ozZzZzZzZz',
-  'obbbbbbbbb',
-  'obzzzzzzzz',
-  'occcccbbbbb',
-  'obkkkkbbbbb',
-  'obkkukbbbbb',
-  'obkkkkbbbbb',
-  'obbkkbbbbbb',
-  'obbbbbbbbbb',
+  'obCCbbbbbb',
+  'oCbbbbbbbbb',
+  'oCbbbcccbbb',
+  'oCbbkkkkbbb',
+  'obbkkuukbbk',
   'occbbbbbbkk',
-  'occzzzzzzkk',
-  'obCbCbCbCb',
-  'occcccccccc',
-  'ooooooooo',
+  'ocCbbbbbbbk',
+  '..oCbbbbbbk',
+  '...obbbkkbb',
+  '...obCbCbCb',
+  '....obbbbbb',
+  '.....occccc',
+  '......ooooo',
   'obCb',
   'obzb',
   'obCbb',
@@ -1321,126 +1403,153 @@ const LICH_ORB = [
  * which is the entire difference between a dragon and a dragon-shaped statue.
  */
 const DRAGON_BODY = [
-  '.............ooooooo........',
-  '..........oooBBBBBBBooo.....',
-  '........ooBBnGGGGGnBBBBoo...',
-  '.......oBBBnGGGGGGGGGnBBBo..',
-  '......oBBBnGGnBBBBBnGGnBBBo.',
-  '.....oBBBBnGnBBBBBBBnGnBBBBo',
-  '....oBBBBBBBBBBBBBBBBBBBBBBo',
-  '...oBBBBBBBBBBBBBBBBBBBBBBBo',
-  '..oBBBBBBBBBBBBBBBBBBBBBBBBo',
-  '..oBBBBBBBBBBBBBBBBBBBBBBBBo',
-  '.oBBBBBBBBBBBBBBBBBBBBBBBBBo',
-  '.oaaBBBBBBBBBBBBBBBBBBBBBBBo',
-  '.oaaaBBBBBBBBBBBBBBBBBBBBBBo',
-  '.oaaaaBBBBBBBBBBBBBBBBBBBBo.',
-  '.oaaaaaBBBBBBBBBBBBBBBBBBBo.',
-  '.oaaaaaaBBBBBBBBBBBBBBBBBBo.',
-  '.oaaaaaaaBBBBBBBBBBBBBBBBBo.',
-  '.oaaaaaaaaBBBBBBBBBBBBBBBBo.',
-  '..oaaaaaaaBBBBBBBBBBBBBBBBo.',
-  '..ooaaaaaaBBBBBBBBBBBBBBBo..',
-  '....oaaaaaBBBBBBBBBBBBBBo...',
-  '....oBBBBBBo.oBBBBBBBBBBo...',
-  '....oBBBBBo...oBBBBBBBBBo...',
-  '....oBBBBo.....oBBBBBBBBo...',
-  '....oBBBo......oBBBBBBBBo...',
-  '...oBBBBo......oBBBBBBBBBo..',
-  '...oBBBBo......oBBBBBBBBBo..',
-  '..oBBBBBo......oBBBBBBBBBBo.',
-  '..oBBBBo........oBBBBBBBBBo.',
-  '.oBBBBBo........oBBBBBBBBBBo',
-  '.oBBBBBo........oBBBBBBBBBBo',
-  'oGnGnGo..........oBBBBBBBBBo',
-  'oGGGGGo..........oBCBCBCBBBo',
-  'oooooo............oCCCCCCCoo',
-  '...................oooooooo.',
+  '.........................oooo...............',
+  '....................BooooBBBBoo.............',
+  '................BooooBBBBBBBBBBooo..........',
+  '.............BoooBBBBBLLLLBBBBBBBBoo........',
+  '............ooBBBLLLLLBBBBBBBBBBBBBBoo......',
+  '..........ooBBBLLBBBBBBBBBBBBBBBBBBBBBo.....',
+  '........BoBBBLLBBBBBBBBBBBBBBBBBBBBBBBo.....',
+  '.......ooBBBLBBBBBBBBBBBBBBBooooBBBBBBBo....',
+  '......oBBBBBBBBBBBBBBBBBBBooBBBBooooBBBo....',
+  '......oBBBBBBBBBBBBBBBBBBoBBBBBBBBBBoBBBo...',
+  '.....BoBBBooBBBBBBBBBBBBoBBBBLLLBBBBoBBBo...',
+  '.....oBBooaaoBBBBBBBBBooBBBLLBBBLBBBBoBBBo..',
+  '.....oBoaaaaaooBBBBBBoBBBBBBBBBBBLLBBBoBBo..',
+  '.....oBoaaaaaaaoBBBBoBBBBBBBBBBBBBBLBBoBBBo.',
+  '....BoBBoaaaaaaaoBBBoBBBBBBBBBBBBBBLBBBoBBo.',
+  '....oBBBoaaaoaaaaooBoBBBBBBBBBBBBBBLBBBoBBo.',
+  '....oBBBoadBooddddaooBBBBBBBBBBBBBBLBBBoBBo.',
+  '....oooBBoaoBBooaaaaooBBBBBBBBBBBBBLBBBoBBo.',
+  '....oddoBoBoBBBBoaaaaoBBdBBBBBBBBBBBBBoBBo..',
+  '....odddoBoBBBBodddaaoBBBdBBBBBBBBBBBBoBBo..',
+  '....oddddBoBBBBoaaaaaoBBBBdBBBBBBBBBBBoBBo..',
+  '...odddddoBBBBoaaaaaaaooBBBddBBBBBBBBBoBBo..',
+  '...oddddBoBBBBoddddddaaooBBBBddBBBBBBoBB.o..',
+  '...odddBoBBBBoooaaaaaaaoBooBBBBBBBBooBBoo...',
+  '...oddooBBBBBo..ooaaaBoooBBoBBBBBBoBB.o.....',
+  '..doBoBBBBBBo.....ooooBBBBoBBBBBBoB.oo......',
+  '..oooBBBBBB.o.......ooBBBBoBBBBBBooo........',
+  '.doBBBBBBBBo..........ooooBBBBBBBBo.........',
+  '.ooooooooooo............oBBBBBBBBBo.........',
+  'doCooCooCoo............BoBBBBBBBBBoo........',
+  'odoCooCooCo............oBBBBBBBBBBBBoooo....',
+  'odooooo.oo..............oBBBBoBBBBoBBBBooo..',
+  '.ooo..o..o..............oBBBCoooBCoooBCooo..',
+  '.........................oBBoCCCooCCCooCCCo.',
+  '..........................ooooooooooooooooo.',
 ];
 
 /* Skull and neck. The neck is authored as a curve so the lash on frame 3 is a
  * skew of something already bent, not a straight rod pivoting. */
 const DRAGON_NECK = [
-  '...............oo......oo.......',
-  '..............oCo.....oCo.......',
-  '.............oCCo....oCCo.......',
-  '........ooooooCCooooooCCo.......',
-  '......ooBBBBBBBBBBBBBBCo........',
-  '....ooBBBBBBBBBBBBBBBBo.........',
-  '..ooBBBBBBBBBBBBBBBBBBo.........',
-  '.oBBBBBBBBBBBBBBBBBBBBo.........',
-  'oBBweBBBBBBweBBBBBBBBBBo........',
-  'oBweeBBBBBweeBBBBBBBBBBo........',
-  'oBBweBBBBBBweBBBBBBBBBBBo.......',
-  'oBBnGGnBBBBBBBBBBBBBBBBBBo......',
-  'oBBnGGnBBBBBBBBBBBBBBBBBBo......',
-  '.oCoCoCoCoBBBBBBBBBBBBBBo.......',
-  '..ooooooooBBBBBBBBBBBBBBo.......',
-  '.........oBBBBBBBBBBBBBBGo......',
-  '.........ooGGGGGGGGGGGGGGo......',
-  '..........oaanGGGGGGGGGGGo......',
-  '..........oaaaBBBBBBBBBBBGo.....',
-  '...........oaaaBBBBBBBBBBGo.....',
-  '...........oaaaaBBBBBBBBBGo.....',
-  '............oaaaBBBBBBBBBBGo....',
-  '............oaaaaBBBBBBBBBGo....',
-  '.............oaaaBBBBBBBBBGo....',
-  '.............oaaaaBBBBBBBBBGo...',
-  '..............oaaaBBBBBBBBBGo...',
-  '..............oaaaaBBBBBBBBBGo..',
-  '...............oaaaBBBBBBBBBGo..',
-  '...............oaaaaBBBBBBBBBGo.',
-  '................oaaaBBBBBBBBBGo.',
+  '.............................oo.............',
+  '...........................ooo..............',
+  '........................CooCCo..............',
+  '......................CooCCCo...............',
+  '.....................ooCCCCCo...............',
+  '.....................oCCCCCo.......Coo......',
+  '.............BooooooCoCCCC.o....ooooo.......',
+  '............ooBBBBBBoCCCCCo..CooCCCo........',
+  '...........oBBLLLLLLLoCCCo..CoCCCC.o........',
+  '.........ooBLLBBBBBBBBooBooCoCCCC.o.........',
+  '......BooBBLBBBBddddddBBoBCoCCCC.o..........',
+  '....BooBBBBBBBBddoooooBBBBoCCCC.o...........',
+  '..BooBBBBBBBBBBddwewBBBBBBoCCC.o............',
+  '.BoBkkBBBBBBBBBBBBBBBBBBBBBoCoo.............',
+  'BoBBBBBBBBBBBBBBBBBBBBBBBBBoBo..............',
+  'oBBBBBBBBBBBBBkkkkBBBBBBBBBBo...............',
+  '.okkkCCkkkCCkkBCCBBBBBBBBBBdo...............',
+  '...oooooooBBBBBBBBBBBBBBBBBdo...............',
+  '..........oooooooBBBBBBBBBd.o...............',
+  '................oaBBBBBBB.do................',
+  '................oaaaBBBBood.................',
+  '................oaddaBBo...d................',
+  '................oBaadddBo..d................',
+  '................oBaaaaBBo...d...............',
+  '................oBaaaaaBBo..dd..............',
+  '.................oaadddBBo....dd............',
+  '.................oBaaaadddoo....dddd........',
+  '..................oBaaaaaBBBooo.....dddd....',
+  '..................oBBaaaaaaaBBBoooo.........',
+  '...................oBBaadddaaaaBBBBoo.......',
+  '....................ooBaaaaddddaaaBBBoo.....',
+  '......................ooBaaaaaaaaaaBBBBoo...',
+  '........................ooBaaaaaaaaaaBBBBoo.',
+  '..........................ooBaaaaaaaaaBBBB.o',
+  '............................ooooooooooooooo.',
 ];
 
 /* The lower jaw is its own layer. On the attack it drops four pixels and the
  * throat behind it lights. */
 const DRAGON_JAW = [
-  'oooooooooo.....',
-  'oCoCoCoCoBo....',
-  'oBBBBBBBBBo....',
-  '.oBBBBBBBBo....',
-  '..oooooooo.....',
+  '.oooooooooooooooooo...',
+  '.oCCCCCCCCCCCCCCCBBo..',
+  '..oBBBBBBBBBBBBBBBBo..',
+  '..ooBBBBBBBBBBBBBBB.o.',
+  '....odddddddddddB.oo..',
+  '......oooooooooooo....',
+  '......................',
 ];
 
 const DRAGON_JAW_OPEN = [
-  'okkkkkkkkkko...',
-  'ouukkkkkkkkBo..',
-  'oUUuukkkkkkBo..',
-  'oCoCoCoCoCoBo..',
-  'oBBBBBBBBBBBo..',
-  '.oBBBBBBBBBBo..',
-  '..ooooooooooo..',
+  'ookkkkkkkkkkkkkkoo....',
+  'oBBkkkkkkkkkkkkkkBo...',
+  '.oBkkkkkkkkkkkkkkkBo..',
+  '.oBkkkkkkkkkkCCCCBBBo.',
+  '.oBBkkkCCCCCCBBBBBBBBo',
+  '..oBCCCBBBBBBBBBBBBBo.',
+  '..ooBBBBBBBddddddBB.o.',
+  '....oodddddBB.oooooo..',
+  '......oooooooo........',
 ];
 
 /* Membrane wing: four fingers, a clawed thumb at the leading edge, and a
  * membrane that is one tone darker than the body so it reads as translucent. */
 const DRAGON_WING = [
-  '..............................ono.....',
-  '.........................ooooonGGo....',
-  '.....................oooodDDDDnGo.....',
-  '..................ooodDDDDDDDDdo......',
-  '...............oooDDDDDDDDDDDdo.......',
-  '.............ooDDDDDDDDDDDDDdo........',
-  '...........ooDDDDDDDDDDDDDDBo.........',
-  '.........ooDDDDDDDDDDDDDDDBo..........',
-  '.......ooDDDDDDDDDDDDDDDDBo...........',
-  '.....ooDDDDDDGoDDDDDDDDDBo............',
-  '....oDDDDDDDGo.oDDDDDDDGo.............',
-  '...oDDDDDDDGo...oDDDDDGBo.............',
-  '..oDDDDDDDGo....oDDDDDGo..............',
-  '..oDDDDDDGo.....oDDDDGo...............',
-  '.oDDDDDDGo......oDDDDGo...............',
-  '.oDDDDDDGo......oDDDGo................',
-  'oDDDDDDGo.......oDDDGo................',
-  'oDDDDDGo........oDDGo.................',
-  'oDDDDGo.........oDDGo.................',
-  'oDDDGo..........oDGo..................',
-  'oDDGo...........oDGo..................',
-  'oDGoo...........oGo...................',
-  'oGdo............oGo...................',
-  'oodo.............oo...................',
-  '.oo...................................',
+  '..............................................ooo.........',
+  '...........................................oooDnnnnno.....',
+  '........................................DooDDnnDDDDDnnnn..',
+  '.....................................DoooDDnnDGGDDDDD.o...',
+  '...................................oooDDnnnDGGDDDDDDoo....',
+  '................................DooDDDnnDBGGBDDDDD.o......',
+  '.............................DoooDDDnnDGGGBBBDDDD.o.......',
+  '.................Co........DooDDDDnnDGGBBBBBDDDDoo........',
+  '................Coo......DooDDDnnnBGGBBBBBBDDDDo..........',
+  '...............CoCo.....ooDDDnnDGGGBBBBBBBDDDDo...........',
+  '...............oCCCo..ooDDDnnDGGBBBBBBBBBBDDDo............',
+  '...............oCCCoDoDDnnnBGGBBBBBBBBBBBDDD.o............',
+  '...............oCCCooDnnDBGGBBBBBBBBBBBBDDDDo.............',
+  '................oCConnDGGGBBBBBBBBBBBBBBDDDo..............',
+  '................oConBGGBBBBBBBBBBBBBBBBDDDo...............',
+  '...............ooooGGBBBBBBBBBBBBBBBBBDDD.o...............',
+  '..............DnnnonnnnBBBBBBBBBBBBBBBDDDo................',
+  '.............DonndndBBBnnnnnBBBBBBBBBDDD.o................',
+  '.............onDnddnddBBBBBBnnnBBBBBDDDDo.................',
+  '............oDnGndddndddBBBBBBBnBBBBDDD.o.................',
+  '...........DonGdndddndddddBBBBBnBBBDDDDo..................',
+  '...........oDnGdnddddnddddddBBBBnBBDDD.o..................',
+  '..........oDnGdddnddddnddddddDBBBnDDDDo...................',
+  '.........oDDnGdddndddddnddddDDDDBnDDDDo...................',
+  '........DoDnGddddnddddddndddDDDDDDnDDo....................',
+  '........oDnGdddddnddddddnddDDooDDDDnDo....................',
+  '.......DoDnGdddddnddddddndDD.o.oooono.....................',
+  '.......oDnGddddddnddddddnDDDo......on.....................',
+  '.......oDGdddddddnddDDDDnDD.o.............................',
+  '......oDnGdddddddnDDDDDDDnDo..............................',
+  '......oDGdddddddnDDDDDDDDnDo..............................',
+  '.....DoGdddddddDnDDooDDDDno...............................',
+  '.....onGddddddDDnDo..ooDDno...............................',
+  '.....oGdddddddDnDo.....oon................................',
+  '....onGdddddddDn.o.......n................................',
+  '....oGdddddddDnDo.........................................',
+  '...DGddddDDDDDno..........................................',
+  '...oGDDDDDDDDDn...........................................',
+  '...GDDDDDDDDDno...........................................',
+  '..onDDD.ooooon............................................',
+  '..nooooo..................................................',
+  '..........................................................',
+  '..........................................................',
 ];
 
 /* Tail, tapering to a bladed fluke. Skewed per frame, so it trails. */
@@ -1771,88 +1880,100 @@ const COLOSSUS_MAUL = [
  * the animation down to one rigid grid and it stops being a hydra.
  */
 const HYDRA_BODY = [
-  '.................oooooo.................',
-  '..............ooooBBBBBoooo.............',
-  '...........oooBBBBBBBBBBBBBooo..........',
-  '.........ooBBBBBBBBBBBBBBBBBBBoo........',
-  '.......ooBBBBBBBBBBBBBBBBBBBBBBBoo......',
-  '......oBBBBBBBBBBBBBBBBBBBBBBBBBBBo.....',
-  '.....oBBBBBBBBBBBBBBBBBBBBBBBBBBBBBo....',
-  '....oBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBo...',
-  '...oBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBo..',
-  '..oBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBo.',
-  '..oBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBo.',
-  '.oBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBo',
-  '.oBBBBBBBBBBBBaaaaaaaaaaaaaBBBBBBBBBBBBo',
-  '.oBBBBBBBBBBaaaaaaaaaaaaaaaaaBBBBBBBBBBo',
-  '.oBBBBBBBBBaaaaaaaaaaaaaaaaaaaBBBBBBBBBo',
-  '.oBBBBBBBBaaaaaaaaaaaaaaaaaaaaaBBBBBBBBo',
-  '.oBBBBBBBaaaaaaaaaaaaaaaaaaaaaaaBBBBBBBo',
-  '..oBBBBBBaaaaaaaaaaaaaaaaaaaaaaaBBBBBBo.',
-  '..oBBBBBBBaaaaaaaaaaaaaaaaaaaaaBBBBBBBo.',
-  '...oBBBBBBBaaaaaaaaaaaaaaaaaaaBBBBBBBo..',
-  '....oBBBBBBBBaaaaaaaaaaaaaaaBBBBBBBBo...',
-  '.....oBBBBBBBBBBaaaaaaaaaBBBBBBBBBBo....',
-  '...oooBBBBBBBBBBBBBBBBBBBBBBBBBBBooo....',
-  '..oBBBoooBBBBBBBBBBBBBBBBBBBooooBBBoo...',
-  '..oBBBBBooooBBBBBBBBBBBBBoooBBBBBBBBBo..',
-  '..oCoCoCoooooooooooooooooooCoCoCoCoCoo..',
-  '...ooooo...................ooooooooo....',
+  '...........................oBBBBBBBBBBBBo...........................',
+  '........................oBBBBBBBBBBBBBBBBBBo........................',
+  '.....................oBBBBBBBBBBBBBBBBBBBBBBBBo.....................',
+  '..................oBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBo..................',
+  '................oBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBo................',
+  '..............oBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBo..............',
+  '............oBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBo............',
+  '..........oBBBBBBBBBBBBBBBBBBBAAAaaaaaBBBBBBBBBBBBBBBBBBBo..........',
+  '.........oBBBBBBBBBBBBBBBBBBBBddddddddBBBBBBBBBBBBBBBBBBBBo.........',
+  '........oBBBBBBBBBBBBBBBBBBBBBAAAaaaaaBBBBBBBBBBBBBBBBBBBBBo........',
+  '.......oBBBBBBBBBBBBBBBBBBBBBBAAAaaaaaBBBBBBBBBBBBBBBBBBBBBBo.......',
+  '......oBBBBdBBBBBBBBBBBBBBBBBBddddddddBBBBBBBBBBBBBBBBBBdBBBBo......',
+  '.....oBBBBdBBBBBBBBBBBBBBBBBBBAAAaaaaaBBBBBBBBBBBBBBBBBBBdBBBBo.....',
+  '.....oBBBBdBBBBBBBBBBBBBBBBBBBAAAaaaaaBBBBBBBBBBBBBBBBBBBdBBBBo.....',
+  '....oBBBBdBBBBBBBBBBBBBBBBBBBBddddddddBBBBBBBBBBBBBBBBBBBBdBBBBo....',
+  '....oBBBBdBBBBBBBBBBBBBBBBBBBBAAAaaaaaBBBBBBBBBBBBBBBBBBBBdBBBBo....',
+  '.....oBBBBdBBBBBBBBBBBBBBBBBBBAAAaaaaaBBBBBBBBBBBBBBBBBBBdBBBBo.....',
+  '......oBBBBdBBBBBBBBBBBBBBBBBBddddddddBBBBBBBBBBBBBBBBBBdBBBBo......',
+  '.......oBBBBdBBBBBBBBBBBBBBBBBAAAaaaaaBBBBBBBBBBBBBBBBBdBBBBo.......',
+  '........oBBBBdBBBBBBBBBBBBBBBBAAAaaaaaBBBBBBBBBBBBBBBBdBBBBo........',
+  '.........oBBBBdBBBBBBBBBBBBBBBddddddddBBBBBBBBBBBBBBBdBBBBo.........',
+  '.........oBBBBdBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBdBBBBo.........',
+  '........oBBBBdBBBBBBBBBBooooooooooooooooooooBBBBBBBBBBdBBBBo........',
+  '.......oBBBBBBBBBBBBBBBB....................BBBBBBBBBBBBBBBBo.......',
+  '......oBBBBBBBBBBBBBBBBB....................BBBBBBBBBBBBBBBBBo......',
+  '......oBCBBBCBBBCBBBCBBB....................CBBBCBBBCBBBCBBBCo......',
+  '.......ooooooooooooooooo....................ooooooooooooooooo.......',
 ];
 
 /* One neck. Drawn once, drawn three times, at three offsets and three phases. */
 const HYDRA_NECK = [
-  '..ooooooo..',
-  '.oBBBBBBBo.',
-  'oBBweBBBBBo',
-  'oBweeBBBBBo',
-  'oBBweBBBBBo',
-  'oBBBBBBBBBo',
-  'oBCoCoCoBBo',
-  '.ooooooBBBo',
-  '.....oBBBBo',
-  '.....oBBBBo',
-  '....oBBBBo.',
-  '....oBBBBo.',
-  '....oBBBo..',
-  '....oBBBo..',
-  '...oBBBBo..',
-  '...oBBBBo..',
-  '...oBBBBo..',
-  '...oBBBBo..',
-  '..oBBBBBo..',
-  '..oBBBBBo..',
-  '..oBBBBBo..',
-  '..oBBBBBBo.',
-  '..oBBBBBBo.',
-  '.oBBBBBBBo.',
+  '..........o....oo.......',
+  '.........oBo..oao.......',
+  '....ooooBBBBooBBBo......',
+  '...oBBBBwwBBBBBBBBo.....',
+  '..oBBBBweBBddBBBBBo.....',
+  '.oBBBBBBeBBdBBBBBBo.....',
+  '.oCCBCBBBoBBBddBBBo.....',
+  '.okkkkkkoBBBBddBBBo.....',
+  '..oCBCBBoBBBddBBBo......',
+  '...ooooooBBBddBBBo......',
+  '........oBBBddBBBo......',
+  '........oBBBddBBBo......',
+  '.........oBBddBBBo......',
+  '.........oBBddBBBo......',
+  '.........oBBddBBBo......',
+  '.........oBBddBBBo......',
+  '.........oBBddBBBBo.....',
+  '.........oBBddBBBBo.....',
+  '.........oBBddBBBBo.....',
+  '.........oBBddBBBBo.....',
+  '........oBBBddBBBBo.....',
+  '........oBBBadBBBBo.....',
+  '........oBBBaaBBBBo.....',
+  '........oBBBaaBBBBo.....',
+  '........oBBBBaBBBBBo....',
+  '........oBBBBaBBBBBo....',
+  '........oBBBBBBBBBBo....',
+  '........oBBBBBBBBBBo....',
+  '........oBBBBBBBBBBo....',
+  '........oBBBBBBBBBBo....',
 ];
 
 const HYDRA_NECK_BITE = [
-  'ooooooooo..',
-  'oBBBBBBBBo.',
-  'oBweBBBBBo.',
-  'oweeBBBBBo.',
-  'oBweBBBBBBo',
-  'oBBBBBBBBBo',
-  'oCoCoCoBBBo',
-  'okkkkkoBBBo',
-  'oCoCoCoBBBo',
-  '.ooooooBBBo',
-  '.....oBBBBo',
-  '.....oBBBBo',
-  '....oBBBBo.',
-  '....oBBBBo.',
-  '....oBBBo..',
-  '....oBBBo..',
-  '...oBBBBo..',
-  '...oBBBBo..',
-  '...oBBBBo..',
-  '..oBBBBBo..',
-  '..oBBBBBo..',
-  '..oBBBBBo..',
-  '..oBBBBBBo.',
-  '.oBBBBBBBo.',
+  '..........o....oo.......',
+  '.........oBo..oao.......',
+  '....ooooBBBBooBBBo......',
+  '...oBBBBwwBBBBBBBBo.....',
+  '..oBBBBweBBddBBBBBo.....',
+  '.oBBBBBBeBBdBBBBBBo.....',
+  '.oCCBCBBBoBBBddBBBo.....',
+  '.okkkkkkkkoBBddBBBo.....',
+  '.okkkkkkkkoBBddBBBo.....',
+  '..oCBCBCBoBBBddBBBo.....',
+  '........oBBBddBBBo......',
+  '........oBBBddBBBo......',
+  '.........oBBddBBBo......',
+  '.........oBBddBBBo......',
+  '.........oBBddBBBo......',
+  '.........oBBddBBBo......',
+  '.........oBBddBBBBo.....',
+  '.........oBBddBBBBo.....',
+  '.........oBBddBBBBo.....',
+  '.........oBBddBBBBo.....',
+  '........oBBBddBBBBo.....',
+  '........oBBBadBBBBo.....',
+  '........oBBBaaBBBBo.....',
+  '........oBBBaaBBBBo.....',
+  '........oBBBBaBBBBBo....',
+  '........oBBBBaBBBBBo....',
+  '........oBBBBBBBBBBo....',
+  '........oBBBBBBBBBBo....',
+  '........oBBBBBBBBBBo....',
+  '........oBBBBBBBBBBo....',
 ];
 
 /* ================================================================
@@ -1935,54 +2056,54 @@ const WRAITH_TAIL = [
  * that way.
  */
 const BEHEMOTH_BODY = [
-  '',
-  '',
-  'oaao',
-  'oaaao......oao',
-  'oaaaao....oaaao',
-  'oBBBBBoo.ooaaaao',
-  'oBBBBBBBoooBBBBBBo',
-  'ooBBBBBBBBBBBBBBBBoo',
-  'oBBBBBBBBBBBBBBBBBBBo',
-  'oBBBBBBBBBBBBBBBBBBBBo',
-  'oBBBBBBBBBBBBBBBBBBBBBo',
-  'oBBBBBBBBBBBBBBBBBBBBBBo',
-  'oBBBBaaaBBBBBBBBBBBBBBBBo',
-  'oBBBaaaaaBBBBBBBBBaaaBBBBo',
-  'oBBBaaaaaBBBBBBBBaaaaaBBBBo',
-  'oBBBBaaaBBBBBBBBBaaaaaBBBBB',
-  'oBBBBBBBBBBBBBBBBBaaaBBBBBB',
-  'oBBBBBBBBBBBBBBBBBBBBBBBBBB',
-  'oBBBBBBBBBBBBBBBBBBoooooooooo',
-  'oBBBBBBBBBBBBBBBoobbbbbbbbbb',
-  'oBBBBBBBBBBBBBBobbbbbbbbbbbb',
-  'oBBBBBBBBBBBBBobbbkkkbbbbbbb',
-  'oBBBBBBBBBBBBobbbbkrkbbbbbbb',
-  'oBBBBBBBBBBBobbbbbkkkbbbbbbb',
-  'oBBBBBBBBBBobbbbbbbbbbbbbbbb',
-  'oBBBBBBBBBoobbbbbbbbbbbbbbbb',
-  'oCoBBBBBBBoobbbbbbbbbbbbbbbb',
-  'oCCoBBBBBBoobbbbbbbbbbbbbbbb',
-  'oCCCoBBBBBoobbCoCoCoCoCoCoCo',
-  'oCCCCoooooooobokkkkkkkkkkkkk',
-  '.oCCCCCoooooobbCoCoCoCoCoCoC',
-  '..oCCCCCoobbbbbbbbbbbbbbbbbb',
-  '...ooooooobbbbbbbbbbbbbbbbbb',
-  'oBBBBoooooobbbbbbbbbbbbbbbbb',
-  'oBBBBBBBooobbbbbbbbbbbbbbbbb',
-  'oBBBBBBBBBoooooooooooooooooo',
-  'oBBBBBBBBBBBBBBBBBBBBBBBBBBB',
-  'oBBBBBBBBBBBBBBBBBBBBBBBBBBB',
-  'oBBBBBBBBBBBBBBBBBBBBBBBBBBB',
-  'oBBBBBBBBBBo....oBBBBBBBBBBBB',
-  'oBBBBBBBBBo.....oBBBBBBBBBBBB',
-  'oBBBBBBBBBo.....oBBBBBBBBBBBB',
-  'oBBBBBBBBBo.....oBBBBBBBBBBBB',
-  'oBBBBBBBBBo.....oBBBBBBBBBBBB',
-  'oggggggggo......ogggggggggggo',
-  'oBBBBBBBBo......oBBBBBBBBBBBo',
-  'oCoCoCoCo.......oCoCoCoCoCoCo',
-  'ooooooooo.......ooooooooooooo',
+  '...............ao............................aoo................',
+  '..............ooo...........................ooaoo...............',
+  '.............oaaoo.........................oaaaoBo..............',
+  '............oaaaoBoo......................aoaaaoBBo.............',
+  '...........aoaaaoBBBo..o..................oaaaaoBBBo............',
+  '..........BoaaaaaoBBBoaoo................aoaaaBoBBBBo.o.........',
+  '.........oooaaaaaoBBBBoao...............ooaaaaoBBBBBooo.........',
+  '........oBoaaaaaaoBBBaoaao............oooaaaaaoBBBBBaoao........',
+  '.......oBBoaaaaaaoBBBoaaaao.........ooBaoaaaaaoBBBBaoaao........',
+  '.......oBaoaaaaaooBBaoaaaaooo.....ooBBBooaaaaaoBBBBoaaaao.......',
+  '.......oBoaaaaooBBBBooooooooBoo.ooBBBBBBBooooaoBBBoaaaaao.......',
+  '......BoBoaBooBBBBBBBBBBBBBBBBBoBBBBBBBBBBBBBooBBaoaaaaaoo......',
+  '......oBoBooBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBaoaaaaaaao......',
+  '......oBooBBBBBBLLBBBBBBBBBBBBBBBBBBBBBBBBBBBLLLLLoooooooo......',
+  '......oBBBBBBBLLBBLLBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBLBBBBBBBo.....',
+  '......oBBBBBBLBBBBBBLLBBBBBBBBBBBBBBBBBBBBBBBBBBBBBLBBBBBBo.....',
+  '......oBBBBBLBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBLBBBBBo.....',
+  '.....BoBBBBBoBBBBBBBBBoooBBBBBBBBBBBBBBboooBBBBBBBBBBLBBBBo.....',
+  '.....oBBBBBboBBBBBBBBobbbooooBBBBBoooooobbboBBBBBBBBBBoBBBBo....',
+  '.....oBBBBBoCBBBBBBBobbbbbbbbooooobbbbbbbbboBBBBBBBBBBoooBBo....',
+  '.....oBBBBBoCBBooBBobbbbbbbbbbbbbbbbbbbbbbbboBBBBBBBBbobboBo....',
+  '.....oBBBBobCooBBobccbbbbbbbbbbbbbbbbbbbbccbboBooBBBBobCboBo....',
+  '.....oBBBBobCoBBBbobccccccbbbbbbbbbbbcccccbbbboBBooooobCboBo....',
+  '.....oBBooobCoBBbobbccccccccbbbbbbbcccccccbbbboBBBBBBobCboBBo...',
+  '.....oBBoBBoCoBBobbbckkkccccbbbbbbbcccckkkbbbbboBBBBBobCboBBo...',
+  '.....oBoBBBoCboBobbbbccckrkbbbbbbbbbkrkccbbbbboBBBBBobCboBBBo...',
+  '.....oBoBBBobCboBobbbbbbcccbbbbbbbbbcccccbbbbBoBBBBBobCboBB.o...',
+  '......BoBBBobCboBobbbbbbbbbbbbbbbbbbbbbbbbbbBoBBBBBBobCbooBo....',
+  '......oBBBBBobCbooobbbbbbboooooooooooobbbbbboBBBBLBobbCbooBo....',
+  '......oBBBBBobbCbboooobbbcoccccccccccobbbbboBBBBBBobbCbboBoo....',
+  '.....oBBLBBBBobCbbbbbbooboccccccccccccobbbooBBBBBbobbCbboBo.....',
+  '.....oBBLBBBBBobCbbbbbboboccckccccckccobbbooBBBBbobbCbboBBBo....',
+  '.....oBBLBBBBBBobCCbbbbococcckccccckccobbbooBBboobbCbbBoBBBo....',
+  '.....oBBLBBBBBBBobbCCbbooccccccccccccccobbooooobbbbCbLoBBBBo....',
+  '.....oBLBBBBBBBdBoooobboocccccccccccccboboobbbbbbCCbboLBBBBo....',
+  '....BoBLBBBBBBBdBBBBoooobocccccccccccbobbobbbbbCCbbboBLBBBBo....',
+  '....oBBLBBBBBBBdBBBBoobbbbookCkkkkkCkobbbBobbCCbbbbBoBLBBBBo....',
+  '....oBBLBBBBBBBdBBBoBobbbbbboccccccbobbbBoobbbbbbBooBBBLBBBo....',
+  '....oBBLBBBBBBBdBBBoBBoobbbbbooooooobbbBoBBobBooooBBBBBLBBBo....',
+  '....oBBLBBBBBBBdBBBoBBBBoobbbbbbbbbbbbBoBBBooooBdBBBBBBBBBBBo...',
+  '....oBBBLBBBBBBdBBBoBBBBBBoobbbbbbbbbBoBBBBBBoBBdBBBBBBBBBBBo...',
+  '....oBBBLBBBBBBdBBBoooooooooooooooooooBBBBBBBoBBdBBBBBBBBBBBo...',
+  '....oBBBLBBBBBBdBBBBodddddo....ooooooooooooooBBBdBBBBBBBBBBBo...',
+  '....oBBoBBBBoBBBBoBBoddddddo.........odddddBoBBoBBBBoBBBBoBBo...',
+  '....oBCoooBCoooBCoooodddddddo........odddddoBBCoooBCoooBCoooo...',
+  '....oBoCBoBoCBoBoCBoodddddddo.......dodddddoBBoCBoBoCBoBoCBoo...',
+  '....oCoCoBCoCoBCoCooddd.oooooo......odddddddoCoCoBCoCoBCoCoo....',
+  '....oooooooooooooooooooo............ooooooooooooooooooooooo.....',
 ];
 
 /* Tail, whipping behind the right haunch. */
@@ -2346,58 +2467,59 @@ const AUTOMATON_PISTON = [
  * body colour on purpose: fire that takes the creature's tint stops being fire.
  */
 const DEMON_BODY = [
-  '',
-  'oCo..............oCo',
-  'oCCo............oCCo',
-  '.oCCo..........oCCo',
-  '..oCCo........oCCo',
-  '...oCCoo....ooCCo',
-  '....oCCCooooCCCo',
-  '.....oCCCCCCCCCo.......rr',
-  '......oCCCCCCCo.....rrRRrr',
-  '.......ooooooo....rrRRRRRr',
-  '.................rrRRfffRr',
-  '................rrRRffffffr',
-  '...............rrRRfffffffff',
-  '..............rrRffffBBBBBBB',
-  '.............rrRffBBBBBBBBBB',
-  '............rrRfBBBBBBBBBBBB',
-  '...........rrRfBBBBBBBBBBBBB',
-  '..........rrRfBBoooBBBBBBBBB',
-  '..........rRfBBoRRRoBBBBBBBB',
-  '.........rRfBBBoRWRoBBBBBBBB',
-  '.........rRfBBBBoRoBBBBBBBBB',
-  '........orfBBBBBBBBBBBBBBBBB',
-  '........orfBBBBBBBBBBBBBBBBB',
-  '........orfBBBBBBBBoooooooooo',
-  '.........ofBBBBBBBoCkCkCkCkCk',
-  '.........oooBBBBBBokkkkkkkkkk',
-  '...........oBBBBBBoCkCkCkCkCk',
-  'ooo........oBBBBBBoooooooooooo',
-  'oBBoo.....ooBBBBBBBBBBBBBBBBBB',
-  'oBBBBoooooBBBBBBBBBBBBBBBBBBBB',
-  'oBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
-  'oBBBBBBBBBBBBBBoooooBBBBBBBBBB',
-  'oBBBBBBBBBBBBBoxxxxxoBBBBBBBBB',
-  'oBBBBBBBBBBBBoxXXXXXxoBBBBBBBB',
-  'oBBBBBBBBBBBBoxXXXXXxoBBBBBBBB',
-  'oBBBBBBBBBBBBoxxxxxxxoBBBBBBBB',
-  '.oBBBBBBBBBBBoxxxxxxoBBBBBBBBB',
-  '..oBBBBBBBBBBBoxxxxoBBBBBBBBBB',
-  '...oBBBBBBBBBBBoooooBBBBBBBBBB',
-  '....oBBBBBBBBBBBBBBBBBBBBBBBBB',
-  '.....oBBBBBBBBBBBBBBBBBBBBBBBB',
-  '......oBBBBBBBBo....oBBBBBBBBBB',
-  '......oBBBBBBBo......oBBBBBBBBB',
-  '.....oBBBBBBBo.......oBBBBBBBBB',
-  '.....oBBBBBBo........oBBBBBBBBB',
-  '....oBBBBBBBo.......oBBBBBBBBBB',
-  '....oBBBBBBBo.......oBBBBBBBBBB',
-  '...oBBBBBBBBo......oBBBBBBBBBBB',
-  '...oBBBBBBBo.......oBBBBBBBBBBo',
-  '...oCCCCCCo........oCCCCCCCCCCo',
-  '...oCCCCCo.........oCCCCCCCCCo',
-  '...ooooooo.........ooooooooooo',
+  '...................o............................oo..............',
+  '..................Coo........................CooCCo.............',
+  '..................oCCo.....................CooCCC.o.............',
+  '...................oCCoo.................CooCCCC.o..............',
+  '...................oCCCCo...............CoCCCCC.o...............',
+  '....................oCCCCoo............CoCCCCC.o................',
+  '.....................oCCCCCoo.Boooo...CoCCCCC.o.o...............',
+  '.....................oCCCCCCCooBBBBooCoCCCCC.o.ro...............',
+  '......................ooCCCCCoBBBBBBBoCCCCC.o..oo...............',
+  '........................oooCBoBLLLBBBBoCCC.o..roro..............',
+  '...................o......oooLLBBBLLBBoCCoo.Boorro..............',
+  '...................oo....oBBBBBBBBBBBBBdBoooororro..............',
+  '...................oro...oBddBBBBBBBdddBooBBBooooo....ro........',
+  '....................oro..oBBkkddBBBddkkBBoBBBBoBBBo.roo.........',
+  '....................o.ooooBBBBrkBBBkrdBBoBBBBBoooBBooro.........',
+  '...................ooooBBBoBBBBBBBBBBBBBoBBBBoBBBoorro..........',
+  '..................oBBBBBBBoBBBBkkkkBBBBBoBBBBoBBoorrro..........',
+  '.................BBoBBBBBBoBBBkCkkkCBBBBoLLBBoBBBBoooo..........',
+  '.................BoBoBBBBBBoBBBkkkkkBBBoLxxBoBBBBBBBoBo.........',
+  '................ooBBBoBBBBBBoBBBBkkBBLoxxxxBoBBBBBBBBBBo........',
+  '...............oBBBBBoBBLLLBBoBBBBBBLoxxxxxxBBBBBBBBBBBo........',
+  '..............oBBLBBBBoBxxxLLLoooBBooxxxxxxxBBBBBBBBBBBBo.......',
+  '.............oBBLBBBBBBxxxxxxxforooooxxxxxxxooBBBBBBBBBBBo......',
+  '............BoBBLBBBBBoxxxxxxxofrRrfoxxxxxxBBBooBBBBdBBBBo......',
+  '............oBBLBBBBBBoxxxxxxxofrrfoxxxxxxBBBB.oooBBBdBBBBo.....',
+  '...........oBBLBBBBBBoBBxxxxxxxoffBoxxxxxBBBBBo...oBBdBBBBo.....',
+  '..........oBBLBBBBBB.oBBBxxxxxxoffoxxxxxBBBBB.o...oBBBdBBBBo....',
+  '.........BoBBLBBBBB.ooBBBBBBxxxBoBoxxBBBdBBBBo....oBBBdBBBBo....',
+  '.........oBBLBBBBB.o..oBBBBdBBBBBoBBBBddBBBBBo....oBBBBdBBBo....',
+  '.........oBBLBBBB.o...oBBBBBddBBBBBBddBBBBBBo......oBBBdBBBo....',
+  '........oBBLBBBB.o.....oBBBBBBddddddBBBBdBBBo......oBBdBBB.o....',
+  '........oBBLBBB.o......oBBBdBBBBBBBBBBddBBBBo......oBBdBBBo.....',
+  '........oBBLBB.o........oBBBddBBBBBBddBBBBBo......BoBBdBBBo.....',
+  '.......oBBBLBBo.........ooBBBBddddddBBBBdBBo......oBBdBBBBo.....',
+  '.......oBBLBBBo........oBBodBBBBBBBBBBddBBo......BoBBdBBCoo.....',
+  '.......oBBLBBBo.......BoBBoBddBBBBBBddBBBoBoo....oBBBBCooCo.....',
+  '......BoBBLBBBo......BoBBBBoBBddddddBBBBoBBBBo..BoBBBooCCCo.....',
+  '......ooBBBBBBo......oBBBBBBoBBBBBBBBBBBoBBBBo..oBBBBBoCCCCo....',
+  '......ooBBBBBoo......oBBBBBBBoooooBBBBBoBBBBBBo..oBBCooooCCCo...',
+  '......ooBBoBBoo......oBBBBBBBBBo..oooooBBBBBBBBo..oooCoo.oCCo...',
+  '.....oCCoCooBoo.......oBBBBBBB.o.....oBBBBBBBBBBo..ooCCo..oCo...',
+  '.....oCCooCoooo.......oBBBBBBBo.......ooBBBBBBBBo...oCCo...oo...',
+  '....CoCoooCCooCo......oBBBBBB.o.........oBBBBBBBBo...oCCo...oo..',
+  '....oC.ooCC.ooCo.....BoBBBBB.o...........oBBBBBBo....oCCo...oo..',
+  '....oCo.oCCo.oCo.....oBBBBB.o...........oBBBBBBo......oCo....o..',
+  '...Co.o.oCCo..ooo...BoBBBB.o...........BoBBBBB.o.......oo.......',
+  '...ooo..oCo.....o...oBBBBBo............oBBBBB.o.........oo......',
+  '...o....o.o........BoBBBBBo...........BoBBBBBo...........o......',
+  '........oo.........oBBBBBBBo..........oBBBBBBBo.................',
+  '........o..........oBCoBBBBoo.........oBBCoBBBBoCo..............',
+  '...................oooCooBBBCooo......oBooCooBBCoCo.............',
+  '...................oooooooBoooCooo....ooooooooBoooCooo..........',
+  '...................oooooooooooooo.....ooooooooooooooo...........',
 ];
 
 /* Bat-frame wing, drawn once and flipped for the other side. The membrane is
@@ -3202,7 +3324,7 @@ const ART = {
   },
   dragon: {
     name: 'Dragon', wide: true, colour: '#3f9c5a', accent: '#d8c07a', anim: 'flap',
-    body: { grid: DRAGON_BODY, ox: 40, oy: 28, drift: { x: 0, y: 1, rate: 1, phase: 0.20 } }, wear: 0.04,
+    body: { grid: DRAGON_BODY, ox: 36, oy: 29, drift: { x: 0, y: 1, rate: 1, phase: 0.20 } }, wear: 0.04,
     motion: { bob: 3, sway: 1, phase: 0.30, period: 1500, telegraph: 520 },
     stage: { scale: 2, sink: 3, bias: -14 },  // -14, not -12: the sway is part of the box, below
     core: [55, 40],                                   // furnace behind the sternum
@@ -3211,19 +3333,19 @@ const ART = {
     parts: [
       // The wing is the slowest thing on the creature and the jaw the fastest.
       // One clock, four rates: nothing is ever at the top of its arc twice.
-      { name: 'wing', grid: DRAGON_WING, ox: 46, oy: 6, behind: true,
-        frames: [[0, 0], [1, 3], [-2, -3], [3, 6], [2, 2]],
-        drift: { x: 3, y: 2, rate: 0.5, phase: 0 },
-        skew: [0, 2, -3, 5, 0] },
+      { name: 'wing', grid: DRAGON_WING, ox: 32, oy: 2, behind: true,
+        frames: [[0, 0], [0, 2], [-2, 0], [2, 4], [1, 2]],
+        drift: { x: 1, y: 1, rate: 0.5, phase: 0 },
+        skew: [0, 1, -2, 3, 0] },
       { name: 'tail', grid: DRAGON_TAIL, ox: 62, oy: 48, behind: true,
         frames: [[0, 0], [0, 1], [2, -1], [-2, 2], [3, 1]],
         drift: { x: 2, y: 1, rate: 0.75, phase: 0.35 },
         skew: [0, 3, -4, 6, -2] },
-      { name: 'neck', grid: DRAGON_NECK, ox: 13, oy: 8,
+      { name: 'neck', grid: DRAGON_NECK, ox: 8, oy: 10,
         frames: [[0, 0], [0, 1], [-3, -2], [4, 3], [-4, 2]],
         drift: { x: 1, y: 1, rate: 1, phase: 0.15 },
         skew: [0, 1, -3, 5, -2] },
-      { name: 'jaw', grid: DRAGON_JAW, ox: 13, oy: 21,
+      { name: 'jaw', grid: DRAGON_JAW, ox: 9, oy: 26,
         frames: [[0, 0], [0, 1], [-3, -1], [4, 6], [-4, 3]],
         drift: { x: 0, y: 1, rate: 1.5, phase: 0.5 },
         alt: { 3: DRAGON_JAW_OPEN } },
@@ -3276,31 +3398,16 @@ const ART = {
         drift: { x: 2, y: 2, rate: 0.5, phase: 0.25 } },
     ],
   },
-  /* THE ONE RIG THAT DOES NOT USE THE BOX IT ASKS FOR. `wide: true` declares
-   * 96 columns; the art paints columns 21..79 — 59 of 96, 61% — over all six
-   * stages, five frames and six beats, against 89-100% for every other rig in
-   * this table. Density 19.7%, the lowest in the roster. On stage at blit 2
-   * that is 118 logical columns where a 64-box boss gets 104-128 and a 24x24
-   * mob gets 96, so the widest DECLARED creature in the game is drawn barely
-   * wider than an ordinary monster. Its map form paints 30 of 72 columns.
-   *
-   * PRE-EXISTING: the body grid, its ox/oy and every part offset are unchanged
-   * since 17cccbf — only `stage` moved with the raster. It is recorded here
-   * rather than fixed because neither fix is small. Re-authoring to 96 means
-   * drawing the two outer heads somewhere they currently have nowhere to go.
-   * Dropping to `wide: false` means shifting the body ox 28, every part ox,
-   * both faults and the core left by 21 so the art still lands inside a 64 box
-   * — a one-line flag with a dozen-line tail, and a silhouette change to a
-   * named boss either way. scripts/verify/stage.mjs §5 prints the fill
-   * fraction for every rig and names this one on every run, so whichever way it
-   * goes, it goes deliberately. */
+  /* The hydra uses its wide box for three separated heads, a low ribbed
+   * thorax and two planted haunches. The growing fourth neck has its own gap.
+   * Source dimensions and stage foot anchor remain the shared wide contract. */
   hydra: {
     name: 'Hydra', wide: true, colour: '#4fb783', accent: '#d8e87a', anim: 'coil',
-    body: { grid: HYDRA_BODY, ox: 28, oy: 35, drift: { x: 0, y: 1, rate: 1, phase: 0.4 } }, wear: 0.04,
+    body: { grid: HYDRA_BODY, ox: 14, oy: 35, drift: { x: 0, y: 1, rate: 1, phase: 0.4 } }, wear: 0.04,
     motion: { bob: 2, sway: 2, phase: 0.20, period: 1700, telegraph: 480 },
-    stage: { scale: 2, sink: 3, bias: 0 },
+    stage: { scale: 2, sink: 3, bias: -20 },
     core: [48, 46],
-    faults: [[36, 44, 12], [60, 44, 12]],
+    faults: [[27, 45, 12], [67, 45, 12]],
     /* The only creature here that GAINS mass where everything else loses it —
      * so `shorn` is where the head comes out rather than where a limb comes
      * off; see partsFor. Everything else in
@@ -3308,26 +3415,26 @@ const ART = {
      * fail to skip, I grow another head", and a boss whose art contradicts its
      * own opening line is worse than one with no art at all. */
     grow: [
-      { name: 'neckNew', grid: HYDRA_NECK, ox: 62, oy: 22, flip: true, behind: true,
+      { name: 'neckNew', grid: HYDRA_NECK, ox: 18, oy: 13, behind: true,
         frames: [[0, 0], [-1, 2], [3, -2], [6, 3], [4, 1]],
         drift: { x: 2, y: 2, rate: 1.5, phase: 0.85 },
-        skew: [3, 4, 6, 9, 5], alt: { 3: HYDRA_NECK_BITE } },
+        skew: [1, 2, 2, 3, 1], alt: { 3: HYDRA_NECK_BITE } },
     ],
     parts: [
       // Three heads on three rates and three phases. Synchronise them and the
       // creature stops being a hydra and becomes a hat rack.
-      { name: 'neckL', grid: HYDRA_NECK, ox: 32, oy: 18, behind: true,
+      { name: 'neckL', grid: HYDRA_NECK, ox: 5, oy: 17, behind: true,
         frames: [[0, 0], [1, 1], [-2, -2], [-4, 3], [-3, 2]],
         drift: { x: 2, y: 2, rate: 0.75, phase: 0 },
-        skew: [-2, -3, -5, -8, -4], alt: { 3: HYDRA_NECK_BITE } },
-      { name: 'neckC', grid: HYDRA_NECK, ox: 43, oy: 13,
+        skew: [-1, -2, -2, -3, -1], alt: { 3: HYDRA_NECK_BITE } },
+      { name: 'neckC', grid: HYDRA_NECK, ox: 34, oy: 10,
         frames: [[0, 0], [-1, 1], [1, -3], [2, 4], [0, 2]],
         drift: { x: 1, y: 2, rate: 1, phase: 0.33 },
         skew: [0, 1, -2, 3, -1], alt: { 3: HYDRA_NECK_BITE } },
-      { name: 'neckR', grid: HYDRA_NECK, ox: 53, oy: 18, flip: true, behind: true,
+      { name: 'neckR', grid: HYDRA_NECK, ox: 61, oy: 17, flip: true, behind: true,
         frames: [[0, 0], [-1, 2], [2, -2], [5, 3], [3, 1]],
         drift: { x: 2, y: 2, rate: 1.25, phase: 0.66 },
-        skew: [2, 3, 5, 8, 4], alt: { 3: HYDRA_NECK_BITE } },
+        skew: [1, 2, 2, 3, 1], alt: { 3: HYDRA_NECK_BITE } },
     ],
   },
   wraith: {
@@ -3349,7 +3456,7 @@ const ART = {
   },
   behemoth: {
     name: 'Behemoth', wide: false, colour: '#c4553f', accent: '#f0a86a', anim: 'heavy',
-    body: { half: BEHEMOTH_BODY, oy: 14, drift: { x: 0, y: 1, rate: 1, phase: 0.15 } }, wear: 0.08,
+    body: { grid: BEHEMOTH_BODY, ox: 0, oy: 14, drift: { x: 0, y: 1, rate: 1, phase: 0.15 } }, wear: 0.08,
     motion: { bob: 2, sway: 1, phase: 0.60, period: 2000, telegraph: 600 },
     stage: { scale: 2, sink: 10, bias: -9 },
     core: [32, 30],
@@ -3435,7 +3542,7 @@ const ART = {
   },
   demon: {
     name: 'Demon', wide: false, colour: '#c43f4f', accent: '#ff9d4a', anim: 'flap',
-    body: { half: DEMON_BODY, oy: 11, drift: { x: 0, y: 1, rate: 1, phase: 0.35 } }, wear: 0.05,
+    body: { grid: DEMON_BODY, ox: 0, oy: 11, drift: { x: 0, y: 1, rate: 1, phase: 0.35 } }, wear: 0.05,
     motion: { bob: 2, sway: 1, phase: 0.15, period: 1500, telegraph: 320 },
     stage: { scale: 2, sink: 10, bias: -9 },
     core: [32, 33],
@@ -4293,6 +4400,35 @@ function partsFor(art, phase) {
   return art.grow ? kept.concat(art.grow) : kept;
 }
 
+/* A hydra's heads lash independently, but their roots remain attached to the
+ * thorax. Build the short muscular bridge behind the body from the actual
+ * posed neck root; a fixed neck offset detached on the attack extreme. */
+function hydraRootBridge(dst, neck, ox, oy, chestX, chestY) {
+  let y = neck.length - 1;
+  while (y >= 0 && !/[^. ]/.test(neck[y])) y--;
+  if (y < 0) return;
+  let first = neck[y].search(/[^. ]/), last = neck[y].length - 1;
+  while (last > first && (neck[y][last] === '.' || neck[y][last] === ' ')) last--;
+  const x0 = ox + (first + last) / 2, y0 = oy + y - 1;
+  const mask = new Set(), w = dst[0].length, h = dst.length;
+  const length = Math.max(1, Math.ceil(Math.hypot(chestX - x0, chestY - y0)));
+  for (let i = 0; i <= length; i++) {
+    const t = i / length, cx = Math.round(x0 + (chestX - x0) * t);
+    const cy = Math.round(y0 + (chestY - y0) * t), radius = 3 + Math.floor(t * 2);
+    for (let dy = -radius; dy <= radius; dy++) for (let dx = -radius; dx <= radius; dx++) {
+      if (dx * dx + dy * dy > radius * radius) continue;
+      const x = cx + dx, y = cy + dy;
+      if (x >= 0 && x < w && y >= 0 && y < h) mask.add(y * w + x);
+    }
+  }
+  const rows = dst.map(r => r.split(''));
+  for (const at of mask) {
+    const y = Math.floor(at / w), x = at % w;
+    rows[y][x] = mask.has(at - 1) && mask.has(at + 1) && mask.has(at - w) && mask.has(at + w) ? 'B' : 'o';
+  }
+  for (let y = 0; y < h; y++) dst[y] = rows[y].join('');
+}
+
 function assemble(key, frame, beat, phase = 0) {
   const art = ART[key];
   const box = boxOf(art);
@@ -4302,6 +4438,7 @@ function assemble(key, frame, beat, phase = 0) {
   let body = art.body.half
     ? mirror(halfRect(art.body.half, half), half)
     : rect(art.body.grid);
+  if (art.wear) body = patina(body, `${key}:body`, art.wear + phase * 0.012, 'd');
   body = (POSES[art.anim] || POSES.heavy)(body, frame);
   /* The body gets a beat too, one pixel of it, so the parts are not drifting
    * against something nailed down. It is the smallest amount of motion that
@@ -4309,6 +4446,11 @@ function assemble(key, frame, beat, phase = 0) {
   const bd = driftAt(art.body.drift, beat);
 
   const parts = partsFor(art, phase);
+  if (key === 'hydra') for (const p of parts) {
+    if (!p.name.startsWith('neck')) continue;
+    const [ox, oy] = partOffset(p, frame, beat);
+    hydraRootBridge(canvasGrid, partGrid(p, frame, beat), ox, oy, 48 + bd[0], 49 + bd[1]);
+  }
   for (const p of parts) {
     if (!p.behind) continue;
     const [ox, oy] = partOffset(p, frame, beat);
@@ -4485,7 +4627,7 @@ function assembleMap(key, frame, phase, rawKey, element) {
    * that refuses the contre-jour must refuse it in BOTH forms or the marker and
    * the fight disagree about what the creature is made of — and the marker is
    * the one that was still spending a palette slot on it. */
-  const lit = applyRim(heavyOutline(box));
+  const lit = materialPlanes(applyRim(heavyOutline(box)), key);
   return (!element || wantsRim(ELEMENT_STUB[element])) ? rimPass(lit) : lit;
 }
 
@@ -4509,8 +4651,9 @@ export function bossMapSprite(spriteKey, colour, frame = 0, opts = {}) {
   if (hit) return hit;
   const mbox = mapBoxOf(art);
   const { canvas, ctx } = offscreen(mbox.w, mbox.h);
-  drawGrid(ctx, assembleMap(key, f, ph, spriteKey, el),
-    bossPalette(base, art.accent, lightPhase(ph), el));
+  const grid = assembleMap(key, f, ph, spriteKey, el);
+  drawGrid(ctx, grid, boundedBossPalette(grid,
+    bossPalette(base, art.accent, lightPhase(ph), el)));
   return cachePut(cacheKey, canvas);
 }
 
@@ -4635,7 +4778,7 @@ export function bossSprite(spriteKey, colour, frame = 0, opts = {}) {
   if (hit) return hit;
 
   let grid = assemble(key, f, beat, ph);
-  if (art.wear) grid = patina(grid, `${key}:${base}:${f}`, art.wear + ph * 0.03, 'd');
+
   /* Damage before shading: applyRim derives light from the silhouette, and a
    * fissure opened after the fact would be lit as if the plate were still shut.
    *
@@ -4666,12 +4809,13 @@ export function bossSprite(spriteKey, colour, frame = 0, opts = {}) {
    * already asked for. 'Q' is written inside the body, never on the boundary,
    * so no silhouette moves; what changes is that four VOID and three BRUTE
    * archetypes each give a palette slot back. */
-  grid = applyRim(grid);
+  grid = materialPlanes(applyRim(grid), key);
   if (!el || wantsRim(ELEMENT_STUB[el])) grid = rimPass(grid);
 
   const box = boxOf(art);
   const { canvas, ctx } = offscreen(box.w, box.h);
-  drawGrid(ctx, grid, bossPalette(base, art.accent, lightPhase(ph), el));
+  drawGrid(ctx, grid, boundedBossPalette(grid,
+    bossPalette(base, art.accent, lightPhase(ph), el)));
   return cachePut(cacheKey, canvas);
 }
 

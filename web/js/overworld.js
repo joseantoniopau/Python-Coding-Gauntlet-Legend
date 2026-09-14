@@ -599,6 +599,7 @@ export class Overworld {
     this.region = null;
     this.scene = null;
     this.markers = [];
+    this._buildingSprites = new Map();
     this.hero = sprites.heroSprites({});
     // Villagers are drawn from the same rig with a different palette, because a
     // world where every NPC is your own sprite is genuinely confusing to play.
@@ -638,6 +639,9 @@ export class Overworld {
     this._skyAsked = null;
     this.onEnter = null;
     this.onMove = null;
+    this.onEscortCaption = null;
+    this.escort = null;
+    this._escortCaptions = new Set();
     this.solvedNodes = new Set();
     this.running = false;
     this.scale = 3;
@@ -811,6 +815,8 @@ export class Overworld {
 
   load(region, tier = 2, spawn) {
     this.region = region;
+    this.escort = null;
+    this._escortCaptions.clear();
     this.tier = tier;
     const grid = buildGrid(region);
     this.markers = placeMarkers(region, grid, tier);
@@ -867,8 +873,13 @@ export class Overworld {
   resize() {
     const dpr = window.devicePixelRatio || 1;
     const rect = this.canvas.parentElement.getBoundingClientRect();
-    const w = Math.max(480, Math.floor(rect.width));
-    const h = Math.max(320, Math.floor(rect.height));
+    // A hidden screen has no viewport yet. Preserve the last useful plate;
+    // show('world') calls resize again after the container is laid out.
+    if (!(rect.width > 0) || !(rect.height > 0)) return;
+    // The camera and pointer conversion use this CSS-sized viewport. A 480px
+    // floor made a 390px phone crop the map and centre its hero off-screen.
+    const w = Math.max(1, Math.floor(rect.width));
+    const h = Math.max(1, Math.floor(rect.height));
     this.canvas.width = w * dpr;
     this.canvas.height = h * dpr;
     this.canvas.style.width = w + 'px';
@@ -1127,6 +1138,7 @@ export class Overworld {
   }
 
   checkTile() {
+    this._offerEscortCaption();
     const m = this.markers.find(mk => mk.x === this.player.x && mk.y === this.player.y);
     if (!m) return;
     if (m.kind === 'encounter' || m.kind === 'elite') {
@@ -1138,6 +1150,7 @@ export class Overworld {
   }
 
   interact() {
+    this._offerEscortCaption();
     const p = this.player;
     const dirs = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0],
                    side: [1, 0] };
@@ -1152,6 +1165,28 @@ export class Overworld {
         return;
       }
     }
+  }
+
+  /* Geography guidance is separate from the pet follower. The server chooses
+   * whether a person is walking here; this only notices the current doorstep
+   * or exit. A shown caption is remembered for this visit, never as a save or
+   * tutorial acknowledgement. Returning false lets a busy host try later. */
+  setEscort(row) {
+    this.escort = row?.walking === true ? row : null;
+    this._offerEscortCaption();
+  }
+
+  _offerEscortCaption() {
+    const row = this.escort;
+    if (!row || !this.onEscortCaption || this.stateSource?.()?.run_open !== false) return;
+    const p = this.player;
+    // Buildings are solid 2x2 footprints today. Their actual interactable is
+    // the NPC on the south doorstep, not an invented interior door tile.
+    const marker = this.markers.find(m =>
+      (m.kind === 'building' && row.with_them?.building_captions && m.x === p.x && m.y + 2 === p.y) ||
+      (m.kind === 'exit' && row.with_them?.route_captions && m.x === p.x && m.y === p.y));
+    if (!marker || this._escortCaptions.has(marker.id)) return;
+    if (this.onEscortCaption(row, marker) === true) this._escortCaptions.add(marker.id);
   }
 
   /* ------------------------------------------------------------- companion
@@ -2232,8 +2267,15 @@ export class Overworld {
           });
         } });
       } else if (m.kind === 'building') {
-        const img = tiles.buildingSprite(this.scene.set.palette,
-                                         hash(m.id), m.tier, m.variant);
+        const key = JSON.stringify([this.region && this.region.id, this.scene.biome,
+          this.scene.set.palette, m.id, m.tier, m.variant]);
+        let img = this._buildingSprites.get(key);
+        if (!img) {
+          img = tiles.buildingSprite(this.scene.set.palette,
+            hash(m.id), m.tier, m.variant, this.scene.biome);
+          this._buildingSprites.set(key, img);
+          if (this._buildingSprites.size > 64) this._buildingSprites.delete(this._buildingSprites.keys().next().value);
+        }
         out.push({ x: m.x, y: m.y, sortY: m.y * T + img.height - 4,
                    draw: (ctx) => ctx.drawImage(img, m.x * T, m.y * T + T * 2 - img.height) });
       } else if (m.kind === 'exit') {
