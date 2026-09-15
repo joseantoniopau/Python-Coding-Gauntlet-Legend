@@ -1073,7 +1073,7 @@ def build() -> list:
             `items[::-1]` is the Python answer and you already know it. This drill is
             about the mechanical version, because the same loop reverses a subrange,
             rotates an array, and shows up inside half the array questions asked in
-            interviews.
+            timed practicals.
         """,
         fn_name="reverse_list", params="items", reference=_reverse_list,
         canonical="""

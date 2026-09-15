@@ -928,7 +928,7 @@ CAPTIVES = [
                "said out loud how it could break.",
     ),
 
-    # -- The Interviewer, the Null King's Castle ---------------------------
+    # -- The Examiner, the Null King's Castle ---------------------------
     # The castle has no village of its own — nothing lives there, which is the
     # point of it. So the last boss took its three from the one place the
     # player cannot be neutral about: home. They are the only captives in this
@@ -1230,7 +1230,7 @@ HOLDINGS = {
                 "never needed to be, because none of the halls outside it is "
                 "labelled and the three people sitting there are from a "
                 "village nine days' walk away.",
-        release=("The Interviewer stops asking. It is not a death and nobody "
+        release=("The Examiner stops asking. It is not a death and nobody "
                  "in the room pretends it is one. It simply runs out of "
                  "questions it already holds the answers to.",
                  "Three chairs scrape back at slightly different times."),
@@ -1416,7 +1416,7 @@ BOONS = {
 #   xp/gold/floor quests.REWARD_TIERS, untouched
 #   metal/potion  the ground you fought on, at that region's band
 #   credit/favour the village that got its people back, which for thirteen of
-#                 the fourteen is the same region and for the Interviewer is
+#                 the fourteen is the same region and for the Examiner is
 #                 deliberately not
 #   gear          the one named object a captive hands over, and it must be a
 #                 real catalogue piece whose element is that region's affinity
@@ -1513,7 +1513,7 @@ def new_captive_state() -> dict:
         # nobody came for. See `liberate()`, and the long note above it.
         "released": [],           # captive ids the index released, roster order
         "index_collapsed": False, # the practical was passed and the shelves emptied
-        # THE SWEEP. Everyone the Interviewer went back for after the
+        # THE SWEEP. Everyone the Examiner went back for after the
         # second-to-last rung fell. They stay in `freed` — the player did carry
         # them out and the roll call goes on saying so, struck through — and
         # their boons are suspended while they are on this list. See retake().
@@ -1707,7 +1707,7 @@ def _view(person: Captive) -> dict:
 # ---------------------------------------------------------------------------
 # The sweep
 # ---------------------------------------------------------------------------
-# THE SECOND-TO-LAST BOSS FALLS AND THE INTERVIEWER GOES AND COLLECTS.
+# THE SECOND-TO-LAST BOSS FALLS AND THE EXAMINER GOES AND COLLECTS.
 #
 # This is the one thing in the file that takes somebody back, and it exists
 # because the player asked for it in those words: the last boss captures all of
@@ -1749,11 +1749,11 @@ RETAKE_NOTE = (
 
 
 def retake(state: dict, captive_ids=()) -> dict:
-    """The Interviewer collects. Idempotent, and it only ever takes the freed.
+    """The Examiner collects. Idempotent, and it only ever takes the freed.
 
     `captive_ids` is the caller's list — zonecompanions.py passes the five zone
     companions, which is the set the player would notice. With no list at all
-    it takes everybody the Interviewer already holds who is somehow out, which
+    it takes everybody the Examiner already holds who is somehow out, which
     is normally nobody and is the honest default rather than a guess.
 
     Returns the same shape twice: a second call reports `first_time` False and
@@ -1798,7 +1798,7 @@ def is_retaken(state: dict, captive_id: str) -> bool:
 
 
 def retaken(state: dict) -> list:
-    """Captive records the Interviewer went back for, in the order he did."""
+    """Captive records the Examiner went back for, in the order he did."""
     raw = _read(state)
     return [CAPTIVE_BY_ID[cid] for cid in (raw.get("retaken") or [])
             if cid in CAPTIVE_BY_ID]
@@ -1807,7 +1807,7 @@ def retaken(state: dict) -> list:
 def final_release(state: dict) -> dict:
     """The last fight, and the only call the finale has to make.
 
-    Frees the three the Interviewer took out of the home village, marks the
+    Frees the three the Examiner took out of the home village, marks the
     release, and hands back the whole roll call — everyone the player got out,
     in the order the cages opened, plus the honest remainder of people still
     held because a boss is still standing. The ending is a eucatastrophe, not
@@ -2737,7 +2737,7 @@ five of them are one line.
 
        release = captives.final_release(self.state)
 
-   It frees the three the Interviewer took out of the home village, marks the
+   It frees the three the Examiner took out of the home village, marks the
    release, and hands back release["roll_call"] — everyone carried out, in
    order — plus release["still_held"], the people whose boss is still standing.
 
@@ -2764,7 +2764,7 @@ five of them are one line.
    release_line(id), is_released(state, id), everyone_out(state),
    index_collapsed(state).
 
-7. INTERVIEW MODE
+7. TIMED PRACTICAL MODE
    captives.available_in(mode) is the same gate the quest board uses. Nothing
    in here happens in a measured run.
 
@@ -2825,7 +2825,7 @@ WHERE THE NUMBERS COME FROM, so nobody re-tunes them here by mistake:
             potions.found_at() and potions.CARRY_CAP.
   metal     quests.metal_for(region) and quests.METAL_COUNT[tier].
   credit    quests.VENDOR_CREDIT[tier], banked against the HOME region, which
-            for the Interviewer is python_village and not the castle.
+            for the Examiner is python_village and not the castle.
 
 WHAT COULD NOT BE RESOLVED, said plainly rather than guessed at:
 

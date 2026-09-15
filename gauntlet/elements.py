@@ -1395,7 +1395,7 @@ EXTRA_AFFINITY: dict = {
     # the floor below eventually amounts to.
     "null_kings_castle": (COLD, BRUTE),
     # Void, because nothing is labelled. Cold, because nothing is lit. Brute,
-    # because the Interviewer has never once cared what you were wearing.
+    # because the Examiner has never once cared what you were wearing.
 }
 
 

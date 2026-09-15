@@ -587,7 +587,7 @@ class TheSealedRule(GameTest):
             self.assertFalse(leaked.get(crutch),
                              f"{crutch} leaked through /api/problem mid-run")
         # And it is not only the served question: while a run is open, every
-        # lookup is the interview view. The rule is a property of the RUN, not
+        # lookup is the timed practical view. The rule is a property of the RUN, not
         # a list of ids somebody has to keep up to date.
         self.assertEqual(g.problem(teachable).get("pattern"), "REDACTED")
 

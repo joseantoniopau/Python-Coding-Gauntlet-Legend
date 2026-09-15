@@ -20,7 +20,7 @@ DESTINATION = ROOT / "web" / "art" / "cinematic-scenes.json"
 NOTICE = (
     "ART DEMONSTRATION — all people, rescue counts, assessment results, and "
     "identifiers below are fictional fixtures. This is not a player's save or "
-    "evidence of interview readiness."
+    "evidence of practical performance."
 )
 
 

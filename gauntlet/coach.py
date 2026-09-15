@@ -2,8 +2,8 @@
 
 Two hard rules:
 
-1. The coach is UNAVAILABLE during Interview Mode. Not "discouraged" — the
-   provider is not constructed, and `available_in()` returns False. Interview
+1. The coach is UNAVAILABLE during Timed Practical Mode. Not "discouraged" — the
+   provider is not constructed, and `available_in()` returns False. Timed Practical
    Mode's whole value is that it measures unaided performance.
 2. The coach is Socratic first. It asks the question that would have unblocked
    you before it shows you anything.
@@ -100,7 +100,7 @@ class CoachReply:
 
 
 def available_in(mode: str) -> bool:
-    """Interview Mode has no coach. This is enforced, not advised."""
+    """Timed Practical Mode has no coach. This is enforced, not advised."""
     return mode != MODE_INTERVIEW
 
 
@@ -133,7 +133,7 @@ def coach(*, mode: str, analysis, problem, report, hints_used: int,
     if not available_in(mode):
         return CoachReply(
             available=False, questions=[],
-            analysis="The coach is sealed during Interview Mode. It opens the moment "
+            analysis="The coach is sealed during Timed Practical Mode. It opens the moment "
                      "the attempt is scored.",
             next_steps=[], source="none")
 
@@ -177,7 +177,7 @@ def coach(*, mode: str, analysis, problem, report, hints_used: int,
             evidence = ("Every correctness trial passed and only the large input failed. "
                         "Your algorithm is right; its cost is not. This is a very "
                         "different problem from being wrong, and it is worth saying so "
-                        "out loud in a real interview.")
+                        "out loud in a real timed practical.")
         elif kinds == {"edge"}:
             evidence = ("Only the edge trials failed. The main idea is sound — the "
                         "boundaries are not.")
@@ -196,7 +196,7 @@ def coach(*, mode: str, analysis, problem, report, hints_used: int,
                      "That habit catches this before the timeout does.")
     if root in ("SYNTAX", "PYTHON_RECALL"):
         steps.append("Python Village drills. Fluency failures are the cheapest kind to "
-                     "eliminate and the most expensive to carry into an interview.")
+                     "eliminate and the most expensive to carry into a timed practical.")
     if root == "PATTERN_NOT_RECOGNIZED":
         steps.append("Pattern encounters, where the only task is naming the family. "
                      "Recognition is trainable separately from implementation.")

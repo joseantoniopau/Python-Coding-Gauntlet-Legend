@@ -5,6 +5,10 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="Python Coding Gauntlet Legend"
 APP="$REPO/dist/$APP_NAME.app"
+INSTALLED="$HOME/Applications/$APP_NAME.app"
+# A loaded backend must never serve files from a replacement bundle.
+# Check before rebuilding dist as well as before changing the installed copy.
+python3 "$REPO/scripts/check_app_closed.py" "$APP" "$INSTALLED"
 CONTENTS="$APP/Contents"
 APP_VERSION="$(python3 -c 'import runpy,sys; print(runpy.run_path(sys.argv[1])["VERSION"])' "$REPO/gauntlet/config.py")"
 
@@ -125,19 +129,19 @@ echo "==> built: $APP"
 # So: if a copy is already installed, UPDATE IT. Only if one is already there —
 # putting an app into someone's Applications folder uninvited is not this
 # script's business, and a first-time build should not do it.
-INSTALLED="$HOME/Applications/$(basename "$APP")"
 if [ -d "$INSTALLED" ]; then
-  # A running copy holds its own Python in memory and would keep serving the
-  # old code from the new files, which looks exactly like the bug above.
-  if pgrep -f "gauntlet.launcher" >/dev/null 2>&1; then
-    echo "==> a copy is RUNNING; quit it before launching the new one"
-  fi
   # Copy completely before moving the installed app. Keep the previous bundle
   # launchable in a dated directory so an update can be rolled back locally.
   STAGING="$(mktemp -d "$HOME/Applications/.gauntlet-install.XXXXXX")"
   cp -R "$APP" "$STAGING/"
   BACKUP_DIR="$HOME/Applications/Gauntlet Legend Backups/$(date '+%Y-%m-%d_%H-%M-%S')-$$"
   mkdir -p "$BACKUP_DIR"
+  # Recheck after the slow copy, immediately before replacing the installation.
+  if ! python3 "$REPO/scripts/check_app_closed.py" "$APP" "$INSTALLED"; then
+    rm -rf "$STAGING"
+    rmdir "$BACKUP_DIR"
+    exit 1
+  fi
   mv "$INSTALLED" "$BACKUP_DIR/"
   if ! mv "$STAGING/$(basename "$APP")" "$INSTALLED"; then
     echo "==> install failed; restoring the previous app"

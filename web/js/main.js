@@ -1300,7 +1300,7 @@ function onNodeEnter(marker) {
  * they are labelled as what they are, and a page can be read again. */
 const CODEX_PAGES = [
   'A dict lookup is O(1) on average and O(n) in the pathological case.',
-  '`all([])` is True. `any([])` is False. Interviewers ask this.',
+  '`all([])` is True. `any([])` is False. Try both empty cases.',
   'Python sorts are stable — equal elements keep their relative order.',
   '`deque` gives O(1) at both ends. A list gives O(n) at the front.',
   'BFS finds the shortest path in an UNWEIGHTED graph only.',
@@ -1452,7 +1452,7 @@ function enterBattle(payload) {
   G.probeCharges = payload.probe_charges;
   G.startedAt = ['ENCOUNTER_RESUME','PRACTICE_RESUME'].includes(payload.reason) ? Number(payload.encounter.started_at)*1000 : Date.now();
   G.interview = payload.interview || null;
-  // What this fight has taken off you. Interview Mode is the full seal; a boss
+  // What this fight has taken off you. Timed Practical Mode is the full seal; a boss
   // is whatever its rung has taken. Read it once, here, and let the tabs obey.
   G.seal = payload.seal || null;
   const sealed = applySeal();
@@ -3215,9 +3215,9 @@ function paintTactics(body) {
   if (G.encounter.mode === 'interview') {
     body.appendChild(el('div', 'frame', `<div style="padding:14px;line-height:1.7">
       <b style="color:var(--red)">SEALED.</b><br><br>
-      Probes, items and gear effects are all withheld in Interview Mode — the
-      forged blade among them, technique and all. What you bring to a real
-      screen is what you know.</div>`));
+      Probes, items and gear effects are all withheld in Timed Practical Mode — the
+      forged blade among them, technique and all. The practical measures what you can
+      do without assistance.</div>`));
     return;
   }
 
@@ -3378,7 +3378,7 @@ function paintSpells(body) {
   if (G.encounter.mode === 'interview') {
     body.appendChild(el('div', 'frame', `<div style="padding:14px;line-height:1.7">
       <b style="color:var(--red)">SEALED.</b><br><br>
-      Interview Mode measures what you can do unaided. Spells, the mentor, the
+      Timed Practical Mode measures what you can do unaided. Spells, the mentor, the
       pattern name and the coach are all withheld — by the server, not merely
       hidden here.<br><br>
       Everything opens again the moment the attempt is scored.</div>`));
@@ -3487,7 +3487,7 @@ function paintApproach(body) {
 
 function paintVision(body) {
   if (G.encounter.mode === 'interview') {
-    body.appendChild(el('div', 'muted', 'Sealed during Interview Mode.'));
+    body.appendChild(el('div', 'muted', 'Sealed during Timed Practical Mode.'));
     return;
   }
   const visible=(G.problem.visible_tests || []).filter(row=>!row.hidden);
@@ -3912,7 +3912,7 @@ async function showResult(result) {
 
   html += `<div class="actions">
       ${result.interview_next && !result.interview_next.finished
-        ? '<button class="btn primary" id="r-next-iv">NEXT INTERVIEW PROBLEM</button>' : ''}
+        ? '<button class="btn primary" id="r-next-iv">NEXT TIMED PRACTICAL PROBLEM</button>' : ''}
       ${result.interview_next && result.interview_next.finished
         ? '<button class="btn primary" id="r-iv-report">SEE YOUR REPORT</button>' : ''}
       ${!result.interview_next && result.solved
@@ -4720,7 +4720,7 @@ async function paintRepos() {
 /* Open one. `mode` is 'adventure' unless the player deliberately asks to be
  * measured, in which case the server takes the pointer, the shapes, the target
  * list and the companion away — through finalexam.sealed(), like everything
- * else that Interview Mode takes. */
+ * else that Timed Practical Mode takes. */
 async function startRepo(repoId, mode = 'adventure') {
   const payload = await api.startRepo(repoId, mode);
   if (payload.error) {
@@ -4760,7 +4760,7 @@ function enterRepo(payload) {
     onRun: repoRun,
     onSubmit: repoSubmit,
     onLeave: leaveRepo,
-    /* The banner across the top says INTERVIEW MODE and carries a clock. It is
+    /* The banner across the top says TIMED PRACTICAL MODE and carries a clock. It is
      * the shell's, not the repo's, so the repo tells it what time it is rather
      * than letting it show the last fight's. */
     onTick: (elapsed, limit) => {
@@ -5350,7 +5350,7 @@ function paintStatus() {
         <div class="section-title">THE ARCHITECT</div>
         <p class="small">LV ${s.player.level} · ${s.player.title}<br>
           ${s.player.xp} XP · ${s.player.gold} gold · best combo ${s.player.best_combo}<br>
-          Profile: <b style="color:var(--gold)">${s.player.profile}</b><br>
+          Profile: <b style="color:var(--gold)">${s.player.profile === 'GENERAL_SWE' ? 'GENERAL PYTHON' : s.player.profile.replace(/_/g, ' ')}</b><br>
           Region: ${s.player.region.replace(/_/g, ' ')}</p>
         <div class="section-title">READINESS ${r.overall}%</div>
         ${dims}
@@ -5361,7 +5361,7 @@ function paintStatus() {
         ${gates}
         <p class="small muted" style="margin-top:10px">
           Beating the final castle requires every gate. An average cannot substitute
-          for a gate, because an interview will not average your answers either.</p>
+          for a gate, because each practical task needs a correct solution.</p>
       </div>
     </div>
     <div class="frame" style="padding:14px;margin-top:12px">
@@ -5828,7 +5828,7 @@ function paintInterview() {
   const live = run ? `
     <div class="frame" style="padding:14px;margin-bottom:12px;border-color:var(--red)">
       <div class="section-title">A RUN IS OPEN</div>
-      <p class="small">${run.format.replace(/_/g, ' ')} · question ${
+      <p class="small">${run.format === 'LIVE_SCREEN' ? 'TIMED SESSION' : run.format.replace(/_/g, ' ')} · question ${
         (run.index || 0) + 1} of ${run.total || 0} ·
         ${run.minutes} minutes on the clock, and it has not stopped.</p>
       <div class="row">
@@ -5836,10 +5836,10 @@ function paintInterview() {
         <button class="btn danger" id="iv-abandon">END IT AND SEE THE REPORT</button>
       </div>
     </div>` : '';
-  panel('INTERVIEW MODE', `
+  panel('TIMED PRACTICAL MODE', `
     ${live}
     <div class="frame" style="padding:16px">
-      <p style="line-height:1.8">Interview Mode is sacred. Spells, the mentor, pattern
+      <p style="line-height:1.8">Timed Practical Mode measures independent work. Spells, the mentor, pattern
       names, the Grimoire and the coach are all withheld — enforced by the server,
       not merely hidden in this page. Everything is recorded: time to first code,
       runs, failed trials, syntax errors, final correctness and completion time.</p>
@@ -5849,16 +5849,15 @@ function paintInterview() {
       <div class="row" style="flex-wrap:wrap">
         ${['PRACTICAL', 'GENERAL_SWE', 'SECURITY_ENGINEERING', 'CUSTOM'].map(p =>
           `<button class="btn small ${s.player.profile === p ? 'primary' : ''}"
-            data-profile="${p}">${p.replace(/_/g, ' ')}</button>`).join('')}
+            data-profile="${p}">${p === 'GENERAL_SWE' ? 'GENERAL PYTHON' : p.replace(/_/g, ' ')}</button>`).join('')}
       </div>
       <p class="small muted" style="margin-top:8px">The PRACTICAL profile weights arrays,
       strings, hash maps, sets, sorting, sliding window, two pointers, matrices, trees,
-      recursion, BFS/DFS, design, debugging, Big-O and testing — the publicly reported
-      emphasis for that screen. These are historical patterns, never guaranteed
-      questions.</p>
+      recursion, BFS/DFS, design, debugging, Big-O and testing. Choose a profile
+      to focus your practical on the skills you want to assess.</p>
       <div class="section-title">FORMAT</div>
       <div class="row">
-        <button class="btn primary" data-format="LIVE_SCREEN">LIVE SCREEN · 50 min · 2 problems</button>
+        <button class="btn primary" data-format="LIVE_SCREEN">TIMED SESSION · 50 min · 2 problems</button>
         <button class="btn primary" data-format="GAUNTLET">THE GAUNTLET · 65 min · 4 problems</button>
       </div>
     </div>
@@ -5924,7 +5923,7 @@ function paintInterview() {
         closeModal();
         // Open the question immediately: no cinematic consumes measured time.
         try { enterBattle(await api.interviewCurrent()); }
-        catch (e) { toast('RUN STARTED', 'Use INTERVIEW to resume. ' + e.message, 'red'); }
+        catch (e) { toast('RUN STARTED', 'Use TIMED PRACTICAL to resume. ' + e.message, 'red'); }
       };
       m.querySelector('#iv-cancel').onclick = closeModal;
     };
@@ -5933,7 +5932,7 @@ function paintInterview() {
 
 /* THE ENDING, AND THE REPORT BEHIND IT.
  *
- * `report.ending` comes back on EVERY interview run — it is the one place in
+ * `report.ending` comes back on EVERY timed practical run — it is the one place in
  * the codebase where the two exams are told apart, and for every ordinary run
  * it says `triggered: false` and this function does exactly what it always
  * did. It says `triggered: true` only for a practical that was started from
@@ -5968,7 +5967,7 @@ function showInterviewReportModal(report) {
       <div class="body"><div class="name">Q${i + 1} — ${r.problem_id}</div>
       <div class="msg">${fmtTime(r.seconds)}${r.rank ? ' · rank ' + r.rank : ''}
       ${r.root_cause ? ' · ' + r.root_cause.replace(/_/g, ' ') : ''}</div></div></div>`).join('');
-  modal(`<h2>INTERVIEW REPORT — ${report.score}%</h2>
+  modal(`<h2>TIMED PRACTICAL REPORT — ${report.score}%</h2>
     <p>${report.solved} of ${report.total} solved in ${fmtTime(report.seconds)}
       ${report.within_time ? '(within time)' : '(over time)'}.</p>
     ${rows}
@@ -6247,7 +6246,7 @@ function paintCharacter() {
           ${lo.effect_text.join('<br>') || 'Nothing yet — equip something.'}</p>
         <p class="small muted">Every one of these changes the economics of a fight.
         None of them writes a line of Python for you, and none survive into
-        Interview Mode.</p>
+        Timed Practical Mode.</p>
       </div>
       <div class="frame" style="padding:14px">
         <div class="section-title">ATTRIBUTES</div>
@@ -6980,7 +6979,7 @@ function paintSettings() {
           <input type="range" min="0.85" max="1.5" step="0.05" value="${s.text_scale || 1}"
             data-setting="text_scale">
         </label>
-        <p class="small muted">Adventure Mode timers are advisory only. Interview Mode
+        <p class="small muted">Adventure Mode timers are advisory only. Timed Practical Mode
         uses standardised constraints so the measurement stays comparable.</p>
       </div>
       <div class="frame" style="padding:14px">
@@ -7129,7 +7128,7 @@ function paintSettings() {
       `<div class="test-line ${a.solved ? 'pass' : 'fail'}">
         <span class="icon">${a.solved ? '✔' : '✖'}</span>
         <div class="body"><div class="name">${a.problem_id}
-          <span class="muted">${a.difficulty} · ${a.mode}</span></div>
+          <span class="muted">${a.difficulty} · ${a.mode === 'interview' ? 'Timed practical' : a.mode}</span></div>
         <div class="msg">${fmtTime(a.seconds)}${a.rank ? ' · rank ' + a.rank : ''}
          · ${uikit.esc(learningui.evidenceLabel(a.evidence_kind))}${a.hints_used ? ' · ' + a.hints_used + ' spell(s)' : ''}
         ${a.root_cause ? ' · ' + a.root_cause.replace(/_/g, ' ') : ''}</div></div></div>`).join('');
@@ -7502,7 +7501,7 @@ async function paintExam() {
         ${inExam
           ? '<button class="btn danger" id="ex-finish">END THE RUN AND BE SCORED</button>'
           : '<button class="btn danger" id="ex-start">SIT THE PRACTICAL TEST</button>'}
-        <button class="btn" id="ex-interview">PRACTISE IN INTERVIEW MODE</button>
+        <button class="btn" id="ex-interview">PRACTISE IN TIMED PRACTICAL MODE</button>
       </div>
       ${inExam ? `<p class="small" style="color:var(--orange)">A run is open —
         question ${(run.index || 0) + 1} of ${run.total || 0}.</p>` : ''}
@@ -7868,7 +7867,7 @@ async function paintKeyring() {
  * The only difference is that the server binds the composed exam's id to the
  * story, so that when the debrief comes back `ending.resolve()` recognises it.
  * That is the entire mechanism, and it is why this call may not be made from
- * the exam screen or the interview menu: a staged sitting reachable from the
+ * the exam screen or the timed practical menu: a staged sitting reachable from the
  * menu is the ending firing for practice, which is the bug this whole feature
  * exists to fix.
  *
@@ -7935,7 +7934,7 @@ const LEDGER = [
     blurb: 'Somebody else\u2019s codebase, its own tests, and a clock.' },
   { id: 'exam', label: 'THE PRACTICAL TEST',
     blurb: 'The fourteen-rung ladder, and the exam at the top of it.' },
-  { id: 'interview', label: 'INTERVIEW MODE',
+  { id: 'interview', label: 'TIMED PRACTICAL MODE',
     blurb: 'A measured run. Nothing is taught while it is running.' },
   { id: 'seed', label: 'THIS WORLD',
     blurb: 'The shareable world code, and the ground under it.' },
@@ -8070,7 +8069,7 @@ function paintLedger() {
     repos: `${((s.mini_repos || {}).cleared || []).length}/${
       ((s.mini_repos || {}).repos || []).length} handed back green`,
     exam: `${(s.cleared_bosses || []).length}/14 rungs climbed`,
-    interview: `profile ${s.player.profile}`,
+    interview: `profile ${s.player.profile === 'GENERAL_SWE' ? 'GENERAL PYTHON' : s.player.profile.replace(/_/g, ' ')}`,
     seed: s.seed || '',
     settings: `${s.playtime || ''} played`,
     town: `${s.player.gold} gold in the purse`,
@@ -8332,7 +8331,7 @@ async function intro() {
     <b style="color:var(--green)">Python</b>.</p>
     <p style="line-height:1.9">Sixteen regions. Fourteen bosses. Every failure opens a
     path, never a wall. Break your armour and you repair it by debugging real code.</p>
-    <p class="small muted">Adventure Mode teaches. Interview Mode measures.
+    <p class="small muted">Adventure Mode teaches. Timed Practical Mode measures.
     They are never confused.</p>
     <div class="actions">
       <button class="btn primary" id="intro-go">ENTER PYTHON VILLAGE</button>
@@ -8500,7 +8499,7 @@ function chooseBuild() {
     fight <i>costs</i> you, and what it pays. You can pay the Armorer to change your
     mind later.</p>
     ${cards}
-    <p class="small muted">Every one of these is disabled inside Interview Mode.</p>`);
+    <p class="small muted">Every one of these is disabled inside Timed Practical Mode.</p>`);
   m.querySelectorAll('[data-build]').forEach(node => {
     node.onclick = async () => {
       let r;
@@ -8752,12 +8751,11 @@ function leaveTitle() {
 function showAbout() {
   modal(`<h2>PYTHON CODING GAUNTLET LEGEND</h2>
     <p class="pixel" style="color:var(--violet);font-size:11px">THE ALGORITHM REALMS</p>
-    <p>A 16-bit RPG whose combat system is a Python coding-interview trainer.
-    Adventure Mode teaches. Interview Mode measures. They are never confused.</p>
+    <p>A 16-bit RPG whose combat system is a Python learning system.
+    Adventure Mode teaches. Timed Practical Mode measures. They are never confused.</p>
     <p class="small muted">Everything here — art, music, text, problems — is original
     to this project. No third-party game assets are used. Problems drawn from publicly
-    reported interview patterns are labelled as historical patterns and are never
-    presented as guaranteed questions.</p>
+    reported coding exercise patterns retain their provenance labels.</p>
     <p class="small muted">Your code runs locally under a sandbox that denies network
     access and enforces CPU, memory and wall-clock limits. Nothing leaves this machine.</p>
     <div class="actions"><button class="btn primary" id="about-back">BACK</button></div>`);

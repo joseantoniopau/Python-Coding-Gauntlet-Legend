@@ -385,7 +385,7 @@ APEXES: tuple = (
         "streets. It does not appear to know how.",
         "Nothing to counter, nothing to ward. It examines whether you can "
         "still type when there is no advantage on the board, which is the "
-        "state every interview is conducted in.",
+        "state every timed practical is conducted in.",
         "It stops and measures a rebuilt wall. While it measures, it is not "
         "walking, and you can see exactly how much time that buys you.",
         "margin_walker", "wraith", "#c8c4d6",

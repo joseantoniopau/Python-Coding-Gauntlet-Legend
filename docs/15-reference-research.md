@@ -22,7 +22,7 @@ Paths in this table are relative to the target repository. These are integration
 
 | RPG design feature | Current Gauntlet equivalent | Status and implementation direction |
 |---|---|---|
-| Readiness gauges and command-driven battle | `gauntlet/engine.py`, `incantation.py`, `web/js/fx.js`, `main.js` | **Partial match.** Keep the existing turn model. Add a clear intent → player action → resolution sequence. A readiness animation can communicate queued action; it must not tick down while the learner writes. Timed interview rehearsal remains opt-in. |
+| Readiness gauges and command-driven battle | `gauntlet/engine.py`, `incantation.py`, `web/js/fx.js`, `main.js` | **Partial match.** Keep the existing turn model. Add a clear intent → player action → resolution sequence. A readiness animation can communicate queued action; it must not tick down while the learner writes. Timed practical rehearsal remains opt-in. |
 | Character-specific commands | `classes.py`, `movesets.py`, `arts.py` | **Strong match.** Six classes already emphasize different study habits. Give each a recognizable command presentation, posture, sound and tactical purpose. Extend their current moves rather than adding a second job system. |
 | Input mastery and distinctive special skills | Real Python incantations and fading templates in `incantation.py`; moves in `movesets.py` | **Strong conceptual match.** Syntax and semantics should express the move. Show a traceable relationship between input, target and result. Avoid treating memorized text as evidence of general Python mastery. |
 | Discoverable mentors teaching abilities | Sages and secret arts in `arts.py`; mastery and class progression | **Partial match.** Present tutors as discoverable teachers with learning progress. Unlock through demonstrated transfer on unseen problems. Do not replace correctness with accumulated combat points. |
@@ -56,7 +56,7 @@ These additions should use the game's existing educational structure rather than
 5. **Mini-Repo investigations.** Expand existing investigations with a reproducible failure, files to inspect, a repair, tests and a short explanation. Reward a small correct repair and useful regression test. Keep success independent of exact patch text.
 6. **Player-directed practice.** Build on the adaptive route: offer recommended next task with a reason, targeted review and exploration. The model should remain advisory; the player should understand whether they are learning, reviewing or being assessed.
 7. **Short expeditions.** Offer approximately 10-, 20- and 40-minute routes with a natural stopping point and resumable state. Time estimates must not become failure timers. Mix one focal concept, retrieval of an older concept and a small narrative payoff.
-8. **Interview rehearsal.** Keep repeatable practice distinct from sealed readiness assessment in `finalexam.py`. Rehearsal can include time, narration, debugging and debrief. Never train on sealed items or imply practice completion certifies interview readiness.
+8. **Timed practical rehearsal.** Keep repeatable practice distinct from sealed readiness assessment in `finalexam.py`. Rehearsal can include time, narration, debugging and debrief. Never train on sealed items or imply practice completion certifies independent Python skill.
 9. **Earned keepsakes.** Award cosmetics and remembered world details for transfer, explanation, thoughtful testing and recovery from a misconception. Avoid attendance punishments and forced streak maintenance. Measure voluntary return and learning, not minutes trapped in menus.
 
 ## Visual research translated into production decisions
@@ -71,7 +71,7 @@ Start with idle, preparation, cast, strike, recoil, hurt, guard, exhausted, vict
 
 ### Heavy Metal: directed variety and tonal contrast
 
-The original making-of and Potterton's later interview describe an anthology of different visual approaches, coordinated through art direction and storyboard work. Its identity includes science fantasy, architectural spectacle and a mixture of orchestral and rock music. It is not a single uniform palette or endless maximal intensity. [Production account][metal-production]; [director interview][potterton].
+The original making-of and Potterton's later discussion describe an anthology of different visual approaches, coordinated through art direction and storyboard work. Its identity includes science fantasy, architectural spectacle and a mixture of orchestral and rock music. It is not a single uniform palette or endless maximal intensity. [Production account][metal-production]; [director discussion][potterton].
 
 **Apply to Gauntlet:** create one shared drawing language—bold contour hierarchy, expressive anatomy, dramatic silhouettes, weathered materials—then give regions controlled variation. A forge may use black iron, ember light and angular architecture; a refuge can use warm lamps, blue evening and softer silhouettes. Preserve moments of humor, tenderness and quiet so threats have contrast. Original characters and architecture should carry the influence through original assets and compositions.
 
@@ -176,7 +176,7 @@ Apply the design lessons to Gauntlet's existing `web/js/audio.js` and combat eve
 ## Animation sources
 
 - [Heavy Metal: The Making of the Movie, August 1981][metal-production]. Original production coverage republished by the magazine.
-- [Animation World Network: Here's the Skinny on Heavy Metal][potterton], 20 April 2015. Direct Gerald Potterton interview.
+- [Animation World Network: Here's the Skinny on Heavy Metal][potterton], 20 April 2015. Conversation with Gerald Potterton.
 - [Bakshi Productions: Fire & Ice][bakshi]. Studio account of the production and animation approach.
 - [James Gurney: The Backgrounds for Fire and Ice][gurney-backgrounds], 12 October 2015. First-person background painting process and illustrated examples.
 - [James Gurney: Background Painting with Ice and Snow][gurney-snow], 26 December 2023. Depth, foreground layering and background treatment.

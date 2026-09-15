@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "demonstration": true,
-  "notice": "ART DEMONSTRATION — all people, rescue counts, assessment results, and identifiers below are fictional fixtures. This is not a player's save or evidence of interview readiness.",
+  "notice": "ART DEMONSTRATION — all people, rescue counts, assessment results, and identifiers below are fictional fixtures. This is not a player's save or evidence of practical performance.",
   "producers": [
     "gauntlet.finale.cutscene",
     "gauntlet.ending.rematch"
@@ -644,7 +644,7 @@
               {
                 "speaker": "the_last_interpreter",
                 "name": "THE LAST INTERPRETER",
-                "text": ">>> candidate.ready",
+                "text": ">>> learner.ready",
                 "kind": "code"
               },
               {
@@ -687,13 +687,13 @@
               {
                 "speaker": "narrator",
                 "name": "",
-                "text": "You are ready to sit a real Python interview.",
+                "text": "You met the standard for this timed Python practical.",
                 "kind": "prose"
               },
               {
                 "speaker": "narrator",
                 "name": "",
-                "text": "Not nearly. Not with a bit more practice. Ready.",
+                "text": "This result records what you completed independently.",
                 "kind": "prose"
               },
               {
@@ -705,7 +705,7 @@
               {
                 "speaker": "narrator",
                 "name": "",
-                "text": "That is not encouragement. It is a measurement, taken by something with no ability to flatter you, and it says you can do this. Go and book the interview.",
+                "text": "Keep the result in your record. Return after a break and try a fresh timed practical to check what you retain.",
                 "kind": "prose"
               }
             ],
@@ -1035,12 +1035,12 @@
         },
         "send_off": {
           "code": "READY",
-          "headline": "GO AND BOOK IT",
+          "headline": "THE STANDARD IS MET",
           "lines": [
-            "You are ready to sit a real Python interview.",
-            "Not nearly. Not with a bit more practice. Ready.",
+            "You met the standard for this timed Python practical.",
+            "This result records what you completed independently.",
             "You sat a timed practical with every one of the 14 crutches removed and solved 5 of 6 inside the clock, with no hint, no probe, no companion, no pattern label and nobody standing behind you.",
-            "That is not encouragement. It is a measurement, taken by something with no ability to flatter you, and it says you can do this. Go and book the interview."
+            "Keep the result in your record. Return after a break and try a fresh timed practical to check what you retain."
           ],
           "celebrates": true,
           "drills": [],
@@ -2040,7 +2040,7 @@
               {
                 "speaker": "the_last_interpreter",
                 "name": "THE LAST INTERPRETER",
-                "text": ">>> candidate.ready",
+                "text": ">>> learner.ready",
                 "kind": "code"
               },
               {
@@ -2085,13 +2085,13 @@
               {
                 "speaker": "narrator",
                 "name": "",
-                "text": "You are ready to sit a real Python interview.",
+                "text": "You met the standard for this timed Python practical.",
                 "kind": "prose"
               },
               {
                 "speaker": "narrator",
                 "name": "",
-                "text": "Not nearly. Not with a bit more practice. Ready.",
+                "text": "This result records what you completed independently.",
                 "kind": "prose"
               },
               {
@@ -2103,7 +2103,7 @@
               {
                 "speaker": "narrator",
                 "name": "",
-                "text": "That is not encouragement. It is a measurement, taken by something with no ability to flatter you, and it says you can do this. Go and book the interview.",
+                "text": "Keep the result in your record. Return after a break and try a fresh timed practical to check what you retain.",
                 "kind": "prose"
               }
             ],
@@ -2846,12 +2846,12 @@
         },
         "send_off": {
           "code": "READY",
-          "headline": "GO AND BOOK IT",
+          "headline": "THE STANDARD IS MET",
           "lines": [
-            "You are ready to sit a real Python interview.",
-            "Not nearly. Not with a bit more practice. Ready.",
+            "You met the standard for this timed Python practical.",
+            "This result records what you completed independently.",
             "You sat a timed practical with every one of the 14 crutches removed and solved 5 of 6 inside the clock, with no hint, no probe, no companion, no pattern label and nobody standing behind you.",
-            "That is not encouragement. It is a measurement, taken by something with no ability to flatter you, and it says you can do this. Go and book the interview."
+            "Keep the result in your record. Return after a break and try a fresh timed practical to check what you retain."
           ],
           "celebrates": true,
           "drills": [],
@@ -4014,7 +4014,7 @@
               {
                 "speaker": "the_last_interpreter",
                 "name": "THE LAST INTERPRETER",
-                "text": ">>> candidate.ready",
+                "text": ">>> learner.ready",
                 "kind": "code"
               },
               {
@@ -4058,13 +4058,13 @@
               {
                 "speaker": "narrator",
                 "name": "",
-                "text": "You are ready to sit a real Python interview.",
+                "text": "You met the standard for this timed Python practical.",
                 "kind": "prose"
               },
               {
                 "speaker": "narrator",
                 "name": "",
-                "text": "Not nearly. Not with a bit more practice. Ready.",
+                "text": "This result records what you completed independently.",
                 "kind": "prose"
               },
               {
@@ -4076,7 +4076,7 @@
               {
                 "speaker": "narrator",
                 "name": "",
-                "text": "That is not encouragement. It is a measurement, taken by something with no ability to flatter you, and it says you can do this. Go and book the interview.",
+                "text": "Keep the result in your record. Return after a break and try a fresh timed practical to check what you retain.",
                 "kind": "prose"
               }
             ],
@@ -5262,12 +5262,12 @@
         },
         "send_off": {
           "code": "READY",
-          "headline": "GO AND BOOK IT",
+          "headline": "THE STANDARD IS MET",
           "lines": [
-            "You are ready to sit a real Python interview.",
-            "Not nearly. Not with a bit more practice. Ready.",
+            "You met the standard for this timed Python practical.",
+            "This result records what you completed independently.",
             "You sat a timed practical with every one of the 14 crutches removed and solved 5 of 6 inside the clock, with no hint, no probe, no companion, no pattern label and nobody standing behind you.",
-            "That is not encouragement. It is a measurement, taken by something with no ability to flatter you, and it says you can do this. Go and book the interview."
+            "Keep the result in your record. Return after a break and try a fresh timed practical to check what you retain."
           ],
           "celebrates": true,
           "drills": [],

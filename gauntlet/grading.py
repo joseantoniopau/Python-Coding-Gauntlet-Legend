@@ -34,7 +34,7 @@ FAILURE_BLURB = {
     "DEBUGGING": "The defect was not located.",
     "COMPLEXITY": "The cost of the approach was misjudged.",
     "TESTING": "The test suite did not probe the failure.",
-    "TIME_PRESSURE": "Correct, but not within the time the interview allows.",
+    "TIME_PRESSURE": "Correct, but not within the time the timed practical allows.",
     "COMMUNICATION": "The explanation did not match the implementation.",
     "UNKNOWN": "Something went wrong that we could not classify.",
 }

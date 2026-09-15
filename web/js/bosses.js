@@ -22,7 +22,7 @@
  *     A comment that disagrees with the constant three lines of code away is
  *     worse than no comment: it is a measurement nobody took again.)
  *   AND ONE 96x128, DRAWN AT 1 — the final boss rung of docs/08 §B, and the
- *     Interviewer is the only thing in the game that gets it. Twelve thousand
+ *     Examiner is the only thing in the game that gets it. Twelve thousand
  *     authored cells against a 64-box boss's four, at one logical pixel each,
  *     so the last creature the player meets is the only one drawn at the
  *     stage's own grain. Standing on the ground line it spans rows 47..174 —
@@ -114,7 +114,7 @@ export const BOSS_WIDE_W = 96;
  * sake: at BOSS_STAGE_SCALE the 64-box rigs already reach §B's tallest 128
  * logical rows, so the only thing left to buy is GRAIN. A 96x128 rig drawn at
  * blit 1 puts one authored cell on one stage pixel, where every other figure in
- * the game spends four (hero, mob) or two (boss). The Interviewer is the only
+ * the game spends four (hero, mob) or two (boss). The Examiner is the only
  * thing the player ever sees at the stage's own resolution.
  *
  * Checked against the frame before a pixel of it was drawn: 128 rows standing
@@ -361,7 +361,7 @@ export function bossPalette(base, accentHex, phase = 0, element = null) {
 }
 
 /* Element geometry can introduce a mark on a body that never used that glyph.
- * In previews this used to add up to three colours to the Interviewer. Resolve
+ * In previews this used to add up to three colours to the Examiner. Resolve
  * the palette against the finished grid, keeping the outline, element marks
  * and rim. Only over-budget palettes share their nearest existing material
  * tones; ordinary sprites retain every colour. No new hue, geometry or canvas
@@ -1565,10 +1565,10 @@ const DRAGON_TAIL = [
 ];
 
 /* ================================================================
- * THE KNIGHT  —  worn by The Interviewer
+ * THE KNIGHT  —  worn by The Examiner
  * ================================================================
  * Full plate, a great helm with nothing behind the visor slit but a cold light,
- * a tower shield and a greatsword. The final boss of a game about interviews is
+ * a tower shield and a greatsword. The final boss of a game about timed practicals is
  * a faceless thing in mirror-polished armour holding a rubric, so the shield
  * carries a graded sigil and the tabard is blood over bone.
  *
@@ -2793,11 +2793,11 @@ const INTERP_STAFF = [
 ];
 
 /* ================================================================
- * THE INTERVIEWER  —  the Null King, and the only 96x128 in the game
+ * THE EXAMINER  —  the Null King, and the only 96x128 in the game
  * ================================================================
  * THE FINAL RUNG. docs/08 names a 96x128 final-boss box, and for a whole
  * migration nothing in this tree drew one.
- * The Interviewer is what it is for. It is authored as a 48-column half at 128
+ * The Examiner is what it is for. It is authored as a 48-column half at 128
  * rows and drawn at scale 1, so ONE authored cell is ONE stage pixel: the hero
  * spends four stage pixels per authored cell and an ordinary boss two, and this
  * is the only creature in the game rendered at the stage's own grain. The box
@@ -2806,7 +2806,7 @@ const INTERP_STAFF = [
  * 175 is only true if the rig is actually full-bleed.
  *
  * WHY IT IS NARROWER THAN THE BOSS IT REPLACES, AND WHY THAT IS THE POINT.
- * The Interviewer used to be the knight: a 64x64 rig at scale 2, so 128x128
+ * The Examiner used to be the knight: a 64x64 rig at scale 2, so 128x128
  * logical, sunk nine authored rows into the floor. This is 96x128 at scale 1 —
  * 32 logical columns NARROWER and exactly as tall. Measured that way it looks
  * like a downgrade and it is worth saying why it is not:
@@ -3644,7 +3644,7 @@ const ART = {
     ],
   },
   interviewer: {
-    name: 'The Interviewer', wide: false, tall: true,
+    name: 'The Examiner', wide: false, tall: true,
     colour: '#d8d8e0', accent: '#8f7ad8', anim: 'still',
     body: { half: NULL_BODY, oy: 0, drift: { x: 0, y: 1, rate: 0.5, phase: 0 } }, wear: 0.01,
     /* The slowest clock and the longest telegraph in the file. It is not being
@@ -3696,9 +3696,9 @@ const ART = {
 /* ---------------- key resolution ----------------
  * world.py names a sprite per boss. Two notes on the mapping:
  *   - "interviewer" used to resolve to the knight, on the argument that the
- *     final boss of a game about interviews is a faceless thing in mirror
+ *     final boss of a game about timed practicals is a faceless thing in mirror
  *     armour holding a rubric and that the knight already was one. It still is
- *     one; it is simply no longer the LAST one. The Interviewer has its own
+ *     one; it is simply no longer the LAST one. The Examiner has its own
  *     96x128 rig now (THE FINAL RUNG, above) and the knight keeps the 64-box
  *     body, which is still reachable — it is what an unknown castle key hashes
  *     onto, and it is the region's ordinary armoured thing.
@@ -4803,7 +4803,7 @@ export function bossSprite(spriteKey, colour, frame = 0, opts = {}) {
    * IS void, stone because rock does not emit — and this file imported the
    * function and never called it. The rim was painted on every creature and the
    * palette was then asked to hide it, which it does badly: measured on the
-   * Interviewer, 'Q' lands at #231c2e against an outline of #362b46 and renders
+   * Examiner, 'Q' lands at #231c2e against an outline of #362b46 and renders
    * 50 pixels of a SIXTEENTH colour on a sprite that is otherwise exactly at
    * fifteen. Not painting it is both the cheaper answer and the one the rule
    * already asked for. 'Q' is written inside the body, never on the boundary,

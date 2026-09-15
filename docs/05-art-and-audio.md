@@ -92,7 +92,7 @@ takes the glassy edge off raw square waves.
 Ten original tracks: town, overworld, dungeon, battle, boss, victory, training
 camp, memory shrine, complexity tower, final castle.
 
-**Adaptive intensity.** As an interview timer approaches expiry, `setIntensity()`
+**Adaptive intensity.** As a timed practical approaches expiry, `setIntensity()`
 raises voice gain and adds a noise hit on the off-beat — the battle track tightens
 as the clock runs down. Learning Mode never does this; stress-inducing audio has
 no place in a teaching context.
@@ -109,5 +109,5 @@ high contrast · colour-blind-safe status indicators (every colour cue is paired
 with a glyph or a word) · full mute · keyboard-first navigation throughout ·
 advisory-only timers in Adventure Mode.
 
-Interview Mode uses standardised constraints so the measurement stays comparable
+Timed Practical Mode uses standardised constraints so the measurement stays comparable
 between runs.

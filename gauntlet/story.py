@@ -13,7 +13,7 @@ Three rules constrain every line of content below.
    gated on a clear, a retest, a boss or a mastery number.
 2. No reward supplies an answer. Mentor techniques spend the same economic
    vocabulary as items.EFFECT_LABELS — focus, probes, loot, XP — and every one of
-   them is sealed in Interview Mode, along with the mentors themselves.
+   them is sealed in Timed Practical Mode, along with the mentors themselves.
 3. The rival motivates and never shames. Their lead is computed to shrink, they
    concede when the player passes them, and they are only ever ahead on one
    skill at a time.
@@ -271,7 +271,7 @@ def trigger_progress(trigger: Trigger, ctx: dict) -> dict:
     if kind == "gates_percent":
         total = max(1, ctx.get("gates_total", 13))
         have = round(100 * ctx.get("gates_passed", 0) / total)
-        return {"label": "Interview readiness", "current": have,
+        return {"label": "Timed Practical readiness", "current": have,
                 "required": int(trigger.value), "met": have >= trigger.value}
     if kind == "event":
         met = trigger.key in ctx.get("events", ())
@@ -532,8 +532,8 @@ def _gate_milestones(milestones: list) -> list:
     region" — BYTE follows you around and the Armorer does not.
 
     Two deliberate exemptions. Anything keyed on a transient event is never
-    gated (see refusal 1). And the interviewer is never gated at all: the
-    Interviewer IS the measurement, the measurement is available from the menu
+    gated (see refusal 1). And the examiner is never gated at all: the
+    Examiner IS the measurement, the measurement is available from the menu
     at any time, and a readiness readout that waits until you have walked
     somewhere would be a worse readout.
     """
@@ -913,7 +913,7 @@ MAIN_QUEST = [
         lines=(
             "Three drills. Your syntax is slow, not wrong. That is the better kind "
             "of broken and the slower kind to fix.",
-            "Slow syntax costs you the first four minutes of every interview. Those "
+            "Slow syntax costs you the first four minutes of every timed practical. Those "
             "are the only four minutes where looking uncertain is still free.",
             "We are not here to teach you what a dictionary is. You know. We are "
             "here to make typing one cost you nothing.",
@@ -1160,8 +1160,8 @@ MAIN_QUEST = [
             "Count the work you do per element. Multiply by the elements. Sequential "
             "work adds, nested work multiplies. That is the entire art and it fits "
             "on a coin.",
-            "Say the cost before anyone asks. Candidates who volunteer it are "
-            "assumed to have chosen it on purpose.",
+            "Say the cost before anyone asks. Explain the tradeoff so your "
+            "choice can be checked against the constraints.",
         ),
         reward={"xp": 180, "codex": "codex_cost", "card": "card_count_per_element"},
         objective="The Coliseum has a sand floor, a clock, and no hints.",
@@ -1210,7 +1210,7 @@ MAIN_QUEST = [
         ),
         reward={"xp": 900, "title": "The Architect Who Spoke",
                 "set_piece": "scene_source_restored", "codex": "codex_ending"},
-        objective="Interview Mode is the same castle with the lights on. Go and be measured.",
+        objective="Timed Practical Mode is the same castle with the lights on. Go and be measured.",
     ),
 ]
 
@@ -1584,7 +1584,7 @@ SIDE_CHAINS = [
                  lines=("Three predictions, three correct. You said what the answer "
                         "would be before the machine did.",
                         "That is not a parlour trick. That is the thing the "
-                        "interviewer is actually watching for."),
+                        "examiner is actually watching for."),
                  reward={"xp": 55, "favor": {"mentor": "testsmith", "amount": 3}}),
             Step(id="testsmith_suite_2", title="Empty, One, Duplicate, Negative",
                  objective="Land twelve correct probes.",
@@ -2189,14 +2189,14 @@ MILESTONES = [
         id="ms_first_medium", name="A Real Medium", speaker="archivist",
         trigger=When.event("first_medium_unaided"),
         line="That was a Medium and you took it unaided. Mediums are what the "
-             "interview is made of. The Easies were the alphabet.",
+             "timed practical is made of. The Easies were the alphabet.",
         reward={"xp": 120, "title": "Journeyman"}),
     Milestone(
         id="ms_first_boss", name="First Boss", speaker="narrator",
         trigger=When.event("first_boss_cleared"),
         line="Six phases: you named it, explained it, wrote it, survived the "
              "hidden trials, priced it, and recognised it again in disguise. That "
-             "is not a fight. That is an interview with a sprite on it.",
+             "is not a fight. That is a timed practical with a sprite on it.",
         reward={"xp": 150, "set_piece": "scene_first_boss"}),
     Milestone(
         id="ms_retest_week", name="Seven Days Later", speaker="oracle",
@@ -3308,8 +3308,8 @@ route in server.py exposes it. Nothing in world.py changes.
    Two invariants. First, technique_effects re-checks each technique's mastery
    requirement every call, so a decayed skill silently suspends its bonus until
    the number comes back — a permanent bonus that outlives its evidence would be
-   a reward for exposure. Second, Interview Mode must not call this at all: pass
-   include_story=False from the interview path, exactly as hints and coaching are
+   a reward for exposure. Second, Timed Practical Mode must not call this at all: pass
+   include_story=False from the timed practical path, exactly as hints and coaching are
    already sealed. A technique is not an answer, but the mode boundary is
    absolute and is enforced by tests/test_interview_isolation.py.
 
@@ -3356,7 +3356,7 @@ route in server.py exposes it. Nothing in world.py changes.
 
    The Standing Portal is progression.py's and world.py's. Story may gate a
    beat on `When.keys(14)`, and the finale properly belongs behind it. Story may
-   NEVER gate anything on the practical being available: Interview Mode is a
+   NEVER gate anything on the practical being available: Timed Practical Mode is a
    measurement, it is reachable from the menu with no keys at all, and
    finalexam.sealed() remains the one capability check in this game.
 

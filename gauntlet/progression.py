@@ -31,7 +31,7 @@ as prose and progress bars rather than as invisible thresholds:
    mortal regions are still one connected map, and `self_check` re-proves it
    from a keyless save standing in each of the seventeen regions in turn.
 
-   THE PORTAL GATES THE STORY CLIMAX AND NEVER THE PRACTICAL. Interview Mode is
+   THE PORTAL GATES THE STORY CLIMAX AND NEVER THE PRACTICAL. Timed Practical Mode is
    a measurement, reachable from the menu at any time with no keys, no roads and
    no bosses. `finalexam.sealed()` is the one capability check in this game;
    `portal_blocks()` is a question with a permanent answer, not a second one.
@@ -707,7 +707,7 @@ ROUTES = [
           "where a fault can be made to happen again on demand, to the second. "
           "You cannot fix what you cannot reproduce.", wall=True, danger=25),
     # The fourteenth. It runs the OTHER way down the road you always had out of
-    # the castle, and it exists so that having beaten the Interviewer you may
+    # the castle, and it exists so that having beaten the Examiner you may
     # walk back into the exam hall from your own village whenever you like.
     # It is a convenience, not a permission: the practical needs no key and no
     # road, and `world.portal_gates("practical")` is False forever.
@@ -845,7 +845,7 @@ WORLD_EVENTS = (
         id="ev_mines_reopen", title="The Cart Line Runs Again",
         need=Needs.bosses(2),
         changes=(Change("dungeon", "ninth_cart", ""),
-                 Change("npc", "shift_foreman", "hiring, apparently")),
+                 Change("npc", "shift_foreman", "gathering a crew, apparently")),
         prose="Two of the realm's monsters are dead and the mines have decided "
               "that is enough reason to reopen. The top shaft unloads from the "
               "top. The bottom shaft takes the oldest cart first. Both of them "
@@ -1297,7 +1297,7 @@ EVENT_BY_ID = {e.id: e for e in WORLD_EVENTS}
 # THE PORTAL AND THE PRACTICAL. Said once more here, where the gate is actually
 # evaluated, because this is the line that would be easiest to cross by accident
 # and the most damaging to cross. The Standing Portal gates the STORY CLIMAX.
-# The Interview Mode practical is a MEASUREMENT and is reachable from the menu
+# The Timed Practical Mode practical is a MEASUREMENT and is reachable from the menu
 # at any time with no keys, no roads, no bosses and no portal —
 # `finalexam.sealed()` is the one capability check in this game and nothing
 # here is a second one. `portal_blocks()` exists so that a caller can ask that
@@ -1401,7 +1401,7 @@ def portal_view(prog: dict) -> dict:
         "gates": list(world.PORTAL_GATES),
         "never_gates": list(world.PORTAL_NEVER_GATES),
         "practical_requires_keys": False,
-        "note": "This portal gates the story climax. The Interview Mode "
+        "note": "This portal gates the story climax. The Timed Practical Mode "
                 "practical is a measurement and is reachable from the menu at "
                 "any time with no keys at all.",
     }
@@ -1536,8 +1536,8 @@ LEVEL_MILESTONES = {
          "text": "Legendary Plate can be forged, if you have earned the parts."},
     45: {"name": "Free Passage", "kind": "unlock",
          "text": "Fast travel between any two regions you have restored."},
-    50: {"name": "The Interviewer's Attention", "kind": "unlock",
-         "text": "Interview Mode will run a full loop, unlabelled, on demand."},
+    50: {"name": "The Examiner's Attention", "kind": "unlock",
+         "text": "Timed Practical Mode will run a full loop, unlabelled, on demand."},
     55: {"name": "The Nameless Trial", "kind": "unlock",
          "text": "The castle's rooms re-roll on request. Nothing in them is ever "
                  "labelled, and nothing is ever labelled the same way twice."},
@@ -1637,7 +1637,7 @@ class Accolade:
 ACCOLADES = (
     Accolade("acc_unaided", "Unaided", Needs.stat("unaided_total", 25),
              "Twenty-five encounters cleared with no spell cast. The number that "
-             "an interviewer is actually measuring."),
+             "an examiner is actually measuring."),
     Accolade("acc_fluent", "Fluent", Needs.mastery("PYTHON", 80),
              "The language costs you nothing. Everything else is now the hard "
              "part, which is the correct arrangement."),
@@ -2315,7 +2315,7 @@ ALWAYS_AVAILABLE = (
 
 
 def available_in(mode: str) -> bool:
-    """Interview Mode has no overworld. The measured run is the whole world for
+    """Timed Practical Mode has no overworld. The measured run is the whole world for
     as long as it lasts."""
     return mode != config.MODE_INTERVIEW
 

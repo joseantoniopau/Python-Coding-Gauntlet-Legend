@@ -63,7 +63,7 @@ The frontend is ES modules with no build step: `<script type="module">` loads
 | `tactics.py` | Enemy weaknesses/resistances, the Probe, damage resolution. |
 | `items.py` | Loot, equipment, sets, attributes, builds, secrets. |
 | `world.py` | Regions, bosses, mentors, companions, weapons, armour, titles, achievements. |
-| `coach.py` | Post-attempt Socratic coaching. Refuses to exist in Interview Mode. |
+| `coach.py` | Post-attempt Socratic coaching. Refuses to exist in Timed Practical Mode. |
 | `db.py` | SQLite persistence. Hybrid: JSON blob for live state, tables for history. |
 | `engine.py` | The game. Every client action passes through here so invariants live in one place. |
 | `server.py` | Local HTTP. Token + origin guard. |
@@ -86,7 +86,7 @@ an older save.
   cause, declared pattern, time-to-first-code, and the submitted source.
 - `boss_records` — per-boss attempt history, for the "first battle 22:31 / now
   11:48" progression view.
-- `interview_runs` — scored interview simulations.
+- `interview_runs` — scored timed practicals.
 - `sessions` — session bookkeeping.
 
 WAL mode, `synchronous=NORMAL`, and an atomic upsert on every action. Export and
@@ -116,8 +116,8 @@ The environment is scrubbed: `HOME` and `TMPDIR` point at the scratch directory,
 Results are written to a file rather than stdout, so the player's own `print()`
 output stays pristine and can be shown verbatim in the battle log.
 
-**Adapters.** Tree problems must hand the player a real linked `TreeNode`, not a
-list, or the encounter stops resembling an interview. Tests travel as level-order
+**Adapters.** Tree problems hand the player a real linked `TreeNode` so the
+encounter tests actual node relationships. Tests travel as level-order
 lists; the harness converts them using the `TreeNode` class defined in the
 problem's own preamble, so `isinstance` and identity behave correctly.
 
@@ -139,7 +139,7 @@ range-checks every path against the web root.
 | GET | `/api/state` | Full dashboard: player, skills, regions, bosses, readiness, loadout, quests |
 | GET | `/api/world` | Static world data |
 | GET | `/api/loadout` | Equipment, inventory, attributes, set bonuses, secrets |
-| GET | `/api/history` | Attempt, boss and interview history |
+| GET | `/api/history` | Attempt, boss and timed practical history |
 | GET | `/api/sandbox/check` | Live sandbox verification |
 | POST | `/api/encounter/next` | Adaptive selection (retests take priority) |
 | POST | `/api/encounter/start` | Start a specific problem |
@@ -151,7 +151,7 @@ range-checks every path against the web root.
 | POST | `/api/explain` | Score a typed approach explanation |
 | POST | `/api/equip` · `/api/unequip` · `/api/allocate` · `/api/build` · `/api/respec` · `/api/consumable` | Loadout |
 | POST | `/api/boss/start` · `/api/boss/ladder` | Boss flow |
-| POST | `/api/interview/start` · GET `/api/interview/current` · POST `/api/interview/finish` | Interview Mode |
+| POST | `/api/interview/start` · GET `/api/interview/current` · POST `/api/interview/finish` | Timed Practical Mode |
 | POST | `/api/search` | Hunt for a hidden location |
 | GET/POST | `/api/export` · `/api/import` | Save portability |
 
@@ -163,5 +163,5 @@ provider. `coach.provider_name()` reports whether one is configured; with none,
 the Socratic coach still works from the failure classification, the test
 evidence and the player's own history.
 
-`coach.available_in(mode)` returns `False` for Interview Mode. The provider is
+`coach.available_in(mode)` returns `False` for Timed Practical Mode. The provider is
 not merely unused there — the code path is not entered.

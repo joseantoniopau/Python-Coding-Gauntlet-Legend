@@ -169,7 +169,7 @@ export const ART_W = 64;
 export const ART_H = 64;
 export const ART_WIDE_W = 96;
 /* And the final rung of docs/08 §B, 12x16 tiles, which bosses.js authors one
- * creature at (the Interviewer). Nothing in THIS file draws at it: an apex is a
+ * creature at (the Examiner). Nothing in THIS file draws at it: an apex is a
  * width profile 64 rows long and the seventeen of them are a cast, not a
  * finale. The constants are here so the two files' idea of the ladder cannot
  * drift silently — bossArtSelfCheck() compares them when a caller hands
@@ -1383,7 +1383,7 @@ const M_ASYM = Object.freeze([
   '.......o.',
 ]);
 
-/* The Interviewer: a visor with no slit in it at all, and a clipboard that is a
+/* The Examiner: a visor with no slit in it at all, and a clipboard that is a
  * rectangle of nothing. The only boss in the game with no lit edge anywhere. */
 const M_BLANK = Object.freeze([
   'ooooooooo',
@@ -1438,7 +1438,7 @@ const NAMED_ROWS = [
   ['bug_demon', 'The Bug Demon', 'debugging_dungeon', 'demon', '#c43f4f',
     'One horn, one wing, one leg a pixel short. The only thing here that refuses the mirror.',
     [['crown', M_ASYM, 30, 8]], { asym: true, lean: 3, leanK: 2 }],
-  ['the_interviewer', 'The Interviewer', 'null_kings_castle', 'interviewer', '#d8d8e0',
+  ['the_interviewer', 'The Examiner', 'null_kings_castle', 'interviewer', '#d8d8e0',
     'A crown whose band is the top of the skull, a visor with no slit, and a clipboard that is a rectangle of nothing.',
     [['brow', M_BLANK, 28, 12]], { scale: 1.00, taper: 10, swell: [6, 16, 4] }],
 ];

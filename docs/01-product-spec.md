@@ -2,11 +2,10 @@
 
 ## What this is
 
-A 16-bit RPG whose combat system is a Python coding-interview trainer, built for
-one named player: a senior security engineer with strong systems judgement,
-strong incident response and detection engineering, who reads code well and
-reasons about it well — but who cannot yet produce Python quickly from a blank
-screen, and has limited exposure to algorithmic interview patterns.
+A 16-bit RPG for learning Python through exploration, coding and timed practicals.
+It supports a learner who reads code and reasons about it well, but cannot yet
+produce Python confidently from a blank screen and has limited experience with
+algorithmic patterns.
 
 The product exists to convert:
 
@@ -16,10 +15,10 @@ into:
 
 > "I recognise the pattern, select the data structure, explain the algorithm,
 > implement it cleanly, debug it, test it, explain its complexity, and do all of
-> that under interview time pressure."
+> that within a timed practical."
 
-The promise: **if you beat the full game under mastery conditions, you should be
-genuinely ready for a demanding Python coding interview.**
+The objective: **build independent Python problem-solving skills and measure
+them on unfamiliar tasks.** Game completion alone is not proof of retained skill.
 
 ## The two priorities, held equally
 
@@ -37,7 +36,7 @@ CHALLENGE → LEARNING → IMPROVEMENT → MASTERY → REWARD → NEW CHALLENGE
 
 ## Design rules that are never violated
 
-1. **Adventure Mode teaches. Interview Mode measures.** They are never confused,
+1. **Adventure Mode teaches. Timed Practical Mode measures.** They are never confused,
    and the separation is enforced server-side.
 2. **Learning never dead-ends.** Every problem's hint tree bottoms out in a
    complete worked solution. A Learning Clear still advances the story.
@@ -48,7 +47,7 @@ CHALLENGE → LEARNING → IMPROVEMENT → MASTERY → REWARD → NEW CHALLENGE
    cause, a training camp targeting the *prerequisite*, and three remediation
    steps.
 6. **Provenance is honest.** Reported patterns are labelled as historical
-   patterns with an explicit disclaimer. Generated content never names a company.
+   patterns with an explicit disclaimer. Generated content retains its source note.
 
 ## The world
 
@@ -86,7 +85,7 @@ input, the correct answer is a specific value:
 - **Wrong** → you have caught a broken mental model *before* spending twenty
   minutes implementing it, and the Testsmith skill is credited either way.
 
-This is the same skill an interviewer watches for: predicting how code breaks.
+This exercises a core Python skill: predicting how code breaks.
 
 ## Progression
 
@@ -112,9 +111,9 @@ This is the same skill an interviewer watches for: predicting how code breaks.
 | 30 min | Standard quest: a region, a retest, an armour repair |
 | 60 min | Training session: a weakness focus plus a boss attempt |
 | 90+ min | Adventure session: region clearing, elites, loot |
-| 45–70 min | Interview simulation: Live Screen or the Gauntlet |
+| 45–70 min | Timed practical: Timed Session or the Gauntlet |
 
-## Interview profiles
+## Timed practical profiles
 
 `PRACTICAL` (the immediate objective), `GENERAL_SWE`, `SECURITY_ENGINEERING`,
 `CUSTOM`. Profiles change question weighting, difficulty, timing and the problem
@@ -123,14 +122,14 @@ window, two pointers, matrices, trees, recursion, BFS/DFS, design, debugging,
 Big-O and testing — the publicly reported emphasis, presented as historical
 pattern rather than prophecy.
 
-Two formats: **Live Screen** (50 minutes, 2 problems) and **The Gauntlet** (65
+Two formats: **Timed Session** (50 minutes, 2 problems) and **The Gauntlet** (65
 minutes, 4 problems rising in difficulty, family never named).
 
 ## Success metrics
 
 Time to pattern recognition · Python generation speed · test pass rate ·
 debugging speed · Medium completion · Big-O accuracy · edge-case identification ·
-retention across intervals · interview simulation score. Plus voluntary session
+retention across intervals · timed practical score. Plus voluntary session
 duration, return frequency, boss replay rate, and reduction in hint dependence.
 
 Engagement is never optimised at the expense of learning.

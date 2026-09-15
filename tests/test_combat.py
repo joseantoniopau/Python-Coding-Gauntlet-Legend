@@ -655,7 +655,7 @@ class TestTheSeal(CombatTest):
 
     def _armed(self):
         """A player with everything: a class, a forged blade, a bag of metal,
-        a full pouch and gold. Then an interview on top of it."""
+        a full pouch and gold. Then a timed practical on top of it."""
         g = self.fresh()
         g.choose_class("analyst")
         state = g._forge_state()
@@ -767,7 +767,7 @@ class TestTheSeal(CombatTest):
             self.assertEqual(payload.get("error"), "sealed", path)
 
     def test_the_final_practical_is_sealed_the_same_way_and_not_a_second_way(self):
-        """The exam IS Interview Mode — finalexam.EXAM_MODE is the same
+        """The exam IS Timed Practical Mode — finalexam.EXAM_MODE is the same
         constant — so every check above fires for it without being told about
         it. Proven rather than assumed, because "the same mode" is exactly the
         kind of claim that stops being true quietly."""

@@ -36,9 +36,9 @@ PATTERNS = [
 DIFFICULTIES = ["GUIDED", "TUTORIAL", "EASY", "MEDIUM", "HARD", "ELITE", "BOSS"]
 
 SOURCE_TYPES = [
-    "REPORTED_INTERVIEW",   # archetype publicly reported for a company
-    "COMPANY_PATTERN",      # family a company is widely reported to favour
-    "GENERAL_INTERVIEW",    # classic, company-agnostic
+    "REPORTED_INTERVIEW",   # reported coding exercise pattern; legacy machine tag
+    "COMPANY_PATTERN",      # reported pattern family; legacy machine tag
+    "GENERAL_INTERVIEW",    # general coding exercise; legacy machine tag
     "GENERATED_VARIANT",    # authored variant of a family
     "SECURITY_VARIANT",     # security-domain transfer skin
     "REMEDIATION",          # micro-drill produced by failure analysis
@@ -253,7 +253,7 @@ class Problem:
         # rule `redact_mcq` applies to the answer index.
         d.pop("scaffold_spans", None)
         if mode == "interview":
-            # Interview Mode measures. No teaching surface whatsoever.
+            # Timed Practical Mode measures. No teaching surface whatsoever.
             d["hint_tree"] = []
             d["visualization"] = {}
             d["common_failures"] = []

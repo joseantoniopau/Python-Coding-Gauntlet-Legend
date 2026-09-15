@@ -7,7 +7,7 @@ self-check in private. Nothing below imports a world module to DO the work —
 the modules are read only for the constants an assertion needs.
 
 Three rules are re-proved end to end rather than assumed:
-  - Adventure Mode teaches, Interview Mode measures, and finalexam.sealed() is
+  - Adventure Mode teaches, Timed Practical Mode measures, and finalexam.sealed() is
     the one question. Both the engine and the HTTP layer refuse.
   - Mastery moves on graded evidence. The Obliging Hand is the single exception
     and it moves mastery DOWN, permanently, and pays for it.
@@ -1042,7 +1042,7 @@ class TestFinalExamReachable(GameTest):
 
 # --------------------------------------------------------------------------
 class TestTheIsolationRuleAtTheEngine(GameTest):
-    """Interview Mode measures. Nothing helps, and nothing is a second path."""
+    """Timed Practical Mode measures. Nothing helps, and nothing is a second path."""
 
     CAPABILITIES = ("HINTS", "PROBES", "ITEMS", "PET", "COACH",
                     "OBLIGING_HAND", "PATTERN", "SOLUTION", "MENTOR")

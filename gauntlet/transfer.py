@@ -150,12 +150,12 @@ def _note(sample: int, cleared: int, remaining: int) -> str:
 
 def _verdict(sample: int, rate, band: dict) -> str:
     if sample < MIN_SAMPLE:
-        return ("Interview Mode and the final practical are the only places this "
+        return ("Timed Practical Mode and the final practical are the only places this "
                 "evidence comes from. Sit one.")
     if band["low"] >= 70:
         return ("Even the pessimistic end of that band clears 70%. On this "
                 "evidence the knowledge is transferring to formulations you "
-                "have never been shown, which is the thing an interview tests.")
+                "have never been shown, which is the thing a timed practical tests.")
     if band["low"] >= 45:
         return ("The band is still wide. What it rules out is more useful than "
                 "what it claims: this is not a player who only performs on "

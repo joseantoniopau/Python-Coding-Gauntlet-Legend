@@ -1702,7 +1702,7 @@ def _states() -> list:
                     "pushes 14. One value left on the stack is what a "
                     "well-formed expression should always end with — more than "
                     "one means the input was malformed, and that is worth "
-                    "checking out loud in an interview.",
+                    "checking out loud in a timed practical.",
         failures=["Popping the operands in the wrong order",
                   "Forgetting that the result is pushed back on"],
         after="sp-deque-window",

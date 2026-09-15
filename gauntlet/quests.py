@@ -31,7 +31,7 @@ The rules the tests enforce apply here without exception. No reward supplies an
 answer to a coding problem: the reward vocabulary buys focus, routes, reference
 cards and places to stand, and nothing else. Nothing in here is gated on time
 spent, and no quest can expire, so there is no scarcity to manufacture anxiety
-with. Adventure Mode only — none of this exists while the interview clock runs.
+with. Adventure Mode only — none of this exists while the timed practical clock runs.
 
 Wiring is documented at the bottom, in WIRING.
 """
@@ -147,7 +147,7 @@ class Gate(story.When):
         """All fourteen. The Standing Portal's own gate, and the only thing in
         the world that is allowed to ask for every key at once.
 
-        It gates the STORY, never the practical: Interview Mode is a
+        It gates the STORY, never the practical: Timed Practical Mode is a
         measurement and is reachable from the menu with no keys at all. See
         world.portal_gates.
         """
@@ -2968,7 +2968,7 @@ _QUESTS += [
         objective={"task": "Cost out the lamp rounds floor by floor",
                    "family": "big_o", "count": 3,
                    "text": "Clear three complexity encounters."},
-        consequence={"npc_line": "The guild has hired four more lighters for "
+        consequence={"npc_line": "The guild has sent four more lighters for "
                                  "the upper floors. Because you counted the "
                                  "work per floor instead of counting floors.",
                      "world": "The tower's lower floors are fully lit, and a "
@@ -3800,7 +3800,7 @@ def _shim_skills(ctx: dict):
 
 
 def available_in(mode: str) -> bool:
-    """Interview Mode has no quest board. A measured run is not a place to be
+    """Timed Practical Mode has no quest board. A measured run is not a place to be
     handed a reward for something you did yesterday."""
     return mode != config.MODE_INTERVIEW
 
@@ -5125,7 +5125,7 @@ How the engine picks this up. Ten touch points, none of them invasive.
                                          the line a quest earned.
        Gate.key / Gate.keys / Gate.portal — for authoring quests behind a key.
 
-   The Standing Portal gates the story climax. It does not gate Interview Mode,
+   The Standing Portal gates the story climax. It does not gate Timed Practical Mode,
    which is a measurement and is reachable from the menu with no keys at all.
    world.portal_gates("practical") is False and there is a test that says so.
 
@@ -5199,8 +5199,8 @@ How the engine picks this up. Ten touch points, none of them invasive.
    nothing in this file can move it. quests._regalia_grants_no_depth() proves
    that and validate() runs it.
 
-9. INTERVIEW MODE
-   None of this exists there. Interview Mode measures; quests teach, pay and
+9. TIMED PRACTICAL MODE
+   None of this exists there. Timed Practical Mode measures; quests teach, pay and
    change the map. The gate is the same one that seals mentors and spells.
 
 10. TESTS

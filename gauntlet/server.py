@@ -275,7 +275,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return raw
 
     def _sealed(self, g, capability: str = "BUILD") -> bool:
-        """Interview Mode is enforced HERE as well as in the engine.
+        """Timed Practical Mode is enforced HERE as well as in the engine.
 
         finalexam.sealed() is the one question; this asks it at the door. The
         engine refuses too, and so do the modules, but a guarantee that only
@@ -693,7 +693,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     #
     # Everything here is a thin door onto an engine method that already holds
     # the rules. The server's own two jobs are input validation — nobody gets a
-    # stack trace — and the seal: Interview Mode is refused at the door as well
+    # stack trace — and the seal: Timed Practical Mode is refused at the door as well
     # as inside, because a guarantee that only lives three rooms in is one
     # somebody can walk around. For several of the doors below that is not
     # belt-and-braces; see the note on _sealed above.
@@ -1108,7 +1108,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def _world_post(self, g, path: str, body: dict) -> bool:
         # -- classes -------------------------------------------------------
-        # A skill tree is BUILD. Interview Mode measures what the player can do
+        # A skill tree is BUILD. Timed Practical Mode measures what the player can do
         # without one, so it is sealed for the length of the run.
         if path == "/api/class/choose":
             if self._sealed(g):
@@ -1391,7 +1391,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         # Three doors. `start` is an overworld action and is sealed during a
         # measured run like every other one; `run` and `submit` are the fight
         # itself, and sealing those would make a Mini-Repo unplayable in the
-        # one mode it most belongs in. What Interview Mode takes off a
+        # one mode it most belongs in. What Timed Practical Mode takes off a
         # Mini-Repo is decided by finalexam.sealed() inside the engine, and
         # nowhere else.
         if path == "/api/repo/start":

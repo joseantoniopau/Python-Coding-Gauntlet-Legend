@@ -72,7 +72,7 @@ WHAT THE EXAM SEES
 Nothing from this file. Every multiplier here is a fact about the character —
 how far up the tree they invested, how many times they have drilled this move —
 and `finalexam` seals that under BUILD. So `scale_for(..., sealed=True)` returns
-exactly one, and an interview context alone is enough to trigger it even if the
+exactly one, and a timed practical context alone is enough to trigger it even if the
 caller forgot the keyword. Damage in a measured run is `complexity.weight` and
 nothing else, which is the only reading under which the exam measures Python
 rather than measuring a save file.
@@ -1409,7 +1409,7 @@ def self_check() -> dict:
         problems.append("a rank penalty survived the seal: %.4f"
                         % seal["faded_sealed"])
     if not seal["interview_context_alone_is_enough"]:
-        problems.append("an interview context does not seal this module on its own")
+        problems.append("a timed practical context does not seal this module on its own")
 
     return {
         "moves": len(CATALOGUE),

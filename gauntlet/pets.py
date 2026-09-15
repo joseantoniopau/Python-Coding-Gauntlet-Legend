@@ -1417,7 +1417,7 @@ PETS: tuple = (
               "read the same statement three times.",
         method="When you freeze at the blank screen, it names the FAMILY the "
                "problem belongs to. Never the steps — the family. Recognition is "
-               "the part of an interview that happens in the first ninety seconds, "
+               "the part of a timed practical that happens in the first ninety seconds, "
                "and it is the part that can be trained.",
         triggers=(
             Trigger("idle_before_first_submit", 210,
@@ -1565,7 +1565,7 @@ PETS: tuple = (
             "BOUNDARY": "The exact limit. Equal to k, not less than it. One "
                         "comparison in there has the wrong strictness.",
             "SCALE": "The large one. It works, it works, it works, and then it takes "
-                     "nine seconds and dies in front of an interviewer.",
+                     "nine seconds and dies in front of an examiner.",
             "UNIFORM": "Every element identical. Does your comparison still make "
                        "progress when nothing is ever greater than anything.",
             "ORDER": "Adverse order. Already sorted, exactly reversed, and shuffled "
@@ -1892,7 +1892,7 @@ PETS: tuple = (
         idle=(
             "You have written no tests. I am not judging. I am recording.",
             "Everything that has ever broken here broke twice. I have the count.",
-            "The interviewer will ask how you would test it. It is worth having an "
+            "The examiner will ask how you would test it. It is worth having an "
             "answer.",
         ),
         on_intervene="There is a test you have not written, and it is the one that "
@@ -1956,7 +1956,7 @@ PETS: tuple = (
               "fifth. It is not in any difficulty.",
         method="It prices what you have written — the shape of the work, not the "
                "fix. Correct and unaffordable is the most common way a good "
-               "candidate loses, and it is the one nobody notices while it is "
+               "learner loses, and it is the one nobody notices while it is "
                "happening.",
         triggers=(
             Trigger("perf_trial_failed", 1,
@@ -2350,7 +2350,7 @@ def available_in(mode: str, region_id: str = "", *, sealed: bool = False) -> boo
     What this function owns is the part finalexam does not know about: two
     regions whose own descriptions promise that nothing helps you there.
 
-    The Interview Mode line below is deny-only and redundant with the seal. It
+    The Timed Practical Mode line below is deny-only and redundant with the seal. It
     stays because it can only ever refuse MORE than finalexam refuses and never
     less, so it is a guard rail on a caller who forgot to pass `sealed` rather
     than a second policy about who may be helped.
@@ -2639,7 +2639,7 @@ def outcome_line(pet_id: str, *, cleared: bool, helped: bool = True) -> str:
 #      anybody at any tier with no companion at all — including a player whose
 #      only companion is dead.
 #   2. The coach, after a failed submission. Socratic, graded, and gated only by
-#      Interview Mode, which is the one place nothing helps anybody.
+#      Timed Practical Mode, which is the one place nothing helps anybody.
 #   3. The worked solution, free in focus after FREE_SOLUTION_AFTER attempts and
 #      costing the entire rank. The floor the whole design already rested on.
 #
@@ -2867,7 +2867,7 @@ def party_effects(active: list, bonds: dict | None = None,
     key" rule stays anyway: it costs nothing, and it keeps an old save that
     still lists two active pets from stacking anything it should not.
 
-    Nothing is contributed in Interview Mode. Items already work this way, and a
+    Nothing is contributed in Timed Practical Mode. Items already work this way, and a
     pet is not allowed to be the exception that proves the rule. The seal proper
     is the caller's to apply — `available_in(mode, region, sealed=)` — and this
     mode check is the same deny-only guard rail that function carries.
@@ -3400,7 +3400,7 @@ def take_aoe(state: dict, damage: float, *, max_health: float,
 
     Returns None when there is nothing to hit: no companion fielded, the one
     fielded is already down, or `available_in` says no animal is present here at
-    all — a measured run, Interview Mode, or one of the two regions that promise
+    all — a measured run, Timed Practical Mode, or one of the two regions that promise
     nothing helps you there. That last group matters. A companion that is not
     allowed to help in this encounter is not standing in the blast either,
     because the alternative is an exam, or a Coliseum bout, that sends the

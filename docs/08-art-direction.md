@@ -4,7 +4,7 @@ This is an original Python-learning RPG. Its visual references are 16-bit consol
 
 ## What the references contribute
 
-The game combines readable side-view combat, compact expressive field actors, strong silhouettes, consistent framed menus, distinctive town geography, an ensemble cast and changes to a persistent world. Decisions need room: the learner must be able to reason before committing an action. Gauntlet's coding encounters resolve after Python execution and authoritative grading; they do not run an ATB clock while a beginner types. Sealed interviews retain their own explicit clocks.
+The game combines readable side-view combat, compact expressive field actors, strong silhouettes, consistent framed menus, distinctive town geography, an ensemble cast and changes to a persistent world. Decisions need room: the learner must be able to reason before committing an action. Gauntlet's coding encounters resolve after Python execution and authoritative grading; they do not run an ATB clock while a beginner types. Sealed timed practicals retain their own explicit clocks.
 
 Heavy Metal contributes broad shadow masses, warm highlights against cold ambient light, silhouettes framed by architecture, varied settings and held compositions punctuated by motion. It does not imply that every surface should glow red. Quiet inhabited places and dawn light provide contrast with the hostile citadel. See the [1981 production account](https://www.heavymetal.com/post/heavy-metal-the-making-of-the-movie-from-august-1981) and [Animation World Network's production history](https://www.awn.com/animationworld/here-s-skinny-heavy-metal).
 
@@ -58,4 +58,4 @@ Existing audio provides regional motifs, battle intensity, enemy cries, elementa
 
 Relevant checks live in `scripts/verify/`: `combathero`, `creaturepolish`, `regionalart`, `petpolish`, `stage`, `cinema`, `finale-player`, and the existing subsystem harnesses. `stage.mjs` compares the geometry declarations, safe-area readouts, integer scales and all boss phases. Its fit arithmetic is a synthetic check; browser measurements of the current layout are the acceptance evidence for reading space.
 
-[16-polish-delivery.md](16-polish-delivery.md) records integrated checks and remaining work. Claims of usability or learning outcomes require observation of people using the game. Automated frame counts cannot establish visual appeal, enjoyment, or sufficient preparation for an interview.
+[16-polish-delivery.md](16-polish-delivery.md) records integrated checks and remaining work. Claims of usability or learning outcomes require observation of people using the game. Automated frame counts cannot establish visual appeal, enjoyment, or independent Python skill.

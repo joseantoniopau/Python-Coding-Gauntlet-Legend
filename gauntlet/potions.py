@@ -1619,7 +1619,7 @@ def _validate() -> list:
     if not third.get("ok"):
         problems.append("a cast did not return the draught")
 
-    # -- the seal: nothing works in Interview Mode, and there is one way to ask
+    # -- the seal: nothing works in Timed Practical Mode, and there is one way to ask
     class _Exam:
         mode = config.MODE_INTERVIEW
         boss_id = ""
@@ -1629,7 +1629,7 @@ def _validate() -> list:
                        player={"stamina": 1, "stamina_max": 20},
                        turn_state=new_fight(), encounter=_Exam())
     if sealed_try.get("error") != "sealed":
-        problems.append("a potion worked in Interview Mode")
+        problems.append("a potion worked in Timed Practical Mode")
 
     # -- D. a monster with an antidote cures out loud, and it costs it the turn
     poison = Poison()

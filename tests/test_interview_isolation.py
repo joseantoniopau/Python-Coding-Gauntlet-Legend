@@ -1,4 +1,4 @@
-"""Interview Mode is sacred. These tests exist to prove it stays that way.
+"""Timed Practical Mode is sacred. These tests exist to prove it stays that way.
 
 The spec requires explicit tests proving AI and assistance are inaccessible.
 Everything here checks the SERVER's behaviour, not the UI's, because a guarantee

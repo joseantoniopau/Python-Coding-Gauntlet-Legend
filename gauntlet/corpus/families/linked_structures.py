@@ -1,6 +1,6 @@
 """Linked structures: the chain, the ring, and the vault built out of both.
 
-A linked list is the first data structure in an interview that is not a Python
+A linked list is the first data structure in a timed practical that is not a Python
 builtin. There is no `len`, no indexing, no slicing — there is a node, and the
 node knows exactly one thing: what comes after it. Everything in this family is
 a consequence of that.
@@ -16,7 +16,7 @@ three-pointer rewiring twice with their own hands.
 
 THE NODE IS REAL. The player writes against an actual `ListNode`, not a Python
 list pretending to be one, because "just use a list" is the exact reflex an
-interviewer is testing for the absence of. Tests still travel as plain value
+examiner is testing for the absence of. Tests still travel as plain value
 lists; the sandbox harness turns them into a chain on the way in and back into
 values on the way out (`arg_adapters=["linked"]`, `result_adapter="linked"`),
 which mirrors what `_tree.py` already does for `TreeNode`.
@@ -889,7 +889,7 @@ def build() -> list:
             return new_head
         """,
         alternates=[{"name": "the iterative three-cursor loop",
-                     "note": "O(1) space, and the one to reach for in a real interview.",
+                     "note": "O(1) space, and the one to reach for in a real timed practical.",
                      "complexity": "O(n) time, O(1) space"}],
         prerequisites=["ll-reverse-rec-guided"], tags=["core", "recursion"],
     ))
@@ -987,7 +987,7 @@ def build() -> list:
         time_complexity="O(n)", space_complexity="O(1)",
         failures=["Advancing `prev` to `second`, which is now behind `first`",
                   "Checking only `prev.next`, then dereferencing a missing partner",
-                  "Swapping `.val` instead of relinking, which the interviewer is "
+                  "Swapping `.val` instead of relinking, which the examiner is "
                   "specifically watching for"],
         nudge="Three links change per pair, and the node you leave `prev` on is the "
               "one that ended up second.",
@@ -1157,7 +1157,7 @@ def build() -> list:
 
             The tests describe each chain as `[values, pos]`, where `pos` is the index
             the last node links back to, or `-1` for no cycle — but your function is
-            handed a real `ListNode`, exactly as it would be in an interview.
+            handed a real `ListNode`, exactly as it would be in a timed practical.
         """,
         fn_name="has_cycle", params="head", reference=linked_ref(_ref_has_cycle, cycle=True),
         canonical="""
@@ -1603,7 +1603,7 @@ def build() -> list:
             The honest answer is that you already solved this: merge two, then merge
             the result with the third. Say that out loud before you write anything
             clever, and then say what it costs — because 'merge k sorted lists' is the
-            same question with a heap bolted on, and the interviewer is listening for
+            same question with a heap bolted on, and the examiner is listening for
             whether you know why the heap is there.
         """,
         fn_name="merge_three", params="a, b, c",
@@ -1882,7 +1882,7 @@ def build() -> list:
 
             Unsorted means duplicates are no longer neighbours, so the chain can no
             longer tell you what it has already shown you. Something else has to
-            remember — and the follow-up an interviewer will ask is how you would do
+            remember — and the follow-up an examiner will ask is how you would do
             it with no extra memory at all.
         """,
         fn_name="remove_duplicates_unsorted", params="head",

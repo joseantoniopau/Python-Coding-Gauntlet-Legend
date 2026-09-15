@@ -164,7 +164,7 @@ STATE_KEY = "sanctuary"
 
 
 def available_in(mode: str) -> bool:
-    """Interview Mode has no dungeons, so it has nothing hidden in them, and it
+    """Timed Practical Mode has no dungeons, so it has nothing hidden in them, and it
     has no healers because it is not teaching anybody anything."""
     return mode != config.MODE_INTERVIEW
 
@@ -2085,7 +2085,7 @@ Six touch points. None of them changes a signature that already exists.
    sanctuary.journal(self.state)                -> the log page
    sanctuary.needed_by(self.state)              -> is this urgent right now
 
-7. INTERVIEW MODE
+7. TIMED PRACTICAL MODE
    sanctuary.available_in(mode) is False there, every entry point takes
    `sealed=` and refuses, and dungeon_look returns a blank row rather than a
    tell. Same gate as everything else: finalexam.sealed(enc, "BUILD").

@@ -15,7 +15,7 @@ anywhere in a teaching payload is already the end of the measurement: an id is
 enough to look it up.
 
 Two things are deliberately NOT here, because they are the measurement itself:
-Interview Mode and the final practical. A sealed id is supposed to come back
+Timed Practical Mode and the final practical. A sealed id is supposed to come back
 from those. Everything else in the game is on trial.
 """
 from base import GameTest  # noqa: E402
@@ -255,7 +255,7 @@ class TestNothingThatTeachesEverDrawsASealedProblem(SealCensus):
     def test_a_measured_run_never_names_a_question_before_it_serves_it(self):
         """The roster, which is the leak that is not a selector.
 
-        Interview Mode reaches for the hold-out FIRST, so the list of problem
+        Timed Practical Mode reaches for the hold-out FIRST, so the list of problem
         ids a run is composed from is a list of sealed ids — and a hold-out
         problem is spent when it is SERVED, not when it is composed. A roster
         handed over at the start of a run was therefore a free look: read the

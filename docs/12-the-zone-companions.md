@@ -95,7 +95,7 @@ row each, no new cast, no new boss, no new key.
   time you walk `rt_waking_road` — **not** on capture. See §1.5.
 - **Capture:** she is the **exception**, and she is the arc's proof. Python
   Village has no boss and no dungeon; there is nothing there to take her. She is
-  taken at the finale, by the Interviewer, alongside Yoren Halt and Ivo Brannt
+  taken at the finale, by the Examiner, alongside Yoren Halt and Ivo Brannt
   — which is already exactly what `captives.py` says happens. The player's own
   line, "the last boss captures all of these known villagers", lands hardest on
   the one you have known since minute one.
@@ -288,7 +288,7 @@ One shape, stated once, five instances.
 | 4 | **The item drops.** | In the same transaction as beat 3, the drop id is appended to `state["inventory"]` — the same one-line path `engine.py` already uses everywhere it hands over gear (`if item_id not in self.state["inventory"]: append`). There is no `items.grant()`; do not invent one. **The grant is unconditional** — not a roll, not in a chest, impossible to miss. A zone mechanic a player can lose access to is a dead end. |
 | 5 | **You free them.** | `captives.free(state, boss_id)` — the existing call, unchanged. It already opens every cage that boss holds, pays through `quests.reward_for`, banks the boon and the route, and returns `{pay, story, world}`. |
 | 6 | **Thank you, keep it, here is the next thing.** | The keep-it line is authored into `Captive.lines`. The next-zone reward is `Captive.gift`, which `captives._extras_for` already hands over inside `free()`. **Nothing new is needed for beat 6.** |
-| 7 | **The Interviewer takes them all.** | On clearing ladder **rung 13** (`bug_demon`) — the second-to-last boss. §2.5. |
+| 7 | **The Examiner takes them all.** | On clearing ladder **rung 13** (`bug_demon`) — the second-to-last boss. §2.5. |
 | 8 | **Everyone out.** | `captives.final_release(state)`, the existing single call the finale makes. |
 
 ### 2.2 Beat 3, in detail: the scene
@@ -341,7 +341,7 @@ deliberately *worse* than the person. **That is the design.** The item is not a
 replacement; it is a coping strategy, and the length of the gap is how long the
 player has to feel the difference.
 
-### 2.5 Beat 7: the Interviewer takes all of them
+### 2.5 Beat 7: the Examiner takes all of them
 
 The player's words: *"the last boss captures all of these known villagers after
 the second-to-last boss is defeated."* The second-to-last boss is
@@ -350,7 +350,7 @@ the second-to-last boss is defeated."* The second-to-last boss is
 New call, `captives.retake(state) -> dict`:
 
 - Moves every id in `state["captives"]["freed"]` that belongs to one of the five
-  zone companions **plus** everyone the Interviewer already holds into a new
+  zone companions **plus** everyone the Examiner already holds into a new
   list `state["captives"]["retaken"]`.
 - **Suspends their boons** — `captives.boon_effects(state)` skips a retaken
   person's boon. This is a real, felt, reversible loss.

@@ -4,7 +4,7 @@ Every other family in this corpus asks the player to *choose* something — a
 structure, a pattern, an algorithm. This one does not. It drills the forms:
 a comprehension with a condition, a sort by the second element, a dict built
 from a zip. The content changes, the shape repeats, and the repetition is the
-entire point. Under interview pressure the thing that fails first is not the
+entire point. Under timed practical pressure the thing that fails first is not the
 idea, it is the fingers.
 
 Nineteen topics, each one walked up the same ramp:
@@ -2237,7 +2237,7 @@ def build() -> list:
                   "check matters.",
             pseudocode="if tags is None: tags = []\nreturn list(tags) + [tag]",
             failures=["`def add_tag(tag, tags=[])` grows across calls and is the "
-                      "canonical Python interview trap",
+                      "canonical Python timed practical trap",
                       "`tags.append(tag)` mutates the caller's list and returns None"],
         ),
 

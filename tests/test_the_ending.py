@@ -2,7 +2,7 @@
 
 Six claims, and the first one is the one that would quietly ruin the game:
 
-  1. AN ORDINARY INTERVIEW MODE RUN ENDS NOTHING. It is a measurement, it is
+  1. AN ORDINARY TIMED PRACTICAL MODE RUN ENDS NOTHING. It is a measurement, it is
      available with no keys at any point in the game, and sitting it — even
      sitting the sealed practical format itself, even passing it — frees
      nobody, plays no cutscene and changes no world.
@@ -129,7 +129,7 @@ class TheEnding(GameTest):
         production caller anywhere in `gauntlet/`.
 
         `liberate()` empties the index. It sets neither `final_release` nor
-        clears `retaken`, so at the credits every companion the Interviewer
+        clears `retaken`, so at the credits every companion the Examiner
         went back for after the second-to-last rung still read RETAKEN, their
         boons stayed suspended for ever, and the one reversal the suspension
         was allowed to cost anything for never happened. The finale's whole
@@ -191,7 +191,7 @@ class TheEnding(GameTest):
         send_off = out["cutscene"]["send_off"]
         self.assertEqual(send_off["code"], "READY")
         text = " ".join(send_off["lines"])
-        self.assertIn("ready to sit a real Python interview", text)
+        self.assertIn("met the standard for this timed Python practical", text)
         self.assertIn("%s of %s" % (report["solved"], report["total"]), text)
 
     # -- 3. the failure ---------------------------------------------------

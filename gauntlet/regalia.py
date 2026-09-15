@@ -742,7 +742,7 @@ def schedule(pet_id: str, bond: int = 0, *, region_id: str = "",
     `sealed` is the caller's `finalexam.sealed(enc, "PET")` verdict, passed in
     for exactly the reason `pets.available_in` takes it as an argument: there is
     one isolation path in this game and this module does not form a second
-    opinion about it. Sealed, or in Interview Mode, an object contributes
+    opinion about it. Sealed, or in Timed Practical Mode, an object contributes
     nothing — same as the companion it is on.
 
     `also_scale` and `also_interventions` ARE THE BRIDGE TO quests.REGALIA, and
@@ -1389,7 +1389,7 @@ def _prove_bounds() -> dict:
 
 
 def _prove_seal() -> dict:
-    """Sealed, and in Interview Mode, an object is jewellery."""
+    """Sealed, and in Timed Practical Mode, an object is jewellery."""
     from .config import MODE_INTERVIEW
     state = new_state()
     grant(state, "jade_collar")
@@ -1712,7 +1712,7 @@ Four call sites, one state key, and no new effect vocabulary.
    ceiling, hint weight or a refusal, across every companion at every
    difficulty; no object grants an items.EFFECT_LABELS key or costs gold; the
    threshold floor and the intervention ceiling both hold at maximum bond; and
-   an object is inert in a sealed run and in Interview Mode.
+   an object is inert in a sealed run and in Timed Practical Mode.
 """
 
 

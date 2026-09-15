@@ -1,7 +1,7 @@
 """Generators, iterators, closures, decorators and context managers.
 
 Everything in this family is *language machinery the corpus could not teach at
-all* before it existed. It is also the ground a Python interview walks onto the
+all* before it existed. It is also the ground a Python timed practical walks onto the
 moment the algorithm question is finished: "so what does `yield` actually do",
 "why is `functools.wraps` there", "what does `with` buy you over try/finally".
 
@@ -1942,7 +1942,7 @@ def build() -> list:
         drill(
             "gen-closure-late-binding", "The Loop That Lied", "EASY",
             """
-            The classic trap, and a genuine interview question.
+            The classic trap, and a genuine timed practical question.
 
             A closure captures the VARIABLE, not the value the variable held when
             the closure was made. Build three functions inside a loop over

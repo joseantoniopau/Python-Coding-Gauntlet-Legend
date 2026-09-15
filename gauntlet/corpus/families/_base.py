@@ -20,13 +20,13 @@ __all__ = ["code_problem", "design_problem", "debug_problem", "mcq_problem",
 # cites reported provenance carries this, appended structurally rather than left
 # to whoever authored the entry.
 PROVENANCE_DISCLAIMER = (
-    " Historically reported pattern, not a guaranteed interview question."
+    " Reported coding exercise patterns, not a guarantee of assessment content."
 )
 
 
 # A provenance note is a claim about where a problem comes from, and every such
 # claim has to be disclaimed — not only the ones that name a company. The three
-# source types below are the ones that appeal to the interview-reporting record;
+# source types below identify reported coding exercise patterns;
 # GENERATED_VARIANT and SECURITY_VARIANT carry their own, stronger note ("never
 # presented as a question any company has asked") and must not have this one
 # appended on top of it.

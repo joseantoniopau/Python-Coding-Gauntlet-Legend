@@ -41,7 +41,7 @@ Thirty-two fields per problem, including: `id`, `title`, `realm`, `pattern`,
 
 `player_view(mode)` is the only path to the client. It strips the canonical
 solution, hidden tests, edge cases, performance tests and mutants — and in
-Interview Mode additionally redacts the pattern, the hint tree, the
+Timed Practical Mode additionally redacts the pattern, the hint tree, the
 visualisation, the complexity and the known failure modes.
 
 ## Entry kinds
@@ -92,7 +92,7 @@ caravan) × three output modes each. Every generated problem carries a canonical
 solution, reference-derived tests and complexity expectations, and runs through
 the same validator as authored content.
 
-Generated problems never name a company, and say so in their provenance note.
+Generated problems retain their provenance note.
 
 ## Provenance
 
@@ -100,9 +100,9 @@ Generated problems never name a company, and say so in their provenance note.
 it to whoever authored the entry. Any problem marked `REPORTED_INTERVIEW` and
 lacking a note is a hard validation error.
 
-The product never claims "this exact question will be asked". It says
-"historically reported pattern", and `test_reported_interview_problems_carry_a_disclaimer`
-holds that line.
+The label "historically reported pattern" describes a problem's source, not a
+promise about a future task. `test_reported_interview_problems_carry_a_disclaimer`
+checks that the disclaimer is present.
 
 ## Hint trees
 

@@ -8,7 +8,7 @@ actually preparing for, so that is the shape of the last fight.
 
 Three commitments hold this module together.
 
-1. IT DOES NOT INVENT A SECOND ISOLATION PATH. Interview Mode already exists, is
+1. IT DOES NOT INVENT A SECOND ISOLATION PATH. Timed Practical Mode already exists, is
 enforced server-side, and is proven by tests/test_interview_isolation.py: the
 pattern is redacted, the hint tree is emptied, and hints, probes, items and the
 coach are all refused with `{"error": "sealed"}`. The exam runs in exactly that
@@ -69,7 +69,7 @@ from dataclasses import dataclass, field, asdict, replace
 from . import adaptive, config, grading, scaffold, world
 from . import skills as skillmod
 
-# The exam is Interview Mode. Not a mode that resembles it, not a mode with the
+# The exam is Timed Practical Mode. Not a mode that resembles it, not a mode with the
 # same rules copied out — the same constant, so every `enc.mode == MODE_INTERVIEW`
 # check already in engine.py fires for the exam without being told about it.
 EXAM_MODE = config.MODE_INTERVIEW
@@ -173,7 +173,7 @@ CRUTCHES: tuple = (
            "Afterwards, there will be no conversation. Only a result."),
     Crutch("UNLIMITED_TIME", "All the time you want", "serialization_lich",
            "Thinking as long as you like at no cost but rank.",
-           "engine.Game._graced_target / interview clock",
+           "engine.Game._graced_target / timed practical clock",
            "I have somewhere to be. You have until then."),
     Crutch("ITEMS", "Consumables", "bug_demon",
            "Charms, whetstones and scrolls bought with gold rather than practice.",
@@ -240,7 +240,7 @@ REFUSAL_MESSAGE = {
 
 def refuse(capability: str) -> dict:
     """The refusal the server returns. Deliberately the same `{"error": "sealed"}`
-    shape engine.py already returns for Interview Mode, so callers and the client
+    shape engine.py already returns for Timed Practical Mode, so callers and the client
     have exactly one failure to handle."""
     name = CAPABILITY_NAMES.get(capability, capability)
     return {
@@ -280,7 +280,7 @@ def suspended(capability: str) -> dict:
 # ---------------------------------------------------------------------------
 #
 # Each boss removes exactly one thing and never gives it back. By the time the
-# Interviewer is standing in front of you, the exam's rule set is not a surprise
+# Examiner is standing in front of you, the exam's rule set is not a surprise
 # — it is the twelfth time in a row the rules got quieter.
 #
 # Rung numbers come from the position of the boss in world.BOSSES, so the ladder
@@ -368,7 +368,7 @@ def _with_holdout(seal: Seal) -> Seal:
 
 def seal_for(*, mode: str = config.MODE_ADVENTURE, boss_id: str = "",
              holdout: bool = False) -> Seal:
-    """The one function every call site asks. Interview Mode is always the full
+    """The one function every call site asks. Timed Practical Mode is always the full
     seal; a boss fight is whatever its rung has taken; anything else is open.
     Hold-out content seals everything either way."""
     if mode == EXAM_MODE:
@@ -435,7 +435,7 @@ def ladder_view() -> list:
 
 # Exactly where the engine has to ask. Each of these is one line: replace the
 # bare `enc.mode == config.MODE_INTERVIEW` test with `finalexam.sealed(enc, CAP)`,
-# which is true for Interview Mode AND for every boss that has already taken it.
+# which is true for Timed Practical Mode AND for every boss that has already taken it.
 ENGINE_HOOKS: tuple = tuple(
     {"capability": c.id, "call_site": c.hook,
      "from_rung": _rung_of(c), "taken_by": c.taken_by or "the exam only"}
@@ -444,9 +444,9 @@ ENGINE_HOOKS: tuple = tuple(
 
 # --- Applying the ladder ---------------------------------------------------
 #
-# Ten edits, all of them the same edit. Interview Mode's behaviour does not
+# Ten edits, all of them the same edit. Timed Practical Mode's behaviour does not
 # change: `sealed()` returns True for every capability whenever the mode is
-# interview, so each site below keeps doing exactly what it does today and
+# timed practical, so each site below keeps doing exactly what it does today and
 # additionally starts doing it for the boss that has taken that crutch.
 #
 #   engine.Game.use_hint
@@ -472,8 +472,8 @@ ENGINE_HOOKS: tuple = tuple(
 #                           seal.blocks("WEAKNESS_MAP") — they ARE the hidden
 #                           edge cases, spelled out with a teaching line attached
 #   problem view            problem.player_view(mode=...) already redacts the
-#                           pattern for interview; for rungs 9-13 pass the
-#                           interview view once seal.blocks("PATTERN"), and use
+#                           pattern for timed practical; for rungs 9-13 pass the
+#                           timed practical view once seal.blocks("PATTERN"), and use
 #                           `finalexam.exam_view(problem)` for the exam itself
 #
 # And one addition rather than a removal: from rung 12, `clock_for(problem, seal)`
@@ -481,7 +481,7 @@ ENGINE_HOOKS: tuple = tuple(
 #
 # `audit_payload()` is the regression test for all of it. Run it against a live
 # exam encounter; anything it names is a door still open. As of writing it names
-# three on the engine's own Interview Mode payload — the mentor, the enemy's
+# three on the engine's own Timed Practical Mode payload — the mentor, the enemy's
 # derived weaknesses, and `complexity_choices` — none of which existed when
 # `player_view` was written, and all of which are help.
 
@@ -514,14 +514,13 @@ def interview_format() -> dict:
 # 3. The format
 # ---------------------------------------------------------------------------
 #
-# Drawn from what is actually reported for this kind of hiring loop, and no more
-# than that: a timed multi-question set on the order of four problems in seventy
+# Reported coding exercise patterns inform this format: a timed multi-question
+# set on the order of four problems in seventy
 # minutes, mixed easy and medium, no hints of any kind; then a practical segment
 # in the reported shape — here is an existing codebase, navigate it, add a
 # feature, fix a bug, keep the existing tests green.
 #
-# Reported format, not a guaranteed one. Nobody here claims to know what any
-# particular company will ask on any particular day.
+# A practice format, not a prediction of any external assessment.
 
 @dataclass(frozen=True)
 class SlotSpec:
@@ -688,7 +687,7 @@ THE_LAST_INTERPRETER = Examiner(
         ">>> ",
         "It does not greet you. It opens a prompt. The prompt is the greeting, "
         "and it is also the entire courtesy you are going to be shown in here.",
-        ">>> assert isinstance(candidate, Fluent)",
+        ">>> assert isinstance(learner, Fluent)",
         "That line either raises or it does not. It has been waiting the whole "
         "game to find out which. So, if you are honest about it, have you.",
     ),
@@ -708,18 +707,18 @@ THE_LAST_INTERPRETER = Examiner(
         "something in mirror armour that was very polite about it.",
     ),
     verdict_lines={
-        "READY": (">>> candidate.ready", "True",
+        "READY": (">>> learner.ready", "True",
                   "It does not congratulate you. It returns a value. In this "
                   "room that is the higher form of respect, because unlike "
                   "praise it can be checked, and because it is the first thing "
                   "anyone has said to you in nine hundred years that meant "
                   "exactly what it said."),
-        "CLOSE": (">>> candidate.ready", "False",
+        "CLOSE": (">>> learner.ready", "False",
                   "False is a value and not a verdict about you. The coils "
                   "shift by about a foot, which from something this size is the "
                   "gesture of an examiner who has seen the near miss before and "
                   "knows which of the two kinds it is."),
-        "NOT_READY": (">>> candidate.ready",
+        "NOT_READY": (">>> learner.ready",
                       "Traceback (most recent call last):",
                       "A traceback is the most generous thing this language "
                       "produces. It names the line, it names the cause, and it "
@@ -785,7 +784,7 @@ def examiner_view(verdict_code: str = "") -> dict:
 # worst skill is worth about nine ordinary ones and the sixth-worst barely tilts
 # anything; across a whole exam that lands at roughly twice the weak-skill share
 # an unweighted composer would produce (see `self_check`). Enough that the exam
-# is about this player, not so much that it stops resembling an interview.
+# is about this player, not so much that it stops resembling a timed practical.
 WEAK_FOCUS = 6
 WEAK_BONUS = 8.0
 UNSEEN_MULTIPLIER = 1.5          # never tested is not proven weak, only unproven
@@ -1330,7 +1329,7 @@ def exam_view(problem) -> dict:
     Everything here comes from `player_view(mode=EXAM_MODE)`. Two things are
     taken off it. `complexity_choices` goes because four Big-O options with the
     right one among them tell you what shape of solution is expected, which is a
-    hint that predates Interview Mode and was never reconsidered — a real
+    hint that predates Timed Practical Mode and was never reconsidered — a real
     practical gives you a specification, examples, and a test suite you can run,
     not a multiple-choice list of the answer's cost. And the puzzle answer keys
     go, for the reason set out above them.
@@ -1397,7 +1396,7 @@ def audit_payload(payload: dict) -> list:
     if not payload.get("interview_locked"):
         leaks.append("interview_locked is not set")
     if payload.get("mode") != EXAM_MODE:
-        leaks.append("encounter is not running in interview mode")
+        leaks.append("encounter is not running in timed practical mode")
     if payload.get("hint_count"):
         leaks.append("hint_count is non-zero")
     if payload.get("probe_charges"):
@@ -1453,8 +1452,8 @@ BUCKET_MEANING = {
                  "to fix, and the most embarrassing to leave unfixed.",
     "implementation": "You knew the approach and the Python got in the way. That "
                       "is fluency, and fluency is drills, not insight.",
-    "timing": "Correct thinking, too slow to finish. Interviews do not award "
-              "partial credit for a right answer arriving after the call ends.",
+    "timing": "Correct thinking, too slow to finish. Timed practicals do not award "
+              "partial credit for a right answer arriving after the session ends.",
 }
 
 # What to actually go and do about a root cause. Deliberately countable: "five
@@ -1538,10 +1537,10 @@ def _assess(question: Question, result: dict) -> str:
     if result.get("solved"):
         if seconds <= target:
             return (f"Solved in {_clock(seconds)} against a {_clock(target)} "
-                    "target. That is interview pace.")
+                    "target. That is timed practical pace.")
         if seconds <= target * 1.5:
             return (f"Solved in {_clock(seconds)}, over the {_clock(target)} "
-                    "target but not by enough to lose the room.")
+                    "target by a small margin.")
         return (f"Solved in {_clock(seconds)} against {_clock(target)}. Correct, "
                 "and in a real loop you would have been stopped before this.")
     cause = result.get("root_cause") or "UNKNOWN"
@@ -1629,11 +1628,10 @@ def _verdict(*, set_solved, set_total, codebase_solved, codebase_total,
     return {
         "code": "NOT_READY",
         "headline": "You are not ready for this format yet. Plainly.",
-        "body": ("You solved {s} of {t} unaided. In a real loop that does not "
-                 "advance. Nothing about that is a verdict on whether you can do "
-                 "the job, and it is a straight answer about whether you could do "
-                 "it on Tuesday under a clock with a stranger watching. The drills "
-                 "below are the shortest route between those two facts.").format(
+        "body": ("You solved {s} of {t} unaided. This run did not meet the "
+                 "standard for this format. It identifies skills that need more "
+                 "practice under the clock. Work through the drills below, then "
+                 "try a fresh timed practical.").format(
                      s=solved, t=total),
     }
 
@@ -1798,7 +1796,7 @@ READINESS_LEAD = {
              "results a fortnight apart, on different sets, is readiness.",
     "CLOSE": "What this says about readiness: the knowledge is largely there and "
              "it is not yet reliable under the conditions. Reliability is the "
-             "thing being measured here, because the interview measures it too.",
+             "thing being measured here, because the timed practical measures it too.",
     "NOT_READY": "What this says about readiness: the gap is not effort and it is "
                  "not talent, it is evidence. Specific skills failed in specific "
                  "ways, all of them listed below, and every one of them moves.",
@@ -1965,7 +1963,7 @@ def self_check(corpus, *, trials: int = 200, players: int = 25,
     # 3. no help, at the seal level as well as the payload level
     for crutch in CRUTCHES:
         if not seal_for(mode=EXAM_MODE).blocks(crutch.id):
-            failures.append(f"{crutch.id} survives interview mode")
+            failures.append(f"{crutch.id} survives timed practical mode")
         if not seal_for(mode=config.MODE_ADVENTURE,
                         boss_id="the_interviewer").blocks(crutch.id):
             failures.append(f"{crutch.id} survives the final boss")

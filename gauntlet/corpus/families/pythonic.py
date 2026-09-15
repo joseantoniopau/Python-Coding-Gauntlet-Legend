@@ -1,7 +1,7 @@
-"""The Pythonic family: the standard library an interviewer expects you to reach for.
+"""The Pythonic family: the standard library an examiner expects you to reach for.
 
 Every other family here trains an algorithm. This one trains RECOGNITION — seeing
-the shape of a problem and knowing which import already solved it. An interviewer
+the shape of a problem and knowing which import already solved it. An examiner
 watching you hand-roll a frequency dict, a max-heap or a memo table is not
 watching you fail; they are watching you spend four of your forty minutes on
 something the library ships.
@@ -32,7 +32,7 @@ import textwrap
 from ._base import code_problem, dedent, mcq_problem
 
 # The player this corpus is for. Recognition is the highest-yield thing an
-# interview rewards per minute spent, so it is weighted accordingly.
+# timed practical rewards per minute spent, so it is weighted accordingly.
 Q = {"PRACTICAL": 2.0, "GENERAL_SWE": 2.0, "SECURITY_ENGINEERING": 2.0}
 
 VIZ = {"type": "array_scan", "caption": "The library already wrote this loop."}
@@ -591,7 +591,7 @@ def build() -> list:
             "py-counter-guided", "The Tally That Ships With Python", "GUIDED",
             """
             A frequency table is the most common data structure in a correct
-            interview answer, and `collections.Counter` is one. Hand it anything
+            timed practical answer, and `collections.Counter` is one. Hand it anything
             you can iterate and it counts the items for you.
 
             Return a plain dict mapping each character of `text` to its count.
@@ -1255,7 +1255,7 @@ def build() -> list:
             """
             Python ships a MIN-heap and nothing else. To get the largest elements
             out of a heap you negate on the way in and negate again on the way
-            out. That trick appears in interview answers constantly and is worth
+            out. That trick appears in timed practical answers constantly and is worth
             having in your fingers.
 
             Return the three most expensive prices in `prices`, descending, using
@@ -1345,7 +1345,7 @@ def build() -> list:
             The move: keep a MIN-heap of size k. Its root is the weakest thing
             currently in the top k, so every new value is compared against exactly
             one element. `heappushpop` pushes and pops in a single sift instead of
-            two, which is the detail an interviewer listens for.
+            two, which is the detail an examiner listens for.
             """,
             "stream_top_k", "values, k", _stream_top_k,
             """
@@ -2687,7 +2687,7 @@ def build() -> list:
 
             `bisect.insort` finds the position and inserts in one call. The search
             is O(log n); the insert is still O(n), and knowing which half is which
-            is the part an interviewer will ask about.
+            is the part an examiner will ask about.
             """,
             "place", "values, target", _place,
             """
@@ -3080,7 +3080,7 @@ def build() -> list:
             exception'. The caller writes `if result is None:` rather than a
             try/except.
 
-            Saying this out loud in an interview — 'I will return None for not
+            Saying this out loud in a timed practical — 'I will return None for not
             found rather than raise, and here is why' — is the communication half
             of the question, and it is usually worth more than the code.
             """,

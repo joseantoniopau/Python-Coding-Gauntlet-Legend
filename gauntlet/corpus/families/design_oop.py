@@ -1,4 +1,4 @@
-"""Stateful design encounters — the 'build me a thing that remembers' interview."""
+"""Stateful design encounters — the 'build me a thing that remembers' timed practical."""
 from __future__ import annotations
 
 from collections import OrderedDict, defaultdict, deque

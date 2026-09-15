@@ -7,7 +7,7 @@ THE LINE UNDER TEST, and it is the whole feature:
 The brief asked for "a real threat to lose progress". Gold, position, inventory,
 loot and the minutes since the last save are that threat, and they are supposed
 to hurt. The graded record — attempts, skills, mastery, the SRS schedule, the
-sealed hold-out ledger, boss records, interview runs — is evidence of what this
+sealed hold-out ledger, boss records, timed practical runs — is evidence of what this
 person can do, and dying may not touch one byte of it.
 
 The tests below are written to FAIL if that line moves, and they are written to

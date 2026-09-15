@@ -148,7 +148,7 @@ def _verdict_for(score: int, wrote_code: bool) -> tuple:
         return 3, ("You read Python, you write it, you name the structure, you "
                    "recognise the family and you can price it. You do not need the "
                    "alphabet. We start at Counting and Membership — the pattern that "
-                   "carries more interview questions than any other.")
+                   "carries more timed practical questions than any other.")
     if score >= 4 and wrote_code:
         return 2, ("Strong reading, and you can produce code unaided. What is missing "
                    "is idiom and speed, not understanding. We start at the Idioms.")
@@ -226,7 +226,7 @@ def _note_for(trial: Trial, correct: bool) -> str:
             "t3-structure": "You reached for the right structure without being "
                             "prompted.",
             "t4-pattern": "You named the family. Recognition is half of every "
-                          "interview question.",
+                          "timed practical question.",
             "t5-complexity": "You spotted the hidden quadratic. Most people miss it "
                              "because the loop looks linear.",
         }.get(trial.id, "Correct.")

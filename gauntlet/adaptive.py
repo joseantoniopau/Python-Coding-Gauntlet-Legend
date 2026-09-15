@@ -677,7 +677,7 @@ def score_problem(problem, *, skills: dict, profile: str, solved_ids: set,
         # ...but only for a player who can already write Python. Those four
         # kinds ask the player to read a piece of code and judge it rather than
         # produce one, which is garnish next to a code battle when you are
-        # preparing for an interview. At the bottom of the ramp it is the exact
+        # preparing for a timed practical. At the bottom of the ramp it is the exact
         # reverse: the player cannot type yet, and a question about one line of
         # code is the LARGEST thing that can honestly be asked of them. This
         # term is why the first rung of the first_steps chain — "here is one
@@ -1076,7 +1076,7 @@ def _verdict(overall: int, passed: int, total: int) -> str:
     if overall >= 70:
         return (f"Strong overall, but {remaining} gate{'s' if remaining > 1 else ''} "
                 "remain{'' if remaining > 1 else 's'} unmet. Averages do not pass "
-                "interviews; the gates do.")
+                "timed practicals; the gates do.")
     if overall >= 45:
         return (f"Real progress. {remaining} gates still open — the open ones are "
                 "exactly what to train next.")

@@ -168,7 +168,7 @@ EXPECTED_INCANTATIONS: dict = {
     'tally': ('structures', 'HASH_MAP',
      '{book}[{key}] = {book}.get({key}, 0) + 1',
      'Count-by-key without a KeyError. The highest-yield '
-     'line in interviews.'),
+     'line in timed practicals.'),
     'settle': ('structures', 'HASH_MAP',
      '{book}.setdefault({key}, []).append({item})',
      'Grouping: make the bucket if absent, then drop the '
@@ -740,7 +740,7 @@ ENEMIES: tuple = (
         "which is exactly why counting into it is nonsense.",
         "It also forgets order, and it cannot be indexed. `seen[0]` raises.",
         "What it gives you in exchange is O(1) membership, and that trade wins most "
-        "interview problems."]),
+        "timed practical problems."]),
     _E("lookup", "LOOKUP, the Keyed Vault", "dict", "structures", "HASH_MAP",
        {"a": 1, "b": 2}, 56,
        ["ask", "inscribe", "rollcall"], ["gather", "mark", "sink"],
@@ -808,7 +808,7 @@ ENEMIES: tuple = (
        "vault", "#e8a33d", "fx_tally_burn", "tally_burn",
        "Numerals brand themselves onto its hide, each one ticking upward.",
        ["`counts[x] = counts.get(x, 0) + 1` is one line and it is the single highest "
-        "yield line in interview Python.",
+        "yield line in timed practical Python.",
         "It resists anything that throws the numbers away. A set would answer "
         "'yes I saw it' and lose 'forty-one times'.",
         "`Counter(items)` does the same job when you are allowed the import."]),
@@ -1064,7 +1064,7 @@ ENEMIES: tuple = (
        ["Sort by start first. Almost every interval problem is trivial afterwards and "
         "impossible before.",
         "Two intervals overlap when the next start is at or before the current end. "
-        "Whether 'at' counts is a question you ask out loud in an interview."]),
+        "Whether 'at' counts is a question you ask out loud in a timed practical."]),
     _E("merged", "MERGED, the Fused Span", "list", "order", "INTERVALS", [], 50,
        ["gather", "greatest", "peek"], ["mark", "inscribe", "sink"],
        "overlapper", "#5f9fbf", "fx_merged_weld", "sort_cascade",
@@ -1199,7 +1199,7 @@ ENEMIES: tuple = (
        ["Check the memo before the work and write to it after. Two lines wrapped "
         "around a function you already had.",
         "That is the entire difference between the exponential fibonacci and the "
-        "linear one. Say it that plainly in an interview."]),
+        "linear one. Say it that plainly in a timed practical."]),
     _E("dp", "DP, the Lit Table", "list", "optimisation", "DP",
        [1, 1, 0, 0, 0], 60,
        ["table", "transition", "reach"], ["mark", "gather", "guard"],
@@ -1269,7 +1269,7 @@ ENEMIES: tuple = (
        ["A test you can run beats a belief you hold. Write the assertion before you "
         "trust the function.",
         "Empty, one element, all identical, already sorted, reversed. Five cases, and "
-        "naming them out loud is most of the testing signal an interviewer wants."]),
+        "naming them out loud is most of the testing signal an examiner wants."]),
 
     # -- XI. Under Pressure --------------------------------------------------
     _E("answer", "ANSWER, the Unnamed Thing", "none", "gauntlet", "RECALL",
@@ -1665,7 +1665,7 @@ ENCOUNTERS: tuple = (
        {"k": 45, "heap": 50, "best": 45, "memo": 45},
        ["sink", "surface", "span", "consult"],
        "Everything at once, on a timer, with nothing labelled. This is the shape of "
-       "the interview, and the only new difficulty is the clock."),
+       "the timed practical, and the only new difficulty is the clock."),
 )
 
 ENCOUNTER_BY_ID: dict = {e.id: e for e in ENCOUNTERS}
@@ -1839,7 +1839,7 @@ BOSSES: tuple = (
                 ["span", "reach"],
                 "Convince me this halts.",
                 "One pointer moves every iteration, so the loop is O(n). Say that "
-                "sentence out loud in an interview."),
+                "sentence out loud in a timed practical."),
          )),
     Boss("matrix_golem", "The Matrix Golem", "grid", "traversal",
          "matrix_citadel", "MATRIX", "#8a8f9c", "golem",
@@ -1966,7 +1966,7 @@ BOSSES: tuple = (
     Boss("editor_automaton", "The Editor Automaton", "stack", "craft",
          "matrix_citadel", "DESIGN", "#b0763f", "automaton",
          "It demands the undo you did not implement. The phases are a design "
-         "interview conducted entirely in stack operations.",
+         "timed practical conducted entirely in stack operations.",
          (
              _P("apply", "Apply an edit", {"stack": 35, "text": 35},
                 ["gather", "bind"],
@@ -1996,7 +1996,7 @@ BOSSES: tuple = (
                 ["reach", "advance"],
                 "Correct is not the same as fast. I am the difference.",
                 "Write the brute force first. It is a correct baseline and an "
-                "interviewer will take it over nothing."),
+                "examiner will take it over nothing."),
              _P("ledger", "Stop recomputing", {"counts": 35, "inside": 35},
                 ["tally", "countdown"],
                 "You counted that substring four times.",
@@ -2066,7 +2066,7 @@ BOSSES: tuple = (
                 "You believe it is fixed. Show me.",
                 "A test you can run beats a belief you hold."),
          )),
-    Boss("the_interviewer", "The Interviewer", "answer", "gauntlet",
+    Boss("the_interviewer", "The Examiner", "answer", "gauntlet",
          "null_kings_castle", "RECALL", "#d8d8e0", "interviewer",
          "Nothing is labelled and nothing is offered. Six phases, mapped onto "
          "world.BOSS_PHASES, and every one of them is something you have already "
@@ -2851,7 +2851,7 @@ def regenerate(vital: dict) -> int:
 # THE FLOOR, and it is the load-bearing half of the rule: CASTS ALONE CANNOT
 # FINISH A PHASE. They stop at CAST_FLOOR_HP. The last point of every phase
 # belongs to the graded submission, so a boss costs EXACTLY one passing
-# submission per phase — four for a region boss, six for the Interviewer — and
+# submission per phase — four for a region boss, six for the Examiner — and
 # no amount of cast fluency buys a way past the problem. The reverse floor is
 # the one that keeps learning from dead-ending: a passing submission clears the
 # phase AT EVERY RUNG OF THE LADDER, at any gear level, with the boss at its
@@ -2928,7 +2928,7 @@ EXPECTED_STATUS_ELEMENT: dict = {
 # phase turn that changes no number at all. VOID is the answer because it is
 # the one element in the wheel that is an absence rather than a weather: a
 # thing turning void in a calm region is turning into itself, which is also
-# what the Interviewer already is.
+# what the Examiner already is.
 NEUTRAL_ESCALATION_ELEMENT = "VOID"
 
 
@@ -3020,7 +3020,7 @@ def ladder(boss) -> tuple:
     """The rungs THIS boss climbs, one per phase turn.
 
     Length is len(phases) - 1: the opening phase is not a turn. A four-phase
-    region boss therefore escalates three times and a six-phase Interviewer
+    region boss therefore escalates three times and a six-phase Examiner
     five, which is the difference between them said in buffs rather than in
     health.
     """
@@ -3117,7 +3117,7 @@ FIGHT_VERSION = 2
 # WHO OWNS THE PHASE COUNT, because two modules currently think they do.
 #
 # THIS FILE DOES. `Boss.phases` is four for a region boss and six for the
-# Interviewer, and that number is load-bearing here in a way it is nowhere else:
+# Examiner, and that number is load-bearing here in a way it is nowhere else:
 # each phase carries its own HP pool, its own demanded incantations and its own
 # enemies, all authored and all verified against the 4-9 cast window. A seed
 # that changed the count would be changing a fight this file has checked.

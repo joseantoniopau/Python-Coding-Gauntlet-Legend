@@ -569,7 +569,7 @@ ANALYST = CharacterClass(
 # garbage. `iteration_bonus` counts at most three failures, pays only when the
 # eventual clear is UNAIDED, and pays less in total than a first-try clear. What
 # it actually rewards is the habit of starting before you are certain and
-# converging — which is a real interview skill and the exact opposite of freezing.
+# converging — which is a real timed practical skill and the exact opposite of freezing.
 
 BERSERKER = CharacterClass(
     id="berserker", name="The Berserker", epithet="The first draft is a weapon",
@@ -874,8 +874,8 @@ ARCHIVIST = CharacterClass(
 # The Warden's core loop: before running anything, name the classes of input you
 # think will break it. Real calls become wards that absorb a failed submission.
 # Wrong calls cost focus. This is `tactics.classify_test` turned into a wager, and
-# it is the most directly transferable habit in the file — the candidate who says
-# "what about the empty list" before writing is the candidate who gets hired.
+# it is a transferable debugging habit: asking "what about the empty list"
+# before writing makes the boundary case part of the design.
 
 WARDEN = CharacterClass(
     id="warden", name="The Warden", epithet="Name what breaks it, then write it",
@@ -1031,7 +1031,7 @@ WARDEN = CharacterClass(
 # The bench is the mechanic, and the rule on it is narrow on purpose: a bench
 # slot holds a helper THE PLAYER WROTE AND CLEARED, in their own words, and it
 # returns only in adventure mode. It is not a library of answers; it is the
-# `utils.py` a working engineer accumulates. Interview Mode empties the bench,
+# `utils.py` a working engineer accumulates. Timed Practical Mode empties the bench,
 # same as it empties everything else.
 
 ARTIFICER = CharacterClass(
@@ -1057,7 +1057,7 @@ ARTIFICER = CharacterClass(
             _node("keep_the_helper", "Keep the Helper", 1,
                   {"xp_bonus": 0.02}, "BENCH",
                   "A helper you wrote and cleared comes with you into later "
-                  "adventure encounters. Interview Mode takes the bench away.",
+                  "adventure encounters. Timed Practical Mode takes the bench away.",
                   unlocks={1: {"bench_slots": 1}, 4: {"bench_slots": 1},
                            8: {"bench_slots": 1}}),
             _node("tidy_hands", "Tidy Hands", 1,
@@ -1089,7 +1089,7 @@ ARTIFICER = CharacterClass(
             _node("the_standing_toolkit", "THE STANDING TOOLKIT", 4,
                   {}, "BENCH",
                   "A shelf of your own code, carried into every fight that is not "
-                  "an interview.",
+                  "a timed practical.",
                   parent="the_shorter_version",
                   unlocks={1: {"bench_slots": 3, "refactor_bonus": 0.2,
                                "xp_bonus": 0.15}},
@@ -1387,7 +1387,7 @@ MOVES = (
          "DECLARATION",
          "The Analyst's whole argument: a wrong guess said out loud at minute one "
          "costs four focus, and a wrong guess discovered at minute twenty costs "
-         "the interview."),
+         "the timed practical."),
     Move("first_draft", "First Draft", "berserker",
          "any time before your first submission",
          {"mana": 0, "stamina": 2},
@@ -1419,7 +1419,7 @@ MOVES = (
          "Each call that matches nothing costs a third of your focus. Naming all "
          "nine classes is not clever; it is expensive.",
          "EDGE_CALL",
-         "The move is the interview habit, priced. You are wagering focus on "
+         "The move is the timed practical habit, priced. You are wagering focus on "
          "knowing where the code will break before the code exists."),
     Move("lay_the_bench", "Lay the Bench", "artificer",
          "after any cleared encounter",
@@ -1429,7 +1429,7 @@ MOVES = (
          "Nothing is wrong here — the cost is the slot. Benches are small and a "
          "helper you never call is a slot you are not using.",
          "BENCH",
-         "Interview Mode empties the bench on entry, along with everything else. "
+         "Timed Practical Mode empties the bench on entry, along with everything else. "
          "The bench is a working engineer's utils file, not a cheat sheet."),
     Move("second_sight", "Second Sight", "seer",
          "after a failed submission",

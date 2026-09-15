@@ -45,7 +45,7 @@ unperformed activity described in the playtest protocol.
 - [x] 25 Companion relationships extending existing systems.
 - [x] 26 Player steering of adaptive practice.
 - [x] 27 Learning-earned cosmetic keepsakes.
-- [x] 28 Interview rehearsal distinct from sealed assessment.
+- [x] 28 Timed practical rehearsal distinct from sealed assessment.
 - [x] 29 Real-renderer visual gallery and captured evidence.
 - [x] 30 Unified rendering contracts and corrected stale documentation.
 - [x] 31 Usability/performance verification and human-playtest protocol.
@@ -136,7 +136,7 @@ Tab/Enter focus. Packaging and deployment results are appended below.
 
 The escort fixture uses a third isolated save on port 8901. Traveling the actual
 Waking Road triggered Thessaly's Slate handover and all its dialogue lines;
-closing it restored the world. Opening the interview confirmation and selecting
+closing it restored the world. Opening the timed practical confirmation and selecting
 NOT YET returned to the entry screen without starting the measured run.
 Doorstep captions are covered by the consumer harness; instantaneous automated
 key taps did not establish a browser movement check.
@@ -157,7 +157,8 @@ required.
 The prior installation is preserved in the dated `Gauntlet Legend Backups`
 folder alongside the app. The build script now creates this recovery copy
 before replacing an existing installation. Packaging does not modify saves or
-terminate an already running game; relaunch the app to use the new bundle.
+terminate an already running game. Quit the game before rebuilding; the build
+now refuses to replace a running bundle.
 
 ## Publishing
 
@@ -186,11 +187,43 @@ Validation: all 317 tracked files scanned, eight changed JavaScript files parsed
 and the field harness passed. All 155 installed app payload files match the
 source, and the rebuilt app passes strict signature verification.
 
+## Timed practical wording and app recovery — 14 September 2026
+
+The README, Pages metadata and copy, GitHub description, game menus, dialogue,
+assessment reports and cinematic specimens now use learning and timed practical
+language. The final verdict describes measured performance and delayed review.
+Saved mode values, routes, problem identifiers and assessment boundaries retain
+their existing identifiers for compatibility. Screenshot pixels are unchanged;
+the published images contained none of the replaced wording.
+
+A running version 1.0 backend survived replacement of its app bundle and served
+version 1.1 interface files. The new practice endpoint was absent from that old
+process. The save was backed up with SQLite's backup API, the stale launcher was
+stopped, and the installed app was reopened. Version 1.1 then loaded the existing
+level 6 save in Graph Wastes without browser errors. All 155 installed payload
+files still match the preceding published revision, and strict signature
+verification passes. The recovered app was left running; this source wording
+update has not been installed over it.
+
+`scripts/check_app_closed.py` now checks running launcher processes before the
+build changes `dist/` and again before installation. It also detects bundles
+that an earlier installer moved into backup. An inspection failure stops the
+update. Six guard tests pass, and an actual build attempt while the recovered
+game was open stopped before changing bundle files.
+
+Validation: 125 targeted Python tests completed successfully (two skipped),
+the 45-call HTTP gameplay harness passed on a disposable save, the navigation
+resume harness passed, and all 11 changed JavaScript modules parsed. The
+cinematic fixture matches its Python producers. Browser inspection confirmed
+the Timed Practical Mode menu, Timed Session format and General Python profile.
+The Python wording audit found no changes to control flow, stored identifiers,
+dictionary keys or embedded executable examples across 61 source files.
+
 ## Limits that remain explicit
 
 [17-playtest-protocol.md](17-playtest-protocol.md) specifies beginner and
 intermediate sessions, delayed recall and voluntary-return measures. **No human
 participants have been tested yet.** Automated checks do not establish retained
-learning, interview readiness outside the measured tasks, enjoyment, or visual
+learning, Python skill transfer outside the measured tasks, enjoyment, or visual
 appeal to players. These outcomes require the participant sessions specified in
 the playtest protocol.

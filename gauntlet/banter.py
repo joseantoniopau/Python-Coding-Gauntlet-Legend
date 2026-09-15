@@ -244,7 +244,7 @@ SPEAKABLE = ("ELEMENT", "PATTERN", "PLACE", "SKILL")
 #   PROVED  MENTOR        — a named person speaking to you about your own record
 #   WHERE   BUILD         — where the metal is, is gear progression
 #
-# When every one of them is sealed, `speak` refuses. That happens in Interview
+# When every one of them is sealed, `speak` refuses. That happens in Timed Practical
 # Mode and on hold-out content, which is exactly where it should happen.
 
 AREA = "AREA"
@@ -2680,7 +2680,7 @@ def _choose(options: list, floor: int, role: str, pick):
 def refusal() -> dict:
     """The standard refusal, so this module's 'no' reads exactly like every
     other 'no' in the game. Reached when every beat's capability is sealed,
-    which is Interview Mode and hold-out content and nothing else."""
+    which is Timed Practical Mode and hold-out content and nothing else."""
     return finalexam.refuse(BEAT_CAPABILITY[AREA])
 
 
@@ -3246,7 +3246,7 @@ and nothing here is a guess.
    AHEAD -> PATTERN, PROVED -> MENTOR, WHERE -> BUILD). Pass the live encounter
    into `context`; beats whose crutch is sealed are dropped, and when all five
    are gone `speak` returns finalexam.refuse's standard {"error": "sealed"}
-   payload with `sealed: True` and no lines. Interview Mode and hold-out
+   payload with `sealed: True` and no lines. Timed Practical Mode and hold-out
    content therefore produce nothing, which is the rule.
 
 6. WHO CAN SPEAK

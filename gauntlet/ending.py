@@ -4,7 +4,7 @@ THERE ARE TWO THINGS IN THIS GAME WEARING THE WORD "EXAM" AND THEY ARE NOT THE
 SAME THING. The next person to read this file will assume there is one, so it
 is said here first, at the top, before anything else:
 
-  1. AN INTERVIEW MODE RUN is a MEASUREMENT. A player sits one to find out
+  1. A TIMED PRACTICAL MODE RUN is a MEASUREMENT. A player sits one to find out
      where they stand. It is available from the menu, at level one, holding
      nothing, with no keys, on the first morning and on the last. It is never
      gated, it is never a reward, and NOTHING IN THIS FILE HAPPENS WHEN ONE
@@ -69,7 +69,7 @@ from . import captives, config, finale, finalexam, world
 
 TWO_EXAMS = {
     "measurement": {
-        "name": "Interview Mode",
+        "name": "Timed Practical Mode",
         "what": "A measured run, sat to find out where you stand.",
         "gated_by": [],
         "keys_required": 0,
@@ -157,7 +157,7 @@ def ensure(state: dict) -> dict:
 # one that was staged. There is no heuristic, no format sniffing and no guess.
 #
 # Consequences worth naming:
-#   * Sitting FINAL_EXAM from the interview menu is never the climax, however
+#   * Sitting FINAL_EXAM from the timed practical menu is never the climax, however
 #     well it goes, because nobody staged it.
 #   * Staging is spent the moment it resolves, so one staged sitting produces
 #     one ending. Sitting a second practical afterwards is a measurement again.
@@ -189,7 +189,7 @@ def can_stage(cleared_bosses=()) -> dict:
                 f"{status['required'] - status['held']} wards are unlit. The "
                 "portal is a story door and it is shut."),
         "blocks_the_practical": False,
-        "note": "A refusal here refuses the ending, never the exam. Interview "
+        "note": "A refusal here refuses the ending, never the exam. Timed Practical "
                 "Mode is open from the menu with no keys at all.",
     }
 
@@ -627,7 +627,7 @@ def resolve(state: dict, *, exam_report: dict | None = None,
             encounter=None, king_voice=None, now: float | None = None) -> dict:
     """After a practical is scored. Decides whether this was the ending.
 
-    Safe to call after EVERY interview run and it is meant to be: the guard is
+    Safe to call after EVERY timed practical run and it is meant to be: the guard is
     here, once, rather than in the engine, so there is exactly one place in the
     codebase where the two exams are told apart. An unstaged run gets
     `triggered: False` and nothing else happens anywhere.
@@ -650,7 +650,7 @@ def resolve(state: dict, *, exam_report: dict | None = None,
             "outcome": "NONE",
             "verdict": verdict,
             "reason": "not_the_story_climax",
-            "why": "This was an Interview Mode run. It measures; it does not "
+            "why": "This was a Timed Practical Mode run. It measures; it does not "
                    "end the game. Nobody was freed, no cutscene played and "
                    "nothing in the world moved.",
             "captives_freed_now": 0,
@@ -722,7 +722,7 @@ def _passed(state: dict, block: dict, *, report: dict, readiness,
     # anything for never happened.
     #
     # IT RUNS FIRST, before `liberate`, and the order is load-bearing twice
-    # over. The people the Interviewer is holding were CARRIED OUT by a player
+    # over. The people the Examiner is holding were CARRIED OUT by a player
     # who beat him, so they belong in `freed` and not in the index collapse's
     # `released` — the two lists never merge, and which one a name lands in is
     # the difference between "you went and got them" and "the thing holding
@@ -766,7 +766,7 @@ def _passed(state: dict, block: dict, *, report: dict, readiness,
                "stops. Everyone still filed is out.",
         "captives_freed_now": release["counts"]["released_now"],
         "release": release,
-        # Everybody the Interviewer went back for after the second-to-last
+        # Everybody the Examiner went back for after the second-to-last
         # rung, handed back. Empty on a run where the sweep never fired, which
         # is most of them. NOT passed into finale.cutscene(): that function's
         # keyword list is closed and a name it does not know raises. The finale
@@ -813,7 +813,7 @@ def status(state: dict, *, cleared_bosses=()) -> dict:
         "total_captives": captives.total(),
         "index_collapsed": captives.index_collapsed(state),
         "interview_mode_available": True,
-        "note": "Interview Mode is available from the menu whatever this says. "
+        "note": "Timed Practical Mode is available from the menu whatever this says. "
                 "Nothing on this screen has ever gated a measurement.",
     }
 
@@ -824,7 +824,7 @@ def status(state: dict, *, cleared_bosses=()) -> dict:
 #
 # Seven claims, all of them cheap to disprove:
 #
-#   1. an ordinary Interview Mode run triggers nothing, at any verdict
+#   1. an ordinary Timed Practical Mode run triggers nothing, at any verdict
 #   2. a staged PASS frees everybody still held and plays the whole ending
 #   3. a staged FAIL frees nobody, and says so in the numbers
 #   4. failure blocks, delays, consumes and gates nothing
@@ -956,7 +956,7 @@ def self_check() -> dict:
     all_bosses = list(captives.HOLDINGS)
     scenes = 0
 
-    # 1. An ordinary Interview Mode run triggers nothing, at every verdict and
+    # 1. An ordinary Timed Practical Mode run triggers nothing, at every verdict and
     #    at every stage of a playthrough.
     for carried in (0, 5, len(all_bosses)):
         for code in ("", "NOT_READY", "CLOSE", "READY"):
@@ -1102,7 +1102,7 @@ Four touch points. Three of them are one line.
 
 0. THE DIRECTION OF EVERY GATE IN THIS FEATURE, SAID ONCE
    The portal gates the STORY. The practical gates the ENDING. Nothing gates
-   the practical. A player at level one with no keys can sit Interview Mode
+   the practical. A player at level one with no keys can sit Timed Practical Mode
    from the menu on the first morning, and this module will return
    `triggered: False` for that run forever.
 
@@ -1126,7 +1126,7 @@ Four touch points. Three of them are one line.
 
    engine._start_exam() already writes state["exam"] with an "id", which is the
    id finalexam.debrief reports back as report["exam_id"]. That match is the
-   entire mechanism. DO NOT call stage() from the interview menu path — that is
+   entire mechanism. DO NOT call stage() from the timed practical menu path — that is
    the one thing that would collapse the two exams into one.
 
    If the portal is shut, stage() returns {"staged": False} and the exam runs
@@ -1140,7 +1140,7 @@ Four touch points. Three of them are one line.
            out["finale"] = self.finale_scene(exam_report=debrief)
 
    Replace that with, and note that the `if` goes away — it is safe and correct
-   to call this after EVERY interview run, which is the point of having one
+   to call this after EVERY timed practical run, which is the point of having one
    place where the two exams are told apart:
 
        out["ending"] = ending.resolve(

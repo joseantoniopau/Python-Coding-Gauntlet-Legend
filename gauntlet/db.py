@@ -3,7 +3,7 @@
 Layout is deliberately hybrid: a single authoritative JSON blob for the live
 game state (atomic, no migration pain for a single-player local game), plus
 normalised tables for the things we genuinely need to *query* — attempt history,
-boss records, interview runs.
+boss records, timed practical runs.
 """
 from __future__ import annotations
 
@@ -619,7 +619,7 @@ def import_save(conn: sqlite3.Connection, payload: dict) -> None:
             merge_transfer(conn, payload["transfer_encounters"])
 
         # Exported since version 1 and never imported, so a round trip quietly
-        # dropped every interview result the player had earned.
+        # dropped every timed practical result the player had earned.
         if "interview_runs" in payload:
             conn.execute("DELETE FROM interview_runs")
             for row in payload["interview_runs"]:

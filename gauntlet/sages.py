@@ -2767,7 +2767,7 @@ _sage(
               "You have read the whole field before stepping into it. Good. "
               "Now tell me which row is the wrong one.",
               "A guess said out loud at minute one is cheap. The same guess "
-              "discovered at minute twenty is the interview.",
+              "discovered at minute twenty is the timed practical.",
               "Declare the shape of the proof before you write a line of it."),
         _face("berserker", "HARROW",
               "Stop reading. The field is not going to get simpler.",

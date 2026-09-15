@@ -463,7 +463,7 @@ PUZZLE_MINUTES = {
 # Not 100%, and the 20% is a deliberate thumb on the scale. RUNE_ASSEMBLY is the
 # best tool in this game for this player's actual bottleneck and the economy
 # should never discourage it — but producing Python from nothing is the thing the
-# interview asks for, and if the gold-optimal hour were an hour of ordering
+# timed practical asks for, and if the gold-optimal hour were an hour of ordering
 # shuffled lines, the economy would be quietly teaching the wrong skill. Twenty
 # per cent is enough to keep the blank screen the best-paid seat in the house and
 # small enough that nobody avoids a puzzle over it.
@@ -1430,7 +1430,7 @@ def assayer_line(key: str, rng: random.Random | None = None) -> str:
 # `bonus` is a multiplier on the area's encounter rate per problem, paid ON TOP
 # of what the problems themselves pay. It is the price of the CONTRACT, not of
 # the code: what the player is being paid for is the constraint held across a
-# set, and a constraint held across a set is the thing an interview actually
+# set, and a constraint held across a set is the thing a timed practical actually
 # measures. That is also why the bonus is FLAT and does not taper. A specific
 # problem can be memorised; "five in a row without a failed submission" cannot.
 

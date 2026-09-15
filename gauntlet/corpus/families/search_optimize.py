@@ -17,7 +17,7 @@ challenging problem. The corpus already had plenty of the latter.
 
 The greedy section is the one with an argument in it. Greed is taught here as a
 judgement — `so-greedy-vs-optimal` makes the player compute the gap between the
-greedy answer and the true one, because the interview question is never "can you
+greedy answer and the true one, because the timed practical question is never "can you
 write a greedy loop", it is "how do you know that works".
 """
 from __future__ import annotations
@@ -1646,7 +1646,7 @@ def build() -> list:
         pattern="SIMULATION", family="bits", realm="python_village",
         secondary=["ARRAY"], time="O(n)", space="O(1)", after="so-bit-power-of-two",
         starter_hint="one accumulator, one operator",
-        nudge="A Counter solves this in O(n) space. The interviewer is asking "
+        nudge="A Counter solves this in O(n) space. The examiner is asking "
               "for O(1), and XOR is the only thing that gives it to you.",
         pseudocode="acc = 0; for v: acc ^= v; return acc",
         failures=["Sorting and comparing neighbours, which costs O(n log n) for "
@@ -1968,7 +1968,7 @@ def build() -> list:
         pseudocode="lo + (hi - lo) // 2",
         fragment=_same_move("probe = left + (right - left) // 2"),
         failures=["Writing `(lo + hi) // 2` and calling it done — correct in "
-                  "Python, and the interviewer is asking about the other case"],
+                  "Python, and the examiner is asking about the other case"],
         tags=["math", "binary-search"],
     ))
 
@@ -2169,7 +2169,7 @@ def build() -> list:
 
         Python's `//` floors instead: `-7 // 2` is -4, while a C programmer
         expects -3. This difference is a real source of off-by-one bugs when
-        porting code or reasoning about an interview question written in another
+        porting code or reasoning about a timed practical question written in another
         language.
         """,
         "truncated_divide", "a, b", _truncated_divide,

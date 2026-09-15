@@ -58,7 +58,7 @@ STAMINA_LOSS_FAILED_SUBMIT = 2
 STAMINA_LOSS_SYNTAX = 1
 MANA_MAX = 30
 
-# Adventure = teach, Interview = measure. Never blur these.
+# Adventure = teach, Timed Practical = measure. Never blur these.
 MODE_ADVENTURE = "adventure"
 MODE_INTERVIEW = "interview"
 

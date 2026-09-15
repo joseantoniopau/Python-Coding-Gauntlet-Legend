@@ -212,7 +212,7 @@ class TestFailureLayers(unittest.TestCase):
             self.assertNotIn(answer, result.detail)
 
     def test_interview_mode_withholds_the_teaching(self):
-        """Adventure teaches, Interview measures. The layer is still named."""
+        """Adventure teaches, Timed Practical measures. The layer is still named."""
         ctx = bestiary.battle_context("enc_hollow_set", mode="interview")
         result = incantation.cast("mark", {"store": "ghost", "item": "x"}, ctx)
         self.assertFalse(result.correct)

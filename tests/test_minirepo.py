@@ -9,7 +9,7 @@ trip.
 
 Four of them are re-proved end to end rather than assumed:
 
-  * Adventure Mode teaches, Interview Mode measures, and `finalexam.sealed()` is
+  * Adventure Mode teaches, Timed Practical Mode measures, and `finalexam.sealed()` is
     the one question. A Mini-Repo in a measured run gets no starting-file
     pointer, no task shapes, no target list, no hints, no probes, no companion
     and no coach — and the reference patch is not in the payload in any mode.

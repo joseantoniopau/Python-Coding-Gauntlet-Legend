@@ -1348,7 +1348,7 @@ class MetalRig {
     const L = this.lanes;
     const six = this.sixteenth;
     const clean = !!t.clean;
-    // intensity rises as an interview clock runs down: louder, and the lead bites
+    // intensity rises as a timed practical clock runs down: louder, and the lead bites
     const push = 1 + this.intensity * 0.4;
 
     let r = L.riff[i % L.riff.length];

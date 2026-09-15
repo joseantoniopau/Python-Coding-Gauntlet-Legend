@@ -168,7 +168,7 @@ BOSSES = [
      "skill": "DEBUGGING", "problem_id": "db-bfs-visited",
      "taunt": "It works on your machine.",
      "sprite": "demon", "colour": "#c43f4f"},
-    {"id": "the_interviewer", "name": "The Interviewer", "region": "null_kings_castle",
+    {"id": "the_interviewer", "name": "The Examiner", "region": "null_kings_castle",
      "skill": "RECALL", "problem_id": "ds-lru-cache", "final": True,
      "taunt": "Walk me through your approach before you write anything.",
      "sprite": "interviewer", "colour": "#d8d8e0"},
@@ -365,7 +365,7 @@ def keyring(cleared_bosses) -> list:
 #             captives, the finale cutscene, the ending. Fourteen keys, which is
 #             every boss in the realm, which is a thing you earn.
 #
-#   IT NEVER  gates the practical. Interview Mode is a MEASUREMENT, not a
+#   IT NEVER  gates the practical. Timed Practical Mode is a MEASUREMENT, not a
 #   GATES     reward: a player must be able to sit it at any time, from the
 #             menu, at level one, holding nothing, to find out where they stand.
 #             That is the entire point of this game. `finalexam.sealed()` is the
@@ -452,7 +452,7 @@ def portal_status(cleared_bosses) -> dict:
 # It is deliberately NOT in BOSSES. finalexam.BOSS_LADDER is built from that
 # list's ORDER — rung N is the Nth entry — so appending to it would renumber
 # every crutch in the game, and nothing about the practical is fought, ranked,
-# rematched or dropped loot by anyway. The Interviewer above is still the
+# rematched or dropped loot by anyway. The Examiner above is still the
 # fourteenth boss and still takes the last crutch.
 #
 # What this is, is the geography: a place, below the castle, with something in
@@ -515,7 +515,7 @@ MENTORS = {
     "scribe": {"name": "THE SCRIBE", "role": "explanation", "sprite": "scribe",
                "greeting": "Say the approach aloud before the first keystroke. "
                            "If you cannot, you do not have one yet."},
-    "interviewer": {"name": "THE INTERVIEWER", "role": "pressure and ambiguity",
+    "interviewer": {"name": "THE EXAMINER", "role": "pressure and ambiguity",
                     "sprite": "interviewer",
                     "greeting": "There is no trick here. Just you, the problem, "
                                 "and the clock."},
@@ -626,7 +626,7 @@ ACHIEVEMENTS = [
     {"id": "explainer", "name": "Explainer",
      "desc": "Score full marks on an approach explanation."},
     {"id": "gauntlet_ready", "name": "Gauntlet Ready",
-     "desc": "Meet every interview-readiness gate."},
+     "desc": "Meet every assessment readiness gate."},
     {"id": "legend", "name": "Legend",
      "desc": "Complete the Null King's Castle."},
 ]

@@ -29,7 +29,7 @@ different fight. Modifiers change tactics, never only numbers: a boss that
 "veiled" cannot be damaged until its weakness is probed. No modifier, item or
 treasure in here supplies any part of an answer.
 
-Dungeons are Adventure Mode only. Interview Mode measures, and a place that
+Dungeons are Adventure Mode only. Timed Practical Mode measures, and a place that
 hands out shrines, codex pages and hint-bearing mentors cannot measure anything.
 
 Two systems are referenced by string id and never imported: `gauntlet.bestiary`
@@ -2057,7 +2057,7 @@ STATE_KEY = "dungeon_run"
 
 
 def available_in(mode: str) -> bool:
-    """Interview Mode has no dungeons. Enforced here rather than advised, so a
+    """Timed Practical Mode has no dungeons. Enforced here rather than advised, so a
     caller cannot get one by forgetting to ask."""
     return mode != config.MODE_INTERVIEW
 
@@ -2066,7 +2066,7 @@ def enter(dungeon: Dungeon, *, run_seed: int | None = None,
           mode: str = config.MODE_ADVENTURE) -> dict:
     """Start a descent. Adventure Mode only — see the module docstring."""
     if not available_in(mode):
-        raise ValueError("dungeons do not exist in Interview Mode")
+        raise ValueError("dungeons do not exist in Timed Practical Mode")
     boss = assemble_boss(dungeon, run_seed=run_seed)
     return {
         "dungeon": dungeon.id,

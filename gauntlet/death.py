@@ -8,7 +8,7 @@ Gold, position, inventory, loot and the minutes since the last save are all fair
 to lose, and losing them is the point — the brief asked for "a real threat to
 lose progress if they die" and this is that threat, stated in the only currency
 a game is allowed to charge. But attempts, skills, mastery, the spaced-repetition
-schedule, the sealed hold-out ledger, boss records and interview runs are
+schedule, the sealed hold-out ledger, boss records and timed practical runs are
 EVIDENCE OF WHAT THIS PERSON CAN DO, and no amount of dying may take that away.
 
 gauntlet/saves.py already holds this exact line for slot loads — "a save slot
@@ -110,7 +110,7 @@ ROLLED_BACK: dict = {
     "incantation": "the typed-Python field battle. cleared outright by `wake`.",
     "interview": "a measured run cannot be open here — a measured run is "
                  "death-proof, see F — so this is only ever already None.",
-    "exam": "same as interview.",
+    "exam": "same as timed practical.",
     "quests": "quest progress. a turn-in is an anchor, so at most one is lost.",
     "world": "region control and route discovery.",
     "dungeon_run": "the descent. you are not in the dungeon any more.",
@@ -133,7 +133,7 @@ ROLLED_BACK: dict = {
     "sanctuary": "a built place. game.",
     "captives": "who has been freed. game.",
     "escorts": "the zone companions' latch — which capture scenes have played, "
-               "which drops were handed over, whether the Interviewer's sweep "
+               "which drops were handed over, whether the Examiner's sweep "
                "fired. IT REWINDS IN LOCKSTEP WITH `captives`, `inventory`, "
                "`cleared_bosses` and `dungeons_cleared`, and it has to, "
                "because it is a RECORD OF those four and every one of them is "
@@ -331,7 +331,7 @@ def ledger() -> dict:
 # which is the scariest thing in the game and costs nothing to be fair.
 #
 # AND A MEASURED RUN IS DEATH-PROOF, which is the other half of F. During an
-# interview or the final exam the Mender refuses to exist — upkeep.heal returns
+# timed practical or the final exam the Mender refuses to exist — upkeep.heal returns
 # "There is no town in here. Finish the paper." — so a player cannot act on low
 # health at all. Worse, killing them mid-run would DESTROY EVIDENCE: the run is
 # graded work in progress, and the whole point of this file is that graded work

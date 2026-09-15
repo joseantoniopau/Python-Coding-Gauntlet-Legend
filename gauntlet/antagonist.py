@@ -13,7 +13,7 @@ TWO THINGS IN THIS GAME WEAR THE WORD "EXAM", AND THEY ARE NOT THE SAME THING
 The next person to read this file will assume there is one exam. There are two,
 and everything this module is allowed to do depends on telling them apart.
 
-    INTERVIEW MODE is the MEASUREMENT. A player may sit one at any time to find
+    TIMED PRACTICAL MODE is the MEASUREMENT. A player may sit one at any time to find
     out where they stand, and it is NEVER gated, never bought, never earned. A
     player who wants to know whether they are ready must always be able to ask.
     Nothing in this file happens inside one. He does not get to stand over a
@@ -2236,7 +2236,7 @@ def _render(register: str, move: str, slots: dict, pick) -> str:
 FINAL_BOSS_ID = "the_interviewer"
 
 # What he is called while he is only watching. The boss row calls him The
-# Interviewer, which is what he is at the end of the road and not what he is
+# Examiner, which is what he is at the end of the road and not what he is
 # for the eleven chapters before it; the story bible calls him the Null King
 # throughout, so that is the name on the line of text and the boss row is still
 # the single source of the sprite, the colour and the identity.
@@ -2251,7 +2251,7 @@ def speaker() -> dict:
         "id": FINAL_BOSS_ID,
         "name": WATCHING_NAME,
         "epithet": WATCHING_EPITHET,
-        "final_name": row.get("name", "The Interviewer"),
+        "final_name": row.get("name", "The Examiner"),
         "sprite": row.get("sprite", "interviewer"),
         "colour": row.get("colour", "#d8d8e0"),
         "region": row.get("region", "null_kings_castle"),
@@ -2260,7 +2260,7 @@ def speaker() -> dict:
 
 def refusal(capability: str) -> dict:
     """The standard refusal, so his 'no' reads exactly like every other 'no' in
-    the game. Reached in Interview Mode and on hold-out content, and nowhere
+    the game. Reached in Timed Practical Mode and on hold-out content, and nowhere
     else, because those are the only places anything is being measured."""
     return finalexam.refuse(capability)
 
@@ -3091,7 +3091,7 @@ optional and nothing here is a guess.
 
 7. THE SEAL
    One capability check and it is finalexam.sealed. Every occasion declares a
-   crutch in Occasion.capability; in Interview Mode finalexam.EXAM_SEAL seals
+   crutch in Occasion.capability; in Timed Practical Mode finalexam.EXAM_SEAL seals
    all of them, so `speak` returns finalexam.refuse's standard
    {"error": "sealed"} payload with `sealed: True` and no lines. That covers
    the measurement and hold-out content, which is the rule.

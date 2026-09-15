@@ -27,7 +27,7 @@ Three rules, and they are the whole design:
 The constraint items.py sets is not weakened anywhere below. An artifact may
 change the economics of an encounter — what probing costs, what failure costs,
 what the clock does, what the drop table pays — but no artifact names a pattern,
-supplies an answer, or survives into Interview Mode. The Obliging Hand is the
+supplies an answer, or survives into Timed Practical Mode. The Obliging Hand is the
 sole and deliberate exception to the first two, and §THE OBLIGING HAND explains
 at length why it is allowed to be, and what it takes from you in exchange.
 
@@ -134,7 +134,7 @@ ACQUISITION_KINDS = {
     "dungeon": "a named dungeon, cleared under a stated condition",
     "proof": "a skill demonstrated at a stated standard",
     "chain": "a quest chain, finished",
-    "exam": "an Interview Mode run, passed",
+    "exam": "a Timed Practical Mode run, passed",
     "pilgrimage": "the same thing found in several unrelated places",
     "offered": "handed to you, in person, with no condition at all",
 }
@@ -967,7 +967,7 @@ ARTIFACTS: list = [
        affinity="ANALYST", dissonance="ARCHIVIST",
        acquisition=_acq(
            "exam",
-           "Pass a full Interview Mode run with recall at standard. The page is "
+           "Pass a full Timed Practical Mode run with recall at standard. The page is "
            "in the bundle when you get back.",
            conditions=("no_failed_submission",),
            needs=({"skill": "RECALL", "mastery": 70, "retention": 60},
@@ -997,7 +997,7 @@ ARTIFACTS: list = [
        affinity="DUELIST", dissonance="ARCHIVIST",
        acquisition=_acq(
            "boss",
-           "Beat the Interviewer in under half the target time.",
+           "Beat the Examiner in under half the target time.",
            where="the_interviewer",
            conditions=("under_half_target", "no_failed_submission"),
            needs=({"skill": "SPEED", "mastery": 70},
@@ -1093,7 +1093,7 @@ HAND_SEALED_MODES = ("interview", "exam", "final")
 
 
 def hand_sealed(mode: str) -> bool:
-    """True where the Hand does nothing. Interview Mode measures; the Hand is
+    """True where the Hand does nothing. Timed Practical Mode measures; the Hand is
     not a measurement, so it is not present. The Null King's door is the same
     rule wearing a different hat."""
     return str(mode or "adventure").lower() in HAND_SEALED_MODES
@@ -1615,7 +1615,7 @@ def validate() -> list:
 
     # --- E: the Hand behaves as advertised ---
     if not hand_sealed("interview"):
-        problems.append("the Hand is not sealed in Interview Mode")
+        problems.append("the Hand is not sealed in Timed Practical Mode")
     if hand_sealed("adventure"):
         problems.append("the Hand does not work where it is supposed to")
     probe = skillmod.new_skills()

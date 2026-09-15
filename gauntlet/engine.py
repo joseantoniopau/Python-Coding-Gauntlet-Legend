@@ -1,7 +1,7 @@
 """The game engine: state, encounters, combat, progression.
 
 Everything the client can do goes through here, so the invariants live in one
-place — chief among them that Interview Mode never leaks a hint, a pattern name,
+place — chief among them that Timed Practical Mode never leaks a hint, a pattern name,
 or a coach.
 """
 from __future__ import annotations
@@ -1016,9 +1016,9 @@ class Game:
         # passes through, handed in rather than re-derived here:
         #
         #   THE SEAL. finalexam.sealed(enc, "PET") is the one authority on
-        #   whether a companion exists in this encounter at all. Interview Mode
+        #   whether a companion exists in this encounter at all. Timed Practical Mode
         #   was already covered, because pets.available_in refuses that mode on
-        #   its own — but the boss that TAKES the companion is not Interview
+        #   its own — but the boss that TAKES the companion is not Timed Practical
         #   Mode, and without the seal the animal went on quietly paying out its
         #   probe charges and its rank grace for every rung after that one and
         #   for the final trial, to a player who had been told it was outside.
@@ -1328,7 +1328,7 @@ class Game:
             return {"error": "unknown item"}
         enc = self.encounter
         # The seal is checked BEFORE anything is applied. It used to sit below
-        # the mana/stamina branch, so an Elixir of Focus worked mid-interview.
+        # the mana/stamina branch, so an Elixir of Focus worked during a timed practical.
         if finalexam.sealed(enc, "ITEMS"):
             return finalexam.refuse("ITEMS")
         effect = dict(spec["effect"])
@@ -2206,7 +2206,7 @@ class Game:
             # learn which creature it was standing for. It drew `m.boss ||
             # 'titan'` with nothing ever setting `m.boss`, so every region in
             # the game put a Hash Titan on its boss tile — including the Null
-            # King's Castle, whose Interviewer has a 72x96 map form that no
+            # King's Castle, whose Examiner has a 72x96 map form that no
             # player could ever have seen. Blank for the six regions that have
             # no boss; overworld.js keeps its own fallback for those.
             "regions": [
@@ -2340,7 +2340,7 @@ class Game:
     # ======================================================================
     # The world layer's public surface. Each of these is a thin door onto a
     # module that already knows the rules; the engine's job here is to hold the
-    # save, seal Interview Mode and pay out what the module says is owed.
+    # save, seal Timed Practical Mode and pay out what the module says is owed.
     # ======================================================================
 
     def _readiness(self) -> dict:
@@ -3611,7 +3611,7 @@ class Game:
     # morning. Behind it is the room under the castle, the mythic python wizard
     # standing in it, the captives, the cutscene and the ending.
     #
-    # THE PORTAL NEVER GATES THE PRACTICAL. Interview Mode is a MEASUREMENT and
+    # THE PORTAL NEVER GATES THE PRACTICAL. Timed Practical Mode is a MEASUREMENT and
     # not a reward. A player must be able to sit it AT ANY TIME, from the menu,
     # at level one, holding nothing, to find out where they stand — that is the
     # entire point of this game. Gating the measurement behind fourteen boss
@@ -3656,7 +3656,7 @@ class Game:
             "requires_keys": False,
             "keys_held": len(world.keys_held(self.state["cleared_bosses"])),
             "format": "FINAL_EXAM",
-            "where": "From the menu. Interview Mode, at any time.",
+            "where": "From the menu. Timed Practical Mode, at any time.",
             "gated_by_portal": world.portal_gates("practical"),   # False, forever
         }
 
@@ -4096,7 +4096,7 @@ class Game:
         Graph Wastes still meets material the curriculum has opened.
 
         Sealed in a measured run. A descent left open when the exam starts is
-        the one way a dungeon reaches Interview Mode, and engaging from inside
+        the one way a dungeon reaches Timed Practical Mode, and engaging from inside
         it opened a full Adventure encounter over the top of the exam's own.
         """
         sealed = self._sealed_in_interview()
@@ -4535,7 +4535,7 @@ class Game:
         how long. NOT which problems.
 
         The roster is the leak nobody looks for, because it is not a selector
-        and it is not an encounter — it is a table of contents. Interview Mode
+        and it is not an encounter — it is a table of contents. Timed Practical Mode
         reaches for the hold-out first, so `problem_ids` is a list of sealed ids
         the player has not been served yet, and it was being handed over twice:
         once in the payload that starts a run, and again on every poll of
@@ -4678,7 +4678,7 @@ class Game:
                 or self.state.get(dungeons.STATE_KEY) or self.state.get("incantation")
                 or not problem or corpusmod.is_sealed(problem)):
             return {"error": "encounter has its own resume flow",
-                    "message": "Resume this activity from its practice, boss, dungeon, repository, or interview screen."}
+                    "message": "Resume this activity from its practice, boss, dungeon, repository, or timed practical screen."}
         return self._encounter_payload(problem, enc, reason="ENCOUNTER_RESUME", preserve_rung=True)
 
     def _encounter_payload(self, problem: Problem, enc: Encounter,
@@ -5206,7 +5206,7 @@ class Game:
         One line per capability, and every one of them asked of
         `finalexam.sealed`, which stays the only thing in this codebase that
         answers whether a capability is available. minirepo.player_view forces
-        the same set again in Interview Mode; that is belt and braces, not a
+        the same set again in Timed Practical Mode; that is belt and braces, not a
         second opinion.
         """
         return {cap for cap in minirepo.SEALED_CAPABILITIES
@@ -8337,7 +8337,7 @@ class Game:
             return {"error": "unknown boss"}
 
         if boss.get("final"):
-            # Spec: final-boss completion requires actual interview-readiness gates.
+            # Spec: final-boss completion requires actual assessment readiness gates.
             skills = self.skills
             ready = adaptive.readiness(
                 skills=skills, schedule=self.schedule,
@@ -8349,7 +8349,7 @@ class Game:
             if not requirements["open"]:
                 return {
                     "error": "not ready",
-                    "message": "The Interviewer will not see you yet. This is not a "
+                    "message": "The Examiner will not see you yet. This is not a "
                                "difficulty wall — it is the readiness bar the whole "
                                "game exists to move you past.",
                     "requirements": requirements,
@@ -8846,9 +8846,9 @@ class Game:
             "message": "Climb back up. Each rung is the same algorithm, one step simpler.",
         }
 
-    # -- interview mode ----------------------------------------------------
+    # -- timed practical mode ----------------------------------------------------
     INTERVIEW_FORMATS = {
-        "LIVE_SCREEN": {"label": "Live Screen", "minutes": 50, "count": 2,
+        "LIVE_SCREEN": {"label": "Timed Session", "minutes": 50, "count": 2,
                         "ladder": ["EASY", "MEDIUM"]},
         "GAUNTLET": {"label": "The Gauntlet", "minutes": 65, "count": 4,
                      "ladder": ["EASY", "EASY", "MEDIUM", "HARD"]},
@@ -8889,7 +8889,7 @@ class Game:
             profile, adaptive.PROFILE_PATTERN_WEIGHT["GENERAL_SWE"])
         recent = set(self.state["recent_ids"][:15])
 
-        # Interview Mode measures, so it reaches for the hold-out FIRST. A
+        # Timed Practical Mode measures, so it reaches for the hold-out FIRST. A
         # sealed problem from a lineage this player has never met is the only
         # content in the corpus that can answer the question they actually
         # asked. The hold-out is finite and spends as it is used, so when it has
@@ -9058,7 +9058,7 @@ class Game:
             ending.clear_staging(self.state)
             staging = {
                 "staged": False, "reason": "from_the_menu",
-                "why": "Interview Mode. This is the measurement, it is the "
+                "why": "Timed Practical Mode. This is the measurement, it is the "
                        "same exam the last room uses, and it does not end the "
                        "game however well it goes.",
                 "blocks_the_practical": False,
@@ -9122,7 +9122,7 @@ class Game:
             # and the segment budgets in the payload, without rebuilding
             # anything. That case is carried, because the alternative is the one
             # this pass actually reproduced: a staged climax solved 6 of 6 in
-            # time, the report printing "INTERVIEW REPORT — 100%", and "THE
+            # time, the report printing "TIMED PRACTICAL REPORT — 100%", and "THE
             # SHELVES ARE STILL FULL" directly beneath it. Anything short of a
             # sweep still carries no verdict and still resolves as a failure —
             # which costs nothing, spends nothing and leaves the portal open, so
@@ -9229,7 +9229,7 @@ class Game:
     def interview_current(self) -> dict:
         run = self.state.get("interview")
         if not run:
-            return {"error": "no interview running"}
+            return {"error": "no timed practical running"}
         if run["index"] >= len(run["problem_ids"]):
             return self.finish_interview()
         pid = run["problem_ids"][run["index"]]
@@ -9246,7 +9246,7 @@ class Game:
     def interview_advance(self, result: dict) -> dict:
         run = self.state.get("interview")
         if not run:
-            return {"error": "no interview running"}
+            return {"error": "no timed practical running"}
         run["results"].append({
             "problem_id": run["problem_ids"][run["index"]],
             "solved": result.get("solved", False),
@@ -9263,7 +9263,7 @@ class Game:
     def finish_interview(self, seconds_by_segment: dict | None = None) -> dict:
         run = self.state.get("interview")
         if not run:
-            return {"error": "no interview running"}
+            return {"error": "no timed practical running"}
         results = run["results"]
         solved = sum(1 for r in results if r["solved"])
         total = max(len(run["problem_ids"]), 1)
@@ -9346,7 +9346,7 @@ class Game:
         # THERE IS NO `if` HERE, AND ITS ABSENCE IS THE FEATURE. This used to
         # read `if was_exam:` and fire the finale — which meant a practice
         # practical, sittable from the menu on the first morning with no keys,
-        # ended the game. `ending.resolve` is called after EVERY interview run
+        # ended the game. `ending.resolve` is called after EVERY timed practical run
         # precisely so that the question "was this the story or a measurement"
         # has exactly one answer in exactly one place. For every ordinary run,
         # staged or not, it returns `triggered: False`, plays nothing, frees
@@ -9356,7 +9356,7 @@ class Game:
         # this class has no such method. Nor are `released` / `collapse_lines`
         # — ending.py makes `captives.liberate(state, passed=True)` itself on
         # the pass branch and builds both rosters from it, which is also what
-        # frees the three the Interviewer took out of the home village.
+        # frees the three the Examiner took out of the home village.
         out["ending"] = ending.resolve(
             self.state,
             exam_report=debrief,
@@ -10099,7 +10099,7 @@ class Game:
         """What you have done. DEGRADE — docs/10-sealed-views.md §4.B.
 
         Both attempt queries contain submitted code and family information.
-        Interview history also contains per-question details and problem ids.
+        Timed Practical history also contains per-question details and problem ids.
         While any measured run is open, keep only totals and run summaries;
         leaving the question screen does not make teaching available again.
         Outside a measured run the player's full history remains available.
@@ -10144,7 +10144,7 @@ class Game:
         title" — which is why the RESPONSE uses `exam.player_view()`. The save
         kept the other one and this door shipped the save.
 
-        Ordinary exports still remove parked interview/exam identities. During
+        Ordinary exports still remove parked timed practical/exam identities. During
         any open measured run, refuse instead: full attempt history would reveal
         code, while a history-stripped export would be an incomplete backup.
         """

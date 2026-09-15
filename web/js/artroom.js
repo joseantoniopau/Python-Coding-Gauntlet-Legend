@@ -41,12 +41,12 @@ async function render() {
           COMBAT_POSES.forEach((p,i)=>ctx.drawImage(combatFrame(p,Math.floor(t*2)%2,look),i%3*42,29+Math.floor(i/3)*48));
         });
       }
-      for(const key of S.PORTRAIT_KEYS)sprite(key,'Dialogue portrait · expressive production frames',32,32,t=>S.portraitAt(key,['neutral','alarmed','delighted'][Math.floor(t/2)%3],t*1000));
+      for(const key of S.PORTRAIT_KEYS)sprite(key==='interviewer'?'Examiner':key,'Dialogue portrait · expressive production frames',32,32,t=>S.portraitAt(key,['neutral','alarmed','delighted'][Math.floor(t/2)%3],t*1000));
     } else if(collection==='monsters') {
       for(const key of M.MONSTER_KEYS) {const n=M.monsterSize(key);sprite(key,`${M.MONSTERS[key].rank||'mob'} · ${n} source pixels`,Math.max(64,n),64,t=>M.monsterFrame(key,Math.floor(t*4)%4));}
     } else if(collection==='bosses') {
       for(const key of B.BOSS_ARCHETYPES)for(const phase of [0,2,5]){
-        sprite(`${key} · phase ${phase+1}`,'Production boss body, material and transformation',112,144,t=>B.bossSprite(key,null,Math.floor(t*2)%5,{phase}));
+        sprite(`${key==='interviewer'?'Examiner':key} · phase ${phase+1}`,'Production boss body, material and transformation',112,144,t=>B.bossSprite(key,null,Math.floor(t*2)%5,{phase}));
       }
     } else if(collection==='towns') {
       Object.entries(M.REGION_BIOME).forEach(([region,biome],i)=>{

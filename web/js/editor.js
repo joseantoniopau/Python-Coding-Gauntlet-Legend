@@ -2,7 +2,7 @@
  * plus a highlight layer. No external editor library, so it works offline and
  * starts instantly.
  *
- * Interview Mode passes `assist: false`, which disables every completion and
+ * Timed Practical Mode passes `assist: false`, which disables every completion and
  * contextual reminder. That flag is honoured here, and the server refuses hints
  * independently — the guarantee does not rest on the UI alone.
  */
@@ -217,7 +217,7 @@ export class Editor {
     this.posEl.textContent = `Ln ${lines.length}, Col ${lines[lines.length - 1].length + 1}`;
     // An empty buffer is the moment a player is most likely to be looking for
     // the place to start, and it is the one moment the syntax reminders have
-    // nothing to say. Say the two keys instead — Interview Mode included,
+    // nothing to say. Say the two keys instead — Timed Practical Mode included,
     // because where the keyboard is is not a hint about the answer.
     if (!this.input.value) {
       this.hintEl.textContent = 'This is the spell. Ctrl/⌘+Enter runs it against '

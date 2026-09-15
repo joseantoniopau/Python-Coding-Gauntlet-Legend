@@ -32,7 +32,7 @@ Ask afterwards: “What does RUN do? What does CAST do? What can you now do in P
 
 ## Intermediate: ten-minute rehearsal and recovery
 
-Eligibility: can write a function with a loop or collection and has some interview preparation experience. Baseline: a small family-matched code problem and one edge-case explanation, without game assistance. Use a different surface example from the later recall tasks.
+Eligibility: can write a function with a loop or collection and has some experience solving Python problems. Baseline: a small family-matched code problem and one edge-case explanation, without game assistance. Use a different surface example from the later recall tasks.
 
 | Time | Participant task | Observe and record |
 | --- | --- | --- |
@@ -40,7 +40,7 @@ Eligibility: can write a function with a loop or collection and has some intervi
 | 1:00–4:00 | Solve the selected code task. Before submitting, use TRACE CURRENT CODE with a public case and inspect a variable at a chosen line. | Whether the trace matches the participant's actual current code; visible case identity; line/stack/locals readability; whether truncation or runtime errors are understood. Distinguish this from a prepared algorithm demonstration. |
 | 4:00–6:00 | Submit code and explain one invariant, one boundary case and the actual time/space costs. Read the communication feedback. | Useful revision caused by feedback; whether topic coverage is mistaken for semantic proof; whether Python allocations are counted honestly. Correct code and a weak explanation remain separate observations. |
 | 6:00–8:00 | Begin the next eligible encounter, make an unfinished edit, wait for “saved,” pause, reload and resume. | Exact draft/explanation/rung restoration; no duplicated completion or reward; paused time excluded; an interrupted network request must not produce a false saved label. |
-| 8:00–10:00 | Finish or pause the session and inspect MY GRIMOIRE. Explain the difference between this rehearsal, a due review and a sealed interview. Choose a sensible next session. | Summary accuracy, understandable completion count, retention language, confidence about stopping and returning. Record remaining time and unanswered work, not an artificial perfect finish. |
+| 8:00–10:00 | Finish or pause the session and inspect MY GRIMOIRE. Explain the difference between this rehearsal, a due review and a sealed timed practical. Choose a sensible next session. | Summary accuracy, understandable completion count, retention language, confidence about stopping and returning. Record remaining time and unanswered work, not an artificial perfect finish. |
 
 Use a separate five-minute follow-up on the prepared profile for a boss rematch or Mini-Repo; do not cram both into the ten-minute task. For a rematch, ask the participant to identify the changed input/output or resource constraint before coding and test one newly relevant case. For a Mini-Repo, ask them to state a hypothesis, cite a file/line, inspect a caller, make a focused change and explain one regression test. Record whether the game supported investigation rather than guessing a single edited line. Unlocked variants must remain practice evidence.
 

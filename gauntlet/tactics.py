@@ -3,7 +3,7 @@
 This is where the game becomes strategic rather than merely gamified. An enemy's
 weaknesses are *real properties of the problem*: the edge cases it hides and the
 performance ceiling it enforces. To fight well you have to reason about how code
-breaks — which is precisely the skill an interview is measuring.
+breaks — which is precisely the skill a timed practical is measuring.
 
 The Probe is the headline mechanic. You spend a charge to assert "on THIS input,
 the correct answer is THAT". The game runs the canonical solution and tells you

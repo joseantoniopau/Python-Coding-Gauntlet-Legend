@@ -218,7 +218,7 @@ gap — which is precisely where §7.4 M13 hangs five `tutor.beat()` calls.
 
 So the seal is carried from the server instead. `Game._run_is_open()` is the
 engine's own answer — true for `state["interview"]`, `state["exam"]` and an
-encounter opened in Interview Mode, open question or not — and it reaches the
+encounter opened in Timed Practical Mode, open question or not — and it reaches the
 client twice over:
 
 - **the lessons** need no client check at all: `/api/lesson` returns `{}` while
@@ -233,7 +233,7 @@ client twice over:
 up. `run-open` is the one that closes the gap.
 
 **Reason one — comparability, and this is the stronger one.** The MENU already
-says it: *"Interview Mode uses standardised constraints so the measurement stays
+says it: *"Timed Practical Mode uses standardised constraints so the measurement stays
 comparable."* A cue that is present for a player on their third fight and
 retired for a player on their fortieth is a difference between two runs that
 were supposed to be the same measurement. The only setting that is the same for
@@ -988,11 +988,11 @@ says *"TRIALS is never sealed"* in its own comment. The order is
 fourteen rungs touch a tab and the other eleven do not.
 
 **And APPROACH is not a restatement of the question.** `paintApproach` draws a
-textarea with `SCORE MY EXPLANATION` under it and *"Interviewers score this as
-heavily as the code"* over it, and it is the **default tab in a measured run**.
+textarea with `SCORE MY EXPLANATION` under it. It is the **default tab in a
+measured run** and asks the learner to explain how the code works.
 The plain statement of the problem is `#problem-statement` in `#battle-brief`,
 which is not a tab at all. A player told otherwise never types in the one panel
-that teaches interview communication.
+that teaches technical explanation.
 
 ---
 
@@ -1323,18 +1323,18 @@ reader counting combat modes against beats finds an answer instead of a hole.
 
 ---
 
-**29 · `the_practical`** — *teaches: the INTERVIEW door is always open*
+**29 · `the_practical`** — *teaches: the TIMED PRACTICAL door is always open*
 Trigger: whichever comes first — the first road walked (queued behind the Slate
-handover), or the first press of the `INTERVIEW` nav button.
+handover), or the first press of the `TIMED PRACTICAL` nav button.
 Channel: say.
-> There is a door on the menu marked INTERVIEW. It is open now. It was open
+> There is a door on the menu marked TIMED PRACTICAL. It is open now. It was open
 > before you arrived and it will be open when all this is finished.
 >
 > Nothing you do out here opens it and nothing closes it. Not the keys, and not
 > the door the keys open. It is a measurement, not a prize, and the only honest
 > thing to do with a measurement is take it whenever you want to know.
 
-`board:` *The INTERVIEW door on the menu is always open. Nothing here opens or closes it, keys included.*
+`board:` *The TIMED PRACTICAL door on the menu is always open. Nothing here opens or closes it, keys included.*
 
 This beat exists because it is the single most misreadable thing in the game —
 `finalexam.py` devotes its longest docstring passage to it and
@@ -1381,7 +1381,7 @@ the cheapest place to prevent that is a schoolteacher on the first road.
 ### 6.1 What is already decided
 
 `zonecompanions.py` settles the mechanics and this document changes none of
-them. Thessaly's `capture_kind` is `"sweep"`: she is taken by the Interviewer
+them. Thessaly's `capture_kind` is `"sweep"`: she is taken by the Examiner
 when `bug_demon` is down **and** twelve of the fourteen rungs are cleared
 (`sweep_fired`, `SWEEP_MIN_RUNGS`). `captives.retake` suspends her boon and
 never touches items, so **the Slate keeps working**. Her `loss_line` is already
@@ -1591,7 +1591,7 @@ One beat. `partyui.js` already has a `configure()` injection point
 | # | Site | Change |
 |---|---|---|
 | E1 | `DEFAULT_STATE`, line 469 area | `"lessons": firstlesson.new_lesson_state()`, beside `"pets"` and the other module sub-states. `_merge` forward-fills, so an existing save gains the key on load with nothing taught. |
-| E2 | `Game`, new | `def lesson(self, beat_id)` → `return tutorial.teach(self.state, beat_id, run_open=self._run_is_open())`, then `self.save()` if the return is non-empty. **Pass `run_open` and do not write the bare call.** The arguments are keyword-only and `run_open` **defaults to `True`**, so the bare call returns `{}` and writes nothing: a forgotten argument is a missing lesson, never a lesson taught into a measurement. `mode` is **not** passed — there is no `Game.mode` (`hasattr(Game(), 'mode')` is `False`, and `engine.py` says so itself beside `_advance_escorts`) and it does not need to be: the gate refuses on `run_open` alone, and `_run_is_open()` is `True` for `state["interview"]`, `state["exam"]` and an encounter opened in Interview Mode. **Do not also flip `mode`'s default to a measured run** — the gate is a disjunction, `run_open` already holds it closed, and a closed `mode` default would make this exact call return `{}` for every beat forever. |
+| E2 | `Game`, new | `def lesson(self, beat_id)` → `return tutorial.teach(self.state, beat_id, run_open=self._run_is_open())`, then `self.save()` if the return is non-empty. **Pass `run_open` and do not write the bare call.** The arguments are keyword-only and `run_open` **defaults to `True`**, so the bare call returns `{}` and writes nothing: a forgotten argument is a missing lesson, never a lesson taught into a measurement. `mode` is **not** passed — there is no `Game.mode` (`hasattr(Game(), 'mode')` is `False`, and `engine.py` says so itself beside `_advance_escorts`) and it does not need to be: the gate refuses on `run_open` alone, and `_run_is_open()` is `True` for `state["interview"]`, `state["exam"]` and an encounter opened in Timed Practical Mode. **Do not also flip `mode`'s default to a measured run** — the gate is a disjunction, `run_open` already holds it closed, and a closed `mode` default would make this exact call return `{}` for every beat forever. |
 | E3 | `Game`, new | `def lesson_note(self, kind, control_id)` → `tutorial.cue_note(self.state, kind, control_id, run_open=self._run_is_open())`; `def lessons_forget(self)` → `tutorial.forget(self.state, run_open=self._run_is_open())`. Both + `self.save()`. **All three writers are gated identically.** `cue_note` writes `state['lessons']['cue']` and `forget` clears the whole block, so both are `docs/10` write-clause writes even though neither leaks help; two of three gated and one ungated is how the ungated one survives a review. `def lessons(self)` → `tutorial.snapshot(self.state)`, no mode argument. |
 | E4 | `server.py`, the POST block around line 510 | `POST /api/lesson {id}`, `POST /api/lesson/note {kind,id}`, `POST /api/lesson/forget {}` |
 | E5 | `settings` default, line 469 | add `"cues": True` |
@@ -1647,5 +1647,5 @@ Run from `tests/`: `cd tests && python3 -m unittest test_firstlesson`.
 > measured run for two independent reasons, and retires each control after three
 > shows or three uses. Thessaly Brun teaches twenty-four things once each, never
 > inside a battle and never in a measured run, and whatever she has not reached
-> by the time the Interviewer takes her is chalked onto the board on the wall
+> by the time the Examiner takes her is chalked onto the board on the wall
 > and delivered one line at a time by a square with nobody standing in it.

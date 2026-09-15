@@ -524,7 +524,7 @@ function placeMarkers(region, grid, tier) {
 
   /* THE MARKER CARRIES ITS CREATURE. Without these two fields the draw below
    * falls through to `m.boss || 'titan'`, and every region in the game — all
-   * seventeen — put a Hash Titan on its boss tile. The Interviewer's 72x96 map
+   * seventeen — put a Hash Titan on its boss tile. The Examiner's 72x96 map
    * form, 4,859 painted pixels and the largest piece of map art in the boss
    * work, could not be drawn by any route at all. Blank for the six regions
    * with no boss row, which keeps the old fallback for exactly those. */
@@ -2187,7 +2187,7 @@ export class Overworld {
       /* The y margin is sized for the TALLEST marker, not the commonest one.
        * A marker's sprite is drawn upward from the bottom of its tile, so a
        * marker below the viewport still paints into it while its top row is
-       * on screen. At 3 that covered a 48px boss (3 tiles); the Interviewer's
+       * on screen. At 3 that covered a 48px boss (3 tiles); the Examiner's
        * map form is 96px — 6 tiles — so a boss at view.y1 + 4 or + 5 painted
        * into the viewport and was culled before it could. 6 restores the same
        * one tile of slack the 48px marker had. */

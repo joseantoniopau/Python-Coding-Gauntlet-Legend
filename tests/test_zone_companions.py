@@ -53,7 +53,7 @@ def beat_boss(state: dict, boss_id: str) -> dict:
 
 
 def near_the_end(state: dict) -> None:
-    """Walk the ladder far enough that the Interviewer's sweep can fire.
+    """Walk the ladder far enough that the Examiner's sweep can fire.
 
     THE BUG DEMON ALONE IS NOT NEAR THE END, and a test that says it is was
     testing the defect rather than the design. `rt_armorers_stair` runs
@@ -391,7 +391,7 @@ class TheInterviewerTakesThemAll(unittest.TestCase):
         guard that only asked it re-fired for ever: every companion rescued
         afterwards was collected the moment they were freed, each with its own
         fresh one-time cutscene. Measured before the fix: four separate sweep
-        events in one run, and a fifth one tick AFTER the Interviewer was
+        events in one run, and a fifth one tick AFTER the Examiner was
         already dead.
         """
         state = blank()

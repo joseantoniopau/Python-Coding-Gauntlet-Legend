@@ -166,7 +166,7 @@ def _short(value, limit=300):
 
 # --- argument / result adapters -------------------------------------------
 # Tree problems must hand the player a real linked TreeNode, not a list, or the
-# encounter stops resembling an interview. Tests still travel as level-order
+# encounter stops resembling a timed practical. Tests still travel as level-order
 # lists with None for absent children.
 
 def _to_tree(values, ns):

@@ -34,7 +34,7 @@ lessons and must not be collapsed into one red buzzer:
   2. BINDING    Do the names the player typed actually exist on this field?
                 A beautifully-formed line naming a variable that is not there
                 is the single most instructive failure in the game. It is
-                exactly the interview mistake of using an undefined name.
+                exactly the timed practical mistake of using an undefined name.
   3. SEMANTICS  Does the line, RUN against the battle state, do what the
                 incantation promises? It is executed in the sandbox. Nothing
                 here pattern-matches the player's string against a stored
@@ -328,7 +328,7 @@ class BattleContext:
     imports: tuple = ()
     modules: tuple = ()          # module names the imports make available
     turn: int = 0
-    mode: str = "adventure"      # adventure | interview
+    mode: str = "adventure"      # `adventure` | `interview` (stored mode values)
 
     # -- vocabulary --------------------------------------------------------
     def enemy_names(self) -> list:
@@ -652,7 +652,7 @@ _FOUNDATION: tuple = (
          holes={"book": (ENEMY, "the dict keeping score"),
                 "key": (EXPR, "the thing being counted")},
          skill="HASH_MAP", chapter=1, family="counting", effect="tally",
-         note="Count-by-key without a KeyError. The highest-yield line in interviews.",
+         note="Count-by-key without a KeyError. The highest-yield line in timed practicals.",
          cost=3, power=12, par=26.0, requires=("dict",),
          demo={"counts": "{}", "ch": "'a'"},
          example={"book": "counts", "key": "ch"},
@@ -1621,7 +1621,7 @@ def _syntax_error_line(exc: SyntaxError, line: str) -> str:
 # Layer 2: binding
 # ---------------------------------------------------------------------------
 # A line that parses and names something that is not there is the most useful
-# wrong answer in the game. It is the interview mistake — confidently using an
+# wrong answer in the game. It is the timed practical mistake — confidently using an
 # undefined name — and it is the one failure the player must learn to feel
 # before he types, not after the traceback.
 
@@ -2036,7 +2036,7 @@ def check_semantics(inc: Incantation, answers: dict, line: str,
 #                   hold in your head and it pays for that.
 #   4. FORM         Comprehension or loop. A comprehension that does the work of
 #                   a loop scores higher, on purpose and not as a matter of
-#                   taste: it is the form that composes, the form an interviewer
+#                   taste: it is the form that composes, the form an examiner
 #                   reads faster, and the form a player will not reach for
 #                   unless something pays them to.
 #   5. COMPOSITION  Two different ideas in one expression — a lookup inside an
@@ -2357,7 +2357,7 @@ class CastResult:
     seconds: float = 0.0
     cost: int = 0
     skill_deltas: dict = field(default_factory=dict)
-    teaching_withheld: bool = False   # True in interview: measured, not taught
+    teaching_withheld: bool = False   # True in timed practical: measured, not taught
     # What the typing was worth, and why. `complexity` is the whole measurement
     # so a client can show the player which part of their line paid.
     complexity: dict = field(default_factory=dict)
@@ -2544,7 +2544,7 @@ def cast(incantation_id: str, answers, context: BattleContext, *,
         # In a measured run the SCORE still comes back — it is what the cast was
         # worth and the health bar is about to show it anyway — but the notes do
         # not. "a loop; a comprehension would score higher" is coaching, and
-        # Interview Mode does not coach.
+        # Timed Practical Mode does not coach.
         complexity=(measured.to_dict() if teaching_allowed
                     else {**measured.to_dict(), "notes": []}),
         complexity_score=measured.score,

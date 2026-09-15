@@ -3,7 +3,7 @@
 # PYTHON CODING GAUNTLET LEGEND
 ### The Algorithm Realms
 
-**An original pixel-art RPG for practicing real Python and interview problem solving.**
+**An original pixel-art RPG for learning real Python through quests, problem solving and timed practicals.**
 
 1,018 validated problems · 17 regions · 14 bosses · 16 dungeons · 74 quests · 6 classes
 No accounts. No network. No dependencies. It all runs on your machine.
@@ -49,7 +49,7 @@ The RPG systems give practice a setting and a purpose:
 - **Readable workspaces:** 16px code, a reversible focus view, keyboard-operated
   choices and file tabs, an offline display font, and motion effects confined to
   scene artwork.
-- **Practice at your pace:** resumable 10, 20 or 40 minute expeditions and interview
+- **Practice at your pace:** resumable 10, 20 or 40 minute expeditions and timed practical
   rehearsals. Choose balanced practice, review, a weak skill or fresh material.
   Pause or finish deliberately; ordinary code and explanation drafts can resume.
 - **Learning records:** a personal grimoire with notes, previous attempts,
@@ -62,7 +62,7 @@ The RPG systems give practice a setting and a purpose:
 
 Rehearsals are practice. Sealed assessment keeps its separate rules and finite
 holdout pool. Explanation feedback reports topic coverage and quoted evidence;
-it does not pretend to judge the quality of an interview answer.
+it does not pretend to judge the quality of a practical explanation.
 
 Open `/art.html` on the running local server for the renderer gallery. It includes
 animation, silhouette checks, cinematic fixtures and PNG frame export. The
@@ -86,7 +86,7 @@ game fails is opening at a difficulty that only helps people who don't need it.
 GUIDED    258  ██████████████░░░░  fill in one expression
 TUTORIAL  215  ████████████░░░░░░  guided, with the shape given
 EASY      321  ██████████████████  on your own
-MEDIUM    199  ███████████░░░░░░░  real interview weight
+MEDIUM    199  ███████████░░░░░░░  applied problem solving
 HARD       25  █░░░░░░░░░░░░░░░░░  the deep end
 ```
 
@@ -142,7 +142,8 @@ python3 run.py
 
 A window opens on a local server bound to `127.0.0.1` with a per-session token.
 Nothing is sent anywhere. `./scripts/build_app.sh` produces a double-clickable
-macOS `.app`.
+macOS `.app`. Quit the game before rebuilding; the script stops if the app is
+running so its interface and backend stay on the same version.
 
 ### Where your save lives
 
@@ -175,9 +176,9 @@ regression suite covers additional boundaries; this command is a smoke check.
 
 ---
 
-## Interview Mode is actually sealed
+## Timed Practical Mode is actually sealed
 
-Adventure Mode teaches. Interview Mode measures. The isolation is enforced
+Adventure Mode teaches. Timed Practical Mode measures. The isolation is enforced
 **server-side**: the pattern label is redacted, and hints, probes, companions,
 items, the smith, the coach and every one of the 142 endpoints that could help
 are refused with a `409` naming the capability. A test suite scans thousands of
@@ -290,7 +291,7 @@ under the Pixabay Content License — nickpanek, alec_koff, Alex Morgan and
 myshoun, credited in `web/audio/music/CREDITS.md`. The game synthesises its own
 soundtrack as a fallback if they are absent.
 
-Problems tagged as reported interview patterns are **historically reported
-shapes, not guaranteed questions**, and name no company.
+Problem provenance distinguishes original exercises from reported coding
+exercise patterns. All tasks are presented as Python learning material.
 
 MIT — see [LICENSE](LICENSE).

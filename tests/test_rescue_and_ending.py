@@ -156,7 +156,7 @@ class ExamIsNotGated(GameTest):
         self.assertIn("freeze", ids)
         self.assertEqual(ids[-1], "the_prompt_stays")
         self.assertEqual(scene["send_off"]["code"], "READY")
-        self.assertIn("ready to sit a real Python interview",
+        self.assertIn("met the standard for this timed Python practical",
                       " ".join(scene["send_off"]["lines"]))
 
     def test_a_failed_practical_still_ends_the_game(self):
@@ -612,7 +612,7 @@ class TheCaptivesArePeople(GameTest):
 
 class TheReadinessLineIsHonest(GameTest):
 
-    _CLAIM = "ready to sit a real Python interview"
+    _CLAIM = "met the standard for this timed Python practical"
 
     def _scene(self, solved: int, *, freed: int = 0, seed: int = 21):
         exam = finalexam.compose(self.corpus, seed=seed)
@@ -652,14 +652,14 @@ class TheReadinessLineIsHonest(GameTest):
         self.assertEqual(send_off["code"], "NOT_READY")
         # Told, not flattered.
         self.assertNotIn(self._CLAIM, " ".join(send_off["lines"]))
-        self.assertIn("not ready", " ".join(send_off["lines"]).lower())
+        self.assertIn("did not meet the standard", " ".join(send_off["lines"]).lower())
         # The win is still celebrated first, before the bad news.
         self.assertTrue(send_off["celebrates"])
         # And there is a countable route out.
         self.assertTrue(send_off["drills"])
         self.assertTrue(send_off["honest"])
         # It is a verdict on the format, never on the person.
-        self.assertIn("a verdict on whether you can do the job",
+        self.assertIn("a record of this attempt, not a limit on what you can learn",
                       " ".join(send_off["lines"]))
 
     def test_the_numbers_in_the_line_are_the_measured_ones(self):

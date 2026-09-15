@@ -17,7 +17,7 @@
  *
  *   Nothing here supplies an answer. The tree, the ticket and the suite are all
  *   the player was given, and the starting-file pointer is the server's to send
- *   or withhold — in Interview Mode it does not arrive at all, and this file
+ *   or withhold — in Timed Practical Mode it does not arrive at all, and this file
  *   never infers one.
  */
 import { Editor, highlight } from './editor.js';
@@ -238,7 +238,7 @@ export class RepoUI {
     this.startedAt = Date.now() - (payload.elapsed_seconds || 0) * 1000;
 
     this.render();
-    /* Where to start reading, when the server sent it. In Interview Mode it did
+    /* Where to start reading, when the server sent it. In Timed Practical Mode it did
      * not, so the first editable file is opened instead — a neutral choice that
      * says nothing about where the defect is. */
     const first = this.view.start_file && this.byPath.has(this.view.start_file)

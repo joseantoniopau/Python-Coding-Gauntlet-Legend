@@ -214,9 +214,9 @@ def _static_checks(p: Problem) -> list:
         err("no starter code")
     if p.source_type == "REPORTED_INTERVIEW":
         if not p.provenance_note:
-            err("reported-interview provenance must carry a disclaimer note")
+            err("reported coding exercise provenance must carry a disclaimer note")
         if "not a guarantee" not in p.provenance_note.lower():
-            err("reported-interview provenance must say it is not a guarantee")
+            err("reported coding exercise provenance must say it is not a guarantee")
         # This build is company-agnostic on purpose. REPORTED_INTERVIEW now means
         # "a shape the reporting record keeps producing", which is a claim we can
         # actually stand behind; naming an employer is a claim we cannot, since
@@ -514,7 +514,7 @@ def _verify_scaffold(p: Problem) -> list:
             # editor-axis problems — so it IS ours, and the blanket exemption is
             # what let `oopl-except-order-tutorial` ship an unparseable rung-4
             # starter through a build reporting zero errors. Rung 4 is what
-            # MEDIUM, HARD, Interview Mode, the practical and the hold-out serve
+            # MEDIUM, HARD, Timed Practical Mode, the practical and the hold-out serve
             # unconditionally; it is the last rung that should go unchecked.
             continue
         try:

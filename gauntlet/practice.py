@@ -22,7 +22,7 @@ OPTIONS = {
     ],
     "kinds": [
         {"id": "expedition", "label": "Practice expedition", "description": "A short, resumable journey through ordinary learning encounters."},
-        {"id": "rehearsal", "label": "Interview rehearsal", "description": "Practise explaining and solving with coaching. This is not a sealed assessment."},
+        {"id": "rehearsal", "label": "Timed Practical rehearsal", "description": "Practise explaining and solving with coaching. This is not a sealed assessment."},
     ],
 }
 

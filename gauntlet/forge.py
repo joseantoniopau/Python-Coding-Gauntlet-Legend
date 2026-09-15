@@ -1686,7 +1686,7 @@ _SPANNER_RUNGS = (
           "square the other way by morning.",
           "THE SECOND FITTING V",
           "A second bench slot. Two helpers travel with you, editable, and "
-          "Interview Mode empties the bench at the door.",
+          "Timed Practical Mode empties the bench at the door.",
           "steel", "#b07a45", "forge_mark", "heatglow", "standard"),
     _rung(_SPANNER, 6, "toolwrights_spanner", "The Toolwright's Spanner",
           {"refactor_bonus": 0.20, "bench_slots": 2, "mana_max": 6},

@@ -87,7 +87,7 @@ wrong band. **TUTORIAL is the whole job.**
 
 > GUIDED hands the player complete code with one blank in it. TUTORIAL hands
 > them a skeleton and asks for the body. EASY is a blank screen. Those are three
-> different acts, and only the third one is what an interview asks for.
+> different acts, and only the third one is what a timed practical asks for.
 
 Measured, TUTORIAL is 195 of 202 write-it-all — **96.5% blank screen**.
 TUTORIAL and EASY are the same act. The engine believes in a three-step band and
@@ -112,7 +112,7 @@ because it is a property of the serving code, not of any problem record.
 | EASY | 3 | never a single hand-held blank; at minimum, several pieces |
 | MEDIUM | 4 | write it all |
 | HARD | 4 | write it all |
-| practical / interview / hold-out | 4 | write it all, no exceptions, ever |
+| timed practical / hold-out | 4 | write it all, no exceptions, ever |
 
 Monotone by construction: `1 ≤ 2 ≤ 3 ≤ 4 ≤ 4`. Today's EASY violation is
 excluded at the floor — an EASY problem may be served at rung 3, never rung 2.
@@ -178,7 +178,7 @@ order-sensitive — over 400 random orders of the same pools GUIDED came out mea
 69.5 / 37.3, green, while the live selector was serving **79.0 / 100.0 / 66.7**:
 a rise, exactly where the whole document says there must be a fall.
 
-Measured on `Game.next_encounter` over a 400-encounter career, after the second
+Measured on `Game.next_encounter` over a 400-encounter run, after the second
 spans and the re-sized `RUNG_EVIDENCE`:
 
 | window | GUIDED | TUTORIAL | EASY | MEDIUM | HARD |
@@ -186,20 +186,20 @@ spans and the re-sized `RUNG_EVIDENCE`:
 | first 200 encounters | 90.9% | 82.1% | 61.0% | 0.0% | 0.0% |
 | full 400 encounters | 61.3% | 71.2% | 49.3% | 0.0% | 0.0% |
 
-**A whole-career band aggregate is not a measurement of the taper, and the full
+**A whole-run band aggregate is not a measurement of the taper, and the full
 400-encounter row is the proof.** It confounds three things:
 
 - **the band**, which is what we want to measure;
 - **the skill**, because evidence is filed per skill — TWO_POINTER's GUIDED
   problems arrive after that skill already holds 23 rung-4 clears, while TREE's
   TUTORIAL problems arrive when it holds three;
-- **the phase of the career**, because the selector keeps serving GUIDED
+- **the phase of the run**, because the selector keeps serving GUIDED
   problems at encounter 350, by which point PYTHON is fluent and a GUIDED
   fill-in-the-blank would be an insult. 14 of the 62 GUIDED encounters in a
-  400-encounter career are PYTHON, served at 0% scaffolded.
+  400-encounter run are PYTHON, served at 0% scaffolded.
 
 The claim survives in its exact form, and it is stronger than the aggregate:
-**for every one of the 241 editor encounters in that career, taking the skill
+**for every one of the 241 editor encounters in that run, taking the skill
 state in the player's hand and asking all five bands how much help they would
 give produces a non-decreasing sequence.** Zero inversions. That is monotone by
 construction — `rung_for` starts the climb at the band's floor, so a band with a
@@ -561,7 +561,7 @@ not ours". That reasoning predates render-time rungs: `skeleton()` passes the
 authored starter through for 533 of the 746 editor-axis problems, so it **is**
 ours, and the blanket exemption is what let `oopl-except-order-tutorial` ship a
 rung 4 raising `SyntaxError: expected 'except' or 'finally' block` at column one
-— through a build reporting zero errors, into MEDIUM, HARD, Interview Mode, the
+— through a build reporting zero errors, into MEDIUM, HARD, Timed Practical Mode, the
 practical and the hold-out, all of which serve rung 4 unconditionally. The skip
 is now narrowed to `not scaffold.scaffoldable(p)`: a DEBUG_BATTLE's broken
 starter IS the question, and `db-syntax-colon` stays correctly exempt.
@@ -683,11 +683,11 @@ the writing trial genuinely is an unaided rung-4 EASY clear.
 #### The thresholds are sized to one skill, not to a band
 
 `RUNG_EVIDENCE` was 21 / 24 / 30, solved against the measured length of a band
-in a real career — 62 GUIDED editor encounters, 59 TUTORIAL, 75 EASY. The
+in a real run — 62 GUIDED editor encounters, 59 TUTORIAL, 75 EASY. The
 arithmetic was right for a question nobody was asking: **evidence is filed per
 skill.** Those 241 editor encounters spread over eighteen skills at a median of
 fifteen apiece, and only HASH_MAP (32) and TWO_POINTER (31) ever reached 24. So
-no skill climbed off TUTORIAL's or EASY's floor in an entire career, and the mix
+no skill climbed off TUTORIAL's or EASY's floor in an entire run, and the mix
 the game served was not measured competence at all — it was declaration coverage
 clamped by the floor: TUTORIAL 100.0% scaffolded against its 70%, EASY 66.7%
 against its 35%.
@@ -731,7 +731,7 @@ Measured: a non-lapsed rung-3 serving of `ob-keep-long-words` took the family
 from stage 0 to stage 1, ease 1.00 to 1.10, next sighting 3.3 days out; four
 such clears reached stage 4, ease 1.40 and **+42.0 days** — six weeks of
 interval bought with fill-in-the-blanks. 18 of the 36 EASY servings in a live
-120-encounter career were rung 3.
+120-encounter run were rung 3.
 
 `counts_as_review(rung, *, recovering=False)` now asks the ENTRY, which is the
 thing that knows whether this serving is a recovery.
@@ -741,7 +741,7 @@ whose servings never reach rung 4 never acquires a `due_at`, so it never enters
 `srs.due()`. That is the correct reading — a review measures retention of
 something the player can produce, and until an ordinary serving of that family
 has been the whole function there is nothing to measure retention *of*. Measured
-over a live 400-encounter career it costs almost nothing: **62 of 71 families
+over a live 400-encounter run it costs almost nothing: **62 of 71 families
 still acquire a due date** (66 before), and what changes is the inflation — 22
 families at stage 5 rather than 30. Non-editor encounters pass `rung=0` and are
 unaffected; a multiple choice is answered whole or not at all.
@@ -801,7 +801,7 @@ excluded by being GUIDED. **Under render-time rungs both coincidences
 evaporate**, because any `CODE_BATTLE` becomes servable at rung 2.
 
 So the practical's guard must move from *encounter kind* to *rung*, explicitly:
-**the practical serves rung 4 and asserts it.** Same for Interview Mode, same
+**the practical serves rung 4 and asserts it.** Same for Timed Practical Mode, same
 for the hold-out. The practical is always the whole function with nothing to
 lean on, and after this change it says so in the one vocabulary that can still
 be true.
@@ -897,7 +897,7 @@ on the lineage mechanism being unreliable, which it is not.
 ## 9. The audit pass, and what it changed
 
 Everything above §9 is the plan as written. This section records what a build
-and a live career had to say about it, because several claims in the plan turned
+and a live run had to say about it, because several claims in the plan turned
 out to be true only by accident.
 
 **Run, not reasoned:** `python3 run.py build-corpus` (1,013 problems, 0 errors);
@@ -905,7 +905,7 @@ out to be true only by accident.
 `test_corpus.py`, `test_acceptance.py`, `test_engine.py`, `test_wiring.py`,
 `test_keys_and_seal.py`, `test_seal_enumeration.py`, `test_interview_isolation.py`,
 `test_transfer.py`, `test_first_steps.py`; and a deterministic 400-encounter
-career driven through `Game.next_encounter` with the rung read off the payload
+run driven through `Game.next_encounter` with the rung read off the payload
 the client is actually sent.
 
 **Corrected, each with its measurement:**
@@ -928,7 +928,7 @@ the client is actually sent.
 
 **The one thing the audit disputed rather than fixed.** The brief asked for the
 live 400-encounter band aggregate to be non-increasing. It is not, and it should
-not be asserted: 61.3 / 71.2 / 49.3 confounds band with skill and with career
+not be asserted: 61.3 / 71.2 / 49.3 confounds band with skill and with run
 phase, and every point of the GUIDED–TUTORIAL gap is composition. §1c gives the
 measurement and the stronger claim that replaces it — zero inversions across
 241 live encounters, asserted per encounter.

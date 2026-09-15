@@ -130,7 +130,7 @@ view that leaks an id, a title or a lineage lets a player collect the hold-out
 for free and study it. `Game.run_view` already documents this defect and its
 fix — and it is separate from the swap test precisely because a roster is not
 *about* the question on the screen, so the swap test would wave it through.
-Finding 4.H was that exact case. `Game.export` now refuses with HTTP 409 while any measured run is open, including between questions: a complete save also contains prior code and interview details. Outside a measured run, exports retain the full attempt history and still redact `state["interview"]` and `state["exam"]`. A refused export is not a partial save.
+Finding 4.H was that exact case. `Game.export` now refuses with HTTP 409 while any measured run is open, including between questions: a complete save also contains prior code and timed practical details. Outside a measured run, exports retain the full attempt history and still redact `state["interview"]` and `state["exam"]`. A refused export is not a partial save.
 
 ---
 

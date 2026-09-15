@@ -164,8 +164,8 @@ The overall figure is **not an average**:
 overall = min(average, 40 + weakest × 0.7) × (0.4 + 0.6 × gates_passed/gates_total)
 ```
 
-The weakest dimension caps the result and the gates scale it, because an
-interview will not average your answers either.
+The weakest dimension caps the result and the gates scale it, so a strong
+average cannot hide a weak prerequisite.
 
 ### The thirteen gates
 
@@ -176,10 +176,10 @@ recognised · BFS and DFS functional · tree traversal functional · Big-O expla
 retains patterns after several days.
 
 **The Null King's Castle requires eight bosses, 60 mastery across its
-prerequisite regions, and ten of the thirteen gates.** The Interviewer refuses an
+prerequisite regions, and ten of the thirteen gates.** The Examiner refuses an
 unready player outright, with the specific requirements shown:
 
-> "The Interviewer will not see you yet. This is not a difficulty wall — it is
+> "The Examiner will not see you yet. This is not a difficulty wall — it is
 > the readiness bar the whole game exists to move you past."
 
 ## Post-attempt coach
@@ -192,6 +192,6 @@ Socratic first. For a timeout it asks, in order:
 4. Could you avoid restarting the scan from every position?
 
 It separates **knowledge failure** from **implementation failure** from **time
-failure**, and the interview report breaks the run down along exactly those three
+failure**, and the timed practical report breaks the run down along exactly those three
 axes. The full solution is offered only after three attempts — and a Learning
 Clear still advances the story while scheduling a mandatory rematch.

@@ -61,7 +61,7 @@ FLOOR = {
     "BOSS": WRITE_IT_ALL,
 }
 
-# The practical, Interview Mode and the hold-out serve rung 4 and nothing else,
+# The practical, Timed Practical Mode and the hold-out serve rung 4 and nothing else,
 # in any band, forever. finalexam.py used to get this by accident — MISSING_RUNE
 # was excluded by encounter kind and the one CODE_BATTLE carrying a blank was
 # excluded by being GUIDED. Under render-time rungs both coincidences evaporate,

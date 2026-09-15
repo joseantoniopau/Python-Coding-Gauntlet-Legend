@@ -609,7 +609,7 @@ def _cold_clause(ev: dict) -> str:
                 f"{ev['transfer_sample']} problems you had never seen in any "
                 f"form, cold, with nothing switched on — {ev['transfer_score']}%, "
                 f"{ev['transfer_confidence']} confidence {ev['transfer_band']}. "
-                "That is the number that answers the question an interview is "
+                "That is the number that answers the question a timed practical is "
                 "actually asking.")
     sample = ev["transfer_sample"]
     if sample:
@@ -668,8 +668,8 @@ def readiness_line(ev: dict, roll: dict | None = None) -> dict:
 
     if verdict == "READY":
         body = [
-            "You are ready to sit a real Python interview.",
-            "Not nearly. Not with a bit more practice. Ready.",
+            "You met the standard for this timed Python practical.",
+            "This result records what you completed independently.",
             f"You sat a timed practical with every one of the "
             f"{ev['crutches_total']} crutches removed and solved {solved} of "
             f"{total} inside the clock, with no hint, no probe, no companion, no "
@@ -682,10 +682,9 @@ def readiness_line(ev: dict, roll: dict | None = None) -> dict:
         if ev["gates_total"]:
             body.append(f"{ev['gates_passed']} of {ev['gates_total']} readiness "
                         "gates are met, and gates do not move on exposure.")
-        body.append("That is not encouragement. It is a measurement, taken by "
-                    "something with no ability to flatter you, and it says you "
-                    "can do this. Go and book the interview.")
-        return {"code": "READY", "headline": "GO AND BOOK IT",
+        body.append("Keep the result in your record. Return after a break and "
+                    "try a fresh timed practical to check what you retain.")
+        return {"code": "READY", "headline": "THE STANDARD IS MET",
                 "lines": body, "celebrates": True,
                 "drills": [], "honest": ""}
 
@@ -708,19 +707,18 @@ def readiness_line(ev: dict, roll: dict | None = None) -> dict:
                 "drills": ev["drills"],
                 "honest": "The knowledge is largely there. The reliability is "
                           "the thing still being measured, because it is the "
-                          "thing the interview measures too."}
+                          "thing the timed practical measures too."}
 
     if verdict == "NOT_READY":
         body = [
             _celebration(roll),
-            "And you are not ready to sit this format yet. Plainly, because the "
-            "alternative is a game that tells you what you want to hear and then "
-            "lets a stranger tell you on a Tuesday.",
+            "This run did not meet the standard for this format yet. The "
+            "results below show what needs more practice.",
             f"You solved {solved} of {total} with nothing to lean on.",
         ]
         if ev["signal_note"]:
             body.append(ev["signal_note"])
-        body.append("None of that is a verdict on whether you can do the job. "
+        body.append("This is a record of this attempt, not a limit on what you can learn. "
                     "All of it moves, all of it is listed below with what to do "
                     "about it, and the practical recomposes — the next one is a "
                     "different set of questions, not this one again.")
@@ -736,7 +734,7 @@ def readiness_line(ev: dict, roll: dict | None = None) -> dict:
     body = [
         _celebration(roll),
         "There is no practical on record for this save, so there is no line "
-        "here about whether you could sit an interview tomorrow — that sentence "
+        "here about whether you could sit a timed practical tomorrow — that sentence "
         "is only worth saying when something measured it.",
         "The practical is under the castle, it takes about two hours, and it is "
         "the one capability check in this entire game. Nothing else here counts "
@@ -1786,7 +1784,7 @@ def available(*, exam_report: dict | None = None, cleared_bosses=(),
     the roll call changes is who is standing in the frame afterwards.
 
     `staged` is ending.py's answer to a different question — was this sitting
-    the story climax at the portal, or an ordinary Interview Mode run somebody
+    the story climax at the portal, or an ordinary Timed Practical Mode run somebody
     sat from the menu to find out where they stand. Pass it and it is ANDed in.
     Omit it and this answers what it has always answered: has a practical been
     sat at all.
@@ -2173,10 +2171,10 @@ def self_check() -> dict:
             if named != size:
                 failures.append(f"[{size}] roll call reads {named} names")
             # 5. no claim the evidence does not support.
-            if code != "READY" and "ready to sit a real Python interview" in " ".join(
+            if code != "READY" and "met the standard for this timed Python practical" in " ".join(
                     scene["send_off"]["lines"]):
                 failures.append(f"[{size}/{code}] claims readiness without it")
-            if code == "READY" and "ready to sit a real Python interview" not in " ".join(
+            if code == "READY" and "met the standard for this timed Python practical" not in " ".join(
                     scene["send_off"]["lines"]):
                 failures.append("a pass does not say the line")
             # The identifier rail drops what the player did not name.

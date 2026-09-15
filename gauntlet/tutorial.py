@@ -89,7 +89,7 @@ Six things this module insists on.
    save, an empty save and a save somebody edited by hand all answer and none
    of them raises.
 
-6. THE CURRICULUM SURVIVES ITS TEACHER. At the Interviewer's sweep every beat
+6. THE CURRICULUM SURVIVES ITS TEACHER. At the Examiner's sweep every beat
    that never fired keeps its trigger and its latch and changes only its
    speaker and its channel: THE BOARD, on the wall of the empty square, one
    chalk line at a time. That is `Beat.board`, it costs one field, and it is
@@ -371,7 +371,7 @@ BEATS = (
     # score this as heavily as the code" over it, and it is the DEFAULT tab in a
     # measured run. The plain statement of the problem is #problem-statement,
     # which is not a tab at all. A player told otherwise never types in the one
-    # panel that teaches interview communication.
+    # panel that teaches timed practical communication.
     Beat(
         id="the_tabs", order=9,
         teaches="the five side panels, and why three of them get taken away",
@@ -742,14 +742,14 @@ BEATS = (
 
     Beat(
         id="the_practical", order=29,
-        teaches="the INTERVIEW door is always open",
+        teaches="the TIMED PRACTICAL door is always open",
         trigger="Whichever comes first: the first road walked, queued behind "
-                "the Slate handover, or the first press of the INTERVIEW nav "
+                "the Slate handover, or the first press of the TIMED PRACTICAL nav "
                 "button.",
         site="main.js · M18",
         channel=CHANNEL_SAY, title="",
         lines=(
-            "There is a door on the menu marked INTERVIEW. It is open now. It "
+            "There is a door on the menu marked TIMED PRACTICAL. It is open now. It "
             "was open before you arrived and it will be open when all this is "
             "finished.",
             "Nothing you do out here opens it and nothing closes it. Not the "
@@ -757,7 +757,7 @@ BEATS = (
             "prize, and the only honest thing to do with a measurement is "
             "take it whenever you want to know.",
         ),
-        board="The INTERVIEW door on the menu is always open. Nothing here "
+        board="The TIMED PRACTICAL door on the menu is always open. Nothing here "
               "opens or closes it, keys included.",
     ),
 
@@ -1164,7 +1164,7 @@ def may_teach(mode: str = config.MODE_ADVENTURE, run_open: bool = True) -> bool:
     `run_open` DEFAULTS TO TRUE, AND THAT IS THE WHOLE OF THE ARGUMENT. Every
     gated entry point in this file defaults it that way, so a caller who
     forgets the argument gets SILENCE rather than a lesson. It defaulted to
-    False once and was measured teaching `the_trials` into an open interview
+    False once and was measured teaching `the_trials` into an open timed practical
     through the bare call `tutorial.teach(state, beat_id)` — which is what
     docs/13 §7.8 E2 told the engine to write. A gate whose safe answer depends
     on the caller remembering is not a gate.
@@ -1180,7 +1180,7 @@ def may_teach(mode: str = config.MODE_ADVENTURE, run_open: bool = True) -> bool:
     forever. Tested: `TheGatesFailClosed` calls both ways.
 
     And nothing is lost by it. `_run_is_open()` is True for `state["interview"]`,
-    for `state["exam"]` and for an encounter opened in Interview Mode, so a
+    for `state["exam"]` and for an encounter opened in Timed Practical Mode, so a
     caller that can honestly say `run_open=False` is not in a measured run. The
     `mode` argument stays for the callers that do hold a mode string, and the
     tests pass it.

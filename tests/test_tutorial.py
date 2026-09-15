@@ -78,7 +78,7 @@ def blank() -> dict:
 
 
 def swept() -> dict:
-    """A save at the Interviewer's sweep: the Bug Demon down and the ladder
+    """A save at the Examiner's sweep: the Bug Demon down and the ladder
     essentially walked, which is the whole of zonecompanions.sweep_fired."""
     state = blank()
     others = [b["id"] for b in world.BOSSES

@@ -157,7 +157,7 @@ class Repo:
     difficulty: str
     shapes: tuple
     brief: str                 # the ticket, as the player receives it
-    start_file: str            # where to start reading; withheld in Interview Mode
+    start_file: str            # where to start reading; withheld in Timed Practical Mode
     start_note: str            # why there; also withheld
     files: dict                # editable project sources and fixtures
     tests: dict                # the graded suite. Never editable. Ever.
@@ -504,7 +504,7 @@ def player_view(repo: Repo, *, mode: str = config.MODE_ADVENTURE,
                 sealed: Iterable[str] = ()) -> dict:
     """The encounter payload. The patch is not in it under any conditions.
 
-    Interview Mode gets the brief, the files, the suite and the clock — the
+    Timed Practical Mode gets the brief, the files, the suite and the clock — the
     same thing a real practical hands over. No pointer at the file to start in,
     no list of which tests are the targets, no label saying which of the three
     shapes this is. Finding that out is the exercise.
@@ -5531,7 +5531,7 @@ register(Repo(
 #                       if finalexam.sealed(enc, cap)}
 #
 #      That is the only way this module learns what is sealed, and
-#      `finalexam.sealed` stays the only place anything asks. Interview Mode
+#      `finalexam.sealed` stays the only place anything asks. Timed Practical Mode
 #      is additionally forced inside `player_view`, belt and braces, exactly
 #      as `Problem.player_view(mode="interview")` does.
 #

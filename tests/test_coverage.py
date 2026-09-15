@@ -2,7 +2,7 @@
 
 Two lists decide what this game owes a player. The first is the language itself
 — the mechanics that have to cost nothing to type under pressure. The second is
-the set of archetype families the product spec names as the shapes an interview
+the set of archetype families the product spec names as the shapes a timed practical
 keeps returning to. This file checks both, item by item, and then checks the one
 property that decides whether any of it lands:
 

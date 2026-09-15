@@ -457,9 +457,8 @@ class TestTransferReadiness(TransferTest):
         self.assertEqual(rows[0]["first_encounter"], 1)
 
     def test_nothing_taught_can_move_it(self):
-        """Adventure clears move mastery and must not move this. Neither may an
-        interview sat on teachable material, which measures performance under
-        interview conditions and says nothing about transfer."""
+        """Adventure clears move mastery and must not move this. Neither may a timed practical sat on teachable material, which measures performance under
+        timed practical conditions and says nothing about transfer."""
         game = self.game()
         for _ in range(12):
             payload = game.next_encounter()
@@ -515,8 +514,7 @@ class TestTransferReadiness(TransferTest):
         self.assertFalse(dashboard["readiness"]["ready"])
 
     def test_an_interview_really_does_produce_transfer_evidence(self):
-        """The whole loop, through the doors the client uses: start an
-        interview, answer what it serves, and check the ledger afterwards."""
+        """The whole loop, through the doors the client uses: start a timed practical, answer what it serves, and check the ledger afterwards."""
         game = self.game()
         game.start_interview("LIVE_SCREEN")
         counted = 0

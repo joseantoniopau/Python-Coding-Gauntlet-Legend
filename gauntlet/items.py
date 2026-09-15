@@ -3,7 +3,7 @@
 The design rule every item obeys: an item may change the *economics* of an
 encounter — how much focus a spell costs, how many probes you get, how much
 grace the clock gives you, how much XP a clever play pays — but no item may
-supply an answer, name a pattern, or survive into Interview Mode.
+supply an answer, name a pattern, or survive into Timed Practical Mode.
 
 That constraint is what keeps a genuinely addictive loot loop honest: the power
 fantasy is real, and it is still your Python that clears the fight.
@@ -226,7 +226,7 @@ EFFECT_LABELS = {
     "loot_double_roll": "every drop rolls twice and you keep both",
     "oblige": "solves the current encounter outright and pays full loot",
     "skill_decay": "permanently removes {v} mastery from the skill it solved",
-    "sealed_in_exam": "does nothing whatsoever in Interview Mode",
+    "sealed_in_exam": "does nothing whatsoever in Timed Practical Mode",
     "hand_ward": "mastery the Obliging Hand took back regrows at {p}% of an unaided "
                  "clear's gain, and the Hand cannot be worn alongside these",
 }
@@ -663,7 +663,7 @@ CATALOGUE: list = [
        flavour="A debt recorded once is a debt never paid twice."),
 
     # ---- hidden: the second tier of secrets ----
-    _i(id="interviewers_coin", name="The Interviewer's Coin", slot="ring1",
+    _i(id="interviewers_coin", name="The Examiner's Coin", slot="ring1",
        rarity="MYTHIC", hidden=True, source="secret",
        effects={"xp_bonus": 0.45, "rank_grace": 0.25, "retest_bonus": 0.35,
                 "loot_luck": 0.2},
@@ -1515,9 +1515,9 @@ SECRETS = [
     {"id": "secret_flawless_run", "item": "interviewers_coin",
      "trigger": "interview_finished",
      "name": "No Scratches",
-     "hint": "Somebody, somewhere, finished a whole interview without a single "
+     "hint": "Somebody, somewhere, finished a whole timed practical without a single "
              "failed submission. Nobody clapped.",
-     "condition": "Complete an Interview Mode run solving every problem with no "
+     "condition": "Complete a Timed Practical Mode run solving every problem with no "
                   "failed submission."},
     {"id": "secret_long_memory", "item": "thirty_day_signet",
      "trigger": "retest_cleared",

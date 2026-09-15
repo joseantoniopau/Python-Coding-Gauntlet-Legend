@@ -23,7 +23,7 @@ Three things make these puzzles honest rather than a matching game:
 
 The ladder runs the way the curriculum runs. Fluency first — accumulators, a loop
 with a condition in it, counting into a dict, building a string — at GUIDED for
-short bodies and TUTORIAL for longer ones. Then the interview patterns at EASY:
+short bodies and TUTORIAL for longer ones. Then the timed practical patterns at EASY:
 hash map, sliding window, two pointers, stack, queue, BFS, DFS, tree recursion,
 binary search, prefix sum, DP. Families match the code battles exactly, so the
 SRS schedules an assembly of `two_sum` in the same rotation as writing `two_sum`
@@ -370,7 +370,7 @@ def build() -> list:
     P: list = []
 
     # ---------------------------------------------------------------- fluency
-    # Chapter I-III. Nothing here is an interview pattern. These exist so that
+    # Chapter I-III. Nothing here is a timed practical pattern. These exist so that
     # "loop, condition, accumulate" becomes a shape he can see rather than a
     # sentence he has to reconstruct.
 
@@ -1059,7 +1059,7 @@ def build() -> list:
         time="O(rows * cols)", space="O(rows * cols)",
     ))
 
-    # ------------------------------------------------------- interview patterns
+    # ------------------------------------------------------- timed practical patterns
     # Chapter IV onward. Same interaction, real patterns. Assembling `two_sum`
     # before writing it means the shape is already familiar when the blank screen
     # arrives, and the SRS family is shared so both count as the same rehearsal.

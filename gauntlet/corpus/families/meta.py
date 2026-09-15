@@ -1,7 +1,7 @@
 """Non-implementation encounters: recognition, complexity, code reading, edge-case
 traps, and the Testsmith Forge.
 
-These exist because an interview is not only 'write the function'. Recognising the
+These exist because a timed practical is not only 'write the function'. Recognising the
 family, predicting behaviour, naming the complexity and inventing the input that
 breaks a solution are separately trainable skills — and each is separately scored.
 """
@@ -233,7 +233,7 @@ def build() -> list:
             the original indices unless you carry them along. B is a single O(n) pass but
             stores up to n entries.
 
-            The right answer depends on what was asked for. If the interviewer says 'O(1)
+            The right answer depends on what was asked for. If the examiner says 'O(1)
             extra space', B is disqualified regardless of being asymptotically faster.
             Say that trade-off out loud; it is a large part of what is being scored.
         """))
@@ -248,7 +248,7 @@ def build() -> list:
         0,
         "The default list is created once, when the function is DEFINED, and is shared by "
         "every call that does not pass a bucket. This is the single most common Python "
-        "interview gotcha."))
+        "timed practical gotcha."))
 
     P.append(reading_q(
         "cr-shallow-copy", "The Shared Row",

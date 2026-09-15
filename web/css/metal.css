@@ -1102,7 +1102,7 @@ textarea.explain:focus {
 .beat .bl { color: var(--ink); }
 
 /* ==========================================================================
-   20. INTERVIEW MODE — the colour drains out, the red stays
+   20. TIMED PRACTICAL MODE — the colour drains out, the red stays
    ========================================================================== */
 
 body.interview-mode { --gold: #b8bcc6; --gold-hi: #e8ecf4; --violet: #7e8496; }

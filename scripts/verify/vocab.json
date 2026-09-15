@@ -132,7 +132,7 @@
   },
   {
    "id": "the_interviewer",
-   "name": "The Interviewer",
+   "name": "The Examiner",
    "region": "null_kings_castle",
    "skill": "RECALL",
    "problem_id": "ds-lru-cache",
@@ -1227,7 +1227,7 @@
   },
   {
    "id": "interviewers_coin",
-   "name": "The Interviewer's Coin",
+   "name": "The Examiner's Coin",
    "slot": "ring1",
    "rarity": "MYTHIC",
    "icon": "sword",

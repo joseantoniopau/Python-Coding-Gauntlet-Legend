@@ -8,7 +8,7 @@
  * only gate in Adventure Mode — the player may take as long as they like, and a
  * wrong cast costs the turn and nothing else. That is the desirable difficulty:
  * enough of a sting to make the next attempt effortful, never enough to punish.
- * Interview Mode turns the timer on, because measuring is a different job from
+ * Timed Practical Mode turns the timer on, because measuring is a different job from
  * teaching and the two are never blurred.
  *
  * Four things this module does NOT do, on purpose:
@@ -21,7 +21,7 @@
  *     sent as part of the teaching ramp.
  *   - It does not own game state. Enemy HP, turn number and mastery are pushed
  *     in; nothing is inferred.
- *   - It does not teach in Interview Mode. Notes, template previews and the
+ *   - It does not teach in Timed Practical Mode. Notes, template previews and the
  *     teaching line under a failure are all suppressed there.
  *
  * It styles itself, like fx.js does, so index.html and game.css never have to
@@ -228,7 +228,7 @@ export class IncantationUI {
     this.element = String(this.opts.element || '') || 'neutral';
 
     this.mode = this.opts.mode === 'interview' ? 'interview' : 'adventure';
-    /* Interview measures, so it never shows a scaffold. Overridable for a
+    /* Timed Practical measures, so it never shows a scaffold. Overridable for a
      * future format that deliberately measures at a lower rung. */
     this.interviewTier = this.opts.interviewTier === undefined
       ? TIER.NAME : this.opts.interviewTier;
@@ -462,7 +462,7 @@ export class IncantationUI {
 
   /* seconds <= 0 hides the bar entirely, which is the Adventure default: an
    * untimed correctness check is the better teacher, and the clock is the thing
-   * Interview Mode adds to measure with. */
+   * Timed Practical Mode adds to measure with. */
   setTimer(seconds) {
     this._stopTimer();
     const s = Math.max(0, Number(seconds) || 0);
@@ -935,7 +935,7 @@ export class IncantationUI {
       const layer = LAYER_META[r.layer] ? r.layer : CAST_LAYER.SEMANTICS;
       const meta = LAYER_META[layer];
       const detail = r.detail || meta.title;
-      /* Adventure explains the layer. Interview names it and stops — the run is
+      /* Adventure explains the layer. Timed Practical names it and stops — the run is
        * measuring, and a teaching line is help. */
       const teach = this.mode === 'interview' ? '' : (r.teach || meta.teach);
       this._say(`bad layer-${layer}`, `THE CAST FAILS · ${meta.label}`, detail, teach,
@@ -1122,7 +1122,7 @@ export class IncantationUI {
     this.teachBox.innerHTML = '';
     if (this.mode === 'interview') {
       this.teachBox.appendChild(node('span', 'muted small',
-        'Interview Mode. No notes, no templates, no teaching lines.'));
+        'Timed Practical Mode. No notes, no templates, no teaching lines.'));
       return;
     }
     if (!m) return;
@@ -1532,7 +1532,7 @@ const INCANT_CSS = `
 @keyframes incgood { 50% { border-color: var(--green); background: #10210e; } }
 @keyframes incbad { 50% { border-color: var(--red); background: #24101a; } }
 
-/* --- timer: absent in Adventure, present in Interview --- */
+/* --- timer: absent in Adventure, present in Timed Practical --- */
 .inc-timerwrap { display: flex; align-items: center; gap: 8px; }
 .inc-timerbar {
   flex: 1; height: 10px; background: #0d0b16; border: 2px solid var(--line);

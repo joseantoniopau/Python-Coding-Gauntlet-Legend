@@ -44,7 +44,7 @@ def tier_index(name: str) -> int:
 #
 # GUIDED hands the player complete code with one blank in it. TUTORIAL hands
 # them a skeleton and asks for the body. EASY is a blank screen. Those are
-# three different acts, and only the third one is what an interview asks for.
+# three different acts, and only the third one is what a timed practical asks for.
 #
 # The bottom of the ramp used to be governed by mastery alone, and mastery is a
 # single accumulating number: a GUIDED clear pays PYTHON 7.5 x 0.3 = 2.25, so
@@ -361,7 +361,7 @@ def servable_rung(problem, state, *, lapsed: bool = False, mode: str = "adventur
     already demonstrated moved it down.
     """
     if mode in scaffold.UNSCAFFOLDED_MODES or getattr(problem, "sealed", False):
-        # The practical, Interview Mode and the hold-out are the whole function
+        # The practical, Timed Practical Mode and the hold-out are the whole function
         # with nothing to lean on, in any band, forever. A sealed problem is
         # never served at any rung, because a rung is a presentation OF a
         # problem and the seal is a property of the problem.
@@ -533,7 +533,7 @@ CHAPTERS: tuple = (
         id="counting",
         title="IV. Counting and Membership",
         blurb="The hash map, properly. The single highest-yield pattern in any "
-              "coding interview.",
+              "timed coding practical.",
         goal="Make 'have I seen this before?' an automatic reflex.",
         skills=("HASH_MAP", "SET", "PYTHON"),
         families=("two_sum", "counting", "frequency", "dedupe", "set_ops", "anagrams"),
@@ -618,7 +618,7 @@ CHAPTERS: tuple = (
         title="X. The Working Engineer",
         blurb="Debugging, testing, design, the object model and the runtime. "
               "What separates someone who can code from someone you would hire.",
-        goal="Be the candidate who finds their own bug, says the complexity "
+        goal="Be the learner who finds their own bug, says the complexity "
              "before being asked, and writes a class somebody else can read.",
         skills=("DEBUGGING", "TESTING", "DESIGN", "COMMUNICATION", "BIG_O"),
         # THE OBJECT MODEL AND THE RUNTIME LIVE HERE, and the reason is bug
@@ -638,7 +638,7 @@ CHAPTERS: tuple = (
         # said this material belonged — tests/test_coverage.py has filed
         # `oop_classes` under "the design work of chapter X" since before any of
         # it was reachable. Descriptors, dunders, decorators and generators are
-        # not what any interview question in chapters IV to IX needs, and they
+        # not what any timed practical question in chapters IV to IX needs, and they
         # are exactly what separates code somebody can maintain from code that
         # merely runs.
         families=("debugging", "testing", "edge_cases", "code_reading", "design",

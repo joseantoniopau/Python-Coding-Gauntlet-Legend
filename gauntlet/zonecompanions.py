@@ -38,7 +38,7 @@ Five things this module insists on.
 
 5. NOTHING HERE READS THE EXAM. This module does not import `finalexam` and
    never calls `finalexam.sealed()`. The ladder rung it needs — the
-   second-to-last boss, for the Interviewer's sweep — is read off
+   second-to-last boss, for the Examiner's sweep — is read off
    `world.BOSSES`, because world.py's own comment says rung N is the Nth entry
    of that list. The exam is a measurement. This is a story layer. They do not
    touch.
@@ -66,7 +66,7 @@ from . import world
 #   TAKEN      the boss has them; the scene has not been settled yet
 #   ITEM_HELD  the boss has them; the thing they left is in your bag
 #   FREED      you beat the boss that took them and they went home
-#   RETAKEN    the Interviewer collected them after the second-to-last rung
+#   RETAKEN    the Examiner collected them after the second-to-last rung
 #
 # TAKEN -> ITEM_HELD is the grant, and it is one transaction: the item is in
 # the inventory before the scene finishes playing. See `advance()`.
@@ -101,7 +101,7 @@ STATE_LABELS = {
 
 RUNG = {boss["id"]: n for n, boss in enumerate(world.BOSSES, 1)}
 
-# The second-to-last rung. When this falls, the Interviewer goes and collects
+# The second-to-last rung. When this falls, the Examiner goes and collects
 # everyone the player has got back. The player's words: "the last boss captures
 # all of these known villagers after the second-to-last boss is defeated."
 SWEEP_AFTER_BOSS = "bug_demon"
@@ -272,7 +272,7 @@ class Escort:
     loss_line: str        # what the item does not do, said to the player once
     thanks: tuple         # the keep-it line at the cage, after captives' own
     handover: str         # what they offer for the next zone
-    retaken_line: str     # what is said when the Interviewer collects them
+    retaken_line: str     # what is said when the Examiner collects them
 
 
 # ---------------------------------------------------------------------------
@@ -687,7 +687,7 @@ SWEEP_MIN_RUNGS = len(world.BOSSES) - 2
 def sweep_fired(state: dict) -> bool:
     """Has the second-to-last rung fallen, with the finale still to come.
 
-    This is the whole of the Interviewer's sweep condition and it is derived,
+    This is the whole of the Examiner's sweep condition and it is derived,
     so a save that cleared the Bug Demon before this file existed answers
     correctly on the next load.
 
@@ -1016,7 +1016,7 @@ def advance(state: dict) -> dict:
          fired. BOTH ROADS GRANT, which is the invariant that makes the item
          impossible to miss.
       3. The capture scene, latched so it plays once.
-      4. The Interviewer's sweep, once the second-to-last rung has fallen.
+      4. The Examiner's sweep, once the second-to-last rung has fallen.
     """
     events: list = []
     early = hand_over_early(state)
@@ -1065,7 +1065,7 @@ def advance(state: dict) -> dict:
 
 
 def _sweep(state: dict) -> dict:
-    """Beat 7. The Interviewer collects everyone the player got back.
+    """Beat 7. The Examiner collects everyone the player got back.
 
     WHO IS TAKEN, and the reasoning, because the edge cases are real: a player
     can beat the Bug Demon at rung 13 having never gone near the Caverns.
@@ -1075,7 +1075,7 @@ def _sweep(state: dict) -> dict:
       - Thessaly Brun, whose own capture IS this event, and who has been in
         Python Village since minute one.
       - NOT anybody a boss is already holding. The Necromancer has Greave; the
-        Interviewer does not need to take him twice.
+        Examiner does not need to take him twice.
       - NOT anybody still walking in a zone the player has not worked. Taking
         somebody the player has arguably never met is a beat with no weight in
         it, and it would read as arithmetic rather than as loss.
@@ -1089,9 +1089,9 @@ def _sweep(state: dict) -> dict:
     and the roster was recomputed on every call as "freed and not retaken", so
     every companion rescued AFTER the rung fell was collected the moment they
     were freed and a fresh one-time cutscene was emitted for them. Measured
-    before the fix: the Interviewer's single collection scene fired four
+    before the fix: the Examiner's single collection scene fired four
     separate times in one run, and fired once more on Thessaly Brun one tick
-    AFTER the Interviewer himself was already dead.
+    AFTER the Examiner himself was already dead.
 
     So the one-shot is latched HERE, in this module's own bucket, rather than
     inferred from the world. `captives.retake()` is idempotent per person and

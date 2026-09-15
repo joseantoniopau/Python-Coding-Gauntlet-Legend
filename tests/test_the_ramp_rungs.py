@@ -92,7 +92,7 @@ class TestTheDeclarations(base.GameTest):
                 # 533 of the 746 editor-axis problems, so it IS ours, and that
                 # exemption is what let `oopl-except-order-tutorial` ship a
                 # rung 4 raising "expected 'except' or 'finally' block" at
-                # column one. Rung 4 is what MEDIUM, HARD, Interview Mode, the
+                # column one. Rung 4 is what MEDIUM, HARD, Timed Practical Mode, the
                 # practical and the hold-out serve unconditionally.
                 rendered = scaffold.render(problem, rung)
                 try:

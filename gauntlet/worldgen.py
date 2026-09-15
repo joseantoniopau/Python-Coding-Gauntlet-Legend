@@ -1333,7 +1333,7 @@ def _bosses(seed: int, regions: tuple, order: tuple, mods: Mods) -> tuple:
                 break
             chosen.add(key)
         if boss.get("final"):
-            chosen = set(PHASE_KEYS)     # the Interviewer asks for all of it
+            chosen = set(PHASE_KEYS)     # the Examiner asks for all of it
         affix_count = max(0, min(3, round((0.4 + rank * 1.4) * mods.affixes)))
         affixes = tuple(a.id for a in rng.sample(list(AFFIXES), affix_count))
         extra = sum(AFFIX_BY_ID[a].effect.get("phases", 0) for a in affixes)
@@ -1612,7 +1612,7 @@ def _pace_plan(segments, boss_seconds: float, story_seconds: float,
 
     Bosses and story beats are charged pro rata as the positions they belong to
     are reached, rather than billed up front, because a player who stops at hour
-    ten has not fought the Interviewer and should not be charged for him.
+    ten has not fought the Examiner and should not be charged for him.
     """
     positions = max(len(segments), 1)
     per_position_fixed = (boss_seconds + story_seconds) / positions

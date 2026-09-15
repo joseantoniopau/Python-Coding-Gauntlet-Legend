@@ -148,7 +148,7 @@ for (const [label, set] of [['the seventeen apexes', BA.APEX_IDS], ['the fourtee
     /* Ten of two hundred and fifty six. A marker on the overworld map is read at
      * a glance and at a distance, and two shapes four cells apart are one shape
      * with a rendering artefact. This gate found the Serialization Lich and the
-     * Interviewer sharing a silhouette, which is exactly the defect the brief's
+     * Examiner sharing a silhouette, which is exactly the defect the brief's
      * fourth, unstated claim is about. */
     if (box === 16 && min < 10) note(`${label} at 16px: closest pair differs by only ${min} cells`);
   }

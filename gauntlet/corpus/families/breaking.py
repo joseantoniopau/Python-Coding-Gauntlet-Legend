@@ -1,4 +1,4 @@
-"""Breaking and pricing: the two questions an interviewer actually listens for.
+"""Breaking and pricing: the two questions an examiner actually listens for.
 
 Every other family in this corpus asks "can you make it work". This one asks the
 two follow-ups that decide the room:
@@ -679,7 +679,7 @@ def _shape_breaks() -> list:
             `<` excludes the boundary; `<=` includes it. The contract says
             "must not exceed", which is `<=`. Every comparison in a contract has
             an input sitting precisely on it, and that input is the only one that
-            can tell the two operators apart. When an interviewer asks for a test
+            can tell the two operators apart. When an examiner asks for a test
             case, this is the one to name first: it is cheap to say and it catches
             the most common class of bug there is.
         """,
@@ -1655,7 +1655,7 @@ def _prices() -> list:
             walk the whole sequence. Put any of them inside a loop over the same
             sequence and you have written a quadratic algorithm that occupies four
             lines and contains one visible `for`. This is the single most common
-            accidental O(n^2) in interview code, and the fix is always the same:
+            accidental O(n^2) in timed practical code, and the fix is always the same:
             do the counting once, up front, into a dict.
         """))
 
@@ -1707,7 +1707,7 @@ def _prices() -> list:
             difference between linear and quadratic. `in` against a list or a
             tuple is a scan; `in` against a set or a dict is a hash lookup. Saying
             this out loud — "I'll put the invited list in a set so membership is
-            O(1)" — is most of what an interviewer wants to hear, and it is the
+            O(1)" — is most of what an examiner wants to hear, and it is the
             same sentence every time.
         """))
 
@@ -1732,7 +1732,7 @@ def _prices() -> list:
              "those copies add up to n^2 / 2. CPython sometimes patches this in "
              "place when nothing else holds the string, but that is an "
              "implementation detail that vanishes the moment another name "
-             "refers to it — it is not the number to quote in an interview."),
+             "refers to it — it is not the number to quote in a timed practical."),
             ("All at Once", """
                 def render(words):
                     return "".join(words)
@@ -1878,7 +1878,7 @@ def _prices() -> list:
         explanation="""
             This is the anagram question priced honestly. Sorting is the answer
             most people reach for and it is n log n; counting is linear and is
-            what an interviewer is listening for. The third looks like counting
+            what an examiner is listening for. The third looks like counting
             and is quadratic, because `in` and `remove` are each a scan. The
             fourth is the guard clause every version should open with.
         """))
@@ -2008,7 +2008,7 @@ def _prices() -> list:
             `insert(0, x)` and `pop(0)` both shift everything. That is why a
             list-as-queue is quietly quadratic and why BFS should use
             `collections.deque`. Reaching for `deque` and being able to say "so
-            popleft is O(1) instead of O(n)" is worth more in an interview than
+            popleft is O(1) instead of O(n)" is worth more in a timed practical than
             the traversal itself.
         """))
 
@@ -2063,7 +2063,7 @@ def _prices() -> list:
         explanation="""
             Grid problems are where complexity answers most often get muddled,
             because there are two defensible variables: the side n and the cell
-            count n^2. Both are correct; only one of them is what the interviewer
+            count n^2. Both are correct; only one of them is what the examiner
             asked. State your variable first — "n is the side length, so a full
             scan is O(n^2)" — and the ambiguity disappears.
         """))

@@ -44,7 +44,7 @@ export async function paintPractice(){
       <label>Session type<select name="kind">${(r.options?.kinds||[]).map(k=>`<option value="${esc(k.id)}">${esc(k.label)}</option>`).join('')}</select></label>
       <label>What would help today?<select name="intent">${(r.options?.intents||[]).map(k=>`<option value="${esc(k.id)}">${esc(k.label)}</option>`).join('')}</select></label></div>
       <p id="practice-intent" class="muted"></p>
-      <p class="muted">Rehearsal includes coaching and uses practice material. Your sealed interview assessment has its own clock and report.</p>
+      <p class="muted">Rehearsal includes coaching and uses practice material. Your sealed timed practical has its own clock and report.</p>
       <button class="btn primary" type="submit">BEGIN MY SESSION</button>
     </form>`:''}
     <div class="actions"><button class="btn" id="practice-journal">PERSONAL GRIMOIRE</button><button class="btn" id="practice-world">RETURN TO THE WORLD</button></div>

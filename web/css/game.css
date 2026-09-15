@@ -648,7 +648,7 @@ body.high-contrast .cue::after { animation: none; opacity: 1; }
 /* MENU -> GUIDANCE -> "Show the guide arrow". tutor.js also stops placing it;
  * this is the second of the two locks. */
 body.no-cues .cue { display: none; }
-/* A measurement furnishes the room without tutoring the candidate.
+/* A measurement furnishes the room without tutoring the learner.
  *
  * TWO CLASSES, AND THE SECOND ONE IS THE LOAD-BEARING ONE. `interview-mode`
  * goes on the body in enterBattle when the ENCOUNTER is measured, and
@@ -862,7 +862,7 @@ body.reduced-motion .tok-blank { animation: none; }
 .toast.red { border-color: var(--red); } .toast.red .tt { color: var(--red); }
 @keyframes pop { from { transform: translateX(40px); opacity: 0; } to { transform: none; opacity: 1; } }
 
-/* interview */
+/* timed practical */
 body.interview-mode { --gold: #d8d8e0; --violet: #8a90a8; }
 body.interview-mode #topbar { background: #101018; border-bottom-color: #3a3a48; }
 #interview-banner {

@@ -33,7 +33,7 @@ from __future__ import annotations
 from ._base import code_problem, mcq_problem
 
 # This player's declared profile. Language mechanics are asked in every one of
-# these interviews, so the weighting is flat and high rather than pointed.
+# these timed practicals, so the weighting is flat and high rather than pointed.
 Q = {"PRACTICAL": 2.5, "GENERAL_SWE": 2.5, "SECURITY_ENGINEERING": 2.0}
 
 VIZ = {"type": "object_state",
@@ -2517,7 +2517,7 @@ def build() -> list:
         _oop(
             "oopl-classmethod-inherit-medium", "Why The Factory Uses cls",
             """
-            This is the question behind the interview question. A factory written
+            This is the question behind the timed practical question. A factory written
             as `@classmethod ... return cls(size)` builds the subclass when called
             on the subclass. The same factory written as a staticmethod naming the
             base class hardcodes the wrong type, and nobody notices until someone
@@ -3914,7 +3914,7 @@ def build() -> list:
             title="What The Lock Actually Promises",
             realm="fields_of_syntax", pattern="SIMULATION", difficulty="EASY",
             statement="""
-            An interviewer asks you to explain the GIL. Which statement is the
+            An examiner asks you to explain the GIL. Which statement is the
             accurate one?
             """,
             choices=[

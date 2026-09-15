@@ -4020,7 +4020,7 @@ export function bossSprite(spriteKey, colour, frame = 0) {
  * ================================================================
  * 24x24. Each mentor has a jaw, complexion, hair material and facial planes.
  * Shared brow/eye/mouth performances fit over that anatomy. BYTE and the
- * Interviewer have mechanical and porcelain faces authored separately.
+ * Examiner have mechanical and porcelain faces authored separately.
  *
  * Seven emotes per character, two frames each. The frames are authored events —
  * a blink, a squeeze, a jaw setting — not the same face at two brightnesses,
@@ -4575,7 +4575,7 @@ function stampRow(grid, y, x0, strip) {
   });
 }
 
-/* The Interviewer's mask has no features at all, which is the point of it — so
+/* The Examiner's mask has no features at all, which is the point of it — so
  * it borrows the human brow and eye strips and nothing else. A blank porcelain
  * face that suddenly has an opinion above the eyes is worth more than any mouth
  * we could have drawn on it. */
